@@ -1,0 +1,8 @@
+[
+{
+  "directory": "D:/code/src/vs/webserver/build",
+  "command": "C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe -ID:/code/src/vs/webserver/include -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -o CMakeFiles\\server.dir\\main.cpp.obj -c D:\\code\\src\\vs\\webserver\\main.cpp",
+  "file": "D:\\code\\src\\vs\\webserver\\main.cpp",
+  "output": "CMakeFiles\\server.dir\\main.cpp.obj"
+}
+]
