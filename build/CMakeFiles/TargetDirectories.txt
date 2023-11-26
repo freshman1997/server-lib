@@ -1,3 +1,0 @@
-D:/code/src/vs/webserver/build/CMakeFiles/server.dir
-D:/code/src/vs/webserver/build/CMakeFiles/edit_cache.dir
-D:/code/src/vs/webserver/build/CMakeFiles/rebuild_cache.dir
