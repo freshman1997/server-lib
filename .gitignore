@@ -1,4 +1,4 @@
-build/
-.cache/
-.vscode/
+build
+.cache
+.vscode
 *.swap
