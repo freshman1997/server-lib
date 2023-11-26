@@ -57,15 +57,51 @@ bool HttpRequestParser::parse_method(Buffer &buff)
             break;
         }
         case 'o': {
-            for (int i = 0; i < 6 && buff.readable_bytes(); ++i) {
+            for (int i = 0; i < 7 && buff.readable_bytes(); ++i) {
                 method.push_back(std::tolower(buff.read_int8()));
             }
 
-            if (method != "option") {
+            if (method != "options") {
                 return false;
             }
 
-            req->method = HttpMethod::option_;
+            req->method = HttpMethod::options_;
+            break;
+        }
+        case 'h': {
+            for (int i = 0; i < 4 && buff.readable_bytes(); ++i) {
+                method.push_back(std::tolower(buff.read_int8()));
+            }
+
+            if (method != "head") {
+                return false;
+            }
+
+            req->method = HttpMethod::head_;
+            break;
+        }
+        case 'c': {
+            for (int i = 0; i < 7 && buff.readable_bytes(); ++i) {
+                method.push_back(std::tolower(buff.read_int8()));
+            }
+
+            if (method != "comment") {
+                return false;
+            }
+
+            req->method = HttpMethod::comment_;
+            break;
+        }
+        case 't': {
+            for (int i = 0; i < 5 && buff.readable_bytes(); ++i) {
+                method.push_back(std::tolower(buff.read_int8()));
+            }
+
+            if (method != "trace") {
+                return false;
+            }
+
+            req->method = HttpMethod::trace_;
             break;
         }
 
@@ -211,10 +247,6 @@ bool HttpRequestParser::parse_headers(Buffer &buff)
 
         while (ch != '\r' && buff.readable_bytes()) {
             ch = buff.read_int8();
-            if (std::isblank(ch)) {
-                continue;
-            }
-
             if (ch != '\r') {
                 val.push_back(ch);
             }

@@ -14,7 +14,10 @@ enum class HttpMethod
     post_,
     put_,
     delete_,
-    option_,
+    options_,
+    head_,
+    comment_,
+    trace_,
 };
 
 enum class HttpVersion : char
