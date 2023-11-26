@@ -3,7 +3,9 @@
 
 #include <string>
 #include <unordered_map>
-class Buffer;
+#include <vector>
+
+#include "buffer.h"
 
 enum class HttpMethod
 {
@@ -15,14 +17,25 @@ enum class HttpMethod
     option_,
 };
 
+enum class HttpVersion : char
+{
+    invalid = -1,
+    v_1_0,
+    v_1_1,
+    v_2_0,
+    v_3_0,
+};
+
+class HttpRequest;
 class HttpRequestParser
 {
+    friend class HttpRequest;
 public:
     enum class HeaderState
     {
         init = 0,
         metohd,                 // 方法
-        metohd_gap,             // 方法接下来的空格
+        method_gap,             // 方法接下来的空格
         url,                    // url
         url_gap,                // url 接下来的空格
         version,                // 版本信息
@@ -40,24 +53,46 @@ public:
         fully,
     };
 
-    bool parse_method(Buffer *buff);
-    bool parse_url(Buffer *buff);
-    bool parse_version(Buffer *buff);
-    bool parse_headers(Buffer *buff);
+    HttpRequestParser() {}
+    HttpRequestParser(HttpRequest *req_) : req(req_) 
+    {}
 
-    bool parse_body(Buffer *buff);
+    void set_req(HttpRequest *req_)
+    {
+        this->req = req_;
+    }
 
-public:
+    bool parse_method(Buffer &buff);
+    bool parse_url(Buffer &buff);
+    bool parse_version(Buffer &buff);
+    bool parse_headers(Buffer &buff);
+
+    bool parse_body(Buffer &buff);
+
+private:
     HeaderState header_state = HeaderState::init;
     BodyState body_state = BodyState::init;
+    HttpRequest *req = nullptr;
 };
 
 class HttpRequest
 {
-
+    friend class HttpRequestParser;
 public:
-    HttpMethod method = HttpMethod::invalid_;
+    HttpRequest();
+
+    HttpMethod get_method() const;
+    HttpVersion get_version() const;
+    bool header_exists(std::string &key) const;
+
+    bool parse_header(Buffer &buff);    
+
+private:
     HttpRequestParser parser;
+    std::vector<std::string> url_domain;
+    HttpMethod method = HttpMethod::invalid_;
+    HttpVersion version = HttpVersion::invalid;
+    std::unordered_map<std::string, std::string> request_params;
     std::unordered_map<std::string, std::string> headers;
 };
 

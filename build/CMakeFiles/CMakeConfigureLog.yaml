@@ -5,7 +5,7 @@ events:
     kind: "message-v1"
     backtrace:
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineSystem.cmake:211 (message)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     message: |
       The system is: Windows - 10.0.22621 - AMD64
   -
@@ -14,7 +14,7 @@ events:
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     message: |
       Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
       Compiler: C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/bin/clang.exe 
@@ -33,7 +33,7 @@ events:
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     message: |
       Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
       Compiler: C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/bin/clang.exe 
@@ -55,7 +55,7 @@ events:
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:1158 (message)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:221 (CMAKE_DETERMINE_MSVC_SHOWINCLUDES_PREFIX)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     message: |
       Detecting C compiler /showIncludes prefix:
         
@@ -65,7 +65,7 @@ events:
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:1158 (message)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:221 (CMAKE_DETERMINE_MSVC_SHOWINCLUDES_PREFIX)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCCompiler.cmake:123 (CMAKE_DETERMINE_COMPILER_ID)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     message: |
       Detecting C compiler /showIncludes prefix:
         
@@ -75,7 +75,7 @@ events:
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     message: |
       Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
       Compiler: C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/bin/clang.exe 
@@ -94,7 +94,7 @@ events:
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     message: |
       Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" succeeded.
       Compiler: C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/bin/clang.exe 
@@ -116,7 +116,7 @@ events:
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:1158 (message)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:221 (CMAKE_DETERMINE_MSVC_SHOWINCLUDES_PREFIX)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     message: |
       Detecting CXX compiler /showIncludes prefix:
         
@@ -126,7 +126,7 @@ events:
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:1158 (message)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerId.cmake:221 (CMAKE_DETERMINE_MSVC_SHOWINCLUDES_PREFIX)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCXXCompiler.cmake:126 (CMAKE_DETERMINE_COMPILER_ID)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     message: |
       Detecting CXX compiler /showIncludes prefix:
         
@@ -135,23 +135,25 @@ events:
     backtrace:
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerABI.cmake:57 (try_compile)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     checks:
       - "Detecting C compiler ABI info"
     directories:
-      source: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-m3fq0j"
-      binary: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-m3fq0j"
+      source: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-he688i"
+      binary: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-he688i"
     cmakeVariables:
       CMAKE_C_FLAGS: ""
+      CMAKE_C_FLAGS_DEBUG: "-O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd"
+      CMAKE_EXE_LINKER_FLAGS: ""
     buildResult:
       variable: "CMAKE_C_ABI_COMPILED"
       cached: true
       stdout: |
-        Change Dir: 'D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-m3fq0j'
+        Change Dir: 'D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-he688i'
         
-        Run Build Command(s): C:/PROGRA~1/MIB055~1/2022/COMMUN~1/Common7/IDE/COMMON~1/MICROS~1/CMake/Ninja/ninja.exe -v cmTC_8aeda
-        [1/2] C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe   -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -MD -MT CMakeFiles/cmTC_8aeda.dir/CMakeCCompilerABI.c.obj -MF CMakeFiles\\cmTC_8aeda.dir\\CMakeCCompilerABI.c.obj.d -o CMakeFiles/cmTC_8aeda.dir/CMakeCCompilerABI.c.obj -c D:/software/CMake/share/cmake-3.27/Modules/CMakeCCompilerABI.c
-        [2/2] cmd.exe /C "cd . && C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe -fuse-ld=lld-link -nostartfiles -nostdlib -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -Xlinker /subsystem:console CMakeFiles/cmTC_8aeda.dir/CMakeCCompilerABI.c.obj -o cmTC_8aeda.exe -Xlinker /MANIFEST:EMBED -Xlinker /implib:cmTC_8aeda.lib -Xlinker /pdb:cmTC_8aeda.pdb -Xlinker /version:0.0     && cd ."
+        Run Build Command(s): C:/PROGRA~1/MIB055~1/2022/COMMUN~1/Common7/IDE/COMMON~1/MICROS~1/CMake/Ninja/ninja.exe -v cmTC_42409
+        [1/2] C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe   -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -MD -MT CMakeFiles/cmTC_42409.dir/CMakeCCompilerABI.c.obj -MF CMakeFiles\\cmTC_42409.dir\\CMakeCCompilerABI.c.obj.d -o CMakeFiles/cmTC_42409.dir/CMakeCCompilerABI.c.obj -c D:/software/CMake/share/cmake-3.27/Modules/CMakeCCompilerABI.c
+        [2/2] cmd.exe /C "cd . && C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe -fuse-ld=lld-link -nostartfiles -nostdlib -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -Xlinker /subsystem:console CMakeFiles/cmTC_42409.dir/CMakeCCompilerABI.c.obj -o cmTC_42409.exe -Xlinker /MANIFEST:EMBED -Xlinker /implib:cmTC_42409.lib -Xlinker /pdb:cmTC_42409.pdb -Xlinker /version:0.0     && cd ."
         
       exitCode: 0
   -
@@ -159,23 +161,25 @@ events:
     backtrace:
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompilerABI.cmake:57 (try_compile)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     checks:
       - "Detecting CXX compiler ABI info"
     directories:
-      source: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-42n2d5"
-      binary: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-42n2d5"
+      source: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-khzoz3"
+      binary: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-khzoz3"
     cmakeVariables:
       CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd"
+      CMAKE_EXE_LINKER_FLAGS: ""
     buildResult:
       variable: "CMAKE_CXX_ABI_COMPILED"
       cached: true
       stdout: |
-        Change Dir: 'D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-42n2d5'
+        Change Dir: 'D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-khzoz3'
         
-        Run Build Command(s): C:/PROGRA~1/MIB055~1/2022/COMMUN~1/Common7/IDE/COMMON~1/MICROS~1/CMake/Ninja/ninja.exe -v cmTC_ad674
-        [1/2] C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe   -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -MD -MT CMakeFiles/cmTC_ad674.dir/CMakeCXXCompilerABI.cpp.obj -MF CMakeFiles\\cmTC_ad674.dir\\CMakeCXXCompilerABI.cpp.obj.d -o CMakeFiles/cmTC_ad674.dir/CMakeCXXCompilerABI.cpp.obj -c D:/software/CMake/share/cmake-3.27/Modules/CMakeCXXCompilerABI.cpp
-        [2/2] cmd.exe /C "cd . && C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe -fuse-ld=lld-link -nostartfiles -nostdlib -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -Xlinker /subsystem:console CMakeFiles/cmTC_ad674.dir/CMakeCXXCompilerABI.cpp.obj -o cmTC_ad674.exe -Xlinker /MANIFEST:EMBED -Xlinker /implib:cmTC_ad674.lib -Xlinker /pdb:cmTC_ad674.pdb -Xlinker /version:0.0     && cd ."
+        Run Build Command(s): C:/PROGRA~1/MIB055~1/2022/COMMUN~1/Common7/IDE/COMMON~1/MICROS~1/CMake/Ninja/ninja.exe -v cmTC_432c7
+        [1/2] C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe   -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -MD -MT CMakeFiles/cmTC_432c7.dir/CMakeCXXCompilerABI.cpp.obj -MF CMakeFiles\\cmTC_432c7.dir\\CMakeCXXCompilerABI.cpp.obj.d -o CMakeFiles/cmTC_432c7.dir/CMakeCXXCompilerABI.cpp.obj -c D:/software/CMake/share/cmake-3.27/Modules/CMakeCXXCompilerABI.cpp
+        [2/2] cmd.exe /C "cd . && C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe -fuse-ld=lld-link -nostartfiles -nostdlib -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -Xlinker /subsystem:console CMakeFiles/cmTC_432c7.dir/CMakeCXXCompilerABI.cpp.obj -o cmTC_432c7.exe -Xlinker /MANIFEST:EMBED -Xlinker /implib:cmTC_432c7.lib -Xlinker /pdb:cmTC_432c7.pdb -Xlinker /version:0.0     && cd ."
         
       exitCode: 0
   -
@@ -186,23 +190,25 @@ events:
       - "D:/software/CMake/share/cmake-3.27/Modules/Compiler/CMakeCommonCompilerMacros.cmake:121 (_record_compiler_features_cxx)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompileFeatures.cmake:70 (cmake_record_cxx_compile_features)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeTestCXXCompiler.cmake:70 (CMAKE_DETERMINE_COMPILE_FEATURES)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     checks:
       - "Detecting CXX compile features"
     directories:
-      source: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-em0nba"
-      binary: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-em0nba"
+      source: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-4dqqej"
+      binary: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-4dqqej"
     cmakeVariables:
       CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd"
+      CMAKE_EXE_LINKER_FLAGS: ""
     buildResult:
       variable: "CMAKE_CXX_FEATURE_TEST"
       cached: true
       stdout: |
-        Change Dir: 'D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-em0nba'
+        Change Dir: 'D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-4dqqej'
         
-        Run Build Command(s): C:/PROGRA~1/MIB055~1/2022/COMMUN~1/Common7/IDE/COMMON~1/MICROS~1/CMake/Ninja/ninja.exe -v cmTC_b98d7
-        [1/2] C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe   -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd   -std=c++14 -MD -MT CMakeFiles/cmTC_b98d7.dir/feature_tests.cxx.obj -MF CMakeFiles\\cmTC_b98d7.dir\\feature_tests.cxx.obj.d -o CMakeFiles/cmTC_b98d7.dir/feature_tests.cxx.obj -c D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-em0nba/feature_tests.cxx
-        [2/2] cmd.exe /C "cd . && C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe -fuse-ld=lld-link -nostartfiles -nostdlib -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -Xlinker /subsystem:console CMakeFiles/cmTC_b98d7.dir/feature_tests.cxx.obj -o cmTC_b98d7.exe -Xlinker /MANIFEST:EMBED -Xlinker /implib:cmTC_b98d7.lib -Xlinker /pdb:cmTC_b98d7.pdb -Xlinker /version:0.0   -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 -loldnames  && cd ."
+        Run Build Command(s): C:/PROGRA~1/MIB055~1/2022/COMMUN~1/Common7/IDE/COMMON~1/MICROS~1/CMake/Ninja/ninja.exe -v cmTC_f95a7
+        [1/2] C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe   -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd   -std=c++14 -MD -MT CMakeFiles/cmTC_f95a7.dir/feature_tests.cxx.obj -MF CMakeFiles\\cmTC_f95a7.dir\\feature_tests.cxx.obj.d -o CMakeFiles/cmTC_f95a7.dir/feature_tests.cxx.obj -c D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-4dqqej/feature_tests.cxx
+        [2/2] cmd.exe /C "cd . && C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe -fuse-ld=lld-link -nostartfiles -nostdlib -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -Xlinker /subsystem:console CMakeFiles/cmTC_f95a7.dir/feature_tests.cxx.obj -o cmTC_f95a7.exe -Xlinker /MANIFEST:EMBED -Xlinker /implib:cmTC_f95a7.lib -Xlinker /pdb:cmTC_f95a7.pdb -Xlinker /version:0.0   -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 -loldnames  && cd ."
         
       exitCode: 0
   -
@@ -213,23 +219,25 @@ events:
       - "D:/software/CMake/share/cmake-3.27/Modules/Compiler/CMakeCommonCompilerMacros.cmake:129 (_record_compiler_features_cxx)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeDetermineCompileFeatures.cmake:70 (cmake_record_cxx_compile_features)"
       - "D:/software/CMake/share/cmake-3.27/Modules/CMakeTestCXXCompiler.cmake:70 (CMAKE_DETERMINE_COMPILE_FEATURES)"
-      - "CMakeLists.txt:1 (project)"
+      - "CMakeLists.txt:2 (project)"
     checks:
       - "Detecting CXX compile features"
     directories:
-      source: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-ofq2ua"
-      binary: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-ofq2ua"
+      source: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-myn2xb"
+      binary: "D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-myn2xb"
     cmakeVariables:
       CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd"
+      CMAKE_EXE_LINKER_FLAGS: ""
     buildResult:
       variable: "CMAKE_CXX_FEATURE_TEST"
       cached: true
       stdout: |
-        Change Dir: 'D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-ofq2ua'
+        Change Dir: 'D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-myn2xb'
         
-        Run Build Command(s): C:/PROGRA~1/MIB055~1/2022/COMMUN~1/Common7/IDE/COMMON~1/MICROS~1/CMake/Ninja/ninja.exe -v cmTC_e6f8f
-        [1/2] C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe   -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd   -std=c++14 -MD -MT CMakeFiles/cmTC_e6f8f.dir/feature_tests.cxx.obj -MF CMakeFiles\\cmTC_e6f8f.dir\\feature_tests.cxx.obj.d -o CMakeFiles/cmTC_e6f8f.dir/feature_tests.cxx.obj -c D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-ofq2ua/feature_tests.cxx
-        [2/2] cmd.exe /C "cd . && C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe -fuse-ld=lld-link -nostartfiles -nostdlib -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -Xlinker /subsystem:console CMakeFiles/cmTC_e6f8f.dir/feature_tests.cxx.obj -o cmTC_e6f8f.exe -Xlinker /MANIFEST:EMBED -Xlinker /implib:cmTC_e6f8f.lib -Xlinker /pdb:cmTC_e6f8f.pdb -Xlinker /version:0.0   -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 -loldnames  && cd ."
+        Run Build Command(s): C:/PROGRA~1/MIB055~1/2022/COMMUN~1/Common7/IDE/COMMON~1/MICROS~1/CMake/Ninja/ninja.exe -v cmTC_b8da6
+        [1/2] C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe   -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd   -std=c++14 -MD -MT CMakeFiles/cmTC_b8da6.dir/feature_tests.cxx.obj -MF CMakeFiles\\cmTC_b8da6.dir\\feature_tests.cxx.obj.d -o CMakeFiles/cmTC_b8da6.dir/feature_tests.cxx.obj -c D:/code/src/vs/webserver/build/CMakeFiles/CMakeScratch/TryCompile-myn2xb/feature_tests.cxx
+        [2/2] cmd.exe /C "cd . && C:\\PROGRA~1\\MIB055~1\\2022\\COMMUN~1\\VC\\Tools\\Llvm\\bin\\clang.exe -fuse-ld=lld-link -nostartfiles -nostdlib -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -Xlinker /subsystem:console CMakeFiles/cmTC_b8da6.dir/feature_tests.cxx.obj -o cmTC_b8da6.exe -Xlinker /MANIFEST:EMBED -Xlinker /implib:cmTC_b8da6.lib -Xlinker /pdb:cmTC_b8da6.pdb -Xlinker /version:0.0   -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 -loldnames  && cd ."
         
       exitCode: 0
 ...

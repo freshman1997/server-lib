@@ -5,6 +5,6 @@ include_directories(
     include/
 )
 
+FILE(GLOB_RECURSE SERVER_SRC "./src/*.cpp")
 
-
-add_executable(server main.cpp)
+add_executable(server ${SERVER_SRC} main.cpp)

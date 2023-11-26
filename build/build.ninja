@@ -49,6 +49,24 @@ cmake_ninja_workdir = D$:/code/src/vs/webserver/build/
 
 build cmake_object_order_depends_target_server: phony || CMakeFiles/server.dir
 
+build CMakeFiles/server.dir/src/request.cpp.obj: CXX_COMPILER__server_unscanned_Debug D$:/code/src/vs/webserver/src/request.cpp || cmake_object_order_depends_target_server
+  DEP_FILE = CMakeFiles\server.dir\src\request.cpp.obj.d
+  FLAGS = -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd
+  INCLUDES = -ID:/code/src/vs/webserver/include
+  OBJECT_DIR = CMakeFiles\server.dir
+  OBJECT_FILE_DIR = CMakeFiles\server.dir\src
+  TARGET_COMPILE_PDB = CMakeFiles\server.dir\
+  TARGET_PDB = server.pdb
+
+build CMakeFiles/server.dir/src/url.cpp.obj: CXX_COMPILER__server_unscanned_Debug D$:/code/src/vs/webserver/src/url.cpp || cmake_object_order_depends_target_server
+  DEP_FILE = CMakeFiles\server.dir\src\url.cpp.obj.d
+  FLAGS = -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd
+  INCLUDES = -ID:/code/src/vs/webserver/include
+  OBJECT_DIR = CMakeFiles\server.dir
+  OBJECT_FILE_DIR = CMakeFiles\server.dir\src
+  TARGET_COMPILE_PDB = CMakeFiles\server.dir\
+  TARGET_PDB = server.pdb
+
 build CMakeFiles/server.dir/main.cpp.obj: CXX_COMPILER__server_unscanned_Debug D$:/code/src/vs/webserver/main.cpp || cmake_object_order_depends_target_server
   DEP_FILE = CMakeFiles\server.dir\main.cpp.obj.d
   FLAGS = -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd
@@ -66,7 +84,7 @@ build CMakeFiles/server.dir/main.cpp.obj: CXX_COMPILER__server_unscanned_Debug D
 #############################################
 # Link the executable server.exe
 
-build server.exe: CXX_EXECUTABLE_LINKER__server_Debug CMakeFiles/server.dir/main.cpp.obj
+build server.exe: CXX_EXECUTABLE_LINKER__server_Debug CMakeFiles/server.dir/src/request.cpp.obj CMakeFiles/server.dir/src/url.cpp.obj CMakeFiles/server.dir/main.cpp.obj
   FLAGS = -O0 -g -Xclang -gcodeview -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd
   LINK_FLAGS = -Xlinker /subsystem:console
   LINK_LIBRARIES = -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 -loldnames

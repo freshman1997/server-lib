@@ -238,15 +238,6 @@ CMAKE_TAPI:FILEPATH=CMAKE_TAPI-NOTFOUND
 CMAKE_VERBOSE_MAKEFILE:BOOL=FALSE
 
 //Value Computed by CMake
-Project_BINARY_DIR:STATIC=D:/code/src/vs/webserver/build
-
-//Value Computed by CMake
-Project_IS_TOP_LEVEL:STATIC=ON
-
-//Value Computed by CMake
-Project_SOURCE_DIR:STATIC=D:/code/src/vs/webserver
-
-//Value Computed by CMake
 webserver_BINARY_DIR:STATIC=D:/code/src/vs/webserver/build
 
 //Value Computed by CMake
