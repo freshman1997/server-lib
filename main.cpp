@@ -1,7 +1,10 @@
-#include "buffer.h"
-#include "request.h"
+#include "buff/buffer.h"
+#include "net/http/request.h"
 #include <iostream>
 #include <string>
+#include "nlohmann/json_fwd.hpp"
+#include "nlohmann/json.hpp"
+
 
 using namespace std;
 
@@ -33,6 +36,13 @@ int main()
         std::cout << "parse fail!!" << std::endl;
         return 1;
     }
+
+    using namespace nlohmann;
+    json data = {
+        {"name", "tomcat"}
+    };
+
+    cout << data << endl;
 
     return 0;
 }

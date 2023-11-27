@@ -3,6 +3,7 @@ project(webserver)
 
 include_directories(
     include/
+    third_party/json/include/
 )
 
 FILE(GLOB_RECURSE SERVER_SRC "./src/*.cpp")

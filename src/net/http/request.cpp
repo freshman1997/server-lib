@@ -1,5 +1,5 @@
-#include "request.h"
-#include "url.h"
+#include "net/http/request.h"
+#include "net/http/url.h"
 #include <cctype>
 #include <string>
 
@@ -37,7 +37,13 @@ bool HttpRequestParser::parse_method(Buffer &buff)
             }
 
             method.push_back(std::tolower(buff.read_int8()));
-            if (method != "post") {
+            if (method == "post") {
+                req->method = HttpMethod::post_;
+                break;
+            }
+
+            method.push_back(std::tolower(buff.read_int8()));
+            if (method != "patch") {
                 return false;
             }
 

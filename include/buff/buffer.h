@@ -4,9 +4,12 @@
 #include <algorithm>
 #include <stdint.h>
 #include <string>
-#include <vcruntime_string.h>
+#include <cstring>
 #include <vector>
 
+#include "endian/endian.hpp"
+
+// TODO fix 复用
 class Buffer
 {
 public:
@@ -28,42 +31,50 @@ public:
 
     int16_t read_uint16()
     {
-        return 0;
+        int16_t be16;
+        ::memcpy(&be16, peek(), sizeof(int16_t));
+        read_index += sizeof(int16_t);
+        return endian::networkToHost16(be16);
     }
 
     uint16_t read_int16()
     {
-        return 0;
+        uint16_t ube16;
+        ::memcpy(&ube16, peek(), sizeof(uint16_t));
+        read_index += sizeof(uint16_t);
+        return endian::networkToHost16(ube16);
     }
 
     uint32_t read_uint32()
     {
-        return 0;
+        uint32_t ube32;
+        ::memcpy(&ube32, peek(), sizeof(uint32_t));
+        read_index += sizeof(uint32_t);
+        return endian::networkToHost32(ube32);
     }
 
     int32_t read_int32()
     {
-        return 0;
+        int32_t be32;
+        ::memcpy(&be32, peek(), sizeof(int32_t));
+        read_index += sizeof(int32_t);
+        return endian::networkToHost32(be32);
     }
 
     uint64_t read_uint64()
     {
-        return 0;
+        uint64_t be64;
+        ::memcpy(&be64, peek(), sizeof(uint64_t));
+        read_index += sizeof(uint64_t);
+        return endian::networkToHost64(be64);
     }
 
     int64_t read_int64()
     {
-        return 0;
-    }
-
-    float read_float32()
-    {
-        return 0;
-    }
-
-    double read_float64()
-    {
-        return 0;
+        int64_t be64;
+        ::memcpy(&be64, peek(), sizeof(int64_t));
+        read_index += sizeof(int64_t);
+        return endian::networkToHost64(be64);
     }
 
 public:
@@ -79,42 +90,38 @@ public:
 
     void write_uint16(uint16_t val)
     {
-
+        uint16_t ube16 = endian::hostToNetwork16(val);
+        write((void *)&ube16, sizeof(uint16_t));
     }
 
     void write_int16(int16_t val)
     {
-
+        int16_t be16 = endian::hostToNetwork16(val);
+        write((void *)&be16, sizeof(int16_t));
     }
 
     void write_uint32(uint32_t val)
     {
-
+        uint32_t ube32 = endian::hostToNetwork32(val);
+        write((void *)&ube32, sizeof(uint32_t));
     }
 
     void write_int32(int32_t val)
     {
-
+        int32_t be32 = endian::hostToNetwork32(val);
+        write((void *)&be32, sizeof(int32_t));
     }
 
     void write_uint64(uint64_t val)
     {
-
+        uint64_t ube64 = endian::hostToNetwork64(val);
+        write((void *)&ube64, sizeof(uint64_t));
     }
 
     void write_int64(int64_t val)
     {
-
-    }
-
-    void write_float32(float val)
-    {
-
-    }
-
-    void write_float64(float val)
-    {
-
+        int64_t be64 = endian::hostToNetwork64(val);
+        write((void *)&be64, sizeof(int64_t));
     }
 
     void write_bool(bool val)
@@ -183,7 +190,9 @@ public:
 private:
     void write(void * data, size_t len)
     {
-        write(static_cast<const char *>(data), len);
+        const char* d = static_cast<const char*>(data);
+        std::copy(d, d + len, begin() + read_index);
+        write_index += len;
     }
 
     void write(const char * data, size_t len)
@@ -195,6 +204,8 @@ private:
         for (int i = 0; i < len; ++i) {
             buffs.push_back(data[i]);
         }
+
+        write_index += len;
     }
 
 public:
@@ -202,7 +213,6 @@ public:
     {
         buffs.reserve(10);
     }
-
 
 private:
     size_t read_index;

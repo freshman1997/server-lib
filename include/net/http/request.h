@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "buffer.h"
+#include "buff/buffer.h"
 
 enum class HttpMethod
 {
@@ -18,6 +18,7 @@ enum class HttpMethod
     head_,
     comment_,
     trace_,
+    patch_,
 };
 
 enum class HttpVersion : char
