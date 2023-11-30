@@ -1,4 +1,3 @@
-#include "thread/task.h"
 #include "thread/thread.h"
 #include "thread/thread_pool.h"
 #include "thread/worker_thread.h"
@@ -9,20 +8,12 @@ namespace thread
     {
     }
 
-    void WorkerThread::run()
+    void WorkerThread::run_internal()
     {
         if (!pool_) {
             return;
         }
 
-        while (!stop_.load()) {
-            Task *task = pool_->pop_task();
-            if (!task) {
-                stop_.store(true);
-                break;
-            }
-
-            task->run();
-        }
+        pool_->run_worker(this);
     }
 }

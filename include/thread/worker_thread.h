@@ -11,7 +11,8 @@ namespace thread
     public:
         WorkerThread(ThreadPool *_pool, int id);
 
-        virtual void run();
+    protected:
+        virtual void run_internal();
 
     private:
         ThreadPool *pool_;

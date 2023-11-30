@@ -6,7 +6,9 @@ namespace thread
     class Task 
     {
     public:
+        Task() : valid_(true) {}
         Task(bool valid) : valid_(valid) {}
+        virtual ~Task() {}
         void cancel_task() { valid_ = false; }
         void enable_task() { valid_ = true; }
         bool is_valid() const { return valid_; }

@@ -1,20 +1,16 @@
 #ifndef __THREAD_H__
 #define __THREAD_H__
-#include <deque>
 #include <string>
 #include <thread>
 #include <atomic>
 
+#include "thread/task.h"
 namespace thread 
 {
-    class Task;
-
-    class Thread
+    class Thread : public Task
     {
     public:
         Thread(int id);
-
-        virtual void run() = 0;
 
         void start();
 
@@ -23,6 +19,8 @@ namespace thread
         void stop();
 
         void detach();
+
+        bool is_stop() { return stop_.load() == true; }
 
     private:
         void set_default_name();

@@ -4,13 +4,31 @@
 #include <string>
 #include "nlohmann/json_fwd.hpp"
 #include "nlohmann/json.hpp"
-
+#include "thread/task.h"
+#include "thread/thread_pool.h"
 
 using namespace std;
 
+class PrintTask : public thread::Task
+{
+protected:
+
+    virtual void run_internal()
+    {
+        cout << "printing...\n";
+    }
+};
+
 int main()
 {
+    thread::ThreadPool pool(1);
+
+    pool.start();
+
+    PrintTask *task = new PrintTask;
+    pool.push_task(task);
     string raw = "GET /Michel4Liu/article/details/79531484 HTTP/1.1\r\n"
+
                 "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7\r\n"
                 "Accept-Encoding: gzip, deflate, br\r\n"
                 "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6,ja;q=0.5\r\n"

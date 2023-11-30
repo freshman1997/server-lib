@@ -10,13 +10,15 @@
 namespace thread
 {
     class Task;
-    class Thread;
+    class WorkerThread;
 
     class ThreadPool
     {
+        friend WorkerThread;
     public:
         ThreadPool();
         ThreadPool(int thread_num);
+        ~ThreadPool();
 
         void start();
         void push_task(Task *);
@@ -25,6 +27,7 @@ namespace thread
         std::string fetch_thread_status();
     private:
         void init();
+        void run_worker(WorkerThread *);
         static const int default_thread_num;
 
     private:
@@ -32,7 +35,7 @@ namespace thread
         int timeout_;
         std::size_t max_queue_size_;
         std::deque<Task *> tasks_;
-        std::vector<Thread *> threads_;
+        std::vector<WorkerThread *> threads_;
         std::mutex mut_;
         std::condition_variable cond_;
     };

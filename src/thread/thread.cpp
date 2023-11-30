@@ -7,7 +7,7 @@
 
 namespace thread
 {
-    Thread::Thread(int id) : join_(false), tid_(id), th(nullptr)
+    Thread::Thread(int id) : Task(true), join_(false), tid_(id), th(nullptr)
     {
         stop_.store(false);
     }

@@ -9,3 +9,6 @@ include_directories(
 FILE(GLOB_RECURSE SERVER_SRC "./src/*.cpp")
 
 add_executable(server ${SERVER_SRC} main.cpp)
+if(UNIX)
+target_link_libraries(server PUBLIC pthread)
+endif()
