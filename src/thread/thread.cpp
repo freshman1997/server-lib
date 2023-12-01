@@ -15,6 +15,7 @@ namespace thread
     void Thread::start()
     {
         assert(th == nullptr);
+        set_default_name();
         th = new std::thread(std::bind(&Thread::run, this));
     }
 

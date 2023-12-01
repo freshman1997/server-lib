@@ -2,10 +2,14 @@
 #include "net/http/request.h"
 #include <iostream>
 #include <string>
+#include <sys/socket.h>
+
+#include "net/socket/inet_address.h"
 #include "nlohmann/json_fwd.hpp"
 #include "nlohmann/json.hpp"
 #include "thread/task.h"
 #include "thread/thread_pool.h"
+#include "net/socket/socket.h"
 
 using namespace std;
 
@@ -21,6 +25,31 @@ protected:
 
 int main()
 {
+    using namespace net;
+    int server_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        cout << "create socket fail!!\n";
+        return 1;
+    }
+
+    Socket sock(server_fd);
+    InetAddress addr("localhost", 12333);
+    if (!sock.bind(addr)) {
+        cout << "cant bind!!\n";
+        return 1;
+    }
+
+    if (!sock.listen()) {
+        cout << "cant listen!!\n";
+        return 1;
+    }
+
+    int conn_fd = sock.accept(addr);
+    if (conn_fd < 0) {
+        cout << "cant accept!!\n";
+        return 1;
+    }
+
     thread::ThreadPool pool(1);
 
     pool.start();

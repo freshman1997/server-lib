@@ -6,6 +6,7 @@ namespace thread
 {
     WorkerThread::WorkerThread(ThreadPool *_pool, int id) : Thread(id), pool_(_pool)
     {
+        
     }
 
     void WorkerThread::run_internal()
