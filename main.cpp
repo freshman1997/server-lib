@@ -1,8 +1,16 @@
 #include "buff/buffer.h"
+#include "net/http/header_key.h"
 #include "net/http/request.h"
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ios>
 #include <iostream>
 #include <string>
 #include <sys/socket.h>
+#include <unistd.h>
+#include <fstream>
 
 #include "net/socket/inet_address.h"
 #include "nlohmann/json_fwd.hpp"
@@ -26,14 +34,15 @@ protected:
 int main()
 {
     using namespace net;
-    int server_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    int server_fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (server_fd < 0) {
         cout << "create socket fail!!\n";
         return 1;
     }
 
     Socket sock(server_fd);
-    InetAddress addr("localhost", 12333);
+    sock.set_reuse(true);
+    InetAddress addr("localhost", 12334);
     if (!sock.bind(addr)) {
         cout << "cant bind!!\n";
         return 1;
@@ -50,14 +59,114 @@ int main()
         return 1;
     }
 
+    /*
     thread::ThreadPool pool(1);
 
     pool.start();
 
     PrintTask *task = new PrintTask;
     pool.push_task(task);
-    string raw = "GET /Michel4Liu/article/details/79531484 HTTP/1.1\r\n"
+    */
 
+    Buffer buff;
+    int time = 0;
+
+    fstream file;
+    file.open("/home/yuan/Desktop/cz");
+    if (!file.good()) {
+        return 1;
+    }
+
+    file.seekg(0, std::ios_base::end);
+    long long length = file.tellg();
+    if (length == 0) {
+        file.close();
+        return 1;
+    }
+
+    file.clear();
+    file.seekg(0, ios::beg);
+
+    char *buff1 = new char[1024 * 1024];
+    net::http::HttpRequest req;
+
+    while (true) {
+        buff.rewind();
+        int ret = recv(conn_fd, buff.begin(), 1024, 0);
+        if (ret == 0 || ret < 0) {
+            break;
+        }
+
+        buff.set_write_index(ret);
+        req.reset();
+
+        if (!req.parse_header(buff)) {
+            std::cout << "parse fail!!" << std::endl;
+            continue;
+        } else {
+            if (req.get_url_domain().size() > 1 && req.get_url_domain()[1] == "movie") {
+                if (file.bad()) {
+                    cout << "file desciptor error!!\n";
+                    break;
+                }
+
+                string resp = "HTTP/1.1 206\r\n";
+                resp.append("Content-Type: video/mp4\r\n");
+
+                const string *range = req.get_header(net::http::http_header_key::range);
+                long long offset = 0;
+
+                if (range) {
+                    size_t pos = range->find_first_of("=");
+                    if (string::npos == pos) {
+                        close(conn_fd);
+                        file.close();
+                        return 1;
+                    }
+
+                    size_t pos1 = range->find_first_of("-");
+                    offset = std::atol(range->substr(pos + 1, pos1 - pos).c_str());
+                }
+                
+                cout.flush();
+                
+                
+                file.seekg(offset, ios::beg);
+                file.read(buff1, 1024 * 1024);
+                size_t r = file.gcount();
+
+                resp.append("Content-Range: bytes ")
+                    .append(std::to_string(offset))
+                    .append("-")
+                    .append(std::to_string(length - 1))
+                    .append("/")
+                    .append(std::to_string(length))
+                    .append("\r\n");
+
+                resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
+                cout << "offset: " << offset << ", length: " << r << ", size: " << length << endl;
+                write(conn_fd, resp.c_str(), resp.size());
+                write(conn_fd, buff1, r);
+
+                if (file.eof()) {
+                    file.clear();
+                }
+
+                file.seekg(0, ios::beg);
+                continue;
+            }
+
+            std::cout << "content lenth:" << req.header_exists(net::http::http_header_key::content_length) << std::endl;
+            string msg = "你好，世界！！";
+            string repsonse = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
+            write(conn_fd, repsonse.c_str(), repsonse.size());
+            close(conn_fd);
+            break;
+        }
+    }
+
+    file.close();
+    string raw = "GET /Michel4Liu/article/details/79531484 HTTP/1.1\r\n"
                 "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7\r\n"
                 "Accept-Encoding: gzip, deflate, br\r\n"
                 "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6,ja;q=0.5\r\n"
@@ -76,13 +185,8 @@ int main()
                 "sec-ch-ua-mobile: ?0\r\n"
                 "sec-ch-ua-platform: \"Windows\"\r\n\r\n";
 
-    HttpRequest req;
-    Buffer buff;
-    buff.write_string(raw);
-    if (!req.parse_header(buff)) {
-        std::cout << "parse fail!!" << std::endl;
-        return 1;
-    }
+    //buff.write_string(raw);
+    
 
     using namespace nlohmann;
     json data = {

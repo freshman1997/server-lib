@@ -1,7 +1,6 @@
 #ifndef __SOCKET_H__
 #define __SOCKET_H__
 #include "inet_address.h"
-#include <string>
 
 namespace net
 {

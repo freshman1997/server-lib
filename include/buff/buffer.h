@@ -137,10 +137,12 @@ public:
     void write_string(const char *str)
     {
         const char *p = str;
-        while (p) {
+        while (*p) {
             buffs.push_back(*p);
             ++p;
         }
+
+        write_index += p - str;
     }
 public:
     char* begin()
@@ -165,7 +167,7 @@ public:
 
     size_t readable_bytes() const
     {
-        return buffs.size() - read_index;
+        return write_index - read_index;
     }
 
     size_t get_read_index() const 
@@ -185,6 +187,20 @@ public:
         }
 
         read_index = idx;
+    }
+
+    void rewind()
+    {
+        read_index = 0;
+        write_index = 0;
+        if (buffs.empty()) {
+            buffs.resize(1024);
+        }
+    }
+
+    void set_write_index(size_t idx)
+    {
+        write_index = idx;
     }
 
 private:
@@ -211,7 +227,7 @@ private:
 public:
     Buffer() : read_index(0), write_index(0)
     {
-        buffs.reserve(10);
+        //buffs.resize(1024);
     }
 
 private:

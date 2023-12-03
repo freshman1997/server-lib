@@ -4,17 +4,20 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/epoll.h>
+#include <fcntl.h>
+#include <signal.h>
 
 #include "net/poller/epoll_poller.h"
-#include "net/poller/poller.h"
 #include "net/channel/channel.h"
 
 namespace net 
 {
     EpollPoller::EpollPoller(EventLoop *loop) : Poller(loop) 
     {
+        signal(SIGPIPE, SIG_IGN);
         epoll_fd_ = ::epoll_create1(EPOLL_CLOEXEC);
         // 设置 ET 触发模式 ？
+        epoll_events_.resize(100);
     }
     
     EpollPoller::~EpollPoller()
@@ -33,7 +36,6 @@ namespace net
                 Channel *channel = static_cast<Channel *>(epoll_events_[i].data.ptr);
                 int fd = channel->get_fd();
                 channel->set_read_event(epoll_events_[i].events);
-                activeChannels->push_back(channel);
             }
         } else if (nevent == 0) {
             // TODO log

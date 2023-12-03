@@ -22,6 +22,10 @@ namespace thread
         }
         
         cond_.notify_all();
+
+        for (auto &it : tasks_) {
+            delete it;
+        }
     }
 
     void ThreadPool::init()

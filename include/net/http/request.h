@@ -6,106 +6,129 @@
 #include <vector>
 
 #include "buff/buffer.h"
-
-enum class HttpMethod
+namespace net::http 
 {
-    invalid_ = 0,
-    get_,
-    post_,
-    put_,
-    delete_,
-    options_,
-    head_,
-    comment_,
-    trace_,
-    patch_,
-};
-
-enum class HttpVersion : char
-{
-    invalid = -1,
-    v_1_0,
-    v_1_1,
-    v_2_0,
-    v_3_0,
-};
-
-class HttpRequest;
-class HttpRequestParser
-{
-    friend class HttpRequest;
-public:
-    enum class HeaderState
+    enum class HttpMethod
     {
-        init = 0,
-        metohd,                 // 方法
-        method_gap,             // 方法接下来的空格
-        url,                    // url
-        url_gap,                // url 接下来的空格
-        version,                // 版本信息
-        version_newline,        // 换行
-        header_key,             // 头部key
-        header_value,           // 值
-        header_newline,         // 换行
-        header_end_lines,       // 最后换行
+        invalid_ = 0,
+        get_,
+        post_,
+        put_,
+        delete_,
+        options_,
+        head_,
+        comment_,
+        trace_,
+        patch_,
     };
 
-    enum class BodyState
+    enum class HttpVersion : char
     {
-        init = 0,
-        partial,
-        fully,
+        invalid = -1,
+        v_1_0,
+        v_1_1,
+        v_2_0,
+        v_3_0,
     };
 
-    HttpRequestParser() {}
-    HttpRequestParser(HttpRequest *req_) : req(req_) 
-    {}
-
-    void set_req(HttpRequest *req_)
+    class HttpRequest;
+    class HttpRequestParser
     {
-        this->req = req_;
-    }
+        friend class HttpRequest;
+    public:
+        enum class HeaderState
+        {
+            init = 0,
+            metohd,                 // 方法
+            method_gap,             // 方法接下来的空格
+            url,                    // url
+            url_gap,                // url 接下来的空格
+            version,                // 版本信息
+            version_newline,        // 换行
+            header_key,             // 头部key
+            header_value,           // 值
+            header_newline,         // 换行
+            header_end_lines,       // 最后换行
+        };
 
-    bool parse_method(Buffer &buff);
-    bool parse_url(Buffer &buff);
-    bool parse_version(Buffer &buff);
-    bool parse_headers(Buffer &buff);
+        enum class BodyState
+        {
+            init = 0,
+            partial,
+            fully,
+        };
 
-    bool parse_body(Buffer &buff);
+        HttpRequestParser() {}
+        HttpRequestParser(HttpRequest *req_) : req(req_) 
+        {}
 
-private:
-    HeaderState header_state = HeaderState::init;
-    BodyState body_state = BodyState::init;
-    HttpRequest *req = nullptr;
-};
+        void set_req(HttpRequest *req_)
+        {
+            this->req = req_;
+        }
 
-class HttpRequest
-{
-    friend class HttpRequestParser;
-public:
-    HttpRequest();
+        bool parse_method(Buffer &buff);
+        bool parse_url(Buffer &buff);
+        bool parse_version(Buffer &buff);
+        bool parse_headers(Buffer &buff);
 
-    HttpMethod get_method() const;
-    HttpVersion get_version() const;
-    bool header_exists(std::string &key) const;
+        bool parse_body(Buffer &buff);
 
-    bool parse_header(Buffer &buff);    
+        void reset() 
+        {
+            header_state = HeaderState::init;
+            body_state = BodyState::init;
+        }
+        
+    private:
+        HeaderState header_state = HeaderState::init;
+        BodyState body_state = BodyState::init;
+        HttpRequest *req = nullptr;
+    };
 
-private:
-    HttpRequestParser parser;
-    std::vector<std::string> url_domain;
-    HttpMethod method = HttpMethod::invalid_;
-    HttpVersion version = HttpVersion::invalid;
-    std::unordered_map<std::string, std::string> request_params;
-    std::unordered_map<std::string, std::string> headers;
-};
+    class HttpRequest
+    {
+        friend class HttpRequestParser;
+    public:
+        HttpRequest();
 
-class HttpRequestContext
-{
-public:
+        HttpMethod get_method() const;
+        HttpVersion get_version() const;
+        bool header_exists(const std::string &key) const;
 
-private:
-    HttpRequest req;
-};
+        const std::string * get_header(const std::string &key) const;
+
+        bool parse_header(Buffer &buff);
+
+        const std::unordered_map<std::string, std::string> & get_request_params() const
+        {
+            return request_params;
+        }
+
+        const std::vector<std::string> & get_url_domain() const
+        {
+            return url_domain;
+        }
+
+        void reset();
+
+    private:
+        HttpRequestParser parser;
+        std::vector<std::string> url_domain;
+        HttpMethod method = HttpMethod::invalid_;
+        HttpVersion version = HttpVersion::invalid;
+        std::unordered_map<std::string, std::string> request_params;
+        std::unordered_map<std::string, std::string> headers;
+    };
+
+    class HttpRequestContext
+    {
+    public:
+
+    private:
+        HttpRequest req;
+
+    };
+}
 
 #endif

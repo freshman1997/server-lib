@@ -23,8 +23,8 @@ namespace net
         struct sockaddr_in addr;
         ::memset(&addr, 0, sizeof(struct sockaddr_in));
         addr.sin_family = AF_INET;
-        addr.sin_port = endian::hostToNetwork16(port_);
-        addr.sin_addr.s_addr = ::inet_addr(ip_.c_str());
+        addr.sin_port = htons(port_);
+        addr.sin_addr.s_addr = inet_addr("192.168.96.128");
         return addr;
     }
 }

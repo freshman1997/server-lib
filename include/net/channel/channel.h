@@ -16,6 +16,8 @@ namespace net
     public:
         Channel(int fd);
 
+        void on_event();
+
         int get_fd() const 
         {
             return fd_;
