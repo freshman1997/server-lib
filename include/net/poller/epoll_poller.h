@@ -6,6 +6,8 @@
 namespace net {
     class EpollPoller : public Poller
     {
+        static const int MAX_EVENT;
+
     public:
         EpollPoller(EventLoop *loop);
         ~EpollPoller();

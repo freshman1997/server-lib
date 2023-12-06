@@ -1,7 +1,7 @@
 #ifndef __CONNECTION_H__
 #define __CONNECTION_H__
 
-namespace conn
+namespace net::conn
 {
     class Connection
     {

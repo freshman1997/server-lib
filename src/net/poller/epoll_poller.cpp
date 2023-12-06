@@ -12,12 +12,14 @@
 
 namespace net 
 {
+    const int EpollPoller::MAX_EVENT = 4096;
+
     EpollPoller::EpollPoller(EventLoop *loop) : Poller(loop) 
     {
         signal(SIGPIPE, SIG_IGN);
         epoll_fd_ = ::epoll_create1(EPOLL_CLOEXEC);
         // 设置 ET 触发模式 ？
-        epoll_events_.resize(100);
+        epoll_events_.resize(10);
     }
     
     EpollPoller::~EpollPoller()
@@ -36,6 +38,11 @@ namespace net
                 Channel *channel = static_cast<Channel *>(epoll_events_[i].data.ptr);
                 int fd = channel->get_fd();
                 channel->set_read_event(epoll_events_[i].events);
+                channel->on_event();
+            }
+            
+            if (nevent == (int)epoll_events_.size() && (int)epoll_events_.size() < MAX_EVENT) {
+                epoll_events_.resize(epoll_events_.size() * 2 >= MAX_EVENT ? MAX_EVENT : epoll_events_.size() * 2);
             }
         } else if (nevent == 0) {
             // TODO log

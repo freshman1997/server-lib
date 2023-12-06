@@ -51,6 +51,7 @@ namespace net
         void enable_write()
         {
             events_ |= WRITE_EVENT;
+            
         }
 
         void disable_all()
