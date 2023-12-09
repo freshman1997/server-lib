@@ -3,13 +3,10 @@
 #include <memory>
 
 #include "connection.h"
+#include "net/channel/channel.h"
+#include "net/socket/inet_address.h"
 
-namespace net 
-{
-    class InetAddress;
-}
-
-namespace net::conn
+namespace net
 {
     class TcpConnection : public Connection
     {
@@ -23,6 +20,7 @@ namespace net::conn
 
     private:
         std::shared_ptr<net::InetAddress> addr_;
+        std::shared_ptr<net::Channel> channel_;
     };
 }
 

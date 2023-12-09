@@ -9,6 +9,7 @@
 #include <iostream>
 #include <string>
 #include <sys/socket.h>
+#include <thread>
 #include <unistd.h>
 #include <fstream>
 
@@ -19,7 +20,11 @@
 #include "thread/thread_pool.h"
 #include "net/socket/socket.h"
 
-using namespace std;
+#include "timer/timer_task.h"
+#include "timer/timer.h"
+#include "timer/wheel_timer_manager.h"
+
+
 
 class PrintTask : public thread::Task
 {
@@ -27,12 +32,44 @@ protected:
 
     virtual void run_internal()
     {
-        cout << "printing...\n";
+        std::cout << "printing...\n";
+    }
+};
+
+using namespace std;
+using namespace timer;
+class PrintTask1 : public TimerTask
+{
+    int idx = 0;
+public:
+    virtual void on_timer(Timer *timer)
+    {
+        std::cout << " timer task printing ==> " << idx <<  std::endl;
+        ++idx;
+    }
+
+    virtual void on_finished(Timer *timer)
+    {
+        std::cout << " timer task finished " << std::endl;
     }
 };
 
 int main()
 {
+    TimerTask *t = new PrintTask1;
+    WheelTimerManager *manager = new WheelTimerManager;
+    Timer *timer = manager->timeout(2000, t);
+    manager->tick();
+    timer->reset();
+    manager->interval(2000, 1000, t, 100);
+    while (true)
+    {
+        manager->tick();
+
+        std::this_thread::sleep_for(chrono::milliseconds(10));
+    }
+
+    return 0;
     using namespace net;
     int server_fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (server_fd < 0) {

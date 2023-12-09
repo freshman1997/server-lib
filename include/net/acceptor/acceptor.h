@@ -1,23 +1,18 @@
 #ifndef __ACCEPTOR_H__
 #define __ACCEPTOR_H__
 
-#include "net/socket/socket.h"
 namespace net
 {
-    class Channel;
+    class AcceptHandler;
 
     class Acceptor
     {
     public:
-        Acceptor();
+        virtual void listen() = 0;
 
-        void listen();
+        virtual void on_close() = 0;
 
-        void on_event();
-
-    private:
-        Socket *accept_socket_;
-        Channel *accept_channel_;
+        virtual void set_handler(AcceptHandler *acceptor) = 0;
     };
 }
 
