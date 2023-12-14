@@ -7,16 +7,16 @@ namespace net
     class Socket
     {
     public:
-        explicit Socket(int fd) : fd_(fd) {}
+        explicit Socket(const char *ip, int port);
         ~Socket();
 
-        bool bind(const InetAddress &addr);
+        bool bind();
 
         bool listen();
 
-        int accept(const InetAddress &addr);
+        int accept(struct sockaddr_in &peer_addr);
 
-        bool connect(const InetAddress &addr);
+        bool connect();
 
         void set_no_deylay(bool on);
 
@@ -29,7 +29,18 @@ namespace net
             return fd_;
         }
 
+        bool valid()
+        {
+            return fd_ > 0;
+        }
+
+        InetAddress * get_address() 
+        {
+            return addr;
+        }
+
     private:
+        InetAddress *addr;
         const int fd_;
     };
 }

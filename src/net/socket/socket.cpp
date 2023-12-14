@@ -4,33 +4,34 @@
 #include <netinet/tcp.h>
 #include <unistd.h>
 
+#include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
+#include "net/socket/socket_ops.h"
 
 namespace net
 {
+    Socket::Socket(const char *ip, int port) : addr(new InetAddress(ip, port)), fd_(socket::create_ipv4_socket(true))
+    {}
+
     Socket::~Socket()
     {
         ::close(fd_);
+        delete addr;
     }
 
-    bool Socket::bind(const InetAddress &addr)
+    bool Socket::bind()
     {
-        struct sockaddr_in saddr =  addr.to_ipv4_address();
-        return ::bind(fd_, (const struct sockaddr *)&saddr, sizeof(struct sockaddr_in)) == 0;
+        return socket::bind(fd_, *addr) == 0;
     }
 
     bool Socket::listen()
     {
-        return ::listen(fd_, 4096) == 0;
+        return socket::listen(fd_, 4096) == 0;
     }
 
-    int Socket::accept(const InetAddress &addr)
+    int Socket::accept(struct sockaddr_in &peer_addr)
     {
-        struct sockaddr_in saddr =  addr.to_ipv4_address();
-        struct sockaddr peer_addr;
-        ::memset(&peer_addr, 0, sizeof(struct sockaddr));
-        socklen_t ssz = (socklen_t)sizeof(struct sockaddr_in);
-        int conn_fd = ::accept(fd_, (struct sockaddr *)&saddr, &ssz);
+        int conn_fd = socket::accept(fd_, peer_addr);
         if (conn_fd < 0) {
             // log
         }
@@ -38,30 +39,23 @@ namespace net
         return conn_fd;
     }
 
-    bool Socket::connect(const InetAddress &addr)
+    bool Socket::connect()
     {
-        struct sockaddr_in saddr =  addr.to_ipv4_address();
-        return :: connect(fd_, (const struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
+        return socket::connect(fd_, *addr) == 0;
     }
 
     void Socket::set_no_deylay(bool on)
     {
-        int optval = on ? 1 : 0;
-        ::setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY,
-               &optval, static_cast<socklen_t>(sizeof optval));
+        socket::set_no_delay(fd_, on);
     }
 
     void Socket::set_reuse(bool on)
     {
-        int optval = on ? 1 : 0;
-        ::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR,
-               &optval, static_cast<socklen_t>(sizeof optval));
+        socket::set_reuse(fd_, on);
     }
 
     void Socket::set_keep_alive(bool on)
     {
-        int optval = on ? 1 : 0;
-        ::setsockopt(fd_, SOL_SOCKET, SO_KEEPALIVE,
-               &optval, static_cast<socklen_t>(sizeof optval));
+        socket::set_keep_alive(fd_, on);
     }
 }

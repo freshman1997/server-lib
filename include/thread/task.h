@@ -15,9 +15,9 @@ namespace thread
 
         void run() 
         {
-            if (!valid_) return;
-
-            run_internal();
+            if (valid_) {
+                run_internal();
+            }
         }
 
     protected:

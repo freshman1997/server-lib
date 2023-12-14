@@ -1,5 +1,4 @@
 #include "timer/wheel_timer.h"
-#include "timer/timer.h"
 #include "timer/timer_task.h"
 
 #include <cstddef>
@@ -28,7 +27,7 @@ namespace timer
         items_.clear();
     }
 
-    size_t Wheel::get_size() const
+    std::size_t Wheel::get_size() const
     {
         return items_.size();
     }

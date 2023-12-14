@@ -2,6 +2,7 @@
 #define __BUFFER_H__
 
 #include <algorithm>
+#include <cstddef>
 #include <stdint.h>
 #include <string>
 #include <cstring>
@@ -177,7 +178,7 @@ public:
 
     size_t get_write_index() const 
     {
-        return read_index;
+        return write_index;
     }
 
     void reset_read_index(size_t idx)
@@ -201,6 +202,21 @@ public:
     void set_write_index(size_t idx)
     {
         write_index = idx;
+    }
+
+    size_t writable_size() const
+    {
+        return buffs.size() - write_index;
+    }
+
+    void fill(size_t bytes)
+    {
+        write_index += bytes;
+    }
+
+    void resize()
+    {
+        buffs.resize(buffs.size() + 1024);
     }
 
 private:
@@ -227,7 +243,7 @@ private:
 public:
     Buffer() : read_index(0), write_index(0)
     {
-        //buffs.resize(1024);
+        buffs.resize(1024);
     }
 
 private:

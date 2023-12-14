@@ -3,6 +3,8 @@
 
 namespace net
 {
+    class SelectHandler;
+
     class Channel
     {
     public:
@@ -64,6 +66,11 @@ namespace net
             read_event_ = ev;
         }
 
+        void set_handler(SelectHandler *handler)
+        {
+            handler_ = handler;
+        }
+
     private:
         static const int READ_EVENT = 1;
         static const int WRITE_EVENT = 2;
@@ -74,6 +81,7 @@ namespace net
         int read_event_;
         int fd_;
         Oper oper = Oper::init;
+        SelectHandler *handler_;
     };
 }
 

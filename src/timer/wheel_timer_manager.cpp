@@ -42,7 +42,7 @@ namespace timer
     WheelTimerManager::WheelTimerManager()
     {
         count_ = 1000;
-        time_unit_ = 1;
+        time_unit_ = 10;
         helper_item_ = new WheelTimerItem;
 
         helper::init_time(time_unit_);

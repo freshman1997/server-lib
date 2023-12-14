@@ -21,7 +21,7 @@ namespace timer
         virtual ~Wheel();
 
     public:
-        size_t get_size() const;
+        std::size_t get_size() const;
 
         uint64_t time_unit() const;
 

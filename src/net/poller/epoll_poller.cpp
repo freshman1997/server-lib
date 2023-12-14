@@ -16,8 +16,8 @@ namespace net
 
     EpollPoller::EpollPoller(EventLoop *loop) : Poller(loop) 
     {
-        signal(SIGPIPE, SIG_IGN);
-        epoll_fd_ = ::epoll_create1(EPOLL_CLOEXEC);
+        //signal(SIGPIPE, SIG_IGN);
+        epoll_fd_ = ::epoll_create(65535);
         // 设置 ET 触发模式 ？
         epoll_events_.resize(10);
     }
@@ -29,14 +29,13 @@ namespace net
 
     time_t EpollPoller::poll(int timeout, std::vector<Channel *> *activeChannels)
     {
+        time_t tm = time(nullptr);
         int nevent = ::epoll_wait(epoll_fd_, &*epoll_events_.begin(), (int)epoll_events_.size(), timeout);
         int err = errno;
-        time_t tm = time(nullptr);
 
         if (nevent > 0) {
             for (int i = 0; i < nevent; ++i) {
                 Channel *channel = static_cast<Channel *>(epoll_events_[i].data.ptr);
-                int fd = channel->get_fd();
                 channel->set_read_event(epoll_events_[i].events);
                 channel->on_event();
             }

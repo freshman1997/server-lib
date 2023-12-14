@@ -61,7 +61,7 @@ int main()
     Timer *timer = manager->timeout(2000, t);
     manager->tick();
     timer->reset();
-    manager->interval(2000, 1000, t, 100);
+    manager->interval(2000, 2000, t, 100);
     while (true)
     {
         manager->tick();
@@ -71,16 +71,15 @@ int main()
 
     return 0;
     using namespace net;
-    int server_fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (server_fd < 0) {
+
+    Socket sock("localhost", 12334);
+    if (!sock.valid()) {
         cout << "create socket fail!!\n";
         return 1;
     }
 
-    Socket sock(server_fd);
     sock.set_reuse(true);
-    InetAddress addr("localhost", 12334);
-    if (!sock.bind(addr)) {
+    if (!sock.bind()) {
         cout << "cant bind!!\n";
         return 1;
     }
@@ -90,7 +89,8 @@ int main()
         return 1;
     }
 
-    int conn_fd = sock.accept(addr);
+    struct sockaddr_in peer_addr;
+    int conn_fd = sock.accept(peer_addr);
     if (conn_fd < 0) {
         cout << "cant accept!!\n";
         return 1;
