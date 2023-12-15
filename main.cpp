@@ -1,4 +1,6 @@
 #include "buff/buffer.h"
+#include "net/acceptor/acceptor.h"
+#include "net/acceptor/tcp_acceptor.h"
 #include "net/http/header_key.h"
 #include "net/http/request.h"
 #include <cstddef>
@@ -13,7 +15,10 @@
 #include <unistd.h>
 #include <fstream>
 
+#include "net/poller/epoll_poller.h"
+#include "net/poller/poller.h"
 #include "net/socket/inet_address.h"
+#include "net/socket/tcp_socket.h"
 #include "nlohmann/json_fwd.hpp"
 #include "nlohmann/json.hpp"
 #include "thread/task.h"
@@ -24,7 +29,29 @@
 #include "timer/timer.h"
 #include "timer/wheel_timer_manager.h"
 
+#include "net/event/event_loop.h"
 
+void test_evloop()
+{
+    net::Socket *sock = new net::Socket("", 12333);
+    if (!sock->bind()) {
+        return;
+    }
+
+    sock->set_reuse(true);
+    //sock->set_none_block(true);
+    net::Acceptor *acceptor = new net::TcpAcceptor(sock);
+    if (!acceptor->listen()) {
+        return;
+    }
+
+    net::Poller *poller = new net::EpollPoller;
+    timer::WheelTimerManager *manager = new timer::WheelTimerManager;
+    net::EventLoop loop(poller, manager);
+    acceptor->set_handler(&loop);
+    loop.on_new_connection(nullptr, acceptor);
+    loop.loop();
+}
 
 class PrintTask : public thread::Task
 {
@@ -56,7 +83,10 @@ public:
 
 int main()
 {
-    TimerTask *t = new PrintTask1;
+    test_evloop();
+    return 1;
+
+    /*TimerTask *t = new PrintTask1;
     WheelTimerManager *manager = new WheelTimerManager;
     Timer *timer = manager->timeout(2000, t);
     manager->tick();
@@ -69,10 +99,10 @@ int main()
         std::this_thread::sleep_for(chrono::milliseconds(10));
     }
 
-    return 0;
+    return 0;*/
     using namespace net;
 
-    Socket sock("localhost", 12334);
+    Socket sock("192.168.88.50", 12334);
     if (!sock.valid()) {
         cout << "create socket fail!!\n";
         return 1;

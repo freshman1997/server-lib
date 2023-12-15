@@ -5,6 +5,7 @@ namespace net
 {
     class AcceptHandler;
     class Connection;
+    class Channel;
 
     class Acceptor
     {
@@ -17,6 +18,7 @@ namespace net
 
         virtual void on_new_connection(Connection *conn) = 0;
 
+        virtual Channel * get_channel() = 0;
     };
 }
 

@@ -29,6 +29,10 @@ namespace net
         // 发送完数据后返回
         virtual void close();
 
+        virtual ConnectionType get_conn_type();
+
+        Channel * get_channel();
+
     public: // select handler
         virtual void on_read_event();
 
@@ -42,6 +46,7 @@ namespace net
         std::shared_ptr<net::Channel> channel_;
         std::shared_ptr<Buffer> input_buffer_;
         std::shared_ptr<Buffer> output_buffer_;
+        bool closed;
     };
 }
 

@@ -1,4 +1,5 @@
 #include "net/connection/tcp_connection.h"
+#include "net/connection/connection.h"
 #include <memory>
 #include <sys/socket.h>
 
@@ -10,13 +11,17 @@ namespace net
         this->local_addr_ = localAddr;
         this->channel_ = channel;
 
+        this->channel_->set_handler(this);
+
         input_buffer_ = std::make_shared<Buffer>();
         output_buffer_ = std::make_shared<Buffer>();
+
+        closed = false;
     }
 
     bool TcpConnection::is_connected()
     {
-        return false;
+        return closed;
     }
 
     const InetAddress & TcpConnection::get_remote_address() const
@@ -37,13 +42,23 @@ namespace net
     // 丢弃所有未发送的数据
     void TcpConnection::abort()
     {
-
+        closed = true;
     }
 
     // 发送完数据后返回
     void TcpConnection::close()
     {
+        closed = true;
+    }
 
+    ConnectionType TcpConnection::get_conn_type()
+    {
+        return ConnectionType::TCP;
+    }
+
+    Channel * TcpConnection::get_channel()
+    {
+        return channel_.get();
     }
 
     void TcpConnection::on_read_event()

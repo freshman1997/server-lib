@@ -10,7 +10,7 @@
 
 namespace net
 {
-    Socket::Socket(const char *ip, int port) : addr(new InetAddress(ip, port)), fd_(socket::create_ipv4_socket(true))
+    Socket::Socket(const char *ip, int port) : addr(new InetAddress(ip, port)), fd_(socket::create_ipv4_socket(false))
     {}
 
     Socket::~Socket()
@@ -21,12 +21,14 @@ namespace net
 
     bool Socket::bind()
     {
-        return socket::bind(fd_, *addr) == 0;
+        int res = socket::bind(fd_, *addr);
+        return res == 0;
     }
 
     bool Socket::listen()
     {
-        return socket::listen(fd_, 4096) == 0;
+        int res = socket::listen(fd_, 128);
+        return res == 0;
     }
 
     int Socket::accept(struct sockaddr_in &peer_addr)
@@ -57,5 +59,10 @@ namespace net
     void Socket::set_keep_alive(bool on)
     {
         socket::set_keep_alive(fd_, on);
+    }
+
+    void Socket::set_none_block(bool on)
+    {
+        socket::set_reuse(fd_, on);
     }
 }

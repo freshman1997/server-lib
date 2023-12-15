@@ -14,7 +14,7 @@ namespace net
 {
     const int EpollPoller::MAX_EVENT = 4096;
 
-    EpollPoller::EpollPoller(EventLoop *loop) : Poller(loop) 
+    EpollPoller::EpollPoller()
     {
         //signal(SIGPIPE, SIG_IGN);
         epoll_fd_ = ::epoll_create(65535);
@@ -27,7 +27,7 @@ namespace net
         ::close(epoll_fd_);
     }
 
-    time_t EpollPoller::poll(int timeout, std::vector<Channel *> *activeChannels)
+    time_t EpollPoller::poll(int timeout)
     {
         time_t tm = time(nullptr);
         int nevent = ::epoll_wait(epoll_fd_, &*epoll_events_.begin(), (int)epoll_events_.size(), timeout);

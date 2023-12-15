@@ -9,10 +9,10 @@ namespace net {
         static const int MAX_EVENT;
 
     public:
-        EpollPoller(EventLoop *loop);
+        EpollPoller();
         ~EpollPoller();
 
-        virtual time_t poll(int timeout, std::vector<Channel *> *activeChannels);
+        virtual time_t poll(int timeout);
 
         virtual void update_channel(Channel *channel);
 

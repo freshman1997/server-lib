@@ -6,6 +6,13 @@ class Buffer;
 namespace net
 {
     class InetAddress;
+    class Channel;
+
+    enum class ConnectionType
+    {
+        TCP,
+        UDP
+    };
 
     // 表示一个连接
     class Connection
@@ -24,6 +31,10 @@ namespace net
 
         // 发送完数据后返回
         virtual void close() = 0;
+
+        virtual ConnectionType get_conn_type() = 0;
+
+        virtual Channel * get_channel() = 0;
     };
 }
 

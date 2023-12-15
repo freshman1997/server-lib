@@ -243,7 +243,7 @@ private:
 public:
     Buffer() : read_index(0), write_index(0)
     {
-        buffs.resize(1024);
+        buffs.resize(4096);
     }
 
 private:

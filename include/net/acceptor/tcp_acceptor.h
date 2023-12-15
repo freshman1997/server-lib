@@ -13,7 +13,7 @@ namespace net
     class TcpAcceptor : public Acceptor, public SelectHandler
     {
     public:
-        TcpAcceptor();
+        TcpAcceptor(Socket *socket);
 
     public:
         virtual bool listen();
@@ -22,15 +22,24 @@ namespace net
 
         virtual void set_handler(AcceptHandler *handler);
 
+        virtual void on_new_connection(Connection *conn);
+
+        virtual Channel * get_channel()
+        {
+            return channel_;
+        }
+
     public: // select handler
         virtual void on_read_event();
 
         virtual void on_write_event();
 
         virtual int get_fd();
-        
+
     public:
         const Socket * get_socket() const;
+
+       
 
     private:
         Channel *channel_;

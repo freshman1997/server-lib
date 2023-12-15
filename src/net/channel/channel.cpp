@@ -4,6 +4,10 @@
 
 namespace net
 {
+    const int Channel::READ_EVENT = EPOLLIN | EPOLLPRI;
+    const int Channel::WRITE_EVENT = EPOLLOUT;
+    const int Channel::NONE_EVENT = 0;
+
     Channel::Channel(int fd) : fd_(fd), handler_(nullptr)
     {
         disable_all();

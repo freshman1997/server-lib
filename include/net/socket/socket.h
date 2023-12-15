@@ -24,6 +24,8 @@ namespace net
 
         void set_keep_alive(bool on);
 
+        void set_none_block(bool on);
+
         int get_fd() const
         {
             return fd_;

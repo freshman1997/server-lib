@@ -3,7 +3,6 @@
 
 namespace net
 {
-    
     class Connection;
     class Acceptor;
 

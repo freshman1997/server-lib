@@ -15,7 +15,7 @@
 
 namespace net
 {
-    TcpAcceptor::TcpAcceptor() : handler_(nullptr), channel_(nullptr), socket_(nullptr)
+    TcpAcceptor::TcpAcceptor(Socket *socket) : handler_(nullptr), channel_(nullptr), socket_(socket)
     {}
 
     bool TcpAcceptor::listen()
@@ -26,6 +26,9 @@ namespace net
             return false;
         }
 
+        channel_ = new Channel(socket_->get_fd());
+        channel_->set_handler(this);
+        channel_->enable_read();
         return true;
     }
 
@@ -38,7 +41,12 @@ namespace net
     {
         handler_ = handler;
     }
-    
+
+    void TcpAcceptor::on_new_connection(Connection *conn)
+    {
+
+    }
+
     void TcpAcceptor::on_read_event()
     {
         assert(socket_);
@@ -50,7 +58,7 @@ namespace net
             return;
         }
 
-        std::shared_ptr<InetAddress> remote_addr = std::make_shared<InetAddress>(::inet_ntoa(peer_addr.sin_addr), peer_addr.sin_port);
+        std::shared_ptr<InetAddress> remote_addr = std::make_shared<InetAddress>(::inet_ntoa(peer_addr.sin_addr), ntohs(peer_addr.sin_port));
         std::shared_ptr<InetAddress> local_addr(socket_->get_address());
         std::shared_ptr<Channel> newChannel = std::make_shared<Channel>(conn_fd);
         Connection *conn = new TcpConnection(remote_addr, local_addr, newChannel);

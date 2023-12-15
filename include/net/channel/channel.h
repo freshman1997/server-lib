@@ -72,9 +72,9 @@ namespace net
         }
 
     private:
-        static const int READ_EVENT = 1;
-        static const int WRITE_EVENT = 2;
-        static const int NONE_EVENT = 0;
+        static const int READ_EVENT;
+        static const int WRITE_EVENT;
+        static const int NONE_EVENT;
 
     private:
         int events_;
