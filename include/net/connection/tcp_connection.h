@@ -1,19 +1,25 @@
 #ifndef __TCP_CONNECTION_H__
 #define __TCP_CONNECTION_H__
 #include <memory>
+#include <fstream>
 
 #include "connection.h"
 #include "net/channel/channel.h"
 #include "net/handler/select_handler.h"
+#include "net/http/request.h"
 #include "net/socket/inet_address.h"
 #include "buff/buffer.h"
 
 namespace net
 {
+    class AcceptHandler;
+
     class TcpConnection : public Connection, public SelectHandler
     {
     public:
-        TcpConnection(std::shared_ptr<net::InetAddress> remoteAddr, std::shared_ptr<net::InetAddress> localAddr, std::shared_ptr<net::Channel> channel);
+        TcpConnection(std::shared_ptr<net::InetAddress> remoteAddr, std::shared_ptr<net::InetAddress> localAddr, std::shared_ptr<net::Channel> channel, AcceptHandler *handler);
+
+        virtual ~TcpConnection();
 
         virtual bool is_connected();
 
@@ -44,9 +50,15 @@ namespace net
         std::shared_ptr<net::InetAddress> remote_addr_;
         std::shared_ptr<net::InetAddress> local_addr_;
         std::shared_ptr<net::Channel> channel_;
+        AcceptHandler *handler_;
         std::shared_ptr<Buffer> input_buffer_;
         std::shared_ptr<Buffer> output_buffer_;
         bool closed;
+
+        char *buff1_;
+        std::fstream file_;
+        long long length_;
+        net::http::HttpRequest req_;
     };
 }
 

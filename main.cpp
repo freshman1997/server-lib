@@ -31,27 +31,7 @@
 
 #include "net/event/event_loop.h"
 
-void test_evloop()
-{
-    net::Socket *sock = new net::Socket("", 12333);
-    if (!sock->bind()) {
-        return;
-    }
 
-    sock->set_reuse(true);
-    //sock->set_none_block(true);
-    net::Acceptor *acceptor = new net::TcpAcceptor(sock);
-    if (!acceptor->listen()) {
-        return;
-    }
-
-    net::Poller *poller = new net::EpollPoller;
-    timer::WheelTimerManager *manager = new timer::WheelTimerManager;
-    net::EventLoop loop(poller, manager);
-    acceptor->set_handler(&loop);
-    loop.on_new_connection(nullptr, acceptor);
-    loop.loop();
-}
 
 class PrintTask : public thread::Task
 {
@@ -80,6 +60,33 @@ public:
         std::cout << " timer task finished " << std::endl;
     }
 };
+
+void test_evloop()
+{
+    net::Socket *sock = new net::Socket("", 12333);
+    if (!sock->bind()) {
+        std::cout << " bind failed " << std::endl;
+        return;
+    }
+
+    sock->set_reuse(true);
+    //sock->set_none_block(true);
+    net::Acceptor *acceptor = new net::TcpAcceptor(sock);
+    if (!acceptor->listen()) {
+        std::cout << " listen failed " << std::endl;
+        return;
+    }
+
+    net::Poller *poller = new net::EpollPoller;
+    timer::WheelTimerManager *manager = new timer::WheelTimerManager;
+    TimerTask *t = new PrintTask1;
+    Timer *timer = manager->interval(2000, 2000, t, 100);
+
+    net::EventLoop loop(poller, manager);
+    acceptor->set_handler(&loop);
+    loop.on_new_connection(nullptr, acceptor);
+    loop.loop();
+}
 
 int main()
 {

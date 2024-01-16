@@ -71,6 +71,11 @@ namespace net
             handler_ = handler;
         }
 
+        void set_new_fd(int new_fd) 
+        {
+            fd_ = new_fd;
+        }
+        
     private:
         static const int READ_EVENT;
         static const int WRITE_EVENT;

@@ -35,7 +35,6 @@ namespace net::socket
 
     int accept(int fd, struct sockaddr_in &peer_addr)
     {
-        //::memset(&peer_addr, 0, sizeof(struct sockaddr_in));
         socklen_t ssz = (socklen_t)sizeof(peer_addr);
         return ::accept(fd, (struct sockaddr *)&peer_addr, &ssz);
     }

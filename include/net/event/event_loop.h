@@ -32,15 +32,20 @@ namespace net
 
         void start();
 
-        void on_new_connection(Connection *conn, Acceptor *acceptor);
+        virtual void on_new_connection(Connection *conn, Acceptor *acceptor);
 
-        void on_close(Acceptor *acceptor);
+        virtual void on_quit(Acceptor *acceptor);
+
+        virtual void on_close(Connection *conn);
+
+        virtual bool is_unique(int fd);
 
     private:
         bool quit_;
         Poller *poller_;
         timer::TimerManager *timer_manager_;
         std::unordered_map<int, Channel *> channels_;
+        int id_;
     };
 }
 #endif

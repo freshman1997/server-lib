@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <iostream>
 
 #include "net/acceptor/tcp_acceptor.h"
 #include "net/connection/connection.h"
@@ -12,6 +13,7 @@
 #include "net/channel/channel.h"
 #include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
+#include "net/socket/socket_ops.h"
 
 namespace net
 {
@@ -58,10 +60,16 @@ namespace net
             return;
         }
 
+        std::cout << "connection fd " << conn_fd << std::endl;
+        if (!handler_->is_unique(conn_fd)) {
+            std::cout << "===> duplicate connection <===" << conn_fd << std::endl;
+            return;
+        }
+
         std::shared_ptr<InetAddress> remote_addr = std::make_shared<InetAddress>(::inet_ntoa(peer_addr.sin_addr), ntohs(peer_addr.sin_port));
         std::shared_ptr<InetAddress> local_addr(socket_->get_address());
         std::shared_ptr<Channel> newChannel = std::make_shared<Channel>(conn_fd);
-        Connection *conn = new TcpConnection(remote_addr, local_addr, newChannel);
+        Connection *conn = new TcpConnection(remote_addr, local_addr, newChannel, handler_);
 
         handler_->on_new_connection(conn, this);
     }
@@ -69,7 +77,7 @@ namespace net
     void TcpAcceptor::on_write_event()
     {
         if (handler_) {
-            handler_->on_close(this);
+            handler_->on_quit(this);
         }
 
         on_close();

@@ -61,7 +61,8 @@ namespace net
         if (channel->get_oper() == Channel::Oper::init || channel->get_oper() == Channel::Oper::free) {
             if (channel->get_oper() == Channel::Oper::init) {
                 if (it != channels_.end()) {
-                    assert(0);
+                    //assert(0);
+                    channels_.erase(it);
                 }
 
                 channels_[fd] = channel;

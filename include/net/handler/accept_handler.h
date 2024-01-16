@@ -11,7 +11,11 @@ namespace net
     public:
         virtual void on_new_connection(Connection *conn, Acceptor *acceptor) = 0;
 
-        virtual void on_close(Acceptor *acceptor) = 0;
+        virtual void on_quit(Acceptor *acceptor) = 0;
+
+        virtual void on_close(Connection *conn) = 0;
+
+        virtual bool is_unique(int fd) = 0;
     };
 }
 
