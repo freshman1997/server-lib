@@ -24,7 +24,7 @@ namespace net
         ::memset(&addr, 0, sizeof(struct sockaddr_in));
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port_);
-        addr.sin_addr.s_addr = inet_addr("192.168.88.50");
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
         return addr;
     }
 }

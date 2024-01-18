@@ -1,3 +1,4 @@
+#include <iostream>
 #include <sys/epoll.h>
 #include "net/channel/channel.h"
 #include "net/handler/select_handler.h"
@@ -25,8 +26,10 @@ namespace net
         }
 
         if (read_event_ & EPOLLIN || read_event_ & EPOLLERR || read_event_ & EPOLLHUP) {
-            if (events_ & READ_EVENT) {
+            if (events_ & READ_EVENT && !dup_) {
                 handler_->on_read_event();
+            } else {
+                std::cout << "=============> skip req \n";
             }
         }
 

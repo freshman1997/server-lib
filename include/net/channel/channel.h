@@ -74,8 +74,13 @@ namespace net
         void set_new_fd(int new_fd) 
         {
             fd_ = new_fd;
+            dup_ = true;
         }
-        
+
+        bool is_dup() const {
+            return dup_;
+        }
+
     private:
         static const int READ_EVENT;
         static const int WRITE_EVENT;
@@ -87,6 +92,7 @@ namespace net
         int fd_;
         Oper oper = Oper::init;
         SelectHandler *handler_;
+        bool dup_;
     };
 }
 

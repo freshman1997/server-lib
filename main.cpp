@@ -64,12 +64,18 @@ public:
 void test_evloop()
 {
     net::Socket *sock = new net::Socket("", 12333);
+    if (!sock->valid()) {
+        cout << "create socket fail!!\n";
+        return;
+    }
+
+    sock->set_reuse(true);
+
     if (!sock->bind()) {
         std::cout << " bind failed " << std::endl;
         return;
     }
 
-    sock->set_reuse(true);
     //sock->set_none_block(true);
     net::Acceptor *acceptor = new net::TcpAcceptor(sock);
     if (!acceptor->listen()) {
@@ -82,9 +88,8 @@ void test_evloop()
     TimerTask *t = new PrintTask1;
     Timer *timer = manager->interval(2000, 2000, t, 100);
 
-    net::EventLoop loop(poller, manager);
+    net::EventLoop loop(poller, manager, acceptor);
     acceptor->set_handler(&loop);
-    loop.on_new_connection(nullptr, acceptor);
     loop.loop();
 }
 
@@ -146,7 +151,7 @@ int main()
     int time = 0;
 
     fstream file;
-    file.open("/home/yuan/Desktop/cz");
+    file.open("/home/yuan/Videos/The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4");
     if (!file.good()) {
         return 1;
     }

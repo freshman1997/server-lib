@@ -135,8 +135,7 @@ namespace net
             }
         } else {
             if (req_.get_url_domain().size() > 1 && req_.get_url_domain()[1] == "movie") {
-                std::string resp = "HTTP/1.1 206\r\n";
-                resp.append("Content-Type: video/mp4\r\n");
+                
 
                 const std::string *range = req_.get_header(net::http::http_header_key::range);
                 long long offset = 0;
@@ -152,34 +151,56 @@ namespace net
                     offset = std::atol(range->substr(pos + 1, pos1 - pos).c_str());
                 }
                 
-                std::cout.flush();
-                
                 file_.seekg(offset, std::ios::beg);
                 file_.read(buff1_, 1024 * 1024);
                 size_t r = file_.gcount();
 
-                resp.append("Content-Range: bytes ")
-                    .append(std::to_string(offset))
-                    .append("-")
-                    .append(std::to_string(length_ - 1))
-                    .append("/")
-                    .append(std::to_string(length_))
-                    .append("\r\n");
+                if (offset > 0) {
+                    std::string resp = "HTTP/1.1 206 Partial Content\r\n";
+                    resp.append("Content-Type: video/mp4\r\n");
+                    resp.append("Content-Range: bytes ")
+                        .append(std::to_string(offset))
+                        .append("-")
+                        .append(std::to_string(length_ - 1))
+                        .append("/")
+                        .append(std::to_string(length_))
+                        .append("\r\n");
 
-                resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
-                std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_ << std::endl;
-                write(fd, resp.c_str(), resp.size());
-                write(fd, buff1_, r);
+                    resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
+                    std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_  << ", fd:" << fd << std::endl;
+                    write(fd, resp.c_str(), resp.size());
+                    write(fd, buff1_, r);
 
-                if (file_.eof()) {
-                    file_.clear();
+                    if (file_.eof()) {
+                        file_.clear();
+                    }
+
+                    file_.seekg(0, std::ios::beg);
+                } else {
+                    std::string resp = "HTTP/1.1 206 Partial Content\r\n";
+                    resp.append("Content-Type: video/mp4\r\n");
+                    resp.append("Accept-Ranges: bytes\r\n");
+                    resp.append("Content-Range: bytes ")
+                        .append(std::to_string(offset))
+                        .append("-")
+                        .append(std::to_string(length_ - 1))
+                        .append("/")
+                        .append(std::to_string(length_))
+                        .append("\r\n");
+                    
+                    resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
+                    //resp.append("Content-Disposition: attachment; filename=The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4\r\n");
+                    write(fd, resp.c_str(), resp.size());
+                    write(fd, buff1_, r);
+
+                    file_.seekg(0, std::ios::beg);
                 }
 
-                file_.seekg(0, std::ios::beg);
+                req_.reset();
                 return;
             }
 
-            std::cout << "content lenth:" << req_.header_exists(net::http::http_header_key::content_length) << std::endl;
+            std::cout << "content length:" << req_.header_exists(net::http::http_header_key::content_length) << std::endl;
             std::string msg = "你好，世界！！";
             std::string repsonse = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
             write(fd, repsonse.c_str(), repsonse.size());

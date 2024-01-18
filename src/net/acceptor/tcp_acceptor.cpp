@@ -56,7 +56,8 @@ namespace net
         struct sockaddr_in peer_addr;
         int conn_fd = socket_->accept(peer_addr);
         if (conn_fd < 0) {
-            on_write_event();
+            //on_write_event();
+            std::cout << "error connection " << std::endl;
             return;
         }
 

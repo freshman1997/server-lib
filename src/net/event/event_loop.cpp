@@ -15,9 +15,14 @@
 namespace net 
 {
 
-    EventLoop::EventLoop(Poller *_poller, timer::TimerManager *timer_manager) : poller_(_poller), timer_manager_(timer_manager), quit_(false)
+    EventLoop::EventLoop(Poller *_poller, timer::TimerManager *timer_manager, Acceptor *acceptor) : poller_(_poller), timer_manager_(timer_manager), quit_(false)
     {
         id_ = 1;
+
+        Channel * channel = acceptor->get_channel();
+        channel->enable_read();
+        channels_[channel->get_fd()] = channel;
+        poller_->update_channel(channel);
     }
 
     EventLoop::~EventLoop()
@@ -45,9 +50,10 @@ namespace net
     {
         if (conn) {
             const InetAddress &addr = conn->get_remote_address();
-            std::cout << "new connection, ip: " << addr.get_ip() << ", port: " << addr.get_port() << std::endl;
-
             Channel * channel = conn->get_channel();
+
+            std::cout << "new connection, ip: " << addr.get_ip() << ", port: " << addr.get_port() << ", fd: " << channel->get_fd()<< std::endl;
+
             channel->enable_read();
             channel->enable_write();
             auto it = channels_.find(channel->get_fd());
@@ -60,11 +66,6 @@ namespace net
                 channel->set_new_fd(new_fd);
             }
 
-            channels_[channel->get_fd()] = channel;
-            poller_->update_channel(channel);
-        } else {
-            Channel * channel = acceptor->get_channel();
-            channel->enable_read();
             channels_[channel->get_fd()] = channel;
             poller_->update_channel(channel);
         }
