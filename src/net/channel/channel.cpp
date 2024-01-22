@@ -25,16 +25,16 @@ namespace net
             return;
         }
 
+        if (read_event_ & EPOLLOUT && events_ & WRITE_EVENT) {
+            handler_->on_write_event();
+        }
+        
         if (read_event_ & EPOLLIN || read_event_ & EPOLLERR || read_event_ & EPOLLHUP) {
             if (events_ & READ_EVENT && !dup_) {
                 handler_->on_read_event();
             } else {
                 std::cout << "=============> skip req \n";
             }
-        }
-
-        if (read_event_ & EPOLLOUT && events_ & WRITE_EVENT) {
-            handler_->on_write_event();
         }
     }
 }

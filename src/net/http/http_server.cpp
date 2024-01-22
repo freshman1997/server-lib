@@ -1,5 +1,6 @@
 #include <iostream>
 #include <memory>
+#include <unistd.h>
 
 #include "buffer/buffer.h"
 #include "net/acceptor/tcp_acceptor.h"
@@ -16,8 +17,9 @@ namespace net::http
 {
     HttpServer::HttpServer()
     {
-        file_.open("/home/yuan/Videos/The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4");
+        file_.open("/home/yuan/Desktop/cz");
         if (!file_.good()) {
+            std::cout << "open file fail!\n";
             /*if (handler_) {
                 handler_->on_close(this);
                 std::cout << "cant open file!!!\n";
@@ -28,6 +30,8 @@ namespace net::http
         length_ = file_.tellg();
         if (length_ == 0) {
             file_.close();
+            std::cout << "open file fail1!\n";
+
             /*if (handler_) {
                 handler_->on_close(this);
                 std::cout << "cant open file!!!\n";
@@ -36,8 +40,7 @@ namespace net::http
 
         file_.clear();
         file_.seekg(0, std::ios::beg);
-
-        buff1_ = new char[1024 * 1024];
+        buff1_ = new char[1024 * 1024 * 2];
     }
 
     HttpServer::~HttpServer()
@@ -77,12 +80,12 @@ namespace net::http
                     offset = std::atol(range->substr(pos + 1, pos1 - pos).c_str());
                 }
                 
-                Buffer buff(1024 * 1024);
+                //Buffer buff(1024 * 1024);
                 file_.seekg(offset, std::ios::beg);
-                file_.read(buff.begin(), 1024 * 1024);
+                file_.read(buff1_, 1024 * 1024 * 2);
                 size_t r = file_.gcount();
-                buff.fill(r);
-                buff.rewind();
+                //buff.fill(r);
+                //buff.rewind();
 
                 if (offset > 0) {
                     std::string resp = "HTTP/1.1 206 Partial Content\r\n";
@@ -96,12 +99,15 @@ namespace net::http
                         .append("\r\n");
 
                     resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
+                    ::write(conn->get_fd(), resp.c_str(), resp.size());
+
+                    /*
                     Buffer buff1;
                     buff1.write_string(resp);
-
                     conn->send(&buff1);
-                    //std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_  << ", fd:" << fd << std::endl;
-                    
+                    */
+
+                    std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_ << std::endl;
                 } else {
                     std::string resp = "HTTP/1.1 206 Partial Content\r\n";
                     resp.append("Content-Type: video/mp4\r\n");
@@ -115,12 +121,16 @@ namespace net::http
                         .append("\r\n");
                     resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
                     //resp.append("Content-Disposition: attachment; filename=The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4\r\n");
-                    Buffer buff1;
-                    buff1.write_string(resp);
-                    conn->send(&buff1);
+                    //Buffer buff1;
+                    //buff1.write_string(resp);
+                    //conn->send(&buff1);
+
+                    ::write(conn->get_fd(), resp.c_str(), resp.size());
                 }
 
-                conn->send(&buff);
+                //conn->send(&buff);
+                ::write(conn->get_fd(), buff1_, r);
+
                 if (file_.eof()) {
                     file_.clear();
                 }
@@ -145,7 +155,7 @@ namespace net::http
 
     void HttpServer::on_close(TcpConnection *conn)
     {
-        
+        event_loop_->on_close(conn);
     }
 
     bool HttpServer::init(int port)
@@ -162,7 +172,7 @@ namespace net::http
             return false;
         }
 
-        //sock->set_none_block(true);
+        sock->set_none_block(true);
         acceptor_ = new TcpAcceptor(sock);
         if (!acceptor_->listen()) {
             std::cout << " listen failed " << std::endl;

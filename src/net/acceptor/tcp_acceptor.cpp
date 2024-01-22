@@ -13,7 +13,6 @@
 #include "net/channel/channel.h"
 #include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
-#include "net/socket/socket_ops.h"
 
 namespace net
 {
@@ -67,11 +66,9 @@ namespace net
             return;
         }
 
-        socket::set_none_block(conn_fd, true);
         std::shared_ptr<InetAddress> remote_addr = std::make_shared<InetAddress>(::inet_ntoa(peer_addr.sin_addr), ntohs(peer_addr.sin_port));
-        std::shared_ptr<InetAddress> local_addr(socket_->get_address());
         std::shared_ptr<Channel> newChannel = std::make_shared<Channel>(conn_fd);
-        Connection *conn = new TcpConnection(remote_addr, local_addr, newChannel);
+        Connection *conn = new TcpConnection(remote_addr, newChannel);
 
         handler_->on_new_connection(conn, this);
     }

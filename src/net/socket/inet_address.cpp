@@ -2,6 +2,7 @@
 #include "endian/endian.hpp"
 
 #include <cstring>
+#include <iostream>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -17,6 +18,19 @@ namespace net
             ip_ = ::inet_ntoa(addr.sin_addr);
         }
     }
+
+    InetAddress::InetAddress(const InetAddress &addr)
+    {
+        this->ip_ = addr.get_ip();
+        this->port_ = addr.get_port();
+    }
+
+
+    InetAddress::~InetAddress()
+    {
+        std::cout << "InetAddress::~InetAddress \n";
+    }
+
 
     struct sockaddr_in InetAddress::to_ipv4_address() const
     {

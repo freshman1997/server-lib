@@ -86,7 +86,8 @@ namespace net
         Channel * channel = conn->get_channel();
         auto it = channels_.find(channel->get_fd());
         if (it != channels_.end()) {
-            std::cout << "close connection now\n";
+            std::cout << "close connection now: " << channel->get_fd() << "\n";
+            poller_->remove_channel(channel);
             ::close(channel->get_fd());
             channels_.erase(it);
         }

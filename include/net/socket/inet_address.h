@@ -12,6 +12,10 @@ namespace net
 
         InetAddress(const struct sockaddr_in &);
 
+        InetAddress(const InetAddress &);
+
+        ~InetAddress();
+
         int get_port() const 
         {
             return port_;

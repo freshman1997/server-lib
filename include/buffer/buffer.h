@@ -212,6 +212,9 @@ public:
     void fill(size_t bytes)
     {
         write_index += bytes;
+        if ((buffs.size() - write_index * 1.0) / buffs.size() > 0.8) {
+            buffs.resize(1 << buffs.size());
+        }
     }
 
     void resize()

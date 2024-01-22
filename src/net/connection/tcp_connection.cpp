@@ -1,8 +1,7 @@
 #include "net/connection/tcp_connection.h"
 #include "net/connection/connection.h"
-#include "net/handler/accept_handler.h"
 #include "net/handler/tcp_socket_handler.h"
-#include "net/http/header_key.h"
+#include "net/socket/socket_ops.h"
 
 #include <iostream>
 #include <sys/socket.h>
@@ -10,10 +9,9 @@
 
 namespace net
 {
-    TcpConnection::TcpConnection(std::shared_ptr<net::InetAddress> remoteAddr, std::shared_ptr<net::InetAddress> localAddr, std::shared_ptr<net::Channel> channel)
+    TcpConnection::TcpConnection(std::shared_ptr<net::InetAddress> remoteAddr, std::shared_ptr<net::Channel> channel)
     {
-        this->remote_addr_ = remoteAddr;
-        this->local_addr_ = localAddr;
+        this->addr_ = remoteAddr;
         this->channel_ = channel;
 
         this->channel_->set_handler(this);
@@ -22,6 +20,8 @@ namespace net
         output_buffer_ = std::make_shared<Buffer>();
 
         closed = false;
+
+        //socket::set_none_block(this->channel_->get_fd(), true);
     }
 
     TcpConnection::~TcpConnection()
@@ -36,18 +36,18 @@ namespace net
 
     const InetAddress & TcpConnection::get_remote_address() const
     {
-        return *remote_addr_.get();
+        return *addr_.get();
     }
 
     const InetAddress & TcpConnection::get_local_address() const
     {
-        return *local_addr_.get();
+        return *addr_.get();
     }
 
     void TcpConnection::send(Buffer *buff)
     {
         int fd = this->channel_->get_fd();
-        ::send(fd, buff->begin(), buff->remain_bytes(), 0);
+        ::write(fd, buff->begin(), buff->remain_bytes());
     }
 
     // 丢弃所有未发送的数据
@@ -91,8 +91,8 @@ namespace net
                 if (bytes == 0) {
                     closed = true;
                     break;
-                } else if (bytes < 0) {
-                    if (errno != ENOTCONN && errno == ECONNREFUSED) {
+                } else if (bytes == -1) {
+                    if (errno != ENOTCONN || errno == ECONNREFUSED) {
                         std::cout << "on error!!\n";
                         tcpSocketHandler_->on_close(this);
                         closed = true;
@@ -102,14 +102,15 @@ namespace net
             } else {
                 read = true;
                 input_buffer_->fill(bytes);
-                input_buffer_->resize();
             }
-        }
 
-        tcpSocketHandler_->on_read(this);
+            break;
+        }
 
         if (closed) {
             close();
+        } else {
+            tcpSocketHandler_->on_read(this);
         }
     }
 
@@ -121,6 +122,6 @@ namespace net
 
     int TcpConnection::get_fd()
     {
-        return 0;
+        return channel_->get_fd();
     }
 }

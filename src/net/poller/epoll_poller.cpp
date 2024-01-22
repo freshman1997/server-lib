@@ -1,11 +1,9 @@
-#include <cassert>
 #include <cstring>
 #include <ctime>
 #include <errno.h>
 #include <unistd.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
-#include <signal.h>
 
 #include "net/poller/epoll_poller.h"
 #include "net/channel/channel.h"
@@ -57,17 +55,7 @@ namespace net
     void EpollPoller::update_channel(Channel *channel)
     {
         int fd = channel->get_fd();
-        auto it = channels_.find(fd);
         if (channel->get_oper() == Channel::Oper::init || channel->get_oper() == Channel::Oper::free) {
-            if (channel->get_oper() == Channel::Oper::init) {
-                if (it != channels_.end()) {
-                    //assert(0);
-                    channels_.erase(it);
-                }
-
-                channels_[fd] = channel;
-            } 
-
             channel->set_oper(Channel::Oper::add);
             update(EPOLL_CTL_ADD, channel);
         } else {
@@ -83,13 +71,7 @@ namespace net
     void EpollPoller::remove_channel(Channel *channel)
     {
         int fd = channel->get_fd();
-        auto it = channels_.find(fd);
-        if (it == channels_.end()) {
-            return;
-        }
-
         update(EPOLL_CTL_DEL, channel);
-        channels_.erase(it);
     }
 
     void EpollPoller::update(int op, Channel *channel)
