@@ -1,7 +1,8 @@
-#include "buff/buffer.h"
+#include "buffer/buffer.h"
 #include "net/acceptor/acceptor.h"
 #include "net/acceptor/tcp_acceptor.h"
 #include "net/http/header_key.h"
+#include "net/http/http_server.h"
 #include "net/http/request.h"
 #include <cstddef>
 #include <cstdio>
@@ -93,9 +94,20 @@ void test_evloop()
     loop.loop();
 }
 
+void test_http_server()
+{
+    net::http::HttpServer server;
+    if (!server.init(12333)) {
+        std::cout << " init failed " << std::endl;
+        return;
+    }
+
+    server.serve();
+}
+
 int main()
 {
-    test_evloop();
+    test_http_server();
     return 1;
 
     /*TimerTask *t = new PrintTask1;

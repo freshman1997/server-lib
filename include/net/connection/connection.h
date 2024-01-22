@@ -7,6 +7,7 @@ namespace net
 {
     class InetAddress;
     class Channel;
+    class TcpConnectionHandler;
 
     enum class ConnectionType
     {
@@ -35,6 +36,8 @@ namespace net
         virtual ConnectionType get_conn_type() = 0;
 
         virtual Channel * get_channel() = 0;
+        
+        virtual void set_tcp_handler(TcpConnectionHandler *tcpSocketHandler) = 0;
     };
 }
 

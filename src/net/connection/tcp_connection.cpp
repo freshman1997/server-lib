@@ -1,6 +1,7 @@
 #include "net/connection/tcp_connection.h"
 #include "net/connection/connection.h"
 #include "net/handler/accept_handler.h"
+#include "net/handler/tcp_socket_handler.h"
 #include "net/http/header_key.h"
 
 #include <iostream>
@@ -9,42 +10,18 @@
 
 namespace net
 {
-    TcpConnection::TcpConnection(std::shared_ptr<net::InetAddress> remoteAddr, std::shared_ptr<net::InetAddress> localAddr, std::shared_ptr<net::Channel> channel, AcceptHandler *handler)
+    TcpConnection::TcpConnection(std::shared_ptr<net::InetAddress> remoteAddr, std::shared_ptr<net::InetAddress> localAddr, std::shared_ptr<net::Channel> channel)
     {
         this->remote_addr_ = remoteAddr;
         this->local_addr_ = localAddr;
         this->channel_ = channel;
 
         this->channel_->set_handler(this);
-        this->handler_ = handler;
 
         input_buffer_ = std::make_shared<Buffer>();
         output_buffer_ = std::make_shared<Buffer>();
 
         closed = false;
-        
-        file_.open("/home/yuan/Videos/The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4");
-        if (!file_.good()) {
-            if (handler_) {
-                handler_->on_close(this);
-                std::cout << "cant open file!!!\n";
-            }
-        }
-
-        file_.seekg(0, std::ios_base::end);
-        length_ = file_.tellg();
-        if (length_ == 0) {
-            file_.close();
-            if (handler_) {
-                handler_->on_close(this);
-                std::cout << "cant open file!!!\n";
-            }
-        }
-
-        file_.clear();
-        file_.seekg(0, std::ios::beg);
-
-        buff1_ = new char[1024 * 1024];
     }
 
     TcpConnection::~TcpConnection()
@@ -54,7 +31,7 @@ namespace net
 
     bool TcpConnection::is_connected()
     {
-        return closed;
+        return true;
     }
 
     const InetAddress & TcpConnection::get_remote_address() const
@@ -82,7 +59,8 @@ namespace net
     // 发送完数据后返回
     void TcpConnection::close()
     {
-        closed = true;
+        tcpSocketHandler_->on_close(this);
+        delete this;
     }
 
     ConnectionType TcpConnection::get_conn_type()
@@ -95,116 +73,43 @@ namespace net
         return channel_.get();
     }
 
+    void TcpConnection::set_tcp_handler(TcpConnectionHandler *tcpSocketHandler)
+    {
+        this->tcpSocketHandler_ = tcpSocketHandler;
+    }
+
     void TcpConnection::on_read_event()
     {
         input_buffer_->rewind();
 
         // TODO read data
         int fd = channel_->get_fd();
+        bool read = false;
         while (true) {
             int bytes = recv(fd, input_buffer_->begin(), input_buffer_->writable_size(), 0);
             if (bytes <= 0) {
                 if (bytes == 0) {
-                    if (handler_) {
-                        handler_->on_close(this);
-                        return;
-                    } else {
-                        // TODO error log
-                    }
+                    closed = true;
+                    break;
                 } else if (bytes < 0) {
-                    std::cout << "xxxxxxxxxxxxxxxxxxxxxxxxxxx22222222\n";
+                    if (errno != ENOTCONN && errno == ECONNREFUSED) {
+                        std::cout << "on error!!\n";
+                        tcpSocketHandler_->on_close(this);
+                        closed = true;
+                    }
                     break;
                 }
-
-                std::cout << "xxxxxxxxxxxxxxxxxxxxxxxxxxx\n";
-                // close
-                break;
+            } else {
+                read = true;
+                input_buffer_->fill(bytes);
+                input_buffer_->resize();
             }
-            
-            input_buffer_->fill(bytes);
-            input_buffer_->resize();
-
-            break;
         }
 
-        if (!req_.parse_header(*input_buffer_.get())) {
-            std::cout << "parse fail!!" << std::endl;
-            if (handler_) {
-                handler_->on_close(this);
-                std::cout << "parse http request fail, close connection now\n";
-            }
-        } else {
-            if (req_.get_url_domain().size() > 1 && req_.get_url_domain()[1] == "movie") {
-                
+        tcpSocketHandler_->on_read(this);
 
-                const std::string *range = req_.get_header(net::http::http_header_key::range);
-                long long offset = 0;
-
-                if (range) {
-                    size_t pos = range->find_first_of("=");
-                    if (std::string::npos == pos) {
-                        handler_->on_close(this);
-                        return;
-                    }
-
-                    size_t pos1 = range->find_first_of("-");
-                    offset = std::atol(range->substr(pos + 1, pos1 - pos).c_str());
-                }
-                
-                file_.seekg(offset, std::ios::beg);
-                file_.read(buff1_, 1024 * 1024);
-                size_t r = file_.gcount();
-
-                if (offset > 0) {
-                    std::string resp = "HTTP/1.1 206 Partial Content\r\n";
-                    resp.append("Content-Type: video/mp4\r\n");
-                    resp.append("Content-Range: bytes ")
-                        .append(std::to_string(offset))
-                        .append("-")
-                        .append(std::to_string(length_ - 1))
-                        .append("/")
-                        .append(std::to_string(length_))
-                        .append("\r\n");
-
-                    resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
-                    std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_  << ", fd:" << fd << std::endl;
-                    write(fd, resp.c_str(), resp.size());
-                    write(fd, buff1_, r);
-
-                    if (file_.eof()) {
-                        file_.clear();
-                    }
-
-                    file_.seekg(0, std::ios::beg);
-                } else {
-                    std::string resp = "HTTP/1.1 206 Partial Content\r\n";
-                    resp.append("Content-Type: video/mp4\r\n");
-                    resp.append("Accept-Ranges: bytes\r\n");
-                    resp.append("Content-Range: bytes ")
-                        .append(std::to_string(offset))
-                        .append("-")
-                        .append(std::to_string(length_ - 1))
-                        .append("/")
-                        .append(std::to_string(length_))
-                        .append("\r\n");
-                    
-                    resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
-                    //resp.append("Content-Disposition: attachment; filename=The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4\r\n");
-                    write(fd, resp.c_str(), resp.size());
-                    write(fd, buff1_, r);
-
-                    file_.seekg(0, std::ios::beg);
-                }
-
-                req_.reset();
-                return;
-            }
-
-            std::cout << "content length:" << req_.header_exists(net::http::http_header_key::content_length) << std::endl;
-            std::string msg = "你好，世界！！";
-            std::string repsonse = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-            write(fd, repsonse.c_str(), repsonse.size());
-            handler_->on_close(this);
+        if (closed) {
+            close();
         }
     }
 

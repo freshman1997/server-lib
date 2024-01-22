@@ -130,7 +130,7 @@ public:
         write_int8(val ? 1 : 0);
     }
 
-    void write_string(std::string &str)
+    void write_string(const std::string &str)
     {
         write(str.c_str(), str.size());
     }
@@ -163,7 +163,7 @@ public:
 
     size_t remain_bytes() const
     {
-        return 0;
+        return buffs.size() - write_index;
     }
 
     size_t readable_bytes() const
@@ -233,17 +233,21 @@ private:
             buffs.reserve(len);
         }
 
-        for (int i = 0; i < len; ++i) {
-            buffs.push_back(data[i]);
+        for (int i = read_index; i < len; ++i) {
+            buffs[i] = data[i];
         }
 
-        write_index += len;
+        //write_index += len;
     }
 
 public:
-    Buffer() : read_index(0), write_index(0)
+    Buffer(int size = 0) : read_index(0), write_index(0)
     {
-        buffs.resize(4096);
+        if (size == 0) {
+            buffs.resize(4096);
+        } else {
+            buffs.resize(size);
+        }
     }
 
 private:

@@ -1,7 +1,7 @@
 #ifndef __LINKED_BUFF_H__
 #define __LINKED_BUFF_H__
 #include <list>
-#include "buff/buffer.h"
+#include "buffer/buffer.h"
 
 class LinkedBuffer
 {

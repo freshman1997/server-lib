@@ -39,8 +39,6 @@ namespace net
     public:
         const Socket * get_socket() const;
 
-       
-
     private:
         Channel *channel_;
         Socket *socket_;

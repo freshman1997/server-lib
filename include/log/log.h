@@ -11,13 +11,12 @@ namespace log
             debug,
             info,
             warn,
+            error,
             fatal,
         };
 
-        
-
     public:
-
+        
     };
 }
 

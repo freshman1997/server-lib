@@ -5,7 +5,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "buff/buffer.h"
+#include "buffer/buffer.h"
+
 namespace net::http 
 {
     enum class HttpMethod
@@ -119,15 +120,6 @@ namespace net::http
         HttpVersion version = HttpVersion::invalid;
         std::unordered_map<std::string, std::string> request_params;
         std::unordered_map<std::string, std::string> headers;
-    };
-
-    class HttpRequestContext
-    {
-    public:
-
-    private:
-        HttpRequest req;
-
     };
 }
 

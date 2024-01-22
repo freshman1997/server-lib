@@ -8,16 +8,17 @@
 #include "net/handler/select_handler.h"
 #include "net/http/request.h"
 #include "net/socket/inet_address.h"
-#include "buff/buffer.h"
+#include "buffer/buffer.h"
 
 namespace net
 {
     class AcceptHandler;
+    class TcpConnectionHandler;
 
     class TcpConnection : public Connection, public SelectHandler
     {
     public:
-        TcpConnection(std::shared_ptr<net::InetAddress> remoteAddr, std::shared_ptr<net::InetAddress> localAddr, std::shared_ptr<net::Channel> channel, AcceptHandler *handler);
+        TcpConnection(std::shared_ptr<net::InetAddress> remoteAddr, std::shared_ptr<net::InetAddress> localAddr, std::shared_ptr<net::Channel> channel);
 
         virtual ~TcpConnection();
 
@@ -37,7 +38,9 @@ namespace net
 
         virtual ConnectionType get_conn_type();
 
-        Channel * get_channel();
+        virtual Channel * get_channel();
+
+        virtual void set_tcp_handler(TcpConnectionHandler *tcpSocketHandler);
 
     public: // select handler
         virtual void on_read_event();
@@ -46,19 +49,26 @@ namespace net
 
         virtual int get_fd();
 
+    public:
+        std::shared_ptr<Buffer> get_input_stream()
+        {
+            return input_buffer_;
+        }
+
+        std::shared_ptr<Buffer> get_output_stream()
+        {
+            return output_buffer_;
+        }
+
     private:
         std::shared_ptr<net::InetAddress> remote_addr_;
         std::shared_ptr<net::InetAddress> local_addr_;
         std::shared_ptr<net::Channel> channel_;
-        AcceptHandler *handler_;
+        AcceptHandler *acceptHandler_;
+        TcpConnectionHandler *tcpSocketHandler_;
         std::shared_ptr<Buffer> input_buffer_;
         std::shared_ptr<Buffer> output_buffer_;
         bool closed;
-
-        char *buff1_;
-        std::fstream file_;
-        long long length_;
-        net::http::HttpRequest req_;
     };
 }
 

@@ -66,8 +66,9 @@ namespace net
                 channel->set_new_fd(new_fd);
             }
 
-            channels_[channel->get_fd()] = channel;
+            conn->set_tcp_handler(tcpConnHandler_);
             poller_->update_channel(channel);
+            channels_[channel->get_fd()] = channel;
         }
     }
 
