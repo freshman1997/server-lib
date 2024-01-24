@@ -62,6 +62,6 @@ namespace net
 
     void Socket::set_none_block(bool on)
     {
-        socket::set_reuse(fd_, on);
+        socket::set_none_block(fd_, on);
     }
 }

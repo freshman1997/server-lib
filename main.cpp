@@ -9,12 +9,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
 #include <ios>
 #include <iostream>
 #include <memory>
 #include <string>
-#include <thread>
 #include <unistd.h>
 #include <fstream>
 
@@ -29,7 +27,7 @@
 #include "timer/wheel_timer_manager.h"
 
 #include "net/event/event_loop.h"
-#include "net/connection/tcp_connection.h"
+#include "net/connection/connection.h"
 
 
 class PrintTask : public thread::Task
@@ -65,7 +63,7 @@ class VideoTest
 public:
     VideoTest()
     {
-        file_.open("/home/yuan/Videos/The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4");
+        file_.open("/home/yuan/Desktop/cz");
         if (!file_.good()) {
             std::cout << "open file fail!\n";
             /*if (handler_) {

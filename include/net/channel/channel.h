@@ -18,7 +18,7 @@ namespace net
     public:
         Channel(int fd);
 
-        void on_event();
+        void on_event(int event);
 
         int get_fd() const 
         {
@@ -32,12 +32,12 @@ namespace net
 
         Oper get_oper() const 
         {
-            return oper;
+            return oper_;
         }
 
         void set_oper(Oper op) 
         {
-            oper = op;
+            oper_ = op;
         }
 
         bool has_events()
@@ -61,11 +61,6 @@ namespace net
             events_ = NONE_EVENT;
         }
 
-        void set_read_event(int ev)
-        {
-            read_event_ = ev;
-        }
-
         void set_handler(SelectHandler *handler)
         {
             handler_ = handler;
@@ -74,25 +69,19 @@ namespace net
         void set_new_fd(int new_fd) 
         {
             fd_ = new_fd;
-            dup_ = true;
         }
 
-        bool is_dup() const {
-            return dup_;
-        }
-
-    private:
+    public:
         static const int READ_EVENT;
         static const int WRITE_EVENT;
+        static const int EXCEP_EVENT;
         static const int NONE_EVENT;
 
     private:
         int events_;
-        int read_event_;
         int fd_;
-        Oper oper = Oper::init;
+        Oper oper_ = Oper::init;
         SelectHandler *handler_;
-        bool dup_;
     };
 }
 

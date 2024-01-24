@@ -1,10 +1,8 @@
 #ifndef __HTTP_REQUEST_DISPATCHER_H__
 #define __HTTP_REQUEST_DISPATCHER_H__
-#include <memory>
 #include <string>
 #include <unordered_map>
 
-#include "../request.h"
 #include "../common.h"
 #include "base/compressed_trie.h"
 

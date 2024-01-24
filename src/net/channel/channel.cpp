@@ -1,12 +1,11 @@
-#include <iostream>
-#include <sys/epoll.h>
 #include "net/channel/channel.h"
 #include "net/handler/select_handler.h"
 
 namespace net
 {
-    const int Channel::READ_EVENT = EPOLLIN | EPOLLPRI;
-    const int Channel::WRITE_EVENT = EPOLLOUT;
+    const int Channel::READ_EVENT = 0x1;
+    const int Channel::WRITE_EVENT = 0x2;
+    const int Channel::EXCEP_EVENT = 0x4;
     const int Channel::NONE_EVENT = 0;
 
     Channel::Channel(int fd) : fd_(fd), handler_(nullptr)
@@ -14,7 +13,7 @@ namespace net
         disable_all();
     }
 
-    void Channel::on_event()
+    void Channel::on_event(int event)
     {
         if (!handler_) {
             // TODO
@@ -25,16 +24,12 @@ namespace net
             return;
         }
 
-        if (read_event_ & EPOLLOUT && events_ & WRITE_EVENT) {
+        if (event & WRITE_EVENT && events_ & WRITE_EVENT) {
             handler_->on_write_event();
         }
         
-        if (read_event_ & EPOLLIN || read_event_ & EPOLLERR || read_event_ & EPOLLHUP) {
-            if (events_ & READ_EVENT && !dup_) {
-                handler_->on_read_event();
-            } else {
-                std::cout << "=============> skip req \n";
-            }
+        if (event & READ_EVENT && events_ & READ_EVENT) {
+            handler_->on_read_event();
         }
     }
 }

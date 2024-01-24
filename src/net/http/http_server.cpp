@@ -5,13 +5,14 @@
 #include "buffer/buffer.h"
 #include "net/acceptor/tcp_acceptor.h"
 #include "net/event/event_loop.h"
-#include "net/http/header_key.h"
 #include "net/http/http_server.h"
 #include "net/http/request.h"
 #include "net/poller/epoll_poller.h"
+#include "net/poller/poll_poller.h"
+#include "net/poller/select_poller.h"
 #include "net/socket/socket.h"
 #include "timer/wheel_timer_manager.h"
-#include "net/connection/tcp_connection.h"
+#include "net/connection/connection.h"
 
 namespace net::http
 {
@@ -98,7 +99,7 @@ namespace net::http
 
     void HttpServer::serve()
     {
-        net::EpollPoller poller;
+        net::PollPoller poller;
         timer::WheelTimerManager manager;
         net::EventLoop loop(&poller, &manager, acceptor_);
         acceptor_->set_handler(&loop);

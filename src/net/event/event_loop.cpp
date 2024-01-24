@@ -1,5 +1,4 @@
 #include <cassert>
-#include <cstddef>
 #include <iostream>
 #include <time.h>
 #include <unistd.h>
@@ -17,10 +16,9 @@ namespace net
 
     EventLoop::EventLoop(Poller *_poller, timer::TimerManager *timer_manager, Acceptor *acceptor) : poller_(_poller), timer_manager_(timer_manager), quit_(false)
     {
-        id_ = 1;
-
         Channel * channel = acceptor->get_channel();
         channel->enable_read();
+        channel->enable_write();
         channels_[channel->get_fd()] = channel;
         poller_->update_channel(channel);
     }

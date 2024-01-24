@@ -25,12 +25,10 @@ namespace net
         this->port_ = addr.get_port();
     }
 
-
     InetAddress::~InetAddress()
     {
         std::cout << "InetAddress::~InetAddress \n";
     }
-
 
     struct sockaddr_in InetAddress::to_ipv4_address() const
     {

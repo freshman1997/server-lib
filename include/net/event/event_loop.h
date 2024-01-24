@@ -52,7 +52,6 @@ namespace net
         Poller *poller_;
         timer::TimerManager *timer_manager_;
         std::unordered_map<int, Channel *> channels_;
-        int id_;
         ConnectionHandler *connHandler_;
     };
 }

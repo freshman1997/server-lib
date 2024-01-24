@@ -34,8 +34,17 @@ namespace net
         if (nevent > 0) {
             for (int i = 0; i < nevent; ++i) {
                 Channel *channel = static_cast<Channel *>(epoll_events_[i].data.ptr);
-                channel->set_read_event(epoll_events_[i].events);
-                channel->on_event();
+                int ev = Channel::NONE_EVENT;
+                int event = epoll_events_[i].events;
+                if (event & EPOLLIN || event & EPOLLERR || event & EPOLLHUP) {
+                    ev |= Channel::READ_EVENT;
+                }
+
+                if (event & EPOLLOUT) {
+                    ev |= Channel::WRITE_EVENT;
+                }
+
+                channel->on_event(ev);
             }
             
             if (nevent == (int)epoll_events_.size() && (int)epoll_events_.size() < MAX_EVENT) {
