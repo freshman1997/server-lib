@@ -9,6 +9,8 @@
 
 namespace net::http 
 {
+    class HttpRequestContext;
+
     enum class HttpMethod
     {
         invalid_ = 0,
@@ -80,6 +82,11 @@ namespace net::http
             header_state = HeaderState::init;
             body_state = BodyState::init;
         }
+
+        bool done() const 
+        {
+            return header_state == HeaderState::header_end_lines;
+        }
         
     private:
         HeaderState header_state = HeaderState::init;
@@ -91,7 +98,7 @@ namespace net::http
     {
         friend class HttpRequestParser;
     public:
-        HttpRequest();
+        HttpRequest(HttpRequestContext *context_);
 
         HttpMethod get_method() const;
         HttpVersion get_version() const;
@@ -111,15 +118,27 @@ namespace net::http
             return url_domain;
         }
 
+        const std::string & get_raw_url() const 
+        {
+            return url_;
+        }
+
+        bool is_ok() const 
+        {
+            return parser.done();
+        }
+
         void reset();
 
     private:
         HttpRequestParser parser;
+        std::string url_;
         std::vector<std::string> url_domain;
         HttpMethod method = HttpMethod::invalid_;
         HttpVersion version = HttpVersion::invalid;
         std::unordered_map<std::string, std::string> request_params;
         std::unordered_map<std::string, std::string> headers;
+        HttpRequestContext *context_;
     };
 }
 

@@ -2,26 +2,24 @@
 #include "net/acceptor/acceptor.h"
 #include "net/acceptor/tcp_acceptor.h"
 #include "net/http/header_key.h"
+#include "net/http/request_context.h"
 #include "net/http/http_server.h"
 #include "net/http/request.h"
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <ios>
 #include <iostream>
+#include <memory>
 #include <string>
-#include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
 #include <fstream>
 
 #include "net/poller/epoll_poller.h"
 #include "net/poller/poller.h"
-#include "net/socket/inet_address.h"
-#include "net/socket/tcp_socket.h"
-#include "nlohmann/json_fwd.hpp"
-#include "nlohmann/json.hpp"
 #include "thread/task.h"
 #include "thread/thread_pool.h"
 #include "net/socket/socket.h"
@@ -31,7 +29,7 @@
 #include "timer/wheel_timer_manager.h"
 
 #include "net/event/event_loop.h"
-
+#include "net/connection/tcp_connection.h"
 
 
 class PrintTask : public thread::Task
@@ -60,6 +58,120 @@ public:
     {
         std::cout << " timer task finished " << std::endl;
     }
+};
+
+class VideoTest
+{
+public:
+    VideoTest()
+    {
+        file_.open("/home/yuan/Videos/The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4");
+        if (!file_.good()) {
+            std::cout << "open file fail!\n";
+            /*if (handler_) {
+                handler_->on_close(this);
+                std::cout << "cant open file!!!\n";
+            }*/
+        }
+
+        file_.seekg(0, std::ios_base::end);
+        length_ = file_.tellg();
+        if (length_ == 0) {
+            file_.close();
+            std::cout << "open file fail1!\n";
+
+            /*if (handler_) {
+                handler_->on_close(this);
+                std::cout << "cant open file!!!\n";
+            }*/
+        }
+
+        file_.clear();
+        file_.seekg(0, std::ios::beg);
+    }
+
+    void on_request(std::shared_ptr<net::http::HttpRequestContext> context)
+    {
+        net::http::HttpRequest req_ = *context->get_request();
+        if (req_.get_url_domain().size() > 1 && req_.get_url_domain()[1] == "movie") {
+            const std::string *range = req_.get_header(net::http::http_header_key::range);
+            long long offset = 0;
+
+            if (range) {
+                size_t pos = range->find_first_of("=");
+                if (std::string::npos == pos) {
+                    context->get_connection()->close();
+                    return;
+                }
+
+                size_t pos1 = range->find_first_of("-");
+                offset = std::atol(range->substr(pos + 1, pos1 - pos).c_str());
+            }
+            
+            Buffer buff(1024 * 1024 * 2);
+            file_.seekg(offset, std::ios::beg);
+            file_.read(buff.buffer_begin(), 1024 * 1024 * 2);
+            size_t r = file_.gcount();
+            buff.fill(r);
+            //buff.reset();
+
+            if (offset > 0) {
+                std::string resp = "HTTP/1.1 206 Partial Content\r\n";
+                resp.append("Content-Type: video/mp4\r\n");
+                resp.append("Content-Range: bytes ")
+                    .append(std::to_string(offset))
+                    .append("-")
+                    .append(std::to_string(length_ - 1))
+                    .append("/")
+                    .append(std::to_string(length_))
+                    .append("\r\n");
+
+                resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
+
+                Buffer buff1;
+                buff1.write_string(resp);
+                context->get_connection()->send(&buff1);
+
+                std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_ << std::endl;
+            } else {
+                std::string resp = "HTTP/1.1 206 Partial Content\r\n";
+                resp.append("Content-Type: video/mp4\r\n");
+                //resp.append("Accept-Ranges: bytes\r\n");
+                resp.append("Content-Range: bytes ")
+                    .append(std::to_string(offset))
+                    .append("-")
+                    .append(std::to_string(length_ - 1))
+                    .append("/")
+                    .append(std::to_string(length_))
+                    .append("\r\n");
+                resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
+                //resp.append("Content-Disposition: attachment; filename=The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4\r\n");
+                Buffer buff1;
+                buff1.write_string(resp);
+                context->get_connection()->send(&buff1);
+            }
+
+            context->get_connection()->send(&buff);
+
+            if (file_.eof()) {
+                file_.clear();
+            }
+
+            file_.seekg(0, std::ios::beg);
+            return;
+        }
+
+        std::cout << "content length:" << req_.header_exists(net::http::http_header_key::content_length) << std::endl;
+        std::string msg = "你好，世界！！";
+        std::string repsonse = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
+        Buffer buff1;
+        buff1.write_string(repsonse);
+        context->get_connection()->send(&buff1);
+    }
+
+public:
+    std::fstream file_;
+    long long length_;
 };
 
 void test_evloop()
@@ -97,6 +209,12 @@ void test_evloop()
 void test_http_server()
 {
     net::http::HttpServer server;
+    VideoTest vt;
+
+    server.on("/movie", [&vt](std::shared_ptr<net::http::HttpRequestContext> ctx) {
+        vt.on_request(ctx);
+    });
+
     if (!server.init(12333)) {
         std::cout << " init failed " << std::endl;
         return;
@@ -108,23 +226,5 @@ void test_http_server()
 int main()
 {
     test_http_server();
-    return 1;
-    
-    /*
-    thread::ThreadPool pool(1);
-
-    pool.start();
-
-    PrintTask *task = new PrintTask;
-    pool.push_task(task);
-    */
-
-    using namespace nlohmann;
-    json data = {
-        {"name", "tomcat"}
-    };
-
-    cout << data << endl;
-
     return 0;
 }

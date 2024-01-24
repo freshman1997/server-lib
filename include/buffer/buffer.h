@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <iostream>
 #include <stdint.h>
 #include <string>
 #include <cstring>
@@ -156,14 +157,14 @@ public:
         return &*buffs.begin();
     }
 
+    char * buffer_begin()
+    { 
+        return &*(buffs.begin() + write_index);
+    }
+
     const char* peek() const
     { 
         return begin() + read_index;
-    }
-
-    size_t remain_bytes() const
-    {
-        return buffs.size() - write_index;
     }
 
     size_t readable_bytes() const
@@ -190,13 +191,11 @@ public:
         read_index = idx;
     }
 
-    void rewind()
+    void reset()
     {
         read_index = 0;
         write_index = 0;
-        if (buffs.empty()) {
-            buffs.resize(1024);
-        }
+        buffs.resize(8192);
     }
 
     void set_write_index(size_t idx)
@@ -212,21 +211,18 @@ public:
     void fill(size_t bytes)
     {
         write_index += bytes;
-        if ((buffs.size() - write_index * 1.0) / buffs.size() > 0.8) {
-            buffs.resize(1 << buffs.size());
-        }
     }
 
-    void resize()
+    void resize(size_t size = 1024)
     {
-        buffs.resize(buffs.size() + 1024);
+        buffs.resize(buffs.size() + size);
     }
 
 private:
     void write(void * data, size_t len)
     {
         const char* d = static_cast<const char*>(data);
-        std::copy(d, d + len, begin() + read_index);
+        std::copy(d, d + len, begin() + write_index);
         write_index += len;
     }
 
@@ -240,14 +236,14 @@ private:
             buffs[i] = data[i];
         }
 
-        //write_index += len;
+        write_index += len;
     }
 
 public:
     Buffer(int size = 0) : read_index(0), write_index(0)
     {
         if (size == 0) {
-            buffs.resize(4096);
+            buffs.resize(8192);
         } else {
             buffs.resize(size);
         }

@@ -2,7 +2,7 @@
 
 namespace net::http
 {
-    HttpResponse::HttpResponse(std::shared_ptr<Channel> channel) : channel_(channel)
+    HttpResponse::HttpResponse(HttpRequestContext *context) : context_(context)
     {
         
     }

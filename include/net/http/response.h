@@ -5,16 +5,17 @@
 #include <string>
 #include <unordered_map>
 
-#include "net/channel/channel.h"
 #include "net/http/request.h"
 #include "response_code.h"
 
 namespace net::http
 {
+    class HttpRequestContext;
+    
     class HttpResponse
     {
     public:
-        HttpResponse(std::shared_ptr<Channel> channel);
+        HttpResponse(HttpRequestContext *context);
 
     public:
         void set_response_code(response_code::ResponseCode code)
@@ -50,8 +51,8 @@ namespace net::http
         response_code::ResponseCode respCode_ = response_code::ResponseCode::invalid;
         HttpVersion version_ = HttpVersion::invalid;
         std::unordered_map<std::string, std::string> headers_;
-        std::shared_ptr<Channel> channel_;
         size_t size = 0;
+        HttpRequestContext *context_;
     };
 }
 #endif

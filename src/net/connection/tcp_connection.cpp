@@ -22,11 +22,12 @@ namespace net
         closed = false;
 
         //socket::set_none_block(this->channel_->get_fd(), true);
+        socket::set_keep_alive(this->channel_->get_fd(), true);
     }
 
     TcpConnection::~TcpConnection()
     {
-        std::cout << "free =====> !!!\n";
+        std::cout << "TcpConnection::~TcpConnection()\n";
     }
 
     bool TcpConnection::is_connected()
@@ -47,7 +48,7 @@ namespace net
     void TcpConnection::send(Buffer *buff)
     {
         int fd = this->channel_->get_fd();
-        ::write(fd, buff->begin(), buff->remain_bytes());
+        ::write(fd, buff->begin(), buff->readable_bytes());
     }
 
     // 丢弃所有未发送的数据
@@ -80,31 +81,27 @@ namespace net
 
     void TcpConnection::on_read_event()
     {
-        input_buffer_->rewind();
+        input_buffer_->reset();
 
         // TODO read data
         int fd = channel_->get_fd();
         bool read = false;
-        while (true) {
-            int bytes = recv(fd, input_buffer_->begin(), input_buffer_->writable_size(), 0);
-            if (bytes <= 0) {
-                if (bytes == 0) {
+        int bytes = ::read(fd, input_buffer_->buffer_begin(), input_buffer_->writable_size());
+        if (bytes <= 0) {
+            if (bytes == 0) {
+                closed = true;
+            } else if (bytes == -1) {
+                if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
+                    std::cout << "on error!!\n";
+                    tcpSocketHandler_->on_error(this);
                     closed = true;
-                    break;
-                } else if (bytes == -1) {
-                    if (errno != ENOTCONN || errno == ECONNREFUSED) {
-                        std::cout << "on error!!\n";
-                        tcpSocketHandler_->on_close(this);
-                        closed = true;
-                    }
-                    break;
                 }
-            } else {
-                read = true;
-                input_buffer_->fill(bytes);
-            }
 
-            break;
+                return;
+            }
+        } else {
+            read = true;
+            input_buffer_->fill(bytes);
         }
 
         if (closed) {

@@ -17,30 +17,7 @@ namespace net::http
 {
     HttpServer::HttpServer()
     {
-        file_.open("/home/yuan/Desktop/cz");
-        if (!file_.good()) {
-            std::cout << "open file fail!\n";
-            /*if (handler_) {
-                handler_->on_close(this);
-                std::cout << "cant open file!!!\n";
-            }*/
-        }
-
-        file_.seekg(0, std::ios_base::end);
-        length_ = file_.tellg();
-        if (length_ == 0) {
-            file_.close();
-            std::cout << "open file fail1!\n";
-
-            /*if (handler_) {
-                handler_->on_close(this);
-                std::cout << "cant open file!!!\n";
-            }*/
-        }
-
-        file_.clear();
-        file_.seekg(0, std::ios::beg);
-        buff1_ = new char[1024 * 1024 * 2];
+        
     }
 
     HttpServer::~HttpServer()
@@ -60,91 +37,28 @@ namespace net::http
 
     void HttpServer::on_read(TcpConnection *conn)
     {
-        HttpRequest req_;
-        if (!req_.parse_header(*conn->get_input_stream().get())) {
-            std::cout << "parse fail!!" << std::endl;
-            conn->close();
-        } else {
-            if (req_.get_url_domain().size() > 1 && req_.get_url_domain()[1] == "movie") {
-                const std::string *range = req_.get_header(net::http::http_header_key::range);
-                long long offset = 0;
-
-                if (range) {
-                    size_t pos = range->find_first_of("=");
-                    if (std::string::npos == pos) {
-                        conn->close();
-                        return;
-                    }
-
-                    size_t pos1 = range->find_first_of("-");
-                    offset = std::atol(range->substr(pos + 1, pos1 - pos).c_str());
-                }
-                
-                //Buffer buff(1024 * 1024);
-                file_.seekg(offset, std::ios::beg);
-                file_.read(buff1_, 1024 * 1024 * 2);
-                size_t r = file_.gcount();
-                //buff.fill(r);
-                //buff.rewind();
-
-                if (offset > 0) {
-                    std::string resp = "HTTP/1.1 206 Partial Content\r\n";
-                    resp.append("Content-Type: video/mp4\r\n");
-                    resp.append("Content-Range: bytes ")
-                        .append(std::to_string(offset))
-                        .append("-")
-                        .append(std::to_string(length_ - 1))
-                        .append("/")
-                        .append(std::to_string(length_))
-                        .append("\r\n");
-
-                    resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
-                    ::write(conn->get_fd(), resp.c_str(), resp.size());
-
-                    /*
-                    Buffer buff1;
-                    buff1.write_string(resp);
-                    conn->send(&buff1);
-                    */
-
-                    std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_ << std::endl;
-                } else {
-                    std::string resp = "HTTP/1.1 206 Partial Content\r\n";
-                    resp.append("Content-Type: video/mp4\r\n");
-                    //resp.append("Accept-Ranges: bytes\r\n");
-                    resp.append("Content-Range: bytes ")
-                        .append(std::to_string(offset))
-                        .append("-")
-                        .append(std::to_string(length_ - 1))
-                        .append("/")
-                        .append(std::to_string(length_))
-                        .append("\r\n");
-                    resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
-                    //resp.append("Content-Disposition: attachment; filename=The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4\r\n");
-                    //Buffer buff1;
-                    //buff1.write_string(resp);
-                    //conn->send(&buff1);
-
-                    ::write(conn->get_fd(), resp.c_str(), resp.size());
-                }
-
-                //conn->send(&buff);
-                ::write(conn->get_fd(), buff1_, r);
-
-                if (file_.eof()) {
-                    file_.clear();
-                }
-
-                file_.seekg(0, std::ios::beg);
-                return;
-            }
-
-            std::cout << "content length:" << req_.header_exists(net::http::http_header_key::content_length) << std::endl;
-            std::string msg = "你好，世界！！";
-            std::string repsonse = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
+        auto context = std::make_shared<HttpRequestContext>(conn);
+        if (!context->parse()) {
+            std::string msg = "<h1>Internal Server Error</h1>";
+            std::string repsonse = "HTTP/1.1 500\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
             Buffer buff1;
             buff1.write_string(repsonse);
             conn->send(&buff1);
+            conn->close();
+            return;
+        }
+
+        auto handler = dispatcher_.get_handler(context->get_request()->get_raw_url());
+        if (handler) {
+            handler(context);
+        } else {
+            // 404
+            std::string msg = "<h1>resource not found</h1>";
+            std::string repsonse = "HTTP/1.1 404 NOT FOUND\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
+            Buffer buff1;
+            buff1.write_string(repsonse);
+            conn->send(&buff1);
+            conn->close();
         }
     }
 
@@ -196,5 +110,10 @@ namespace net::http
     void HttpServer::stop()
     {
         event_loop_->quit();
+    }
+
+    void HttpServer::on(const std::string &url, request_function func)
+    {
+        dispatcher_.register_handler(url, func);
     }
 }

@@ -88,8 +88,8 @@ namespace net
         if (it != channels_.end()) {
             std::cout << "close connection now: " << channel->get_fd() << "\n";
             poller_->remove_channel(channel);
-            ::close(channel->get_fd());
             channels_.erase(it);
+            ::close(channel->get_fd());
         }
     }
 

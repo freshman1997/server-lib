@@ -1,8 +1,13 @@
 #ifndef __HTTP_SERVER_H__
 #define __HTTP_SERVER_H__
 #include <fstream>
+#include <functional>
+#include <memory>
 
 #include "net/handler/tcp_socket_handler.h"
+#include "common.h"
+#include "ops/request_dispatcher.h"
+#include "request.h"
 
 namespace net
 {
@@ -49,15 +54,16 @@ namespace net::http
 
         void stop();
 
+    public:
+        void on(const std::string &url, request_function func);
+
     private:
         bool quit_;
         State state_;
         Acceptor *acceptor_;
         EventLoop *event_loop_;
-        char *buff1_;
-        std::fstream file_;
-        long long length_;
-        //net::http::HttpRequest req_;
+        
+        HttpRequestDispatcher dispatcher_;
     };
 }
 

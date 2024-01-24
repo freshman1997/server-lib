@@ -1,4 +1,5 @@
 #include <fcntl.h>
+#include <iostream>
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -68,8 +69,8 @@ namespace net::socket
     void set_none_block(int fd, bool on)
     {
         if (on) {
-            int flags = fcntl(fd, F_GETFL, 0);
-            fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+            int flags = fcntl(fd, F_GETFL);
+            fcntl(fd, F_SETFL, flags |= O_NONBLOCK);
         }
     }
 }

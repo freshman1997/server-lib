@@ -60,7 +60,6 @@ namespace net
             return;
         }
 
-        std::cout << "connection fd " << conn_fd << std::endl;
         if (!handler_->is_unique(conn_fd)) {
             std::cout << "===> duplicate connection <===" << conn_fd << std::endl;
             return;

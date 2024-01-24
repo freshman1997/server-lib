@@ -151,6 +151,7 @@ namespace net::http
         // }
 
         url = url::url_decode(url);
+        req->url_ = url;
 
         if (!url::decode_url_domain(url, req->url_domain)) {
             return false;
@@ -280,7 +281,7 @@ namespace net::http
         return false;
     }
 
-    HttpRequest::HttpRequest() 
+    HttpRequest::HttpRequest(HttpRequestContext *context) : context_(context)
     {
         parser.set_req(this);
     }
