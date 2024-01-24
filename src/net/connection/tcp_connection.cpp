@@ -1,6 +1,6 @@
 #include "net/connection/tcp_connection.h"
 #include "net/connection/connection.h"
-#include "net/handler/tcp_socket_handler.h"
+#include "net/handler/connection_handler.h"
 #include "net/socket/socket_ops.h"
 
 #include <iostream>
@@ -45,7 +45,17 @@ namespace net
         return *addr_.get();
     }
 
-    void TcpConnection::send(Buffer *buff)
+    std::shared_ptr<Buffer> TcpConnection::get_input_buff()
+    {
+        return input_buffer_;
+    }
+
+    std::shared_ptr<Buffer> TcpConnection::get_output_buff()
+    {
+        return output_buffer_;
+    }
+
+    void TcpConnection::send(std::shared_ptr<Buffer> buff)
     {
         int fd = this->channel_->get_fd();
         ::write(fd, buff->begin(), buff->readable_bytes());
@@ -60,7 +70,7 @@ namespace net
     // 发送完数据后返回
     void TcpConnection::close()
     {
-        tcpSocketHandler_->on_close(this);
+        connectionHandler_->on_close(this);
         delete this;
     }
 
@@ -74,9 +84,9 @@ namespace net
         return channel_.get();
     }
 
-    void TcpConnection::set_tcp_handler(TcpConnectionHandler *tcpSocketHandler)
+    void TcpConnection::set_connection_handler(ConnectionHandler *handler)
     {
-        this->tcpSocketHandler_ = tcpSocketHandler;
+        this->connectionHandler_ = handler;
     }
 
     void TcpConnection::on_read_event()
@@ -93,7 +103,7 @@ namespace net
             } else if (bytes == -1) {
                 if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
                     std::cout << "on error!!\n";
-                    tcpSocketHandler_->on_error(this);
+                    connectionHandler_->on_error(this);
                     closed = true;
                 }
 
@@ -107,7 +117,7 @@ namespace net
         if (closed) {
             close();
         } else {
-            tcpSocketHandler_->on_read(this);
+            connectionHandler_->on_read(this);
         }
     }
 

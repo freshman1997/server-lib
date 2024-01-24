@@ -3,7 +3,7 @@
 
 namespace net 
 {
-    class TcpConnection;
+    class Connection;
 }
 
 namespace net::http 
@@ -14,7 +14,7 @@ namespace net::http
     class HttpRequestContext
     {
     public:
-        HttpRequestContext(TcpConnection *conn_);
+        HttpRequestContext(Connection *conn_);
         ~HttpRequestContext();
 
         HttpRequest * get_request()
@@ -27,7 +27,7 @@ namespace net::http
             return response;
         }
 
-        TcpConnection * get_connection()
+        Connection * get_connection()
         {
             return conn_;
         }
@@ -36,7 +36,7 @@ namespace net::http
         bool parse();
 
     private:
-        TcpConnection *conn_;
+        Connection *conn_;
         HttpRequest *request;
         HttpResponse *response;
     };

@@ -88,10 +88,12 @@ public:
 
         file_.clear();
         file_.seekg(0, std::ios::beg);
+        buff = std::make_shared<Buffer>(1024 * 1024 * 2);
     }
 
     void on_request(std::shared_ptr<net::http::HttpRequestContext> context)
     {
+        buff->reset();
         net::http::HttpRequest req_ = *context->get_request();
         if (req_.get_url_domain().size() > 1 && req_.get_url_domain()[1] == "movie") {
             const std::string *range = req_.get_header(net::http::http_header_key::range);
@@ -108,12 +110,10 @@ public:
                 offset = std::atol(range->substr(pos + 1, pos1 - pos).c_str());
             }
             
-            Buffer buff(1024 * 1024 * 2);
             file_.seekg(offset, std::ios::beg);
-            file_.read(buff.buffer_begin(), 1024 * 1024 * 2);
+            file_.read(buff->buffer_begin(), 1024 * 1024 * 2);
             size_t r = file_.gcount();
-            buff.fill(r);
-            //buff.reset();
+            buff->fill(r);
 
             if (offset > 0) {
                 std::string resp = "HTTP/1.1 206 Partial Content\r\n";
@@ -128,9 +128,9 @@ public:
 
                 resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
 
-                Buffer buff1;
-                buff1.write_string(resp);
-                context->get_connection()->send(&buff1);
+                std::shared_ptr<Buffer> buff1 = std::make_shared<Buffer>();
+                buff1->write_string(resp);
+                context->get_connection()->send(buff1);
 
                 std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_ << std::endl;
             } else {
@@ -146,12 +146,12 @@ public:
                     .append("\r\n");
                 resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
                 //resp.append("Content-Disposition: attachment; filename=The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4\r\n");
-                Buffer buff1;
-                buff1.write_string(resp);
-                context->get_connection()->send(&buff1);
+                std::shared_ptr<Buffer> buff1 = std::make_shared<Buffer>();
+                buff1->write_string(resp);
+                context->get_connection()->send(buff1);
             }
 
-            context->get_connection()->send(&buff);
+            context->get_connection()->send(buff);
 
             if (file_.eof()) {
                 file_.clear();
@@ -164,14 +164,15 @@ public:
         std::cout << "content length:" << req_.header_exists(net::http::http_header_key::content_length) << std::endl;
         std::string msg = "你好，世界！！";
         std::string repsonse = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-        Buffer buff1;
-        buff1.write_string(repsonse);
-        context->get_connection()->send(&buff1);
+        std::shared_ptr<Buffer> buff1 = std::make_shared<Buffer>();
+        buff1->write_string(repsonse);
+        context->get_connection()->send(buff1);
     }
 
-public:
+private:
     std::fstream file_;
     long long length_;
+    std::shared_ptr<Buffer> buff;
 };
 
 void test_evloop()

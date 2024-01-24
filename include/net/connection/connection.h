@@ -1,5 +1,6 @@
 #ifndef __CONNECTION_H__
 #define __CONNECTION_H__
+#include <memory>
 
 class Buffer;
 
@@ -7,7 +8,7 @@ namespace net
 {
     class InetAddress;
     class Channel;
-    class TcpConnectionHandler;
+    class ConnectionHandler;
 
     enum class ConnectionType
     {
@@ -25,7 +26,11 @@ namespace net
 
         virtual const InetAddress & get_local_address() const = 0;
 
-        virtual void send(Buffer *buff) = 0;
+        virtual std::shared_ptr<Buffer> get_input_buff() = 0;
+
+        virtual std::shared_ptr<Buffer> get_output_buff() = 0;
+
+        virtual void send(std::shared_ptr<Buffer> buff) = 0;
 
         // 丢弃所有未发送的数据
         virtual void abort() = 0;
@@ -37,7 +42,7 @@ namespace net
 
         virtual Channel * get_channel() = 0;
         
-        virtual void set_tcp_handler(TcpConnectionHandler *tcpSocketHandler) = 0;
+        virtual void set_connection_handler(ConnectionHandler *handler) = 0;
     };
 }
 

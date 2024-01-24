@@ -4,7 +4,7 @@
 #include <functional>
 #include <memory>
 
-#include "net/handler/tcp_socket_handler.h"
+#include "net/handler/connection_handler.h"
 #include "common.h"
 #include "ops/request_dispatcher.h"
 #include "request.h"
@@ -18,7 +18,7 @@ namespace net
 
 namespace net::http 
 {
-    class HttpServer : public TcpConnectionHandler
+    class HttpServer : public ConnectionHandler
     {
         enum State
         {
@@ -37,15 +37,15 @@ namespace net::http
         ~HttpServer();
 
     public:
-        virtual void on_connected(TcpConnection *conn);
+        virtual void on_connected(Connection *conn);
 
-        virtual void on_error(TcpConnection *conn);
+        virtual void on_error(Connection *conn);
 
-        virtual void on_read(TcpConnection *conn);
+        virtual void on_read(Connection *conn);
 
-        virtual void on_wirte(TcpConnection *conn);
+        virtual void on_wirte(Connection *conn);
 
-        virtual void on_close(TcpConnection *conn);
+        virtual void on_close(Connection *conn);
 
     public:
         bool init(int port);

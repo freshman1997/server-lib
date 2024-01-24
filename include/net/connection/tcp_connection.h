@@ -26,7 +26,11 @@ namespace net
 
         virtual const InetAddress & get_local_address() const;
 
-        virtual void send(Buffer *buff);
+        virtual std::shared_ptr<Buffer> get_input_buff();
+
+        virtual std::shared_ptr<Buffer> get_output_buff();
+
+        virtual void send(std::shared_ptr<Buffer> buff);
 
         // 丢弃所有未发送的数据
         virtual void abort();
@@ -38,7 +42,7 @@ namespace net
 
         virtual Channel * get_channel();
 
-        virtual void set_tcp_handler(TcpConnectionHandler *tcpSocketHandler);
+        virtual void set_connection_handler(ConnectionHandler *connectionHandler);
 
     public: // select handler
         virtual void on_read_event();
@@ -47,22 +51,11 @@ namespace net
 
         virtual int get_fd();
 
-    public:
-        std::shared_ptr<Buffer> get_input_stream()
-        {
-            return input_buffer_;
-        }
-
-        std::shared_ptr<Buffer> get_output_stream()
-        {
-            return output_buffer_;
-        }
-
     private:
         std::shared_ptr<net::InetAddress> addr_;
         std::shared_ptr<net::Channel> channel_;
         AcceptHandler *acceptHandler_;
-        TcpConnectionHandler *tcpSocketHandler_;
+        ConnectionHandler *connectionHandler_;
         std::shared_ptr<Buffer> input_buffer_;
         std::shared_ptr<Buffer> output_buffer_;
         bool closed;

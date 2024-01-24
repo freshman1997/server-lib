@@ -25,25 +25,25 @@ namespace net::http
 
     }
 
-    void HttpServer::on_connected(TcpConnection *conn)
+    void HttpServer::on_connected(Connection *conn)
     {
 
     }
 
-    void HttpServer::on_error(TcpConnection *conn)
+    void HttpServer::on_error(Connection *conn)
     {
 
     }
 
-    void HttpServer::on_read(TcpConnection *conn)
+    void HttpServer::on_read(Connection *conn)
     {
         auto context = std::make_shared<HttpRequestContext>(conn);
         if (!context->parse()) {
             std::string msg = "<h1>Internal Server Error</h1>";
             std::string repsonse = "HTTP/1.1 500\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-            Buffer buff1;
-            buff1.write_string(repsonse);
-            conn->send(&buff1);
+            std::shared_ptr<Buffer> buff1 = std::make_shared<Buffer>();
+            buff1->write_string(repsonse);
+            conn->send(buff1);
             conn->close();
             return;
         }
@@ -55,19 +55,19 @@ namespace net::http
             // 404
             std::string msg = "<h1>resource not found</h1>";
             std::string repsonse = "HTTP/1.1 404 NOT FOUND\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-            Buffer buff1;
-            buff1.write_string(repsonse);
-            conn->send(&buff1);
+            std::shared_ptr<Buffer> buff1 = std::make_shared<Buffer>();
+            buff1->write_string(repsonse);
+            conn->send(buff1);
             conn->close();
         }
     }
 
-    void HttpServer::on_wirte(TcpConnection *conn)
+    void HttpServer::on_wirte(Connection *conn)
     {
 
     }
 
-    void HttpServer::on_close(TcpConnection *conn)
+    void HttpServer::on_close(Connection *conn)
     {
         event_loop_->on_close(conn);
     }

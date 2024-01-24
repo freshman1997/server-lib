@@ -22,8 +22,6 @@ namespace net
 
         virtual void set_handler(AcceptHandler *handler);
 
-        virtual void on_new_connection(Connection *conn);
-
         virtual Channel * get_channel()
         {
             return channel_;

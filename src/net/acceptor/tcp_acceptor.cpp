@@ -43,11 +43,6 @@ namespace net
         handler_ = handler;
     }
 
-    void TcpAcceptor::on_new_connection(Connection *conn)
-    {
-
-    }
-
     void TcpAcceptor::on_read_event()
     {
         assert(socket_);

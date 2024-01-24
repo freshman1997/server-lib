@@ -3,7 +3,7 @@
 #include <unordered_map>
 
 #include "net/handler/accept_handler.h"
-#include "net/handler/tcp_socket_handler.h"
+#include "net/handler/connection_handler.h"
 
 namespace timer
 {
@@ -42,9 +42,9 @@ namespace net
         virtual bool is_unique(int fd);
 
     public:
-        void set_tcp_handler(TcpConnectionHandler *tcpConnHandler)
+        void set_tcp_handler(ConnectionHandler *connHandler)
         {
-            this->tcpConnHandler_ = tcpConnHandler;
+            this->connHandler_ = connHandler;
         }
 
     private:
@@ -53,7 +53,7 @@ namespace net
         timer::TimerManager *timer_manager_;
         std::unordered_map<int, Channel *> channels_;
         int id_;
-        TcpConnectionHandler *tcpConnHandler_;
+        ConnectionHandler *connHandler_;
     };
 }
 #endif

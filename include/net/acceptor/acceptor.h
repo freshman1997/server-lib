@@ -16,8 +16,6 @@ namespace net
 
         virtual void set_handler(AcceptHandler *acceptor) = 0;
 
-        virtual void on_new_connection(Connection *conn) = 0;
-
         virtual Channel * get_channel() = 0;
     };
 }

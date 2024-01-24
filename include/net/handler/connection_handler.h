@@ -1,15 +1,22 @@
-#ifndef __CONNECTION_HANDLER_H__
-#define __CONNECTION_HANDLER_H__
-class Buffer;
+#ifndef __TCP_SOCKET_HANDLER_H__
+#define __TCP_SOCKET_HANDLER_H__
 
 namespace net
 {
-    class Handler
-    {   
-    public:
-        virtual void on_packet(Buffer *buff) = 0;
+    class Connection;
 
-        virtual void on_error() = 0;
+    class ConnectionHandler
+    {
+    public:
+        virtual void on_connected(Connection *conn) = 0;
+
+        virtual void on_error(Connection *conn) = 0;
+
+        virtual void on_read(Connection *conn) = 0;
+
+        virtual void on_wirte(Connection *conn) = 0;
+
+        virtual void on_close(Connection *conn) = 0;
     };
 }
 
