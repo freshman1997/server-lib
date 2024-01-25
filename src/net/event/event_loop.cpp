@@ -39,11 +39,6 @@ namespace net
         }
     }
 
-    void EventLoop::start()
-    {
-        // TODO 
-    }
-
     void EventLoop::on_new_connection(Connection *conn, Acceptor *acceptor)
     {
         if (conn) {

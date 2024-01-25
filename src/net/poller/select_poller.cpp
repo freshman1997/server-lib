@@ -31,9 +31,18 @@ namespace net
 
     time_t SelectPoller::poll(int timeout)
     {
-        #define INVALID_FD -1
-
         time_t tm = time(nullptr);
+
+        if (!helper::removed_fds_.empty()) {
+            for (auto &fd : helper::removed_fds_) {
+                auto it = helper::sockets_.find(fd);
+                if (it != helper::sockets_.end()) {
+                    helper::sockets_.erase(it);
+                }
+            }
+
+            helper::removed_fds_.clear();
+        }
 
         FD_ZERO(&helper::reads_);
         FD_ZERO(&helper::writes_);
@@ -63,11 +72,11 @@ namespace net
             }
         }
 
-        timeval time;
-        time.tv_sec = 0;
-        time.tv_usec = timeout * 1000;
+        struct timeval tv;
+        tv.tv_sec = timeout / 1000;
+        tv.tv_usec = (timeout % 1000) * 1000;
 
-        int ret = select(max_fd + 1, &helper::reads_, &helper::writes_, &helper::excepts_, &time);
+        int ret = select(max_fd + 1, &helper::reads_, &helper::writes_, &helper::excepts_, nullptr);
         if (ret <= 0) {
             // TODO
             return tm;
@@ -91,15 +100,6 @@ namespace net
                 j->second->on_event(ev);
             }
         }
-
-        for (auto &fd : helper::removed_fds_) {
-            auto it = helper::sockets_.find(fd);
-            if (it != helper::sockets_.end()) {
-                helper::sockets_.erase(it);
-            }
-        }
-
-        helper::removed_fds_.clear();
 
         return tm;
     }

@@ -1,4 +1,3 @@
-#include "buffer/buffer.h"
 #include "net/acceptor/acceptor.h"
 #include "net/acceptor/tcp_acceptor.h"
 #include "net/http/header_key.h"
@@ -63,7 +62,7 @@ class VideoTest
 public:
     VideoTest()
     {
-        file_.open("/home/yuan/Videos/The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4");
+        file_.open("/home/yuan/Desktop/cz");
         if (!file_.good()) {
             std::cout << "open file fail!\n";
         }
@@ -74,93 +73,60 @@ public:
             file_.close();
             std::cout << "open file fail1!\n";
         }
-
-        file_.seekg(0, std::ios::beg);
-        buff = std::make_shared<Buffer>(1024 * 1024 * 2);
     }
 
     void on_request(std::shared_ptr<net::http::HttpRequestContext> context)
     {
-        buff->reset();
-        net::http::HttpRequest req_ = *context->get_request();
-        if (req_.get_url_domain().size() > 1 && req_.get_url_domain()[1] == "movie") {
-            const std::string *range = req_.get_header(net::http::http_header_key::range);
-            long long offset = 0;
-
-            if (range) {
-                size_t pos = range->find_first_of("=");
-                if (std::string::npos == pos) {
-                    context->get_connection()->close();
-                    return;
-                }
-
-                size_t pos1 = range->find_first_of("-");
-                offset = std::atol(range->substr(pos + 1, pos1 - pos).c_str());
-            }
-            
-            file_.seekg(offset, std::ios::beg);
-            file_.read(buff->buffer_begin(), 1024 * 1024 * 2);
-            size_t r = file_.gcount();
-            buff->fill(r);
-
-            if (offset > 0) {
-                std::string resp = "HTTP/1.1 206 Partial Content\r\n";
-                resp.append("Content-Type: video/mp4\r\n");
-                resp.append("Content-Range: bytes ")
-                    .append(std::to_string(offset))
-                    .append("-")
-                    .append(std::to_string(length_ - 1))
-                    .append("/")
-                    .append(std::to_string(length_))
-                    .append("\r\n");
-
-                resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
-
-                std::shared_ptr<Buffer> buff1 = std::make_shared<Buffer>();
-                buff1->write_string(resp);
-                context->get_connection()->send(buff1);
-
-                std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_ << std::endl;
-            } else {
-                std::string resp = "HTTP/1.1 206 Partial Content\r\n";
-                resp.append("Content-Type: video/mp4\r\n");
-                //resp.append("Accept-Ranges: bytes\r\n");
-                resp.append("Content-Range: bytes ")
-                    .append(std::to_string(offset))
-                    .append("-")
-                    .append(std::to_string(length_ - 1))
-                    .append("/")
-                    .append(std::to_string(length_))
-                    .append("\r\n");
-                resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
-                //resp.append("Content-Disposition: attachment; filename=The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4\r\n");
-                std::shared_ptr<Buffer> buff1 = std::make_shared<Buffer>();
-                buff1->write_string(resp);
-                context->get_connection()->send(buff1);
-            }
-
-            context->get_connection()->send(buff);
-
-            if (file_.eof()) {
-                file_.clear();
-            }
-
-            file_.seekg(0, std::ios::beg);
-            return;
+        auto out = context->get_connection()->get_output_buff();
+        if (out->get_buff_size() < 1024 * 10224 * 2) {
+            out->resize(1024 * 10224 * 2);
         }
 
-        std::cout << "content length:" << req_.header_exists(net::http::http_header_key::content_length) << std::endl;
-        std::string msg = "你好，世界！！";
-        std::string repsonse = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-        std::shared_ptr<Buffer> buff1 = std::make_shared<Buffer>();
-        buff1->write_string(repsonse);
-        context->get_connection()->send(buff1);
+        net::http::HttpRequest request = *context->get_request();
+        const std::string *range = request.get_header(net::http::http_header_key::range);
+        long long offset = 0;
+
+        if (range) {
+            size_t pos = range->find_first_of("=");
+            if (std::string::npos == pos) {
+                context->get_connection()->close();
+                return;
+            }
+
+            size_t pos1 = range->find_first_of("-");
+            offset = std::atol(range->substr(pos + 1, pos1 - pos).c_str());
+        }
+
+        std::string resp = "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\n";
+        resp.append("Content-Range: bytes ")
+            .append(std::to_string(offset))
+            .append("-")
+            .append(std::to_string(length_ - 1))
+            .append("/")
+            .append(std::to_string(length_))
+            .append("\r\n");
+        
+        size_t r = 1024 * 1024 * 2 + offset > length_ ? length_ - offset : 1024 * 1024 * 2;
+        std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_ << std::endl;
+
+        resp.append("Content-length: ").append(std::to_string(r)).append("\r\n\r\n");
+        out->write_string(resp);
+
+        file_.seekg(offset, std::ios::beg);
+        file_.read(out->buffer_begin(), 1024 * 1024 * 2);
+
+        out->fill(r);
+        context->get_connection()->send(out);
+        out->reset();
+
+        if (file_.eof()) {
+            file_.clear();
+        }
     }
 
 private:
     std::fstream file_;
     long long length_;
-    std::shared_ptr<Buffer> buff;
 };
 
 void test_evloop()

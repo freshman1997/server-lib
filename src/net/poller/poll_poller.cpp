@@ -28,6 +28,21 @@ namespace net
     {
         time_t tm = time(nullptr);
 
+        if (!helper::removed_fds_.empty()) {
+            for (auto &fd : helper::removed_fds_) {
+                auto it = helper::channels_.find(fd);
+                if (it != helper::channels_.end()) {
+                    helper::channels_.erase(fd);
+                    helper::fds_.erase(std::remove_if(helper::fds_.begin(), helper::fds_.end(), 
+                    [fd](struct pollfd pfd) -> bool {
+                        return fd == pfd.fd;
+                    }));
+                }
+            }
+
+            helper::removed_fds_.clear();
+        }
+
         int ret = ::poll(&*helper::fds_.begin(), helper::fds_.size(), timeout);
         if (ret < 0) {
             // TODO
@@ -52,19 +67,6 @@ namespace net
                 channel->on_event(ev);
             }
         }
-
-        for (auto &fd : helper::removed_fds_) {
-            auto it = helper::channels_.find(fd);
-            if (it != helper::channels_.end()) {
-                helper::channels_.erase(fd);
-                helper::fds_.erase(std::remove_if(helper::fds_.begin(), helper::fds_.end(), 
-                [fd](struct pollfd pfd) -> bool {
-                    return fd == pfd.fd;
-                }));
-            }
-        }
-
-        helper::removed_fds_.clear();
 
         return tm;
     }

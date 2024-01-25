@@ -42,7 +42,7 @@ namespace net
 
         bool has_events()
         {
-            return events_ == NONE_EVENT;
+            return events_ != NONE_EVENT;
         }
 
         void enable_read()

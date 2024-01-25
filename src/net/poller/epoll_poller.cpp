@@ -1,6 +1,5 @@
 #include <cstring>
 #include <ctime>
-#include <errno.h>
 #include <unistd.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
@@ -84,6 +83,8 @@ namespace net
     {
         struct epoll_event event;
         memset(&event, 0, sizeof(struct epoll_event));
+
+        event.events |= EPOLLET;
         int ev = channel->get_events();
         if (ev & Channel::READ_EVENT) {
             event.events |= EPOLLIN | EPOLLERR | EPOLLHUP;

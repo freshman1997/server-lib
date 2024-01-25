@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <iostream>
 #include <stdint.h>
 #include <string>
 #include <cstring>
@@ -195,7 +194,6 @@ public:
     {
         read_index = 0;
         write_index = 0;
-        buffs.resize(8192);
     }
 
     void set_write_index(size_t idx)
@@ -216,6 +214,11 @@ public:
     void resize(size_t size = 1024)
     {
         buffs.resize(buffs.size() + size);
+    }
+
+    size_t get_buff_size() const
+    {
+        return buffs.size();
     }
 
 private:

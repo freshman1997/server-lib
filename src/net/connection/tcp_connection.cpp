@@ -123,8 +123,9 @@ namespace net
 
     void TcpConnection::on_write_event()
     {
-        // TODO write data
-
+        if (output_buffer_->readable_bytes() > 0) {
+            send(output_buffer_);
+        }
     }
 
     int TcpConnection::get_fd()

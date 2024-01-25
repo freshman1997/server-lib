@@ -42,9 +42,9 @@ namespace net::http
         if (!context->parse()) {
             std::string msg = "<h1>Internal Server Error</h1>";
             std::string repsonse = "HTTP/1.1 500\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-            std::shared_ptr<Buffer> buff1 = std::make_shared<Buffer>();
-            buff1->write_string(repsonse);
-            conn->send(buff1);
+            auto buff = conn->get_output_buff();
+            buff->write_string(repsonse);
+            conn->send(buff);
             conn->close();
             return;
         }
@@ -56,9 +56,9 @@ namespace net::http
             // 404
             std::string msg = "<h1>resource not found</h1>";
             std::string repsonse = "HTTP/1.1 404 NOT FOUND\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-            std::shared_ptr<Buffer> buff1 = std::make_shared<Buffer>();
-            buff1->write_string(repsonse);
-            conn->send(buff1);
+            auto buff = conn->get_output_buff();
+            buff->write_string(repsonse);
+            conn->send(buff);
             conn->close();
         }
     }
@@ -99,7 +99,7 @@ namespace net::http
 
     void HttpServer::serve()
     {
-        net::SelectPoller poller;
+        net::EpollPoller poller;
         timer::WheelTimerManager manager;
         net::EventLoop loop(&poller, &manager, acceptor_);
         acceptor_->set_handler(&loop);

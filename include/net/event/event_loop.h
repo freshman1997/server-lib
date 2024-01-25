@@ -31,8 +31,6 @@ namespace net
             quit_ = true;
         }
 
-        void start();
-
         virtual void on_new_connection(Connection *conn, Acceptor *acceptor);
 
         virtual void on_quit(Acceptor *acceptor);
