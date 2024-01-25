@@ -33,8 +33,8 @@ namespace net
 
         while (!quit_) {
             time_t from = poller_->poll(100);
-            //time_t to = time(NULL);
             timer_manager_->tick();
+            //time_t to = time(NULL);
             //std::cout << "comsume: " << (to - from) << std::endl;
         }
     }

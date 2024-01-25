@@ -13,6 +13,7 @@ namespace
     {
         std::vector<struct pollfd> fds_;
         std::unordered_map<int, net::Channel *> channels_;
+        std::vector<int> removed_fds_;
     }
 }
 
@@ -52,6 +53,19 @@ namespace net
             }
         }
 
+        for (auto &fd : helper::removed_fds_) {
+            auto it = helper::channels_.find(fd);
+            if (it != helper::channels_.end()) {
+                helper::channels_.erase(fd);
+                helper::fds_.erase(std::remove_if(helper::fds_.begin(), helper::fds_.end(), 
+                [fd](struct pollfd pfd) -> bool {
+                    return fd == pfd.fd;
+                }));
+            }
+        }
+
+        helper::removed_fds_.clear();
+
         return tm;
     }
 
@@ -74,8 +88,8 @@ namespace net
 
     void PollPoller::update_channel(Channel *channel)
     {
-        int fd = channel->get_fd();
-        if (channel->get_oper() == Channel::Oper::init || channel->get_oper() == Channel::Oper::free) {
+        auto it = helper::channels_.find(channel->get_fd());
+        if (it == helper::channels_.end()) {
             do_add_channel(channel);
         } else {
             if (!channel->has_events()) {
@@ -105,13 +119,6 @@ namespace net
 
     void PollPoller::remove_channel(Channel *channel)
     {
-        helper::channels_.erase(channel->get_fd());
-        channel->set_oper(Channel::Oper::free);
-        int rm_fd = channel->get_fd();
-        auto it = std::remove_if(helper::fds_.begin(), helper::fds_.end(), [rm_fd](struct pollfd pfd) -> bool {
-            return rm_fd == pfd.fd;
-        });
-
-        helper::fds_.erase(it);
+        helper::removed_fds_.push_back(channel->get_fd());
     }
 }

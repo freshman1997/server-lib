@@ -99,7 +99,7 @@ namespace net::http
 
     void HttpServer::serve()
     {
-        net::PollPoller poller;
+        net::SelectPoller poller;
         timer::WheelTimerManager manager;
         net::EventLoop loop(&poller, &manager, acceptor_);
         acceptor_->set_handler(&loop);

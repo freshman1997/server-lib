@@ -4,6 +4,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <map>
+#include <vector>
 
 #include "net/channel/channel.h"
 #include "net/poller/select_poller.h"
@@ -12,7 +13,8 @@ namespace
 {
     namespace helper 
     {
-        std::map<int, std::pair<net::Channel *, int>> sockets_;
+        std::map<int, net::Channel *> sockets_;
+        std::vector<int> removed_fds_;
         fd_set reads_;
         fd_set writes_;
 		fd_set excepts_;
@@ -39,21 +41,21 @@ namespace net
 
         int max_fd = 0;
         for (auto i = helper::sockets_.begin(); i != helper::sockets_.end(); ++i) {
-            if (i->second.second & Channel::READ_EVENT) {
+            if (i->second->get_events() & Channel::READ_EVENT) {
                 FD_SET(i->first, &helper::reads_);
                 if (i->first > max_fd) {
                     max_fd = i->first;
                 }
             }
 
-            if (i->second.second & Channel::READ_EVENT) {
+            if (i->second->get_events() & Channel::READ_EVENT) {
                 FD_SET(i->first, &helper::writes_);
                 if (i->first > max_fd) {
                     max_fd = i->first;
                 }
             }
 
-            if (i->second.second & Channel::EXCEP_EVENT) {
+            if (i->second->get_events() & Channel::EXCEP_EVENT) {
                 FD_SET(i->first, &helper::excepts_);
                 if (i->first > max_fd) {
                     max_fd = i->first;
@@ -86,32 +88,33 @@ namespace net
             }
 
             if (ev != Channel::NONE_EVENT) {
-                j->second.first->on_event(ev);
+                j->second->on_event(ev);
             }
         }
+
+        for (auto &fd : helper::removed_fds_) {
+            auto it = helper::sockets_.find(fd);
+            if (it != helper::sockets_.end()) {
+                helper::sockets_.erase(it);
+            }
+        }
+
+        helper::removed_fds_.clear();
 
         return tm;
     }
 
     void SelectPoller::update_channel(Channel *channel)
     {
-        int fd = channel->get_fd();
-        if (channel->get_oper() == Channel::Oper::init || channel->get_oper() == Channel::Oper::free) {
-            channel->set_oper(Channel::Oper::add);
-            helper::sockets_[channel->get_fd()] = std::make_pair(channel, channel->get_events());
+        if (!channel->has_events()) {
+            helper::removed_fds_.push_back(channel->get_fd());
         } else {
-            if (!channel->has_events()) {
-                helper::sockets_.erase(channel->get_fd());
-                channel->set_oper(Channel::Oper::free);
-            } else {
-                helper::sockets_[channel->get_fd()] = std::make_pair(channel, channel->get_events());
-            }
+            helper::sockets_[channel->get_fd()] = channel;
         }
     }
 
     void SelectPoller::remove_channel(Channel *channel)
     {
-        helper::sockets_.erase(channel->get_fd());
-        channel->set_oper(Channel::Oper::free);
+        helper::removed_fds_.push_back(channel->get_fd());
     }
 }

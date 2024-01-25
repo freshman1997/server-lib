@@ -5,9 +5,8 @@ namespace thread
 {
     const int ThreadPool::default_thread_num = 1;
 
-    ThreadPool::ThreadPool() : thread_amount_(default_thread_num)
+    ThreadPool::ThreadPool() : ThreadPool(default_thread_num)
     {
-        init();
     }
 
     ThreadPool::ThreadPool(int thread_num) : thread_amount_(thread_num)

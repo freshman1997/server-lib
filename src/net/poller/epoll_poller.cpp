@@ -29,7 +29,9 @@ namespace net
     {
         time_t tm = time(nullptr);
         int nevent = ::epoll_wait(epoll_fd_, &*epoll_events_.begin(), (int)epoll_events_.size(), timeout);
-        int err = errno;
+        if (nevent < 0) {
+            return tm;
+        }
 
         if (nevent > 0) {
             for (int i = 0; i < nevent; ++i) {
@@ -50,12 +52,8 @@ namespace net
             if (nevent == (int)epoll_events_.size() && (int)epoll_events_.size() < MAX_EVENT) {
                 epoll_events_.resize(epoll_events_.size() * 2 >= MAX_EVENT ? MAX_EVENT : epoll_events_.size() * 2);
             }
-        } else if (nevent == 0) {
-            // TODO log
         } else {
-            if (err != EINTR) {
-                errno = err;
-            }
+            // TODO log
         }
 
         return tm;
@@ -63,7 +61,6 @@ namespace net
 
     void EpollPoller::update_channel(Channel *channel)
     {
-        int fd = channel->get_fd();
         if (channel->get_oper() == Channel::Oper::init || channel->get_oper() == Channel::Oper::free) {
             channel->set_oper(Channel::Oper::add);
             update(EPOLL_CTL_ADD, channel);
@@ -79,19 +76,26 @@ namespace net
 
     void EpollPoller::remove_channel(Channel *channel)
     {
-        int fd = channel->get_fd();
         update(EPOLL_CTL_DEL, channel);
+        channel->set_oper(Channel::Oper::free);
     }
 
     void EpollPoller::update(int op, Channel *channel)
     {
         struct epoll_event event;
         memset(&event, 0, sizeof(struct epoll_event));
-        event.events = channel->get_events();
+        int ev = channel->get_events();
+        if (ev & Channel::READ_EVENT) {
+            event.events |= EPOLLIN | EPOLLERR | EPOLLHUP;
+        }
+
+        if (ev & Channel::WRITE_EVENT) {
+            event.events |= EPOLLOUT;
+        }
+
         event.data.ptr = channel;
 
-        int fd = channel->get_fd();
-        if (::epoll_ctl(epoll_fd_, op, fd, &event)) {
+        if (::epoll_ctl(epoll_fd_, op, channel->get_fd(), &event)) {
             // log
         }
     }

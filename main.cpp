@@ -63,13 +63,9 @@ class VideoTest
 public:
     VideoTest()
     {
-        file_.open("/home/yuan/Desktop/cz");
+        file_.open("/home/yuan/Videos/The.Shawshank.Redemption.1994.1080p.BluRay.H264.AAC-RARBG.mp4");
         if (!file_.good()) {
             std::cout << "open file fail!\n";
-            /*if (handler_) {
-                handler_->on_close(this);
-                std::cout << "cant open file!!!\n";
-            }*/
         }
 
         file_.seekg(0, std::ios_base::end);
@@ -77,14 +73,8 @@ public:
         if (length_ == 0) {
             file_.close();
             std::cout << "open file fail1!\n";
-
-            /*if (handler_) {
-                handler_->on_close(this);
-                std::cout << "cant open file!!!\n";
-            }*/
         }
 
-        file_.clear();
         file_.seekg(0, std::ios::beg);
         buff = std::make_shared<Buffer>(1024 * 1024 * 2);
     }
