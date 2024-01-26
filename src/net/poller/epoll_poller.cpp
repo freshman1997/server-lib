@@ -1,11 +1,17 @@
 #include <cstring>
 #include <ctime>
+#include <set>
 #include <unistd.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
 
 #include "net/poller/epoll_poller.h"
 #include "net/channel/channel.h"
+
+namespace net::helper 
+{
+    std::set<int> fds_;
+}
 
 namespace net 
 {
@@ -60,23 +66,22 @@ namespace net
 
     void EpollPoller::update_channel(Channel *channel)
     {
-        if (channel->get_oper() == Channel::Oper::init || channel->get_oper() == Channel::Oper::free) {
-            channel->set_oper(Channel::Oper::add);
-            update(EPOLL_CTL_ADD, channel);
-        } else {
+        auto it = helper::fds_.find(channel->get_fd());
+        if (it != helper::fds_.end()) {
             if (!channel->has_events()) {
-                update(EPOLL_CTL_DEL, channel);
-                channel->set_oper(Channel::Oper::free);
+                remove_channel(channel);
             } else {
                 update(EPOLL_CTL_MOD, channel);
             }
+        } else {
+            update(EPOLL_CTL_ADD, channel);
         }
     }
 
     void EpollPoller::remove_channel(Channel *channel)
     {
         update(EPOLL_CTL_DEL, channel);
-        channel->set_oper(Channel::Oper::free);
+        helper::fds_.erase(channel->get_fd());
     }
 
     void EpollPoller::update(int op, Channel *channel)
@@ -84,7 +89,7 @@ namespace net
         struct epoll_event event;
         memset(&event, 0, sizeof(struct epoll_event));
 
-        event.events |= EPOLLET;
+        //event.events |= EPOLLET;
         int ev = channel->get_events();
         if (ev & Channel::READ_EVENT) {
             event.events |= EPOLLIN | EPOLLERR | EPOLLHUP;

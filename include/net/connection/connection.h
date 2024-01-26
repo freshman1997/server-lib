@@ -1,5 +1,6 @@
 #ifndef __CONNECTION_H__
 #define __CONNECTION_H__
+#include "net/handler/select_handler.h"
 #include <memory>
 
 class Buffer;
@@ -17,7 +18,7 @@ namespace net
     };
 
     // 表示一个连接
-    class Connection
+    class Connection : public SelectHandler
     {
     public:
         virtual bool is_connected() = 0;
@@ -31,6 +32,8 @@ namespace net
         virtual std::shared_ptr<Buffer> get_output_buff() = 0;
 
         virtual void send(std::shared_ptr<Buffer> buff) = 0;
+
+        virtual void send() = 0;
 
         // 丢弃所有未发送的数据
         virtual void abort() = 0;

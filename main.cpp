@@ -1,9 +1,3 @@
-#include "net/acceptor/acceptor.h"
-#include "net/acceptor/tcp_acceptor.h"
-#include "net/http/header_key.h"
-#include "net/http/request_context.h"
-#include "net/http/http_server.h"
-#include "net/http/request.h"
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -12,9 +6,14 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <unistd.h>
 #include <fstream>
 
+#include "net/acceptor/acceptor.h"
+#include "net/acceptor/tcp_acceptor.h"
+#include "net/http/header_key.h"
+#include "net/http/request_context.h"
+#include "net/http/http_server.h"
+#include "net/http/request.h"
 #include "net/poller/epoll_poller.h"
 #include "net/poller/poller.h"
 #include "thread/task.h"
@@ -28,6 +27,9 @@
 #include "net/event/event_loop.h"
 #include "net/connection/connection.h"
 
+#ifdef _WIN32
+#pragma comment(lib,"ws2_32.lib")
+#endif
 
 class PrintTask : public thread::Task
 {
@@ -116,8 +118,7 @@ public:
         file_.read(out->buffer_begin(), 1024 * 1024 * 2);
 
         out->fill(r);
-        context->get_connection()->send(out);
-        out->reset();
+        context->get_connection()->send();
 
         if (file_.eof()) {
             file_.clear();
@@ -157,7 +158,7 @@ void test_evloop()
     Timer *timer = manager->interval(2000, 2000, t, 100);
 
     net::EventLoop loop(poller, manager, acceptor);
-    acceptor->set_handler(&loop);
+    acceptor->set_event_handler(&loop);
     loop.loop();
 }
 

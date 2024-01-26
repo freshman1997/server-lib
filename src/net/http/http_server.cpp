@@ -2,6 +2,11 @@
 #include <memory>
 #include <unistd.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#include<WinSock2.h>
+#endif
+
 #include "buffer/buffer.h"
 #include "net/acceptor/tcp_acceptor.h"
 #include "net/event/event_loop.h"
@@ -99,12 +104,12 @@ namespace net::http
 
     void HttpServer::serve()
     {
-        net::EpollPoller poller;
+        net::PollPoller poller;
         timer::WheelTimerManager manager;
         net::EventLoop loop(&poller, &manager, acceptor_);
-        acceptor_->set_handler(&loop);
+        acceptor_->set_event_handler(&loop);
         this->event_loop_ = &loop;
-        loop.set_tcp_handler(this);
+        loop.set_connection_handler(this);
         loop.loop();
     }
 

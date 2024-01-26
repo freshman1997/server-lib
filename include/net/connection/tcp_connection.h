@@ -13,7 +13,7 @@ namespace net
     class AcceptHandler;
     class TcpConnectionHandler;
 
-    class TcpConnection : public Connection, public SelectHandler
+    class TcpConnection : public Connection
     {
     public:
         TcpConnection(std::shared_ptr<net::InetAddress> remoteAddr, std::shared_ptr<net::Channel> channel);
@@ -32,6 +32,8 @@ namespace net
 
         virtual void send(std::shared_ptr<Buffer> buff);
 
+        virtual void send();
+
         // 丢弃所有未发送的数据
         virtual void abort();
 
@@ -49,16 +51,17 @@ namespace net
 
         virtual void on_write_event();
 
-        virtual int get_fd();
+        virtual void set_event_handler(EventHandler *eventHandler);
 
     private:
         std::shared_ptr<net::InetAddress> addr_;
         std::shared_ptr<net::Channel> channel_;
         AcceptHandler *acceptHandler_;
         ConnectionHandler *connectionHandler_;
+        EventHandler *eventHandler_;
         std::shared_ptr<Buffer> input_buffer_;
         std::shared_ptr<Buffer> output_buffer_;
-        bool closed;
+        bool closed_;
     };
 }
 

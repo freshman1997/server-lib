@@ -1,8 +1,13 @@
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
+#endif
+
 #include <map>
 #include <vector>
 
@@ -25,6 +30,11 @@ namespace net
 {
     SelectPoller::SelectPoller()
     {
+        #ifdef _WIN32
+            WSADATA data;
+            WSAStartup(MAKEWORD(2, 2), &data);
+        #endif
+        
         FD_ZERO(&helper::reads_);
         FD_ZERO(&helper::writes_);
     }
@@ -76,7 +86,7 @@ namespace net
         tv.tv_sec = timeout / 1000;
         tv.tv_usec = (timeout % 1000) * 1000;
 
-        int ret = select(max_fd + 1, &helper::reads_, &helper::writes_, &helper::excepts_, nullptr);
+        int ret = select(max_fd + 1, &helper::reads_, &helper::writes_, &helper::excepts_, &tv);
         if (ret <= 0) {
             // TODO
             return tm;

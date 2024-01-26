@@ -1,5 +1,9 @@
 #include <cassert>
+#include <condition_variable>
+#include <cstdint>
 #include <iostream>
+#include <mutex>
+#include <thread>
 #include <time.h>
 #include <unistd.h>
 
@@ -10,10 +14,16 @@
 #include "timer/timer_manager.h"
 #include "net/socket/inet_address.h"
 #include "net/acceptor/acceptor.h"
+#include "base/time.h"
+
+namespace helper 
+{
+    std::mutex m;
+    std::condition_variable cond;
+}
 
 namespace net 
 {
-
     EventLoop::EventLoop(Poller *_poller, timer::TimerManager *timer_manager, Acceptor *acceptor) : poller_(_poller), timer_manager_(timer_manager), quit_(false)
     {
         Channel * channel = acceptor->get_channel();
@@ -32,10 +42,17 @@ namespace net
         assert(poller_);
 
         while (!quit_) {
-            time_t from = poller_->poll(100);
+            uint32_t from = base::time::get_tick_count();
+            time_t tm = poller_->poll(100);
             timer_manager_->tick();
-            //time_t to = time(NULL);
-            //std::cout << "comsume: " << (to - from) << std::endl;
+            uint32_t to = base::time::get_tick_count();
+            if (to - from < 100) {
+                {
+                    std::unique_lock<std::mutex> lock(helper::m);
+                    auto now = std::chrono::system_clock::now();
+                    helper::cond.wait_until(lock, now + std::chrono::milliseconds(100 - (to - from)));
+                }
+            }
         }
     }
 
@@ -90,5 +107,17 @@ namespace net
     {
         auto it = channels_.find(fd);
         return it == channels_.end();
+    }
+
+    void EventLoop::update_event(Channel *channel)
+    {
+        if (channel) {
+            poller_->update_channel(channel);
+        }
+    }
+
+    void EventLoop::wakeup()
+    {
+        helper::cond.notify_all();
     }
 }

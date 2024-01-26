@@ -1,41 +1,9 @@
 #include <cstdint>
 #include <chrono>
 
+#include "base/time.h"
 #include "timer/wheel_timer_manager.h"
 #include "timer/wheel_timer.h"
-
-namespace timer::helper 
-{
-    uint32_t time_unit_ = 100;
-    uint32_t tick_ = 0;
-
-    int32_t get_tick_count()
-    {
-        auto time_now = std::chrono::system_clock::now();
-        auto duration_in_ms = std::chrono::duration_cast<std::chrono::milliseconds>(time_now.time_since_epoch());
-        return duration_in_ms.count();
-    }
-
-    void init_time(uint32_t unit)
-    {
-        time_unit_ = unit;
-        tick_ = get_tick_count();
-    }
-
-    uint32_t get_passed_time()
-    {
-        if (tick_ == 0) {
-            tick_ = get_tick_count();
-            return 0;
-        }
-
-        uint32_t cur_tick = get_tick_count();
-        uint32_t passed = (cur_tick - tick_) / time_unit_;
-        tick_ += passed * time_unit_;
-
-        return passed;
-    }
-}
 
 namespace timer 
 {
@@ -45,7 +13,7 @@ namespace timer
         time_unit_ = 10;
         helper_item_ = new WheelTimerItem;
 
-        helper::init_time(time_unit_);
+        base::time::init_time(time_unit_);
     }
 
     WheelTimerManager::~WheelTimerManager() 
@@ -122,7 +90,7 @@ namespace timer
     
     void WheelTimerManager::tick()
     {
-        uint32_t click = helper::get_passed_time();
+        uint32_t click = base::time::get_passed_time();
         for (uint32_t time = 0; time < click; ++time) {
             for (auto it = wheels_.begin(); it != wheels_.end(); ++it) {
                 uint64_t unit = (*it)->time_unit();

@@ -8,14 +8,6 @@ namespace net
     class Channel
     {
     public:
-        enum class Oper : char
-        {
-            init = -1,
-            add,
-            free,
-        };
-
-    public:
         Channel(int fd);
 
         void on_event(int event);
@@ -28,16 +20,6 @@ namespace net
         int get_events() const 
         {
             return events_;
-        }
-
-        Oper get_oper() const 
-        {
-            return oper_;
-        }
-
-        void set_oper(Oper op) 
-        {
-            oper_ = op;
         }
 
         bool has_events()
@@ -53,12 +35,21 @@ namespace net
         void enable_write()
         {
             events_ |= WRITE_EVENT;
-            
         }
 
         void disable_all()
         {
             events_ = NONE_EVENT;
+        }
+
+        void disable_read()
+        {
+            events_ &= ~READ_EVENT;
+        }
+
+        void disable_write()
+        {
+            events_ &= ~WRITE_EVENT;
         }
 
         void set_handler(SelectHandler *handler)
@@ -80,7 +71,6 @@ namespace net
     private:
         int events_;
         int fd_;
-        Oper oper_ = Oper::init;
         SelectHandler *handler_;
     };
 }

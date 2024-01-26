@@ -2,7 +2,7 @@
 #define __EVENT_LOOH_H__
 #include <unordered_map>
 
-#include "net/handler/accept_handler.h"
+#include "net/handler/event_handler.h"
 #include "net/handler/connection_handler.h"
 
 namespace timer
@@ -17,7 +17,7 @@ namespace net
     class Connection;
     class Channel;
 
-    class EventLoop : public AcceptHandler
+    class EventLoop : public EventHandler
     {
     public:
         EventLoop(Poller *_poller, timer::TimerManager *timer_manager, Acceptor *acceptor);
@@ -39,11 +39,15 @@ namespace net
 
         virtual bool is_unique(int fd);
 
+        virtual void update_event(Channel *channel);
+
     public:
-        void set_tcp_handler(ConnectionHandler *connHandler)
+        void set_connection_handler(ConnectionHandler *connHandler)
         {
             this->connHandler_ = connHandler;
         }
+
+        void wakeup();
 
     private:
         bool quit_;

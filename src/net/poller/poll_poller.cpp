@@ -73,7 +73,6 @@ namespace net
 
     static void do_add_channel(Channel *channel)
     {
-        channel->set_oper(Channel::Oper::add);
         helper::channels_[channel->get_fd()] = channel;
         struct pollfd pfd;
         pfd.revents = 0;

@@ -3,6 +3,8 @@
 
 namespace net
 {
+    class EventHandler;
+
     class SelectHandler
     {
     public:
@@ -10,7 +12,7 @@ namespace net
 
         virtual void on_write_event() = 0;
 
-        virtual int get_fd() = 0;
+        virtual void set_event_handler(EventHandler *eventHandler) = 0;
     };
 }
 

@@ -10,7 +10,7 @@ namespace net
     class Socket;
     class Channel;
 
-    class TcpAcceptor : public Acceptor, public SelectHandler
+    class TcpAcceptor : public Acceptor
     {
     public:
         TcpAcceptor(Socket *socket);
@@ -19,8 +19,6 @@ namespace net
         virtual bool listen();
 
         virtual void on_close();
-
-        virtual void set_handler(AcceptHandler *handler);
 
         virtual Channel * get_channel()
         {
@@ -32,7 +30,7 @@ namespace net
 
         virtual void on_write_event();
 
-        virtual int get_fd();
+        virtual void set_event_handler(EventHandler *eventHandler);
 
     public:
         const Socket * get_socket() const;
@@ -40,7 +38,7 @@ namespace net
     private:
         Channel *channel_;
         Socket *socket_;
-        AcceptHandler *handler_;
+        EventHandler *handler_;
     };
 }
 
