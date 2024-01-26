@@ -25,8 +25,6 @@ namespace net
 
         virtual const InetAddress & get_remote_address() const = 0;
 
-        virtual const InetAddress & get_local_address() const = 0;
-
         virtual std::shared_ptr<Buffer> get_input_buff() = 0;
 
         virtual std::shared_ptr<Buffer> get_output_buff() = 0;

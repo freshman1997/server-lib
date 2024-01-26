@@ -9,6 +9,10 @@
 
 namespace net 
 {
+    InetAddress::InetAddress() : port_(0)
+    {
+    }
+
     InetAddress::InetAddress(std::string ip, int port) : ip_(std::move(ip)), port_(port) {}
 
     InetAddress::InetAddress(const struct sockaddr_in &addr)
@@ -23,11 +27,6 @@ namespace net
     {
         this->ip_ = addr.get_ip();
         this->port_ = addr.get_port();
-    }
-
-    InetAddress::~InetAddress()
-    {
-        std::cout << "InetAddress::~InetAddress \n";
     }
 
     struct sockaddr_in InetAddress::to_ipv4_address() const

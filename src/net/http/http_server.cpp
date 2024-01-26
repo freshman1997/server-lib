@@ -106,8 +106,10 @@ namespace net::http
     {
         net::PollPoller poller;
         timer::WheelTimerManager manager;
-        net::EventLoop loop(&poller, &manager, acceptor_);
+        net::EventLoop loop(&poller, &manager);
         acceptor_->set_event_handler(&loop);
+
+        loop.update_event(acceptor_->get_channel());
         this->event_loop_ = &loop;
         loop.set_connection_handler(this);
         loop.loop();

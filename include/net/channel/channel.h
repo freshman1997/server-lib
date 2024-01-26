@@ -8,9 +8,16 @@ namespace net
     class Channel
     {
     public:
+        Channel();
+
         Channel(int fd);
 
         void on_event(int event);
+
+        void set_fd(int fd)
+        {
+            fd_ = fd;
+        }
 
         int get_fd() const 
         {

@@ -16,15 +16,13 @@ namespace net
     class TcpConnection : public Connection
     {
     public:
-        TcpConnection(std::shared_ptr<net::InetAddress> remoteAddr, std::shared_ptr<net::Channel> channel);
+        TcpConnection(const std::string ip, int port, int fd);
 
         virtual ~TcpConnection();
 
         virtual bool is_connected();
 
         virtual const InetAddress & get_remote_address() const;
-
-        virtual const InetAddress & get_local_address() const;
 
         virtual std::shared_ptr<Buffer> get_input_buff();
 
@@ -54,8 +52,11 @@ namespace net
         virtual void set_event_handler(EventHandler *eventHandler);
 
     private:
-        std::shared_ptr<net::InetAddress> addr_;
-        std::shared_ptr<net::Channel> channel_;
+        void do_close();
+
+    private:
+        InetAddress addr_;
+        Channel channel_;
         AcceptHandler *acceptHandler_;
         ConnectionHandler *connectionHandler_;
         EventHandler *eventHandler_;

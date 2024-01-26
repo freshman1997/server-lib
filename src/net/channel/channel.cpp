@@ -8,6 +8,10 @@ namespace net
     const int Channel::EXCEP_EVENT = 0x4;
     const int Channel::NONE_EVENT = 0;
 
+    Channel::Channel() : Channel(0)
+    {
+    }
+
     Channel::Channel(int fd) : fd_(fd), handler_(nullptr)
     {
         disable_all();

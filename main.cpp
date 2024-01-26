@@ -157,7 +157,7 @@ void test_evloop()
     TimerTask *t = new PrintTask1;
     Timer *timer = manager->interval(2000, 2000, t, 100);
 
-    net::EventLoop loop(poller, manager, acceptor);
+    net::EventLoop loop(poller, manager);
     acceptor->set_event_handler(&loop);
     loop.loop();
 }

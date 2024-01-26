@@ -8,13 +8,19 @@ namespace net
     class InetAddress
     {
     public:
+        InetAddress();
+        
         InetAddress(std::string ip, int port);
 
         InetAddress(const struct sockaddr_in &);
 
-        InetAddress(const InetAddress &);
+        InetAddress(const InetAddress &addr);
 
-        ~InetAddress();
+        void set_addr(const std::string &ip, int port)
+        {
+            ip_ = ip;
+            port_ = port;
+        }
 
         int get_port() const 
         {

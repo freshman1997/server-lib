@@ -2,6 +2,7 @@
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
 #include "net/socket/socket_ops.h"
+#include "net/handler/event_handler.h"
 
 #include <iostream>
 #include <sys/socket.h>
@@ -9,25 +10,28 @@
 
 namespace net
 {
-    TcpConnection::TcpConnection(std::shared_ptr<net::InetAddress> remoteAddr, std::shared_ptr<net::Channel> channel)
+    TcpConnection::TcpConnection(const std::string ip, int port, int fd)
     {
-        this->addr_ = remoteAddr;
-        this->channel_ = channel;
+        addr_.set_addr(ip, port);
 
-        this->channel_->set_handler(this);
+        //socket::set_none_block(fd, true);
+        socket::set_keep_alive(fd, true);
+
+        channel_.set_fd(fd);
+        channel_.set_handler(this);
+        channel_.enable_read();
+        channel_.enable_write();
 
         input_buffer_ = std::make_shared<Buffer>();
         output_buffer_ = std::make_shared<Buffer>();
 
         closed_ = false;
-
-        //socket::set_none_block(this->channel_->get_fd(), true);
-        socket::set_keep_alive(this->channel_->get_fd(), true);
     }
 
     TcpConnection::~TcpConnection()
     {
-        std::cout << "closed_ connection\n";
+        std::cout << "connection closed, ip: " << addr_.get_ip() << ", port: " << addr_.get_port() 
+                << ", fd: " << channel_.get_fd() << "\n";
     }
 
     bool TcpConnection::is_connected()
@@ -37,12 +41,7 @@ namespace net
 
     const InetAddress & TcpConnection::get_remote_address() const
     {
-        return *addr_.get();
-    }
-
-    const InetAddress & TcpConnection::get_local_address() const
-    {
-        return *addr_.get();
+        return addr_;
     }
 
     std::shared_ptr<Buffer> TcpConnection::get_input_buff()
@@ -57,16 +56,19 @@ namespace net
 
     void TcpConnection::send(std::shared_ptr<Buffer> buff)
     {
-        int fd = this->channel_->get_fd();
+        int fd = this->channel_.get_fd();
         ::write(fd, buff->begin(), buff->readable_bytes());
     }
 
     void TcpConnection::send()
     {
-        int fd = this->channel_->get_fd();
-        int ret = ::write(fd, output_buffer_->begin(), output_buffer_->readable_bytes());
+        int ret = ::write(channel_.get_fd(), output_buffer_->begin(), output_buffer_->readable_bytes());
         if (ret > 0) {
             output_buffer_->reset();
+        }
+
+        if (closed_) {
+            do_close();
         }
     }
 
@@ -74,6 +76,7 @@ namespace net
     void TcpConnection::abort()
     {
         closed_ = true;
+        do_close();
     }
 
     // 发送完数据后返回
@@ -81,11 +84,12 @@ namespace net
     {
         closed_ = true;
         if (output_buffer_->readable_bytes() > 0) {
-            channel_->disable_read();
+            channel_.disable_read();
+            eventHandler_->update_event(&channel_);
+            return;
         }
 
-        connectionHandler_->on_close(this);
-        delete this;
+        do_close();
     }
 
     ConnectionType TcpConnection::get_conn_type()
@@ -95,7 +99,7 @@ namespace net
 
     Channel * TcpConnection::get_channel()
     {
-        return channel_.get();
+        return &channel_;
     }
 
     void TcpConnection::set_connection_handler(ConnectionHandler *handler)
@@ -107,10 +111,8 @@ namespace net
     {
         input_buffer_->reset();
 
-        // TODO read data
-        int fd = channel_->get_fd();
         bool read = false;
-        int bytes = ::read(fd, input_buffer_->buffer_begin(), input_buffer_->writable_size());
+        int bytes = ::read(channel_.get_fd(), input_buffer_->buffer_begin(), input_buffer_->writable_size());
         if (bytes <= 0) {
             if (bytes == 0) {
                 closed_ = true;
@@ -143,5 +145,12 @@ namespace net
     void TcpConnection::set_event_handler(EventHandler *eventHandler)
     {
         eventHandler_ = eventHandler;
+        eventHandler_->update_event(&channel_);
+    }
+
+    void TcpConnection::do_close()
+    {
+        connectionHandler_->on_close(this);
+        delete this;
     }
 }

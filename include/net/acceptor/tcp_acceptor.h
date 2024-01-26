@@ -4,6 +4,7 @@
 
 #include "net/acceptor/acceptor.h"
 #include "net/handler/select_handler.h"
+#include "net/channel/channel.h"
 
 namespace net
 {
@@ -15,6 +16,8 @@ namespace net
     public:
         TcpAcceptor(Socket *socket);
 
+        ~TcpAcceptor();
+
     public:
         virtual bool listen();
 
@@ -22,7 +25,7 @@ namespace net
 
         virtual Channel * get_channel()
         {
-            return channel_;
+            return &channel_;
         }
 
     public: // select handler
@@ -36,7 +39,7 @@ namespace net
         const Socket * get_socket() const;
 
     private:
-        Channel *channel_;
+        Channel channel_;
         Socket *socket_;
         EventHandler *handler_;
     };

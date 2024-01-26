@@ -20,7 +20,7 @@ namespace net
     class EventLoop : public EventHandler
     {
     public:
-        EventLoop(Poller *_poller, timer::TimerManager *timer_manager, Acceptor *acceptor);
+        EventLoop(Poller *_poller, timer::TimerManager *timer_manager);
         ~EventLoop();
 
     public:
