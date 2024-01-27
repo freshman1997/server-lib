@@ -38,14 +38,14 @@ namespace net
 
         while (!quit_) {
             uint32_t from = base::time::get_tick_count();
-            time_t tm = poller_->poll(100);
+            time_t tm = poller_->poll(10);
             timer_manager_->tick();
             uint32_t to = base::time::get_tick_count();
-            if (to - from < 100) {
+            if (to - from < 10) {
                 {
                     std::unique_lock<std::mutex> lock(helper::m);
                     auto now = std::chrono::system_clock::now();
-                    helper::cond.wait_until(lock, now + std::chrono::milliseconds(100 - (to - from)));
+                    helper::cond.wait_until(lock, now + std::chrono::milliseconds(10 - (to - from)));
                 }
             }
         }
