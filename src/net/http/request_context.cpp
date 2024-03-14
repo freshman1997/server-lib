@@ -7,13 +7,14 @@ namespace net::http
 {
     HttpRequestContext::HttpRequestContext(Connection *conn) : conn_(conn)
     {
-        request = new HttpRequest(this);
-        response = new HttpResponse(this);
+        request_ = new HttpRequest(this);
+        response_ = new HttpResponse(this);
     }
 
     HttpRequestContext::~HttpRequestContext()
     {
-
+        delete request_;
+        delete response_;
     }
 
     bool HttpRequestContext::parse()
@@ -22,6 +23,11 @@ namespace net::http
             return false;
         }
 
-        return request->parse_header(*conn_->get_input_buff());
+        return request_->parse_header(*conn_->get_input_buff());
+    }
+
+    void HttpRequestContext::send()
+    {
+        response_->send();
     }
 }

@@ -19,12 +19,12 @@ namespace net::http
 
         HttpRequest * get_request()
         {
-            return request;
+            return request_;
         }
 
         HttpResponse * get_response()
         {
-            return response;
+            return response_;
         }
 
         Connection * get_connection()
@@ -32,13 +32,15 @@ namespace net::http
             return conn_;
         }
 
+        void send();
+
     public:
         bool parse();
 
     private:
         Connection *conn_;
-        HttpRequest *request;
-        HttpResponse *response;
+        HttpRequest *request_;
+        HttpResponse *response_;
     };
 }
 

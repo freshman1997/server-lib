@@ -137,13 +137,15 @@ public:
 
     void write_string(const char *str)
     {
-        const char *p = str;
-        while (*p) {
-            buffs.push_back(*p);
-            ++p;
+        size_t len = strlen(str);
+        if (len < write_index + 1) {
+            resize(buffs.size() + len);
         }
 
-        write_index += p - str;
+        const char *p = str;
+        while (*p) {
+            buffs[write_index++] = *p++;
+        }
     }
 public:
     char* begin()
@@ -235,8 +237,8 @@ private:
             buffs.reserve(len);
         }
 
-        for (int i = read_index; i < len; ++i) {
-            buffs[i] = data[i];
+        for (int i = 0, j = write_index; i < len; ++i, ++j) {
+            buffs[j] = data[i];
         }
 
         write_index += len;

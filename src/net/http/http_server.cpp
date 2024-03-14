@@ -18,6 +18,8 @@
 #include "net/socket/socket.h"
 #include "timer/wheel_timer_manager.h"
 #include "net/connection/connection.h"
+#include "base/time.h"
+#include "net/http/session.h"
 
 namespace net::http
 {
@@ -28,22 +30,27 @@ namespace net::http
 
     HttpServer::~HttpServer()
     {
+        for (const auto &it : sessions_) {
+            delete it.second;
+        }
 
+        sessions_.clear();
     }
 
     void HttpServer::on_connected(Connection *conn)
     {
-
+        uint64_t sessionId = (uint64_t)conn;
+        sessions_[sessionId] = new HttpSession(sessionId, new HttpRequestContext(conn));
     }
 
     void HttpServer::on_error(Connection *conn)
     {
-
+        free_session(conn);
     }
 
     void HttpServer::on_read(Connection *conn)
     {
-        auto context = std::make_shared<HttpRequestContext>(conn);
+        auto context = sessions_[(uint64_t)conn]->get_context();
         if (!context->parse()) {
             std::string msg = "<h1>Internal Server Error</h1>";
             std::string repsonse = "HTTP/1.1 500\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
@@ -56,7 +63,7 @@ namespace net::http
 
         auto handler = dispatcher_.get_handler(context->get_request()->get_raw_url());
         if (handler) {
-            handler(context);
+            handler(context->get_request(), context->get_response());
         } else {
             // 404
             std::string msg = "<h1>resource not found</h1>";
@@ -70,11 +77,12 @@ namespace net::http
 
     void HttpServer::on_wirte(Connection *conn)
     {
-
+        
     }
 
     void HttpServer::on_close(Connection *conn)
     {
+        free_session(conn);
         event_loop_->on_close(conn);
     }
 
@@ -123,5 +131,17 @@ namespace net::http
     void HttpServer::on(const std::string &url, request_function func)
     {
         dispatcher_.register_handler(url, func);
+    }
+
+    void HttpServer::free_session(Connection *conn)
+    {
+        uint64_t sessionId = (uint64_t)conn;
+        auto it = sessions_.find(sessionId);
+        if (it != sessions_.end()) {
+            delete it->second;
+            sessions_.erase(it);
+        } else {
+            std::cerr << "internal error found!!!\n";
+        }
     }
 }

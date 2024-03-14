@@ -6,7 +6,16 @@
 class LinkedBuffer
 {
 public:
-    void traverse();
+    Buffer & allocBuffer()
+    {
+        if (buffers_.empty()) {
+            buffers_.push_back(Buffer());
+        }
+
+        return buffers_.back();
+    }
+
+    
 
 private:
     std::list<Buffer> buffers_;

@@ -1,0 +1,31 @@
+#include "net/http/session.h"
+#include "net/http/request_context.h"
+
+namespace net::http 
+{
+    HttpSession::HttpSession(uint64_t id, HttpRequestContext *context) : session_id_(id), context_(context)
+    {
+    }
+
+    HttpSession::~HttpSession()
+    {
+        if (context_) {
+            delete context_;
+        }
+    }
+
+    void HttpSession::add_session_value(const std::string &key, int ival)
+    {
+        session_items_[key] = { SessionItemType::ival, ival, {} };
+    }
+
+    void HttpSession::add_session_value(const std::string &key, double dval)
+    {
+        session_items_[key] = { SessionItemType::dval, {.dval = dval}, {} };
+    }
+
+    void HttpSession::add_session_value(const std::string &key, const std::string &sval)
+    {
+        session_items_[key] = { SessionItemType::sval, 0, sval };
+    }
+}

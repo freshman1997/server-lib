@@ -130,7 +130,7 @@ namespace net
 
         if (closed_) {
             close();
-        } else {
+        } else if (read) {
             connectionHandler_->on_read(this);
         }
     }
@@ -151,6 +151,7 @@ namespace net
     void TcpConnection::do_close()
     {
         connectionHandler_->on_close(this);
+        channel_.set_handler(nullptr);
         delete this;
     }
 }

@@ -62,16 +62,15 @@ namespace net
             auto it = channels_.find(channel->get_fd());
             if (it != channels_.end()) {
                 int new_fd = ::dup(channel->get_fd());
-                if (new_fd < 0) {
-                    assert(0);
-                }
-
+                assert(new_fd > 0);
                 channel->set_new_fd(new_fd);
             }
 
             conn->set_connection_handler(connHandler_);
             poller_->update_channel(channel);
             channels_[channel->get_fd()] = channel;
+
+            connHandler_->on_connected(conn);
         }
     }
 

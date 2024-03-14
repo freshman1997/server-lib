@@ -3,11 +3,12 @@
 #include <functional>
 #include <memory>
 
-#include "request_context.h"
-
 namespace net::http 
 {
-    typedef std::function<void (std::shared_ptr<net::http::HttpRequestContext> ctx)> request_function;
+    class HttpRequest;
+    class HttpResponse;
+
+    typedef std::function<void (HttpRequest *req, HttpResponse *resp)> request_function;
 }
 
 #endif

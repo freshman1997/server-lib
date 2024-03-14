@@ -9,7 +9,7 @@
 
 namespace net
 {
-    Socket::Socket(const char *ip, int port) : addr(new InetAddress(ip, port)), fd_(socket::create_ipv4_socket(false))
+    Socket::Socket(const char *ip, int port) : addr(new InetAddress(ip, port)), fd_(socket::create_ipv4_socket(true))
     {}
 
     Socket::~Socket()

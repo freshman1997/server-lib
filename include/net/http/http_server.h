@@ -3,9 +3,11 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 
 #include "net/handler/connection_handler.h"
 #include "common.h"
+#include "net/http/request_context.h"
 #include "ops/request_dispatcher.h"
 #include "request.h"
 
@@ -18,6 +20,8 @@ namespace net
 
 namespace net::http 
 {
+    class HttpSession;
+
     class HttpServer : public ConnectionHandler
     {
         enum State
@@ -58,11 +62,14 @@ namespace net::http
         void on(const std::string &url, request_function func);
 
     private:
+        void free_session(Connection *conn);
+
+    private:
         bool quit_;
         State state_;
         Acceptor *acceptor_;
         EventLoop *event_loop_;
-        
+        std::unordered_map<uint64_t, HttpSession *> sessions_;
         HttpRequestDispatcher dispatcher_;
     };
 }

@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "buffer/buffer.h"
 #include "net/http/request.h"
 #include "response_code.h"
 
@@ -28,30 +29,45 @@ namespace net::http
             version_ = version;
         }
 
-        template<class T>
-        void add_header(const std::string &k, T v)
+        void add_header(const std::string &k, const std::string &v)
         {
             if (k.empty()) {
                 return;
             }
 
-            const std::string &val = std::to_string(v);
-            headers_[k] = val;
+            headers_[k] = v;
 
-            size += k.size();
-            size += val.size();
+            size_ += k.size();
+            size_ += v.size();
         }
 
         size_t get_size() const 
         {
-            return size;
+            return size_;
         }
 
+        void append_body(const char *data);
+        
+        void append_body(const std::string &data);
+
+        std::shared_ptr<Buffer> get_buff()
+        {
+            return buffer_;
+        }
+
+        void send();
+        
     private:
-        response_code::ResponseCode respCode_ = response_code::ResponseCode::invalid;
-        HttpVersion version_ = HttpVersion::invalid;
+        bool pack_response();
+
+        void pack_error_reponse();
+
+    private:
+        response_code::ResponseCode respCode_ = response_code::ResponseCode::bad_request;
+        HttpVersion version_ = HttpVersion::v_1_1;
         std::unordered_map<std::string, std::string> headers_;
-        size_t size = 0;
+        size_t size_ = 0;
+        std::shared_ptr<Buffer> buffer_;
         HttpRequestContext *context_;
     };
 }
