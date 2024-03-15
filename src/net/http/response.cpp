@@ -4,6 +4,7 @@
 #include "net/connection/connection.h"
 #include "net/http/response_code_desc.h"
 #include <cstdint>
+#include <iostream>
 
 namespace net::http
 {
@@ -22,6 +23,14 @@ namespace net::http
         buffer_->write_string(data);
     }
 
+    void HttpResponse::reset()
+    {
+        respCode_ = response_code::ResponseCode::bad_request;
+        version_ = HttpVersion::v_1_1;
+        headers_.clear();
+        buffer_->reset();
+    }
+
     void HttpResponse::send()
     {
         bool res = pack_response();
@@ -36,7 +45,6 @@ namespace net::http
     void HttpResponse::pack_error_reponse()
     {
         auto outputBuffer = context_->get_connection()->get_output_buff();
-        outputBuffer->reset();
         std::string header("HTTP/1.1");
         header.append(" ");
         header.append(std::to_string((uint32_t)response_code::ResponseCode::internal_server_error));
@@ -58,24 +66,18 @@ namespace net::http
         }
         
         auto outputBuffer = context_->get_connection()->get_output_buff();
-        outputBuffer->reset();
-
         std::string header("HTTP/1.1");
         header.append(" ");
         header.append(std::to_string((uint32_t)respCode_));
         header.append(" ");
-        header.append(descIt->second);
-        outputBuffer->write_string(header);
-        outputBuffer->write_string("\r\n");
+        header.append(descIt->second).append("\r\n");
 
         for (const auto &item : headers_) {
-            outputBuffer->write_string(item.first);
-            outputBuffer->write_string(": ");
-            outputBuffer->write_string(item.second);
-            outputBuffer->write_string("\r\n");
+            header.append(item.first).append(": ").append(item.second).append("\r\n");
         }
 
-        outputBuffer->write_string("\r\n");
+        header.append("\r\n");
+        outputBuffer->write_string(header);
 
         return true;
     }

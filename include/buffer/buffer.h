@@ -237,10 +237,7 @@ private:
             buffs.reserve(len);
         }
 
-        for (int i = 0, j = write_index; i < len; ++i, ++j) {
-            buffs[j] = data[i];
-        }
-
+        std::copy(data, data + len, begin() + write_index);
         write_index += len;
     }
 

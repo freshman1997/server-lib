@@ -137,9 +137,9 @@ namespace net
 
     void TcpConnection::on_write_event()
     {
-        if (output_buffer_->readable_bytes() > 0) {
+        /*if (output_buffer_->readable_bytes() > 0) {
             send(output_buffer_);
-        }
+        }*/
     }
 
     void TcpConnection::set_event_handler(EventHandler *eventHandler)

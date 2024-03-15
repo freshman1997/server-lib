@@ -51,8 +51,10 @@ namespace net::http
     void HttpServer::on_read(Connection *conn)
     {
         auto context = sessions_[(uint64_t)conn]->get_context();
+        context->pre_request();
+
         if (!context->parse()) {
-            std::string msg = "<h1>Internal Server Error</h1>";
+            std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">Internal Server Error</h1>";
             std::string repsonse = "HTTP/1.1 500\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
             auto buff = conn->get_output_buff();
             buff->write_string(repsonse);
@@ -66,7 +68,7 @@ namespace net::http
             handler(context->get_request(), context->get_response());
         } else {
             // 404
-            std::string msg = "<h1>resource not found</h1>";
+            std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">resource not found</h1>";
             std::string repsonse = "HTTP/1.1 404 NOT FOUND\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
             auto buff = conn->get_output_buff();
             buff->write_string(repsonse);

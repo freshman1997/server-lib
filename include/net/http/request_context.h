@@ -17,6 +17,8 @@ namespace net::http
         HttpRequestContext(Connection *conn_);
         ~HttpRequestContext();
 
+        void pre_request();
+
         HttpRequest * get_request()
         {
             return request_;

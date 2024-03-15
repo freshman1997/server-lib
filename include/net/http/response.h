@@ -36,14 +36,6 @@ namespace net::http
             }
 
             headers_[k] = v;
-
-            size_ += k.size();
-            size_ += v.size();
-        }
-
-        size_t get_size() const 
-        {
-            return size_;
         }
 
         void append_body(const char *data);
@@ -54,6 +46,13 @@ namespace net::http
         {
             return buffer_;
         }
+
+        HttpRequestContext * get_context()
+        {
+            return context_;
+        }
+
+        void reset();
 
         void send();
         
@@ -66,7 +65,6 @@ namespace net::http
         response_code::ResponseCode respCode_ = response_code::ResponseCode::bad_request;
         HttpVersion version_ = HttpVersion::v_1_1;
         std::unordered_map<std::string, std::string> headers_;
-        size_t size_ = 0;
         std::shared_ptr<Buffer> buffer_;
         HttpRequestContext *context_;
     };

@@ -17,6 +17,12 @@ namespace net::http
         delete response_;
     }
 
+    void HttpRequestContext::pre_request()
+    {
+        request_->reset();
+        response_->reset();
+    }
+
     bool HttpRequestContext::parse()
     {
         if (!conn_) {

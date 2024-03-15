@@ -74,14 +74,23 @@ public:
 
         file_.seekg(0, std::ios_base::end);
         length_ = file_.tellg();
+        content_size_ = -1;
         if (length_ == 0) {
             file_.close();
             std::cout << "open file fail1!\n";
+            return;
         }
+
+        content_size_ = 1024 * 1024;
     }
 
     void on_request(net::http::HttpRequest *req, net::http::HttpResponse *resp)
     {
+        if (content_size_ < 0) {
+            resp->set_response_code(net::http::response_code::ResponseCode::internal_server_error);
+            return;
+        }
+
         const std::string *range = req->get_header(net::http::http_header_key::range);
         long long offset = 0;
 
@@ -96,8 +105,6 @@ public:
             offset = std::atol(range->substr(pos + 1, pos1 - pos).c_str());
         }
 
-        std::string response = "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\n";
-        resp->add_header("Content-Type", "video/mp4");
         std::string bytes = "bytes ";
         bytes.append(std::to_string(offset))
             .append("-")
@@ -108,18 +115,18 @@ public:
         resp->add_header("Content-Type", "video/mp4");
         resp->add_header("Content-Range", bytes);
 
-        size_t r = 1024 * 1024 + offset > length_ ? length_ - offset : 1024 * 1024;
+        size_t r = content_size_ + offset > length_ ? length_ - offset : content_size_;
         std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_ << std::endl;
 
         resp->add_header("Content-length", std::to_string(r));
 
         file_.seekg(offset, std::ios::beg);
         resp->get_buff()->reset();
-        if (resp->get_buff()->writable_size() < 1024 * 1024) {
-            resp->get_buff()->resize(1024 * 1024);
+        if (resp->get_buff()->writable_size() < content_size_) {
+            resp->get_buff()->resize(content_size_);
         }
 
-        file_.read(resp->get_buff()->begin(), 1024 * 1024);
+        file_.read(resp->get_buff()->buffer_begin(), content_size_);
         resp->get_buff()->fill(r);
 
         if (file_.eof()) {
@@ -131,6 +138,7 @@ public:
     }
 
 private:
+    int content_size_;
     std::fstream file_;
     long long length_;
 };
