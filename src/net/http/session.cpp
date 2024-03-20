@@ -5,6 +5,7 @@ namespace net::http
 {
     HttpSession::HttpSession(uint64_t id, HttpRequestContext *context) : session_id_(id), context_(context)
     {
+        context_->set_session(this);
     }
 
     HttpSession::~HttpSession()

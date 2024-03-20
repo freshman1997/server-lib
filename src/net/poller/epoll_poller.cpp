@@ -89,7 +89,7 @@ namespace net
         struct epoll_event event;
         memset(&event, 0, sizeof(struct epoll_event));
 
-        //event.events |= EPOLLET;
+        event.events |= EPOLLET;
         int ev = channel->get_events();
         if (ev & Channel::READ_EVENT) {
             event.events |= EPOLLIN | EPOLLERR | EPOLLHUP;

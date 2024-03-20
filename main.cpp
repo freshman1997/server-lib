@@ -67,7 +67,7 @@ class VideoTest
 public:
     VideoTest()
     {
-        file_.open("/home/yuan/Desktop/cz");
+        file_.open("/home/yuan/Desktop/cz.mp4");
         if (!file_.good()) {
             std::cout << "open file fail!\n";
         }
@@ -133,7 +133,28 @@ public:
             file_.clear();
         }
 
+        resp->add_header("Accept-Ranges", "bytes");
         resp->set_response_code(net::http::response_code::ResponseCode::partial_content);
+        resp->send();
+    }
+
+    void on_body_test(net::http::HttpRequest *req, net::http::HttpResponse *resp)
+    {
+        if (req->body_begin()) {
+            std::cout << "has body\n";
+        }
+
+        std::string reqBody(req->body_begin(), req->body_end());
+        req->read_body_done();
+
+        std::cout << reqBody << std::endl;
+
+        std::string body = "{\"success\": 1}";
+        resp->add_header("Content-length", std::to_string(body.size()));
+        resp->add_header("Connection", "close");
+        resp->add_header("Content-Type", "application/json");
+        resp->set_response_code(net::http::response_code::ResponseCode::ok_);
+        resp->append_body(body);
         resp->send();
     }
 
@@ -152,20 +173,19 @@ void test_evloop()
     }
 
     sock->set_reuse(true);
-
+    sock->set_none_block(true);
     if (!sock->bind()) {
         std::cout << " bind failed " << std::endl;
         return;
     }
 
-    //sock->set_none_block(true);
     net::Acceptor *acceptor = new net::TcpAcceptor(sock);
     if (!acceptor->listen()) {
         std::cout << " listen failed " << std::endl;
         return;
     }
 
-    net::Poller *poller = new net::SelectPoller;
+    net::Poller *poller = new net::EpollPoller;
     timer::WheelTimerManager *manager = new timer::WheelTimerManager;
     TimerTask *t = new PrintTask1;
     Timer *timer = manager->interval(2000, 2000, t, 100);
@@ -182,6 +202,10 @@ void test_http_server()
 
     server.on("/movie", [&vt](net::http::HttpRequest *req, net::http::HttpResponse *resp) {
         vt.on_request(req, resp);
+    });
+
+    server.on("/body", [&vt](net::http::HttpRequest *req, net::http::HttpResponse *resp) {
+        vt.on_body_test(req, resp);
     });
 
     if (!server.init(12333)) {

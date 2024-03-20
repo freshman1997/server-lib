@@ -53,7 +53,7 @@ namespace net::http
         auto context = sessions_[(uint64_t)conn]->get_context();
         context->pre_request();
 
-        if (!context->parse()) {
+        if (!context->parse() || context->has_error()) {
             std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">Internal Server Error</h1>";
             std::string repsonse = "HTTP/1.1 500\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
             auto buff = conn->get_output_buff();
@@ -63,17 +63,19 @@ namespace net::http
             return;
         }
 
-        auto handler = dispatcher_.get_handler(context->get_request()->get_raw_url());
-        if (handler) {
-            handler(context->get_request(), context->get_response());
-        } else {
-            // 404
-            std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">resource not found</h1>";
-            std::string repsonse = "HTTP/1.1 404 NOT FOUND\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-            auto buff = conn->get_output_buff();
-            buff->write_string(repsonse);
-            conn->send(buff);
-            conn->close();
+        if (context->is_completed()) {
+            auto handler = dispatcher_.get_handler(context->get_request()->get_raw_url());
+            if (handler) {
+                handler(context->get_request(), context->get_response());
+            } else {
+                // 404
+                std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">resource not found</h1>";
+                std::string repsonse = "HTTP/1.1 404 NOT FOUND\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
+                auto buff = conn->get_output_buff();
+                buff->write_string(repsonse);
+                conn->send(buff);
+                conn->close();
+            }
         }
     }
 
@@ -97,12 +99,12 @@ namespace net::http
         }
 
         sock->set_reuse(true);
+        sock->set_none_block(true);
         if (!sock->bind()) {
             std::cout << " bind failed " << std::endl;
             return false;
         }
 
-        sock->set_none_block(true);
         acceptor_ = new TcpAcceptor(sock);
         if (!acceptor_->listen()) {
             std::cout << " listen failed " << std::endl;
@@ -132,6 +134,10 @@ namespace net::http
 
     void HttpServer::on(const std::string &url, request_function func)
     {
+        if (url.empty() || !func) {
+            return;
+        }
+        
         dispatcher_.register_handler(url, func);
     }
 

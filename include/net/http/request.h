@@ -70,24 +70,41 @@ namespace net::http
             this->req = req_;
         }
 
-        bool parse_method(Buffer &buff);
-        bool parse_url(Buffer &buff);
-        bool parse_version(Buffer &buff);
-        bool parse_headers(Buffer &buff);
-
-        bool parse_body(Buffer &buff);
-
         void reset() 
         {
             header_state = HeaderState::init;
             body_state = BodyState::init;
         }
 
-        bool done() const 
+        int parse(Buffer &buff);
+
+        bool done() const
+        {
+            return is_header_done() && is_body_done();
+        }
+
+    private:
+        bool parse_method(Buffer &buff);
+        bool parse_url(Buffer &buff);
+        bool parse_version(Buffer &buff);
+        bool parse_header_keys(Buffer &buff);
+        bool parse_new_line(Buffer &buff);
+
+        bool parse_header(Buffer &buff);
+        int parse_body(Buffer &buff, uint32_t length);
+    
+        uint32_t get_body_length();
+
+        bool is_header_done() const 
         {
             return header_state == HeaderState::header_end_lines;
         }
-        
+
+        bool is_body_done() const 
+        {
+            return body_state == BodyState::fully;
+        }
+
     private:
         HeaderState header_state = HeaderState::init;
         BodyState body_state = BodyState::init;
@@ -106,16 +123,16 @@ namespace net::http
 
         const std::string * get_header(const std::string &key) const;
 
-        bool parse_header(Buffer &buff);
+        bool parse(Buffer &buff);
 
         const std::unordered_map<std::string, std::string> & get_request_params() const
         {
-            return request_params;
+            return request_params_;
         }
 
         const std::vector<std::string> & get_url_domain() const
         {
-            return url_domain;
+            return url_domain_;
         }
 
         const std::string & get_raw_url() const 
@@ -123,21 +140,39 @@ namespace net::http
             return url_;
         }
 
+        const char * body_begin();
+
+        const char * body_end();
+
+        void read_body_done();
+
         bool is_ok() const 
         {
-            return parser.done();
+            return parser_.done();
+        }
+
+        bool good() const 
+        {
+            return is_good_;
+        }
+
+        HttpRequestContext * get_context()
+        {
+            return context_;
         }
 
         void reset();
 
     private:
-        HttpRequestParser parser;
+        bool is_good_;
+        uint32_t body_length_;
+        HttpRequestParser parser_;
         std::string url_;
-        std::vector<std::string> url_domain;
-        HttpMethod method = HttpMethod::invalid_;
-        HttpVersion version = HttpVersion::invalid;
-        std::unordered_map<std::string, std::string> request_params;
-        std::unordered_map<std::string, std::string> headers;
+        std::vector<std::string> url_domain_;
+        HttpMethod method_;
+        HttpVersion version_;
+        std::unordered_map<std::string, std::string> request_params_;
+        std::unordered_map<std::string, std::string> headers_;
         HttpRequestContext *context_;
     };
 }

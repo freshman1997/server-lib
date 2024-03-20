@@ -1,10 +1,31 @@
 #include "net/http/request.h"
+#include "net/http/header_key.h"
+#include "net/http/ops/option.h"
 #include "net/http/url.h"
-#include <cctype>
-#include <string>
+#include "net/http/request_context.h"
+#include "net/connection/connection.h"
 
 namespace net::http 
 {
+    static const char* http_method_descs[9] = {
+        "get",
+        "post",
+        "put",
+        "delete",
+        "option",
+        "head",
+        "comment",
+        "trace",
+        "patch",
+    };
+
+    static const char* http_version_descs[4] = {
+        "1.0",
+        "1.1",
+        "2.0",
+        "3.0"
+    };
+
     bool HttpRequestParser::parse_method(Buffer &buff)
     {
         if (buff.readable_bytes() == 0) {
@@ -25,7 +46,7 @@ namespace net::http
                     return false;
                 }
 
-                req->method = HttpMethod::get_;
+                req->method_ = HttpMethod::get_;
                 break;
             }
             case 'p': {
@@ -34,13 +55,13 @@ namespace net::http
                 }
 
                 if (method == "put") {
-                    req->method = HttpMethod::put_;
+                    req->method_ = HttpMethod::put_;
                     break;
                 }
 
                 method.push_back(std::tolower(buff.read_int8()));
                 if (method == "post") {
-                    req->method = HttpMethod::post_;
+                    req->method_ = HttpMethod::post_;
                     break;
                 }
 
@@ -49,7 +70,7 @@ namespace net::http
                     return false;
                 }
 
-                req->method = HttpMethod::post_;
+                req->method_ = HttpMethod::post_;
                 break;
             }
             case 'd': {
@@ -61,7 +82,7 @@ namespace net::http
                     return false;
                 }
 
-                req->method = HttpMethod::delete_;
+                req->method_ = HttpMethod::delete_;
                 break;
             }
             case 'o': {
@@ -73,7 +94,7 @@ namespace net::http
                     return false;
                 }
 
-                req->method = HttpMethod::options_;
+                req->method_ = HttpMethod::options_;
                 break;
             }
             case 'h': {
@@ -85,7 +106,7 @@ namespace net::http
                     return false;
                 }
 
-                req->method = HttpMethod::head_;
+                req->method_ = HttpMethod::head_;
                 break;
             }
             case 'c': {
@@ -97,7 +118,7 @@ namespace net::http
                     return false;
                 }
 
-                req->method = HttpMethod::comment_;
+                req->method_ = HttpMethod::comment_;
                 break;
             }
             case 't': {
@@ -109,14 +130,14 @@ namespace net::http
                     return false;
                 }
 
-                req->method = HttpMethod::trace_;
+                req->method_ = HttpMethod::trace_;
                 break;
             }
 
             default: break;
         }
 
-        if (req->method == HttpMethod::invalid_) {
+        if (req->method_ == HttpMethod::invalid_) {
             return false;
         }
 
@@ -124,7 +145,6 @@ namespace net::http
             return false;
         }
 
-        header_state = HeaderState::method_gap;
         return true;
     }
 
@@ -153,15 +173,14 @@ namespace net::http
         url = url::url_decode(url);
         req->url_ = url;
 
-        if (!url::decode_url_domain(url, req->url_domain)) {
+        if (!url::decode_url_domain(url, req->url_domain_)) {
             return false;
         }
 
-        if (!url::decode_parameters(url, req->request_params)) {
+        if (!url::decode_parameters(url, req->request_params_)) {
             return false;
         }
 
-        header_state = HeaderState::url_gap;
         return true;
     }
 
@@ -207,22 +226,21 @@ namespace net::http
         }
 
         if (v == "1.0") {
-            req->version = HttpVersion::v_1_0;
+            req->version_ = HttpVersion::v_1_0;
         } else if (v == "1.1") {
-            req->version = HttpVersion::v_1_1;
+            req->version_ = HttpVersion::v_1_1;
         } else if (v == "2.0") {
-            req->version = HttpVersion::v_2_0;
+            req->version_ = HttpVersion::v_2_0;
         } else if (v == "3.0") {
-            req->version = HttpVersion::v_3_0;
+            req->version_ = HttpVersion::v_3_0;
         } else {
             return false;
         }
 
-        header_state = HeaderState::version_newline;
         return true; 
     }
 
-    bool HttpRequestParser::parse_headers(Buffer &buff)
+    bool HttpRequestParser::parse_header_keys(Buffer &buff)
     {
         if (buff.readable_bytes() == 0 || header_state != HeaderState::version_newline) {
             return false;
@@ -265,97 +283,201 @@ namespace net::http
                 return false;
             }
 
-            req->headers[key] = val;
+            req->headers_[key] = val;
         }
 
         if (buff.read_int8() != '\n') {
             return false;
         }
 
-        header_state = HeaderState::header_newline;
         return true;
     }
 
-    bool HttpRequestParser::parse_body(Buffer &buff)
+    bool HttpRequestParser::parse_new_line(Buffer &buff)
     {
-        return false;
+        char ch = buff.read_int8();
+        if (ch != '\r') {
+            return false;
+        }
+
+        ch = buff.read_int8();
+        if (ch != '\n') {
+            return false;
+        }
+
+        return true;
     }
 
-    HttpRequest::HttpRequest(HttpRequestContext *context) : context_(context)
+    uint32_t HttpRequestParser::get_body_length()
     {
-        parser.set_req(this);
+        const std::string *length = req->get_header(http_header_key::content_length);
+        if (!length) {
+            return 0;
+        }
+
+        return std::atoi(length->c_str());
+    }
+
+    bool HttpRequestParser::parse_header(Buffer &buff)
+    {
+        int from = buff.get_read_index();
+        if (header_state == HttpRequestParser::HeaderState::init) {
+            if (!parse_method(buff)) {
+                buff.reset_read_index(from);
+                header_state = HttpRequestParser::HeaderState::init;
+                return false;
+            }
+
+            header_state = HeaderState::method_gap;
+        }
+
+        from = buff.get_read_index();
+        if (header_state == HttpRequestParser::HeaderState::method_gap) {
+            if (!parse_url(buff)) {
+                buff.reset_read_index(from);
+                header_state = HttpRequestParser::HeaderState::method_gap;
+                return false;
+            }
+
+            header_state = HeaderState::url_gap;
+        }
+
+        from = buff.get_read_index();
+        if (header_state == HttpRequestParser::HeaderState::url_gap) {
+            if (!parse_version(buff)) {
+                buff.reset_read_index(from);
+                header_state = HttpRequestParser::HeaderState::url_gap;
+                return false;
+            }
+
+            header_state = HeaderState::version_newline;
+        }
+
+        from = buff.get_read_index();
+        if (header_state == HttpRequestParser::HeaderState::version_newline) {
+            if (!parse_header_keys(buff)) {
+                buff.reset_read_index(from);
+                header_state = HttpRequestParser::HeaderState::version_newline;
+                return false;
+            }
+
+            header_state = HeaderState::header_end_lines;
+        }
+    
+        return true;
+    }
+
+    int HttpRequestParser::parse_body(Buffer &buff, uint32_t length)
+    {
+        if (header_state != HeaderState::header_end_lines) {
+            return 0; 
+        }
+
+        if (length > client_max_content_length) {
+            return -1;
+        }
+
+        if (buff.readable_bytes() < length) {
+            return 0;
+        }
+
+        return 1;
+    }
+
+    int HttpRequestParser::parse(Buffer &buff)
+    {
+        if (!is_header_done()) {
+            parse_header(buff);
+        }
+
+        if (is_header_done()) {
+            uint32_t length = get_body_length();
+            if (length > 0) {
+                int res = parse_body(buff, length);
+                if (res >= 0) {
+                    body_state = BodyState::fully;
+                    req->body_length_ = length;
+                }
+                return res;
+            } else {
+                body_state = BodyState::fully;
+                return 1;
+            }
+        }
+
+        return is_body_done() ? 1 : 0;
+    }
+
+    HttpRequest::HttpRequest(HttpRequestContext *context) : context_(context), is_good_(false)
+    {
+        parser_.set_req(this);
+        reset();
     }
 
     HttpMethod HttpRequest::get_method() const
     {
-        return this->method;
+        return this->method_;
     }
 
     HttpVersion HttpRequest::get_version() const
     {
-        return this->version;
+        return this->version_;
     }
 
     bool HttpRequest::header_exists(const std::string &key) const
     {
-        auto it = this->headers.find(key);
-        return it == this->headers.end();
+        auto it = this->headers_.find(key);
+        return it == this->headers_.end();
     }
 
     const std::string * HttpRequest::get_header(const std::string &key) const
     {
-        auto it = this->headers.find(key);
-        return it != this->headers.end() ? &it->second : nullptr;
+        auto it = this->headers_.find(key);
+        return it != this->headers_.end() ? &it->second : nullptr;
     }
 
-    bool HttpRequest::parse_header(Buffer &buff)
+    bool HttpRequest::parse(Buffer &buff)
     {
-        int from = buff.get_read_index();
-        if (parser.header_state == HttpRequestParser::HeaderState::init) {
-            if (!parser.parse_method(buff)) {
-                buff.reset_read_index(from);
-                parser.header_state = HttpRequestParser::HeaderState::init;
-                return false;
-            }
+        if (is_ok()) {
+            return true;
         }
 
-        from = buff.get_read_index();
-        if (parser.header_state == HttpRequestParser::HeaderState::method_gap) {
-            if (!parser.parse_url(buff)) {
-                buff.reset_read_index(from);
-                parser.header_state = HttpRequestParser::HeaderState::method_gap;
-                return false;
-            }
+        int res = parser_.parse(buff);
+        if (res < 0) {
+            is_good_ = false;
+            return false;
+        } else {
+            is_good_ = true;
+            return true;
         }
-
-        from = buff.get_read_index();
-        if (parser.header_state == HttpRequestParser::HeaderState::url_gap) {
-            if (!parser.parse_version(buff)) {
-                buff.reset_read_index(from);
-                parser.header_state = HttpRequestParser::HeaderState::url_gap;
-                return false;
-            }
-        }
-
-        from = buff.get_read_index();
-        if (parser.header_state == HttpRequestParser::HeaderState::version_newline) {
-            if (!parser.parse_headers(buff)) {
-                buff.reset_read_index(from);
-                parser.header_state = HttpRequestParser::HeaderState::version_newline;
-                return false;
-            }
-        }
-        
-        return true;
     }
 
     void HttpRequest::reset()
     {
-        url_domain.clear();
-        method = HttpMethod::invalid_;
-        version = HttpVersion::invalid;
-        request_params.clear();
-        headers.clear();
-        parser.reset();
+        is_good_ = false;
+        body_length_ = 0;
+        url_domain_.clear();
+        method_ = HttpMethod::invalid_;
+        version_ = HttpVersion::invalid;
+        request_params_.clear();
+        headers_.clear();
+        parser_.reset();
+    }
+
+    const char * HttpRequest::body_begin()
+    {
+        return body_length_ == 0 ? nullptr : context_->get_connection()->get_input_buff()->peek();
+    }
+
+    const char * HttpRequest::body_end()
+    {
+        return body_length_ == 0 ? nullptr : context_->get_connection()->get_input_buff()->peek() + body_length_;
+    }
+    
+    void HttpRequest::read_body_done()
+    {
+        if (body_length_ > 0) {
+            context_->get_connection()->get_input_buff()->add_read_index(body_length_);
+        }
     }
 }

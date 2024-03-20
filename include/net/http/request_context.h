@@ -10,6 +10,7 @@ namespace net::http
 {
     class HttpRequest;
     class HttpResponse;
+    class HttpSession;
 
     class HttpRequestContext
     {
@@ -34,15 +35,30 @@ namespace net::http
             return conn_;
         }
 
+        void set_session(HttpSession *session)
+        {
+            session_ = session;
+        }
+
+        HttpSession * get_session()
+        {
+            return session_;
+        }
+
         void send();
 
     public:
         bool parse();
 
+        bool is_completed();
+
+        bool has_error();
+
     private:
         Connection *conn_;
         HttpRequest *request_;
         HttpResponse *response_;
+        HttpSession *session_;
     };
 }
 

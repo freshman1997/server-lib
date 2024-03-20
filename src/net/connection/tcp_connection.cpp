@@ -56,15 +56,22 @@ namespace net
 
     void TcpConnection::send(std::shared_ptr<Buffer> buff)
     {
-        int fd = this->channel_.get_fd();
-        ::write(fd, buff->begin(), buff->readable_bytes());
+        output_buffer_->append_buffer(*buff.get());
     }
 
     void TcpConnection::send()
     {
-        int ret = ::write(channel_.get_fd(), output_buffer_->begin(), output_buffer_->readable_bytes());
+        int ret = ::write(channel_.get_fd(), output_buffer_->peek(), output_buffer_->readable_bytes());
         if (ret > 0) {
-            output_buffer_->reset();
+            if (ret >= output_buffer_->readable_bytes()) {
+                output_buffer_->reset();
+            } else {
+                output_buffer_->set_read_index(ret);
+                std::cout << "still remain data: " << output_buffer_->readable_bytes() << " bytes.\n";
+                return;
+            }
+        } else if (ret < 0) {
+            closed_ = true;
         }
 
         if (closed_) {
@@ -137,9 +144,9 @@ namespace net
 
     void TcpConnection::on_write_event()
     {
-        /*if (output_buffer_->readable_bytes() > 0) {
-            send(output_buffer_);
-        }*/
+        if (output_buffer_->readable_bytes() > 0) {
+            send();
+        }
     }
 
     void TcpConnection::set_event_handler(EventHandler *eventHandler)

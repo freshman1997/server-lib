@@ -34,7 +34,6 @@ namespace net::http
     void HttpResponse::send()
     {
         bool res = pack_response();
-        context_->get_connection()->send();
         if (res) {
             context_->get_connection()->send(buffer_);
         } else {

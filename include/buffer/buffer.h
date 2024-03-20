@@ -203,6 +203,16 @@ public:
         write_index = idx;
     }
 
+    void set_read_index(size_t idx)
+    {
+        read_index = idx;
+    }
+
+    void add_read_index(size_t idx)
+    {
+        read_index += idx;
+    }
+
     size_t writable_size() const
     {
         return buffs.size() - write_index;
@@ -221,6 +231,16 @@ public:
     size_t get_buff_size() const
     {
         return buffs.size();
+    }
+
+    void append_buffer(Buffer &buff)
+    {
+        if (buff.readable_bytes() > writable_size()) {
+            resize(get_buff_size() - writable_size() + buff.readable_bytes());
+        }
+
+        std::memcpy(buffer_begin(), buff.begin(), buff.readable_bytes());
+        fill(buff.readable_bytes());
     }
 
 private:
