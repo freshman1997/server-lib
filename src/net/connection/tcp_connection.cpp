@@ -14,7 +14,7 @@ namespace net
     {
         addr_.set_addr(ip, port);
 
-        //socket::set_none_block(fd, true);
+        socket::set_none_block(fd, true);
         socket::set_keep_alive(fd, true);
 
         channel_.set_fd(fd);

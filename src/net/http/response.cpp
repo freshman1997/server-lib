@@ -25,7 +25,7 @@ namespace net::http
 
     void HttpResponse::reset()
     {
-        respCode_ = response_code::ResponseCode::bad_request;
+        respCode_ = ResponseCode::bad_request;
         version_ = HttpVersion::v_1_1;
         headers_.clear();
         buffer_->reset();
@@ -41,26 +41,11 @@ namespace net::http
         }
     }
 
-    void HttpResponse::pack_error_reponse()
-    {
-        auto outputBuffer = context_->get_connection()->get_output_buff();
-        std::string header("HTTP/1.1");
-        header.append(" ");
-        header.append(std::to_string((uint32_t)response_code::ResponseCode::internal_server_error));
-        header.append(" ");
-        header.append(responseCodeDescs[response_code::ResponseCode::internal_server_error]);
-        header.append("\r\nContent-Type: text/html\r\n");
-        header.append("Content-Length: 93");
-        header.append("\r\n\r\n");
-        header.append("<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">internal server error</h1>");
-        outputBuffer->write_string(header);
-    }
-
     bool HttpResponse::pack_response()
     {
         auto descIt = responseCodeDescs.find(respCode_);
-        if (descIt == responseCodeDescs.end() || respCode_ == response_code::ResponseCode::internal_server_error) {
-            pack_error_reponse();
+        if (descIt == responseCodeDescs.end() || respCode_ == ResponseCode::internal_server_error) {
+            context_->process_error(context_->get_connection());
             return false;
         }
         

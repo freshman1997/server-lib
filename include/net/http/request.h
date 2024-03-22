@@ -6,6 +6,9 @@
 #include <vector>
 
 #include "buffer/buffer.h"
+#include "net/http/content_type.h"
+#include "net/http/response_code.h"
+#include "net/http/content/types.h"
 
 namespace net::http 
 {
@@ -117,8 +120,13 @@ namespace net::http
     public:
         HttpRequest(HttpRequestContext *context_);
 
+    public:
         HttpMethod get_method() const;
+        std::string get_raw_method() const;
+
         HttpVersion get_version() const;
+        std::string get_raw_version() const;
+
         bool header_exists(const std::string &key) const;
 
         const std::string * get_header(const std::string &key) const;
@@ -146,6 +154,22 @@ namespace net::http
 
         void read_body_done();
 
+        const std::unordered_map<std::string, std::string> & get_content_type_extra() const 
+        {
+            return content_type_extra_;
+        }
+
+        void set_body_content(const Content &content)
+        {
+            body_content_ = content;
+        }
+
+        const Content & get_body_content() const
+        {
+            return body_content_;
+        }
+
+    public:
         bool is_ok() const 
         {
             return parser_.done();
@@ -156,6 +180,11 @@ namespace net::http
             return is_good_;
         }
 
+        ResponseCode get_error_code() const
+        {
+            return error_code_;
+        }
+
         HttpRequestContext * get_context()
         {
             return context_;
@@ -164,16 +193,27 @@ namespace net::http
         void reset();
 
     private:
+        bool parse_content_type();
+
+        bool parse_content();
+
+    private:
+        HttpRequestContext *context_;
         bool is_good_;
+
+    private:
         uint32_t body_length_;
+        HttpMethod method_;
+        HttpVersion version_;
+        content_type content_type_;
+        ResponseCode error_code_;
         HttpRequestParser parser_;
         std::string url_;
         std::vector<std::string> url_domain_;
-        HttpMethod method_;
-        HttpVersion version_;
         std::unordered_map<std::string, std::string> request_params_;
         std::unordered_map<std::string, std::string> headers_;
-        HttpRequestContext *context_;
+        std::unordered_map<std::string, std::string> content_type_extra_;
+        Content body_content_;
     };
 }
 

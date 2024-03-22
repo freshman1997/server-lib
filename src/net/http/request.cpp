@@ -4,6 +4,7 @@
 #include "net/http/url.h"
 #include "net/http/request_context.h"
 #include "net/connection/connection.h"
+#include "net/http/content_type.h"
 
 namespace net::http 
 {
@@ -369,7 +370,7 @@ namespace net::http
 
     int HttpRequestParser::parse_body(Buffer &buff, uint32_t length)
     {
-        if (header_state != HeaderState::header_end_lines) {
+        if (!is_header_done()) {
             return 0; 
         }
 
@@ -394,9 +395,11 @@ namespace net::http
             uint32_t length = get_body_length();
             if (length > 0) {
                 int res = parse_body(buff, length);
-                if (res >= 0) {
+                if (res > 0) {
                     body_state = BodyState::fully;
                     req->body_length_ = length;
+                } else if (res == 0) {
+                    body_state = BodyState::partial;
                 }
                 return res;
             } else {
@@ -419,9 +422,27 @@ namespace net::http
         return this->method_;
     }
 
+    std::string HttpRequest::get_raw_method() const
+    {
+        if (!is_ok()) {
+            return {};
+        }
+
+        return http_method_descs[(uint32_t)method_];
+    }
+
     HttpVersion HttpRequest::get_version() const
     {
         return this->version_;
+    }
+
+    std::string HttpRequest::get_raw_version() const
+    {
+        if (!is_ok()) {
+            return {};
+        }
+
+        return http_version_descs[(uint32_t)version_];
     }
 
     bool HttpRequest::header_exists(const std::string &key) const
@@ -447,8 +468,13 @@ namespace net::http
             is_good_ = false;
             return false;
         } else {
-            is_good_ = true;
-            return true;
+            if (res == 1) {
+                is_good_ = parse_content_type();
+                return true;
+            } else {
+                is_good_ = true;
+                return false;
+            }
         }
     }
 
@@ -462,6 +488,8 @@ namespace net::http
         request_params_.clear();
         headers_.clear();
         parser_.reset();
+        content_type_ = content_type::not_support;
+        error_code_ = ResponseCode::bad_request;
     }
 
     const char * HttpRequest::body_begin()
@@ -479,5 +507,84 @@ namespace net::http
         if (body_length_ > 0) {
             context_->get_connection()->get_input_buff()->add_read_index(body_length_);
         }
+    }
+
+    bool HttpRequest::parse_content_type()
+    {
+        const std::string *val = get_header(http_header_key::content_type);
+        if (!val) {
+            return true;
+        }
+
+        if (val->empty()) {
+            return false;
+        }
+
+        std::string type;
+        int i = 0;
+        for (; i < val->size(); ++i) {
+            char ch = val->at(i);
+            if (ch == ' ') continue;
+
+            if (ch == ';') {
+                break;
+            }
+
+            type.push_back(ch);
+        }
+
+        content_type_ = find_content_type(type);
+        if (content_type_ == content_type::not_support) {
+            return false;
+        }
+
+        if (i < val->size()) {
+            ++i;
+            while (i < val->size()) {
+                char ch = val->at(i);
+                if (ch == ' ') {
+                    ++i;
+                    continue;
+                }
+
+                std::string k;
+                for (int j = i; j < val->size(); ++j) {
+                    ch = val->at(j);
+                    if (ch == '=') {
+                        i = j + 1;
+                        break;
+                    }
+                    k.push_back(ch);
+                }
+
+                std::string v;
+                for (; i < val->size(); ++i) {
+                    ch = val->at(i);
+                    if (ch == ';') {
+                        ++i;
+                        break;
+                    }
+                    v.push_back(ch);
+                }
+
+                content_type_extra_[k] = v;
+            }
+        }
+        return true;
+    }
+
+    bool HttpRequest::parse_content()
+    {
+        if (content_type_ == content_type::multpart_form_data) {
+            // skip boundary
+            std::string boundaryStart = "--" + content_type_extra_["boundary"];
+            context_->get_connection()->get_input_buff()->add_read_index(boundaryStart.size());
+
+            std::string boundaryEnd = boundaryStart + "--";
+        } else if (content_type_ == content_type::application_json) {
+
+        }
+
+        return false;
     }
 }

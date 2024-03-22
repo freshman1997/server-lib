@@ -19,7 +19,7 @@ namespace net::http
         HttpResponse(HttpRequestContext *context);
 
     public:
-        void set_response_code(response_code::ResponseCode code)
+        void set_response_code(ResponseCode code)
         {
             respCode_ = code;
         }
@@ -59,10 +59,8 @@ namespace net::http
     private:
         bool pack_response();
 
-        void pack_error_reponse();
-
     private:
-        response_code::ResponseCode respCode_ = response_code::ResponseCode::bad_request;
+        ResponseCode respCode_ = ResponseCode::bad_request;
         HttpVersion version_ = HttpVersion::v_1_1;
         std::unordered_map<std::string, std::string> headers_;
         std::shared_ptr<Buffer> buffer_;

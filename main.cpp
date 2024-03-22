@@ -19,6 +19,7 @@
 #include "net/poller/epoll_poller.h"
 #include "net/poller/poller.h"
 #include "net/poller/select_poller.h"
+#include "nlohmann/json_fwd.hpp"
 #include "thread/task.h"
 #include "thread/thread_pool.h"
 #include "net/socket/socket.h"
@@ -29,6 +30,10 @@
 
 #include "net/event/event_loop.h"
 #include "net/connection/connection.h"
+
+#include "base/utils/base64.h"
+#include "nlohmann/json.hpp"
+#include "net/http/content/parsers/text_content_parser.h"
 
 #ifdef _WIN32
 #pragma comment(lib,"ws2_32.lib")
@@ -87,7 +92,7 @@ public:
     void on_request(net::http::HttpRequest *req, net::http::HttpResponse *resp)
     {
         if (content_size_ < 0) {
-            resp->set_response_code(net::http::response_code::ResponseCode::internal_server_error);
+            resp->set_response_code(net::http::ResponseCode::internal_server_error);
             return;
         }
 
@@ -97,7 +102,7 @@ public:
         if (range) {
             size_t pos = range->find_first_of("=");
             if (std::string::npos == pos) {
-                resp->set_response_code(net::http::response_code::ResponseCode::internal_server_error);
+                resp->set_response_code(net::http::ResponseCode::internal_server_error);
                 return;
             }
 
@@ -134,7 +139,7 @@ public:
         }
 
         resp->add_header("Accept-Ranges", "bytes");
-        resp->set_response_code(net::http::response_code::ResponseCode::partial_content);
+        resp->set_response_code(net::http::ResponseCode::partial_content);
         resp->send();
     }
 
@@ -144,16 +149,19 @@ public:
             std::cout << "has body\n";
         }
 
-        std::string reqBody(req->body_begin(), req->body_end());
+        /*using namespace nlohmann;
+        json jData = json::parse(req->body_begin(), req->body_end());
+        */
+        std::string jData(req->body_begin(), req->body_end());
         req->read_body_done();
 
-        std::cout << reqBody << std::endl;
+        std::cout << jData << std::endl;
 
         std::string body = "{\"success\": 1}";
         resp->add_header("Content-length", std::to_string(body.size()));
         resp->add_header("Connection", "close");
         resp->add_header("Content-Type", "application/json");
-        resp->set_response_code(net::http::response_code::ResponseCode::ok_);
+        resp->set_response_code(net::http::ResponseCode::ok_);
         resp->append_body(body);
         resp->send();
     }
@@ -218,6 +226,13 @@ void test_http_server()
 
 int main()
 {
-    test_http_server();
+    //test_http_server();
+    //std::cout << base::util::base64_encode("hello:hello1") << std::endl;
+    //std::cout << base::util::base64_decode("aGVsbG86aGVsbG8x") << std::endl;
+
+    net::http::TextContentParser text_content_parser;
+
+    const char *text = "Content-Disposition: form-data; name=\"password\"; filename=\"a.txt\"";
+    const auto &res = text_content_parser.parse_content_disposition(text, text + 66);
     return 0;
 }

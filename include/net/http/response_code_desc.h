@@ -4,6 +4,9 @@
 #include <unordered_map>
 #include "net/http/response_code.h"
 
-extern std::unordered_map<net::http::response_code::ResponseCode, std::string> responseCodeDescs;
+namespace net::http 
+{
+    extern std::unordered_map<ResponseCode, std::string> responseCodeDescs;
+}
 
 #endif

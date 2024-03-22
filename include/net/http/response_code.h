@@ -1,7 +1,7 @@
 #ifndef __REPONSE_CODE_H__
 #define __REPONSE_CODE_H__
 
-namespace net::http::response_code
+namespace net::http
 {
     enum class ResponseCode : int
     {

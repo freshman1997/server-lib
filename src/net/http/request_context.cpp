@@ -9,6 +9,7 @@ namespace net::http
     {
         request_ = new HttpRequest(this);
         response_ = new HttpResponse(this);
+        init = true;
     }
 
     HttpRequestContext::~HttpRequestContext()
@@ -19,8 +20,10 @@ namespace net::http
 
     void HttpRequestContext::pre_request()
     {
-        request_->reset();
-        response_->reset();
+        if (!init) {
+            request_->reset();
+            response_->reset();
+        }
     }
 
     bool HttpRequestContext::parse()
@@ -49,5 +52,42 @@ namespace net::http
     void HttpRequestContext::send()
     {
         response_->send();
+    }
+
+    ResponseCode HttpRequestContext::get_error_code() const 
+    {
+        return request_->get_error_code();
+    }
+
+    void HttpRequestContext::process_error(Connection *conn, ResponseCode errorCode)
+    {
+        switch (errorCode) {
+            case ResponseCode::bad_request: {
+                std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">Bad Request</h1>";
+                std::string repsonse = "HTTP/1.1 403 Bad Request\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
+                auto buff = conn->get_output_buff();
+                buff->write_string(repsonse);
+                conn->send();
+                conn->close();
+                break;
+            }
+            case ResponseCode::not_found: {
+                std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">resource not found</h1>";
+                std::string repsonse = "HTTP/1.1 404 NOT FOUND\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
+                auto buff = conn->get_output_buff();
+                buff->write_string(repsonse);
+                conn->send();
+                conn->close();
+                break;
+            }
+            default: {
+                std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">Internal Server Error</h1>";
+                std::string repsonse = "HTTP/1.1 500\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
+                auto buff = conn->get_output_buff();
+                buff->write_string(repsonse);
+                conn->send();
+                conn->close();
+            }
+        }
     }
 }

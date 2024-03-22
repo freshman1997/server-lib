@@ -20,6 +20,7 @@
 #include "net/connection/connection.h"
 #include "base/time.h"
 #include "net/http/session.h"
+#include "net/http/response_code.h"
 
 namespace net::http
 {
@@ -53,13 +54,12 @@ namespace net::http
         auto context = sessions_[(uint64_t)conn]->get_context();
         context->pre_request();
 
-        if (!context->parse() || context->has_error()) {
-            std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">Internal Server Error</h1>";
-            std::string repsonse = "HTTP/1.1 500\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-            auto buff = conn->get_output_buff();
-            buff->write_string(repsonse);
-            conn->send(buff);
-            conn->close();
+        if (!context->parse()) {
+            return;
+        }
+
+        if (context->has_error()) {
+            context->process_error(conn, context->get_error_code());
             return;
         }
 
@@ -69,12 +69,8 @@ namespace net::http
                 handler(context->get_request(), context->get_response());
             } else {
                 // 404
-                std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">resource not found</h1>";
-                std::string repsonse = "HTTP/1.1 404 NOT FOUND\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-                auto buff = conn->get_output_buff();
-                buff->write_string(repsonse);
-                conn->send(buff);
-                conn->close();
+                context->process_error(conn, ResponseCode::not_found);
+                return;
             }
         }
     }
@@ -137,7 +133,7 @@ namespace net::http
         if (url.empty() || !func) {
             return;
         }
-        
+
         dispatcher_.register_handler(url, func);
     }
 

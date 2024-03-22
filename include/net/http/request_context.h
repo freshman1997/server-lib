@@ -1,6 +1,7 @@
 #ifndef __HTTP_REQUEST_CONTEXT_H__
 #define __HTTP_REQUEST_CONTEXT_H__
 
+#include "net/http/response_code.h"
 namespace net 
 {
     class Connection;
@@ -54,7 +55,12 @@ namespace net::http
 
         bool has_error();
 
+        ResponseCode get_error_code() const;
+
+        void process_error(Connection *conn, ResponseCode errorCode = ResponseCode::internal_server_error);
+
     private:
+        bool init;
         Connection *conn_;
         HttpRequest *request_;
         HttpResponse *response_;

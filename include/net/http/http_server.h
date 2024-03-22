@@ -8,6 +8,7 @@
 #include "net/handler/connection_handler.h"
 #include "common.h"
 #include "net/http/request_context.h"
+#include "net/http/response_code.h"
 #include "ops/request_dispatcher.h"
 #include "request.h"
 
