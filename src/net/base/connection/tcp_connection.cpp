@@ -54,8 +54,11 @@ namespace net
 
     void TcpConnection::send(Buffer * buff)
     {
-        Buffer *newBuf = output_buffer_.allocate_buffer();
-        newBuf->append_buffer(*buff);
+        if (!buff) {
+            return;
+        }
+        
+        output_buffer_.append_buffer(buff);
     }
 
     void TcpConnection::send()

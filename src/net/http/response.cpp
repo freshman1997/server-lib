@@ -36,8 +36,7 @@ namespace net::http
         bool res = pack_response();
         if (res) {
             context_->get_connection()->send(buffer_);
-        } else {
-            context_->get_connection()->close();
+            buffer_ = singleton::singleton<BufferedPool>().allocate();
         }
     }
 
