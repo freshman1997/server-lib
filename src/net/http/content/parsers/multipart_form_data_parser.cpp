@@ -16,10 +16,10 @@ namespace net::http
 {
     namespace helper
     {
-        std::unordered_map<std::string, ContentDispistionType> dispistion_type_mapping_ = {
-            {"inline", ContentDispistionType::inline_},
-            {"attachment", ContentDispistionType::attachment_},
-            {"form-data", ContentDispistionType::form_data_},
+        std::unordered_map<std::string, ContentDispositionType> dispistion_type_mapping_ = {
+            {"inline", ContentDispositionType::inline_},
+            {"attachment", ContentDispositionType::attachment_},
+            {"form-data", ContentDispositionType::form_data_},
         };
 
         const char * dispistion_type_names[] = {
@@ -86,15 +86,15 @@ namespace net::http
         }
     }
 
-    ContentDispistionType get_content_disposition_type(const std::string &name)
+    ContentDispositionType get_content_disposition_type(const std::string &name)
     {
         auto it = helper::dispistion_type_mapping_.find(name);
-        return it == helper::dispistion_type_mapping_.end() ? ContentDispistionType::unknow_ : it->second;
+        return it == helper::dispistion_type_mapping_.end() ? ContentDispositionType::unknow_ : it->second;
     }
 
-    std::string content_disposition_to_string(ContentDispistionType type)
+    std::string content_disposition_to_string(ContentDispositionType type)
     {
-        if (type == ContentDispistionType::unknow_) {
+        if (type == ContentDispositionType::unknow_) {
             return {};
         }
 
@@ -124,7 +124,7 @@ namespace net::http
 
         std::string boundaryEnd = "--" + it->second + "--";
         FormDataContent *fd = new FormDataContent;
-        fd->type = helper::dispistion_type_names[(std::size_t)ContentDispistionType::form_data_];
+        fd->type = helper::dispistion_type_names[(std::size_t)ContentDispositionType::form_data_];
         Content *content = new Content(content_type::multpart_form_data, fd);
         while (begin != end)
         {
@@ -137,8 +137,8 @@ namespace net::http
                 return false;
             }
 
-            ContentDispistionType disType = get_content_disposition_type(dis.second.first);
-            if (disType != ContentDispistionType::form_data_) {
+            ContentDispositionType disType = get_content_disposition_type(dis.second.first);
+            if (disType != ContentDispositionType::form_data_) {
                 delete content;
                 return false;
             }
@@ -180,9 +180,9 @@ namespace net::http
         return true;
     }
 
-    ContentDispistion MultipartFormDataParser::parse_content_disposition(const char *begin, const char *end)
+    ContentDisposition MultipartFormDataParser::parse_content_disposition(const char *begin, const char *end)
     {
-        ContentDispistion res = {0, {}};
+        ContentDisposition res = {0, {}};
         const char *p = begin;
         if (p + 21 > end) {
             return res;

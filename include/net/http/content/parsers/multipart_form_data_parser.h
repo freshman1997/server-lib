@@ -5,9 +5,9 @@
 
 namespace net::http 
 {
-    typedef std::pair<uint32_t, std::pair<std::string, std::unordered_map<std::string, std::string>>> ContentDispistion;
+    typedef std::pair<uint32_t, std::pair<std::string, std::unordered_map<std::string, std::string>>> ContentDisposition;
 
-    enum class ContentDispistionType
+    enum class ContentDispositionType
     {
         unknow_ = -1,
         inline_ = 0,
@@ -15,9 +15,9 @@ namespace net::http
         form_data_,
     };
 
-    ContentDispistionType get_content_disposition_type(const std::string &name);
+    ContentDispositionType get_content_disposition_type(const std::string &name);
 
-    std::string content_disposition_to_string(ContentDispistionType type);
+    std::string content_disposition_to_string(ContentDispositionType type);
 
     class MultipartFormDataParser : public ContentParser
     {
@@ -29,7 +29,7 @@ namespace net::http
         virtual bool parse(HttpRequest *req);
 
     public:
-        ContentDispistion parse_content_disposition(const char *begin, const char *end);
+        ContentDisposition parse_content_disposition(const char *begin, const char *end);
         std::pair<uint32_t, std::string> parse_part_value(const char *begin, const char *end);
         std::tuple<bool, uint32_t, std::string> parse_part_file_content(HttpRequest *req, const char *begin, const char *end, const std::string &originName);
     };
