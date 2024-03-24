@@ -8,7 +8,6 @@ namespace net::http
     {
     public:
         // 检查是否可以解析
-        virtual bool can_parse(const std::string &contentType);
         virtual bool can_parse(const content_type contentType);
 
         // 解析

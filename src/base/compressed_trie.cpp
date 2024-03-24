@@ -1,4 +1,4 @@
-#include "base/compressed_trie.h"
+#include "base/utils/compressed_trie.h"
 
 namespace base
 {

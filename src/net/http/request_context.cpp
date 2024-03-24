@@ -1,7 +1,9 @@
+#include "net/base/connection/connection.h"
 #include "net/http/request_context.h"
 #include "net/http/request.h"
 #include "net/http/response.h"
-#include "net/connection/connection.h"
+#include "net/http/response_code.h"
+#include "net/http/response_code_desc.h"
 
 namespace net::http 
 {
@@ -9,7 +11,6 @@ namespace net::http
     {
         request_ = new HttpRequest(this);
         response_ = new HttpResponse(this);
-        init = true;
     }
 
     HttpRequestContext::~HttpRequestContext()
@@ -18,12 +19,10 @@ namespace net::http
         delete response_;
     }
 
-    void HttpRequestContext::pre_request()
+    void HttpRequestContext::reset()
     {
-        if (!init) {
-            request_->reset();
-            response_->reset();
-        }
+        request_->reset();
+        response_->reset();
     }
 
     bool HttpRequestContext::parse()
@@ -59,35 +58,40 @@ namespace net::http
         return request_->get_error_code();
     }
 
-    void HttpRequestContext::process_error(Connection *conn, ResponseCode errorCode)
+    bool HttpRequestContext::try_parse_request_content()
     {
+        return request_->parse_content();
+    }
+    
+    void HttpRequestContext::process_error(ResponseCode errorCode)
+    {
+        std::string response;
         switch (errorCode) {
             case ResponseCode::bad_request: {
-                std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">Bad Request</h1>";
-                std::string repsonse = "HTTP/1.1 403 Bad Request\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-                auto buff = conn->get_output_buff();
-                buff->write_string(repsonse);
-                conn->send();
-                conn->close();
+                std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">"+ responseCodeDescs[errorCode] +"</h1>";
+                response = "HTTP/1.1 "+ responseCodeDescs[errorCode] 
+                    + "\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " 
+                    + std::to_string(msg.size()) + "\r\n\r\n" + msg;
                 break;
             }
             case ResponseCode::not_found: {
-                std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">resource not found</h1>";
-                std::string repsonse = "HTTP/1.1 404 NOT FOUND\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-                auto buff = conn->get_output_buff();
-                buff->write_string(repsonse);
-                conn->send();
-                conn->close();
+                std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">"+ responseCodeDescs[errorCode] +"</h1>";
+                response = "HTTP/1.1 " + responseCodeDescs[errorCode] 
+                    + "\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " 
+                    + std::to_string(msg.size()) + "\r\n\r\n" + msg;
                 break;
             }
             default: {
-                std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">Internal Server Error</h1>";
-                std::string repsonse = "HTTP/1.1 500\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-                auto buff = conn->get_output_buff();
-                buff->write_string(repsonse);
-                conn->send();
-                conn->close();
+                std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">"+ responseCodeDescs[ResponseCode::internal_server_error] +"</h1>";
+                response = "HTTP/1.1 " + responseCodeDescs[ResponseCode::internal_server_error] 
+                    + "\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " 
+                    + std::to_string(msg.size()) + "\r\n\r\n" + msg;
+                break;
             }
         }
+
+        auto buff = conn_->get_output_buff();
+        buff->write_string(response);
+        conn_->send();
     }
 }

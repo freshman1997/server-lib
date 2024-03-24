@@ -119,6 +119,7 @@ namespace net::http
         friend class HttpRequestParser;
     public:
         HttpRequest(HttpRequestContext *context_);
+        ~HttpRequest();
 
     public:
         HttpMethod get_method() const;
@@ -154,17 +155,22 @@ namespace net::http
 
         void read_body_done();
 
+        content_type get_content_type() const
+        {
+            return content_type_;
+        }
+
         const std::unordered_map<std::string, std::string> & get_content_type_extra() const 
         {
             return content_type_extra_;
         }
 
-        void set_body_content(const Content &content)
+        void set_body_content(const Content *content)
         {
             body_content_ = content;
         }
 
-        const Content & get_body_content() const
+        const Content * get_body_content() const
         {
             return body_content_;
         }
@@ -185,6 +191,11 @@ namespace net::http
             return error_code_;
         }
 
+        void set_error_code(ResponseCode code)
+        {
+            error_code_ = code;
+        }
+
         HttpRequestContext * get_context()
         {
             return context_;
@@ -192,16 +203,15 @@ namespace net::http
 
         void reset();
 
-    private:
-        bool parse_content_type();
+        std::pair<bool, uint32_t> parse_content_type(const char *begin, const char *end, content_type &type, std::unordered_map<std::string, std::string> &extra);
 
         bool parse_content();
 
     private:
         HttpRequestContext *context_;
-        bool is_good_;
 
     private:
+        bool is_good_;
         uint32_t body_length_;
         HttpMethod method_;
         HttpVersion version_;
@@ -213,7 +223,7 @@ namespace net::http
         std::unordered_map<std::string, std::string> request_params_;
         std::unordered_map<std::string, std::string> headers_;
         std::unordered_map<std::string, std::string> content_type_extra_;
-        Content body_content_;
+        const Content *body_content_;
     };
 }
 

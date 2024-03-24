@@ -1,10 +1,16 @@
+#include "net/base/connection/connection.h"
+
 #include "net/http/request.h"
+#include "net/http/content/content_parser_factory.h"
 #include "net/http/header_key.h"
 #include "net/http/ops/option.h"
+#include "net/http/response_code.h"
 #include "net/http/url.h"
 #include "net/http/request_context.h"
-#include "net/connection/connection.h"
 #include "net/http/content_type.h"
+#include "singleton/singleton.h"
+
+#include <iostream>
 
 namespace net::http 
 {
@@ -280,7 +286,7 @@ namespace net::http
                 }
             }
 
-            if (val.empty() || buff.read_int8() != '\n') {
+            if (buff.read_int8() != '\n') {
                 return false;
             }
 
@@ -408,13 +414,20 @@ namespace net::http
             }
         }
 
-        return is_body_done() ? 1 : 0;
+        return is_body_done();
     }
 
     HttpRequest::HttpRequest(HttpRequestContext *context) : context_(context), is_good_(false)
     {
         parser_.set_req(this);
         reset();
+    }
+
+    HttpRequest::~HttpRequest()
+    {
+        if (body_content_) {
+            delete body_content_;
+        }
     }
 
     HttpMethod HttpRequest::get_method() const
@@ -463,13 +476,20 @@ namespace net::http
             return true;
         }
 
+        //std::string data(buff.peek(), buff.peek() + buff.readable_bytes());
+        //std::cout << data << std::endl;
+
         int res = parser_.parse(buff);
         if (res < 0) {
             is_good_ = false;
             return false;
         } else {
             if (res == 1) {
-                is_good_ = parse_content_type();
+                const std::string *ctype = get_header(http_header_key::content_type);
+                is_good_ = true;
+                if (ctype) {
+                    is_good_ = parse_content_type(ctype->c_str(), ctype->c_str() + ctype->size(), content_type_, content_type_extra_).first;
+                }
                 return true;
             } else {
                 is_good_ = true;
@@ -490,6 +510,15 @@ namespace net::http
         parser_.reset();
         content_type_ = content_type::not_support;
         error_code_ = ResponseCode::bad_request;
+        content_type_ = content_type::not_support;
+
+        if (body_content_) {
+            delete body_content_;
+            body_content_ = nullptr;
+        }
+
+        content_type_extra_.clear();
+        error_code_ = ResponseCode::internal_server_error;
     }
 
     const char * HttpRequest::body_begin()
@@ -509,82 +538,93 @@ namespace net::http
         }
     }
 
-    bool HttpRequest::parse_content_type()
+    std::pair<bool, uint32_t> HttpRequest::parse_content_type(const char *begin, const char *end, content_type &ctype, std::unordered_map<std::string, std::string> &extra)
     {
-        const std::string *val = get_header(http_header_key::content_type);
-        if (!val) {
-            return true;
+        const char *p = begin;
+        if (!begin) {
+            return {true, 0};;
         }
 
-        if (val->empty()) {
-            return false;
+        if (!end || end - begin == 0) {
+            return {false, 0};;
         }
 
         std::string type;
-        int i = 0;
-        for (; i < val->size(); ++i) {
-            char ch = val->at(i);
+        for (; begin != end; ++begin) {
+            char ch = *begin;
             if (ch == ' ') continue;
 
             if (ch == ';') {
+                ++begin;
                 break;
             }
 
-            type.push_back(ch);
+            if (ch == '\r') {
+                begin += 2;
+                break;
+            }
+
+            type.push_back(std::tolower(ch));
         }
 
-        content_type_ = find_content_type(type);
+        ctype = find_content_type(type);
         if (content_type_ == content_type::not_support) {
-            return false;
+            return {false, 0};
         }
 
-        if (i < val->size()) {
-            ++i;
-            while (i < val->size()) {
-                char ch = val->at(i);
+        if (begin != end) {
+            while (begin != end) {
+                char ch = *begin;
                 if (ch == ' ') {
-                    ++i;
+                    ++begin;
                     continue;
                 }
 
+                if (ch == '\r') {
+                    break;
+                }
+
                 std::string k;
-                for (int j = i; j < val->size(); ++j) {
-                    ch = val->at(j);
+                for (; begin != end; ++begin) {
+                    ch = *begin;
                     if (ch == '=') {
-                        i = j + 1;
+                        ++begin;
                         break;
                     }
-                    k.push_back(ch);
+                    k.push_back(std::tolower(ch));
                 }
 
                 std::string v;
-                for (; i < val->size(); ++i) {
-                    ch = val->at(i);
-                    if (ch == ';') {
-                        ++i;
+                for (; begin != end; ++begin) {
+                    ch = *begin;
+                    if (ch == ';' || ch == '\r') {
                         break;
                     }
-                    v.push_back(ch);
+                    v.push_back(std::tolower(ch));
                 }
 
-                content_type_extra_[k] = v;
+                extra[k] = v;
+
+                if (*begin == ';') {
+                    ++begin;
+                    continue;
+                }
             }
         }
-        return true;
+        return {true, begin - p};
     }
 
     bool HttpRequest::parse_content()
     {
-        if (content_type_ == content_type::multpart_form_data) {
-            // skip boundary
-            std::string boundaryStart = "--" + content_type_extra_["boundary"];
-            context_->get_connection()->get_input_buff()->add_read_index(boundaryStart.size());
-
-            std::string boundaryEnd = boundaryStart + "--";
-        } else if (content_type_ == content_type::application_json) {
-
+        if (!is_good_) {
+            return false;
         }
 
-        return false;
+        const std::string *ctype = get_header(http_header_key::content_type);
+        if (!ctype) {
+            return true;
+        }
+
+        return singleton::singleton<ContentParserFactory>().parse_content(this);
     }
 }

@@ -1,7 +1,6 @@
 #ifndef __HTTP_COMMON_H__
 #define __HTTP_COMMON_H__
 #include <functional>
-#include <memory>
 
 namespace net::http 
 {

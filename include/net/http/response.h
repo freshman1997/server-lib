@@ -1,7 +1,5 @@
 #ifndef __RESPONSE_H__
 #define __RESPONSE_H__
-
-#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -42,7 +40,7 @@ namespace net::http
         
         void append_body(const std::string &data);
 
-        std::shared_ptr<Buffer> get_buff()
+        Buffer * get_buff()
         {
             return buffer_;
         }
@@ -63,7 +61,7 @@ namespace net::http
         ResponseCode respCode_ = ResponseCode::bad_request;
         HttpVersion version_ = HttpVersion::v_1_1;
         std::unordered_map<std::string, std::string> headers_;
-        std::shared_ptr<Buffer> buffer_;
+        Buffer * buffer_;
         HttpRequestContext *context_;
     };
 }

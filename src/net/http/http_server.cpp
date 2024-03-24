@@ -1,5 +1,4 @@
 #include <iostream>
-#include <memory>
 #include <unistd.h>
 
 #ifdef _WIN32
@@ -7,18 +6,14 @@
 #include<WinSock2.h>
 #endif
 
-#include "buffer/buffer.h"
-#include "net/acceptor/tcp_acceptor.h"
-#include "net/event/event_loop.h"
-#include "net/http/http_server.h"
-#include "net/http/request.h"
-#include "net/poller/epoll_poller.h"
-#include "net/poller/poll_poller.h"
-#include "net/poller/select_poller.h"
-#include "net/socket/socket.h"
 #include "timer/wheel_timer_manager.h"
-#include "net/connection/connection.h"
-#include "base/time.h"
+#include "net/base/acceptor/tcp_acceptor.h"
+#include "net/base/event/event_loop.h"
+#include "net/http/http_server.h"
+#include "net/base/poller/select_poller.h"
+#include "net/base/socket/socket.h"
+#include "net/base/connection/connection.h"
+#include "net/http/request.h"
 #include "net/http/session.h"
 #include "net/http/response_code.h"
 
@@ -52,24 +47,31 @@ namespace net::http
     void HttpServer::on_read(Connection *conn)
     {
         auto context = sessions_[(uint64_t)conn]->get_context();
-        context->pre_request();
-
         if (!context->parse()) {
+            if (context->has_error()) {
+                context->process_error(context->get_error_code());
+            }
             return;
         }
 
         if (context->has_error()) {
-            context->process_error(conn, context->get_error_code());
+            context->process_error(context->get_error_code());
             return;
         }
 
         if (context->is_completed()) {
+            if (!context->try_parse_request_content()) {
+                context->process_error(ResponseCode::bad_request);
+                return;
+            }
+
             auto handler = dispatcher_.get_handler(context->get_request()->get_raw_url());
             if (handler) {
                 handler(context->get_request(), context->get_response());
+                context->reset();
             } else {
                 // 404
-                context->process_error(conn, ResponseCode::not_found);
+                context->process_error(ResponseCode::not_found);
                 return;
             }
         }

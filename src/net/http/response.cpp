@@ -1,14 +1,14 @@
+#include "net/base/connection/connection.h"
 #include "net/http/response.h"
 #include "buffer/buffer.h"
+#include "buffer/pool.h"
 #include "net/http/request_context.h"
-#include "net/connection/connection.h"
 #include "net/http/response_code_desc.h"
-#include <cstdint>
-#include <iostream>
+#include "singleton/singleton.h"
 
 namespace net::http
 {
-    HttpResponse::HttpResponse(HttpRequestContext *context) : context_(context), buffer_(std::make_shared<Buffer>())
+    HttpResponse::HttpResponse(HttpRequestContext *context) : context_(context), buffer_(singleton::singleton<BufferedPool>().allocate())
     {
         
     }
@@ -45,7 +45,7 @@ namespace net::http
     {
         auto descIt = responseCodeDescs.find(respCode_);
         if (descIt == responseCodeDescs.end() || respCode_ == ResponseCode::internal_server_error) {
-            context_->process_error(context_->get_connection());
+            context_->process_error();
             return false;
         }
         

@@ -19,7 +19,7 @@ namespace net::http
         HttpRequestContext(Connection *conn_);
         ~HttpRequestContext();
 
-        void pre_request();
+        void reset();
 
         HttpRequest * get_request()
         {
@@ -57,10 +57,11 @@ namespace net::http
 
         ResponseCode get_error_code() const;
 
-        void process_error(Connection *conn, ResponseCode errorCode = ResponseCode::internal_server_error);
+        bool try_parse_request_content();
+
+        void process_error(ResponseCode errorCode = ResponseCode::internal_server_error);
 
     private:
-        bool init;
         Connection *conn_;
         HttpRequest *request_;
         HttpResponse *response_;

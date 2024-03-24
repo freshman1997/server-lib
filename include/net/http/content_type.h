@@ -4,7 +4,7 @@
 
 namespace net::http
 {
-    enum class content_type
+    enum class content_type : char
     {
         not_support = -1,
         text_plain = 0,

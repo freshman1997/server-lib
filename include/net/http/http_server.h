@@ -1,16 +1,11 @@
 #ifndef __HTTP_SERVER_H__
 #define __HTTP_SERVER_H__
-#include <fstream>
-#include <functional>
-#include <memory>
 #include <unordered_map>
 
-#include "net/handler/connection_handler.h"
+#include "net/base/handler/connection_handler.h"
 #include "common.h"
 #include "net/http/request_context.h"
-#include "net/http/response_code.h"
-#include "ops/request_dispatcher.h"
-#include "request.h"
+#include "request_dispatcher.h"
 
 namespace net
 {

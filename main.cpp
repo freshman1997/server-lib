@@ -8,32 +8,34 @@
 #include <memory>
 #include <string>
 #include <fstream>
+#include <ctime>
+#include <cstdlib>
 
-#include "net/acceptor/acceptor.h"
-#include "net/acceptor/tcp_acceptor.h"
+#include "net/base/acceptor/acceptor.h"
+#include "net/base/acceptor/tcp_acceptor.h"
 #include "net/http/header_key.h"
 #include "net/http/request_context.h"
 #include "net/http/http_server.h"
 #include "net/http/request.h"
 #include "net/http/response.h"
-#include "net/poller/epoll_poller.h"
-#include "net/poller/poller.h"
-#include "net/poller/select_poller.h"
+#include "net/base/poller/epoll_poller.h"
+#include "net/base/poller/poller.h"
+#include "net/base/poller/select_poller.h"
 #include "nlohmann/json_fwd.hpp"
 #include "thread/task.h"
 #include "thread/thread_pool.h"
-#include "net/socket/socket.h"
+#include "net/base/socket/socket.h"
 
 #include "timer/timer_task.h"
 #include "timer/timer.h"
 #include "timer/wheel_timer_manager.h"
 
-#include "net/event/event_loop.h"
-#include "net/connection/connection.h"
+#include "net/base/event/event_loop.h"
+#include "net/base/connection/connection.h"
 
 #include "base/utils/base64.h"
 #include "nlohmann/json.hpp"
-#include "net/http/content/parsers/text_content_parser.h"
+#include "net/http/content/parsers/multipart_form_data_parser.h"
 
 #ifdef _WIN32
 #pragma comment(lib,"ws2_32.lib")
@@ -72,7 +74,7 @@ class VideoTest
 public:
     VideoTest()
     {
-        file_.open("/home/yuan/Desktop/cz.mp4");
+        file_.open("/home/yuan/Desktop/cz");
         if (!file_.good()) {
             std::cout << "open file fail!\n";
         }
@@ -162,7 +164,31 @@ public:
         resp->add_header("Connection", "close");
         resp->add_header("Content-Type", "application/json");
         resp->set_response_code(net::http::ResponseCode::ok_);
+
         resp->append_body(body);
+        resp->send();
+    }
+
+    void icon(net::http::HttpRequest *req, net::http::HttpResponse *resp)
+    {
+        resp->add_header("Connection", "close");
+        resp->add_header("Content-Type", "image/x-icon");
+        resp->set_response_code(net::http::ResponseCode::ok_);
+        std::fstream file;
+        file.open("/home/yuan/Desktop/icon.ico");
+        if (!file.good()) {
+            resp->get_context()->process_error();
+            return;
+        }
+
+        file.seekg(0, std::ios_base::end);
+        std::size_t sz = file.tellg();
+        resp->get_buff()->resize(sz);
+        file.seekg(0, std::ios_base::beg);
+        file.read(resp->get_buff()->buffer_begin(), sz);
+        resp->get_buff()->fill(sz);
+
+        resp->add_header("Content-length", std::to_string(sz));
         resp->send();
     }
 
@@ -216,6 +242,10 @@ void test_http_server()
         vt.on_body_test(req, resp);
     });
 
+    server.on("/favicon.ico", [&vt](net::http::HttpRequest *req, net::http::HttpResponse *resp) {
+        vt.icon(req, resp);
+    });
+
     if (!server.init(12333)) {
         std::cout << " init failed " << std::endl;
         return;
@@ -226,13 +256,15 @@ void test_http_server()
 
 int main()
 {
-    //test_http_server();
+    srand(time(nullptr));
+
+    test_http_server();
     //std::cout << base::util::base64_encode("hello:hello1") << std::endl;
     //std::cout << base::util::base64_decode("aGVsbG86aGVsbG8x") << std::endl;
 
-    net::http::TextContentParser text_content_parser;
+    net::http::MultipartFormDataParser text_content_parser;
 
-    const char *text = "Content-Disposition: form-data; name=\"password\"; filename=\"a.txt\"";
-    const auto &res = text_content_parser.parse_content_disposition(text, text + 66);
+    const char *text = "Content-Disposition: form-data; name=\"password\"; filename=\"a.txt\"\nContent-Type: text/plain";
+    const auto &res = text_content_parser.parse_content_disposition(text, text + 90);
     return 0;
 }
