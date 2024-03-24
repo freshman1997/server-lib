@@ -1,4 +1,13 @@
-#ifndef __HTTP_CLIENT_H__
-#define __HTTP_CLIENT_H__
+#ifndef __NET_HTTP_CLIETNT_H__
+#define __NET_HTTP_CLIETNT_H__
+
+namespace net::http 
+{
+    class HttpClient
+    {
+    public:
+        
+    };
+}
 
 #endif
