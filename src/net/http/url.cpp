@@ -80,7 +80,7 @@ namespace url
             return false;
         }
 
-        return i >= sz;
+        return true;
     }
 
     bool decode_parameters(const std::string &url, std::unordered_map<std::string, std::string> &headers)
@@ -104,7 +104,7 @@ namespace url
             }
 
             std::string val;
-            for (; j < sz && url[j] != '&'; ++j) {
+            for (++j; j < sz && url[j] != '&'; ++j) {
                 val.push_back(url[j]);
             }
 

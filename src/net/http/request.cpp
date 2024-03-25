@@ -172,11 +172,6 @@ namespace net::http
             }
         }
 
-        // if (url.size() == 1) {
-        //     header_state = HeaderState::method_gap;
-        //     return false;
-        // }
-
         url = url::url_decode(url);
         req->url_ = url;
 
@@ -488,7 +483,8 @@ namespace net::http
                 const std::string *ctype = get_header(http_header_key::content_type);
                 is_good_ = true;
                 if (ctype) {
-                    is_good_ = parse_content_type(ctype->c_str(), ctype->c_str() + ctype->size(), content_type_, content_type_extra_).first;
+                    is_good_ = parse_content_type(ctype->c_str(), ctype->c_str() + ctype->size(), content_type_text_, content_type_extra_).first;
+                    content_type_ = find_content_type(content_type_text_);
                 }
                 return true;
             } else {
@@ -538,7 +534,7 @@ namespace net::http
         }
     }
 
-    std::pair<bool, uint32_t> HttpRequest::parse_content_type(const char *begin, const char *end, content_type &ctype, std::unordered_map<std::string, std::string> &extra)
+    std::pair<bool, uint32_t> HttpRequest::parse_content_type(const char *begin, const char *end, std::string &ctype, std::unordered_map<std::string, std::string> &extra)
     {
         const char *p = begin;
         if (!begin) {
@@ -549,7 +545,6 @@ namespace net::http
             return {false, 0};;
         }
 
-        std::string type;
         for (; begin != end; ++begin) {
             char ch = *begin;
             if (ch == ' ') continue;
@@ -564,12 +559,7 @@ namespace net::http
                 break;
             }
 
-            type.push_back(std::tolower(ch));
-        }
-
-        ctype = find_content_type(type);
-        if (content_type_ == content_type::not_support) {
-            return {false, 0};
+            ctype.push_back(std::tolower(ch));
         }
 
         if (begin != end) {

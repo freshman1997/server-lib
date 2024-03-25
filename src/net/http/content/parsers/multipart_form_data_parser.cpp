@@ -1,10 +1,3 @@
-#include <cctype>
-#include <fstream>
-#include <ios>
-#include <tuple>
-#include <ctime>
-#include <cstdlib>
-
 #include "net/http/content/parsers/multipart_form_data_parser.h"
 #include "base/utils/base64.h"
 #include "net/http/content/types.h"
@@ -157,16 +150,19 @@ namespace net::http
             if (fit == dis.second.second.end()) {
                 const auto &res = parse_part_value(begin, end);
                 begin += res.first;
-                fd->properties[pit->second] = {false, res.second};
+                fd->properties[pit->second] = FormDataStringItem(res.second);
             } else {
                 const auto &res = parse_part_file_content(req, begin, end, fit->second);
-                if (!std::get<0>(res)) {
+                if (std::get<0>(res).empty()) {
                     delete content;
                     return false;
                 }
 
-                fd->properties[fit->second] = {true, std::get<2>(res) };
-                begin += std::get<1>(res);
+                fd->properties[fit->second] = FormDataStreamItem(fit->second, 
+                    {std::get<0>(res), std::get<1>(res)}, 
+                    begin, begin + std::get<2>(res));
+
+                begin += std::get<2>(res);
             }
 
             begin += helper::skip_new_line(begin);
@@ -257,12 +253,6 @@ namespace net::http
         return {p - begin, val};
     }
 
-    std::pair<std::string, std::string> parse_file_content_type(const char *begin, const char *end)
-    {
-        const std::string &key = helper::read_identifier(begin, end);
-        return {key, helper::read_identifier(begin + key.size() + 1, end)};
-    }
-
     static std::string get_random_filename(const std::string &origin)
     {
         std::string ext;
@@ -276,7 +266,8 @@ namespace net::http
         return std::to_string(now) + b64.substr(0, b64.size() - 2) + ext;
     }
 
-    std::tuple<bool, uint32_t, std::string> MultipartFormDataParser::parse_part_file_content(HttpRequest *req, const char *begin, const char *end, const std::string &originName)
+    std::tuple<std::string, std::unordered_map<std::string, std::string>, uint32_t> MultipartFormDataParser::parse_part_file_content(
+        HttpRequest *req, const char *begin, const char *end, const std::string &originName)
     {
         const char *p = begin;
         content_type ctype;
@@ -288,7 +279,7 @@ namespace net::http
         }
 
         if (ctypeName != http_header_key::content_type) {
-            return {false, 0, {}};
+            return {{}, {}, 0};
         }
 
         ++begin;
@@ -296,19 +287,14 @@ namespace net::http
             ++begin;
         }
 
-        const auto &res = req->parse_content_type(begin, end, ctype, extra);
-        if (!res.first || ctype == content_type::not_support) {
-            return {false, 0, {}};
+        std::string ctypeText;
+        const auto &res = req->parse_content_type(begin, end, ctypeText, extra);
+        if (!res.first || ctypeText.empty()){
+            return {{}, {}, 0};
         }
 
         begin += res.second;
         begin += helper::skip_new_line(begin);
-
-        const std::string &filename = get_random_filename(originName);
-        std::fstream file(filename.c_str(), std::ios_base::out);
-        if (!file.good()) {
-            return {false, 0, {}};
-        }
 
         const auto &contentExtra = req->get_content_type_extra();
         auto it = contentExtra.find("boundary");
@@ -318,13 +304,9 @@ namespace net::http
                 break;
             }
 
-            file.write(begin, 1);
             ++begin;
         }
 
-        file.flush();
-        file.close();
-
-        return {true, begin - p, filename};
+        return {ctypeText, extra, begin - p};
     }
 }

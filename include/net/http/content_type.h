@@ -22,9 +22,7 @@ namespace net::http
         MAX
     };
 
-    extern const char * content_type_names[(size_t)content_type::MAX];
-
-    extern content_type find_content_type(const std::string &name);
+    content_type find_content_type(const std::string &name);
 }
 
 #endif

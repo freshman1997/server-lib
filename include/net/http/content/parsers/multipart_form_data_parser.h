@@ -31,7 +31,7 @@ namespace net::http
     public:
         ContentDisposition parse_content_disposition(const char *begin, const char *end);
         std::pair<uint32_t, std::string> parse_part_value(const char *begin, const char *end);
-        std::tuple<bool, uint32_t, std::string> parse_part_file_content(HttpRequest *req, const char *begin, const char *end, const std::string &originName);
+        std::tuple<std::string, std::unordered_map<std::string, std::string>, uint32_t> parse_part_file_content(HttpRequest *req, const char *begin, const char *end, const std::string &originName);
     };
 }
 

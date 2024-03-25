@@ -3,7 +3,7 @@
 
 namespace net::http
 {
-    const char * content_type_names[] = 
+    static const char * content_type_names[] = 
     {
         "text/plain",
         "text/html",

@@ -203,7 +203,7 @@ namespace net::http
 
         void reset();
 
-        std::pair<bool, uint32_t> parse_content_type(const char *begin, const char *end, content_type &type, std::unordered_map<std::string, std::string> &extra);
+        std::pair<bool, uint32_t> parse_content_type(const char *begin, const char *end, std::string &type, std::unordered_map<std::string, std::string> &extra);
 
         bool parse_content();
 
@@ -222,6 +222,7 @@ namespace net::http
         std::vector<std::string> url_domain_;
         std::unordered_map<std::string, std::string> request_params_;
         std::unordered_map<std::string, std::string> headers_;
+        std::string content_type_text_;
         std::unordered_map<std::string, std::string> content_type_extra_;
         const Content *body_content_;
     };
