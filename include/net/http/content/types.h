@@ -31,14 +31,23 @@ namespace net::http
         nlohmann::json jval;
     };
 
+    enum class FormDataType
+    {
+        string_,
+        file_,
+    };
+
     struct FormDataItem
     {
+        FormDataType item_type_;
     };
 
     struct FormDataStringItem : FormDataItem
     {
         std::string value_;
-        FormDataStringItem(const std::string &val) : value_(std::move(val)) {}
+        FormDataStringItem(const std::string &val) : value_(std::move(val)) {
+            item_type_ = FormDataType::string_;
+        }
     };
 
     struct FormDataStreamItem : FormDataItem
@@ -51,7 +60,10 @@ namespace net::http
         FormDataStreamItem(const std::string &name, 
             const std::pair<std::string, std::unordered_map<std::string, std::string>> &type, 
             const char *begin, const char *end) 
-            : originName_(std::move(name)), content_type_(std::move(type)), begin_(begin), end_(end) {}
+            : originName_(std::move(name)), content_type_(std::move(type)), begin_(begin), end_(end) {
+
+            item_type_ = FormDataType::file_;
+        }
 
         std::size_t get_content_length()
         {

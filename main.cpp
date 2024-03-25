@@ -74,7 +74,7 @@ class VideoTest
 public:
     VideoTest()
     {
-        file_.open("/home/yuan/Desktop/cz.mp4");
+        file_.open("/home/yuan/Desktop/cz");
         if (!file_.good()) {
             std::cout << "open file fail!\n";
         }

@@ -422,6 +422,7 @@ namespace net::http
     {
         if (body_content_) {
             delete body_content_;
+            body_content_ = nullptr;
         }
     }
 

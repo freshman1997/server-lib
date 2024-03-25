@@ -158,7 +158,7 @@ namespace net::http
                     return false;
                 }
 
-                fd->properties[fit->second] = FormDataStreamItem(fit->second, 
+                fd->properties[pit->second] = FormDataStreamItem(fit->second, 
                     {std::get<0>(res), std::get<1>(res)}, 
                     begin, begin + std::get<2>(res));
 
