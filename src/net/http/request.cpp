@@ -375,7 +375,7 @@ namespace net::http
             return 0; 
         }
 
-        if (length > client_max_content_length) {
+        if (length > config::client_max_content_length) {
             return -1;
         }
 

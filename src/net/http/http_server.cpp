@@ -1,3 +1,4 @@
+#include <functional>
 #include <iostream>
 #include <unistd.h>
 
@@ -16,6 +17,9 @@
 #include "net/http/request.h"
 #include "net/http/session.h"
 #include "net/http/response_code.h"
+#include "net/http/ops/config_manager.h"
+#include "net/http/ops/option.h"
+#include "singleton/singleton.h"
 
 namespace net::http
 {
@@ -68,7 +72,6 @@ namespace net::http
             auto handler = dispatcher_.get_handler(context->get_request()->get_raw_url());
             if (handler) {
                 handler(context->get_request(), context->get_response());
-                context->reset();
             } else {
                 // 404
                 context->process_error(ResponseCode::not_found);
@@ -90,6 +93,10 @@ namespace net::http
 
     bool HttpServer::init(int port)
     {
+        if (singleton::singleton<HttpConfigManager>().good()) {
+            std::cout << singleton::singleton<HttpConfigManager>().get_string_property("server_name") << " starting...\n";
+        }
+
         net::Socket *sock = new net::Socket("", port);
         if (!sock->valid()) {
             std::cout << "create socket fail!!\n";
@@ -108,6 +115,8 @@ namespace net::http
             std::cout << " listen failed " << std::endl;
             return false;
         }
+
+        load_static_paths();
 
         return true;
     }
@@ -149,5 +158,31 @@ namespace net::http
         } else {
             std::cerr << "internal error found!!!\n";
         }
+    }
+
+    void HttpServer::load_static_paths()
+    {
+        // 必须要支持 /static/* 这种形式
+        auto &cfgManager = singleton::singleton<HttpConfigManager>();
+        const std::vector<nlohmann::json> &paths = cfgManager.get_type_array_properties<nlohmann::json>(config::static_file_paths);
+        for (const auto &path : paths) {
+            const std::string &root = path[config::static_file_paths_root];
+            const std::string &rootPath = path[config::static_file_paths_path];
+            if (root.empty() || rootPath.empty()) {
+                continue;
+            }
+
+            on(root, std::bind(&HttpServer::serve_static, this, std::placeholders::_1, std::placeholders::_2));
+        }
+
+        const std::vector<std::string> &types = cfgManager.get_type_array_properties<std::string>(config::playable_types);
+        for (const auto &type : types) {
+            play_types_.insert(type);
+        }
+    }
+
+    void HttpServer::serve_static(HttpRequest *req, HttpResponse *resp)
+    {
+
     }
 }

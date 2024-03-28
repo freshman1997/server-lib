@@ -15,6 +15,7 @@ namespace net::http
     {
     public:
         HttpResponse(HttpRequestContext *context);
+        ~HttpResponse();
 
     public:
         void set_response_code(ResponseCode code)

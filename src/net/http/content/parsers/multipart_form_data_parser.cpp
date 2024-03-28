@@ -4,6 +4,9 @@
 #include "net/http/content_type.h"
 #include "net/http/request.h"
 #include "net/http/header_key.h"
+#include "net/http/ops/option.h"
+#include <cstdlib>
+#include <fstream>
 
 namespace net::http 
 {
@@ -158,9 +161,15 @@ namespace net::http
                     return false;
                 }
 
-                fd->properties[pit->second] = FormDataStreamItem(fit->second, 
-                    {std::get<0>(res), std::get<1>(res)}, 
+                auto &extra = std::get<1>(res);
+                auto tIt = extra.find("____tmp_file_name");
+                if (tIt == extra.end()) {
+                    fd->properties[pit->second] = FormDataStreamItem(fit->second, 
+                    {std::get<0>(res), extra }, 
                     begin, begin + std::get<2>(res));
+                } else {
+                    fd->properties[pit->second] = FormDataFileItem(fit->second, tIt->second, extra);
+                }
 
                 begin += std::get<2>(res);
             }
@@ -296,6 +305,16 @@ namespace net::http
         begin += res.second;
         begin += helper::skip_new_line(begin);
 
+        std::fstream *file = nullptr;
+        if (config::form_data_upload_save) {
+            const std::string &tmpName = get_random_filename(originName);
+            file = new std::fstream(tmpName.c_str(), std::ios_base::out);
+            if (!file->good()) {
+                return {{}, {}, 0};
+            }
+            extra["____tmp_file_name"] = tmpName;
+        }
+
         const auto &contentExtra = req->get_content_type_extra();
         auto it = contentExtra.find("boundary");
         const std::string &boundaryStart = "--" + it->second;
@@ -304,7 +323,17 @@ namespace net::http
                 break;
             }
 
+            if (file) {
+                file->write(begin, 1);
+            }
+
             ++begin;
+        }
+
+        if (file) {
+            file->flush();
+            file->close();
+            delete file;
         }
 
         return {ctypeText, extra, begin - p};

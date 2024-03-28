@@ -10,7 +10,11 @@ namespace net::http
 {
     HttpResponse::HttpResponse(HttpRequestContext *context) : context_(context), buffer_(singleton::singleton<BufferedPool>().allocate())
     {
-        
+    }
+
+    HttpResponse::~HttpResponse()
+    {
+        singleton::singleton<BufferedPool>().free(buffer_);
     }
 
     void HttpResponse::append_body(const char *data)

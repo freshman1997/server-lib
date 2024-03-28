@@ -74,14 +74,15 @@ class VideoTest
 public:
     VideoTest()
     {
+        content_size_ = -1;
         file_.open("/home/yuan/Desktop/cz");
         if (!file_.good()) {
             std::cout << "open file fail!\n";
+            return;
         }
 
         file_.seekg(0, std::ios_base::end);
         length_ = file_.tellg();
-        content_size_ = -1;
         if (length_ == 0) {
             file_.close();
             std::cout << "open file fail1!\n";
@@ -94,7 +95,7 @@ public:
     void on_request(net::http::HttpRequest *req, net::http::HttpResponse *resp)
     {
         if (content_size_ < 0) {
-            resp->set_response_code(net::http::ResponseCode::internal_server_error);
+            resp->get_context()->process_error();
             return;
         }
 
@@ -104,7 +105,7 @@ public:
         if (range) {
             size_t pos = range->find_first_of("=");
             if (std::string::npos == pos) {
-                resp->set_response_code(net::http::ResponseCode::internal_server_error);
+                resp->get_context()->process_error();
                 return;
             }
 
@@ -190,6 +191,11 @@ public:
 
         resp->add_header("Content-length", std::to_string(sz));
         resp->send();
+    }
+
+    void serve_static(net::http::HttpRequest *req, net::http::HttpResponse *resp)
+    {
+
     }
 
 private:

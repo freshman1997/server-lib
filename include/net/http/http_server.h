@@ -1,5 +1,7 @@
 #ifndef __HTTP_SERVER_H__
 #define __HTTP_SERVER_H__
+#include <set>
+#include <string>
 #include <unordered_map>
 
 #include "net/base/handler/connection_handler.h"
@@ -60,6 +62,10 @@ namespace net::http
     private:
         void free_session(Connection *conn);
 
+        void load_static_paths();
+
+        void serve_static(HttpRequest *req, HttpResponse *resp);
+
     private:
         bool quit_;
         State state_;
@@ -67,6 +73,8 @@ namespace net::http
         EventLoop *event_loop_;
         std::unordered_map<uint64_t, HttpSession *> sessions_;
         HttpRequestDispatcher dispatcher_;
+        std::unordered_map<std::string, std::string> static_paths_;
+        std::set<std::string> play_types_;
     };
 }
 

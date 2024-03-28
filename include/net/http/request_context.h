@@ -19,8 +19,6 @@ namespace net::http
         HttpRequestContext(Connection *conn_);
         ~HttpRequestContext();
 
-        void reset();
-
         HttpRequest * get_request()
         {
             return request_;
@@ -62,6 +60,10 @@ namespace net::http
         void process_error(ResponseCode errorCode = ResponseCode::internal_server_error);
 
     private:
+        void reset();
+        
+    private:
+        bool has_parsed_;
         Connection *conn_;
         HttpRequest *request_;
         HttpResponse *response_;

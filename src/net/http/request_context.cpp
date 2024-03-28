@@ -7,7 +7,7 @@
 
 namespace net::http 
 {
-    HttpRequestContext::HttpRequestContext(Connection *conn) : conn_(conn)
+    HttpRequestContext::HttpRequestContext(Connection *conn) : conn_(conn), has_parsed_(false)
     {
         request_ = new HttpRequest(this);
         response_ = new HttpResponse(this);
@@ -31,7 +31,12 @@ namespace net::http
             return false;
         }
 
-        return request_->parse(*conn_->get_input_buff());
+        if (!has_parsed_) {
+            reset();
+        }
+
+        has_parsed_ = true;
+        return  request_->parse(*conn_->get_input_buff());
     }
 
     bool HttpRequestContext::is_completed()
@@ -40,7 +45,12 @@ namespace net::http
             return false;
         }
 
-        return request_->is_ok();
+        if (request_->is_ok()) {
+            has_parsed_ = false;
+            return true;
+        }
+        
+        return false;
     }
 
     bool HttpRequestContext::has_error()
@@ -93,5 +103,6 @@ namespace net::http
         auto buff = conn_->get_output_buff();
         buff->write_string(response);
         conn_->send();
+        conn_->close();
     }
 }
