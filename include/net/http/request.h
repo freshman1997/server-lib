@@ -134,7 +134,7 @@ namespace net::http
 
         bool parse(Buffer &buff);
 
-        const std::unordered_map<std::string, std::string> & get_request_params() const
+        std::unordered_map<std::string, std::string> & get_request_params()
         {
             return request_params_;
         }

@@ -2,6 +2,7 @@
 #include "net/http/content/parsers/json_content_parser.h"
 #include "net/http/content/parsers/multipart_form_data_parser.h"
 #include "net/http/content/parsers/text_content_parser.h"
+#include "net/http/content/parsers/url_encoded_content_parser.h"
 #include "net/http/content_type.h"
 #include "net/http/request.h"
 #include "net/http/content/content_parser.h"
@@ -18,6 +19,7 @@ namespace net::http
 
         parsers[content_type::multpart_form_data] = new MultipartFormDataParser;
         parsers[content_type::application_json] = new JsonContentParser;
+        parsers[content_type::x_www_form_urlencoded] = new UrlEncodedContentParser;
     }
 
     ContentParserFactory::~ContentParserFactory()

@@ -318,19 +318,16 @@ namespace net::http
         const auto &contentExtra = req->get_content_type_extra();
         auto it = contentExtra.find("boundary");
         const std::string &boundaryStart = "--" + it->second;
+        const char *from = begin;
         while (begin != end) {
             if (helper::str_cmp(begin, begin + boundaryStart.size(), boundaryStart.c_str())) {
                 break;
             }
-
-            if (file) {
-                file->write(begin, 1);
-            }
-
             ++begin;
         }
 
         if (file) {
+            file->write(from, (begin - from));
             file->flush();
             file->close();
             delete file;

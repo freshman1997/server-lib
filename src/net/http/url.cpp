@@ -29,28 +29,33 @@ namespace url
 
     std::string url_decode(const std::string &str)
     {
-        std::ostringstream unescaped;
+        return url_decode(str.c_str(), str.c_str() + str.size() - 1);
+    }
 
-        for (std::string::size_type i = 0; i < str.length(); ++i) {
-            if (str[i] == '%') {
+    std::string url_decode(const char *begin, const char *end)
+    {
+        std::ostringstream unescaped;
+        for (const char *p = begin; p <= end; ++p) {
+            char ch = *p;
+            if (ch == '%') {
                 // 解码 %xx 形式的字符
-                std::string hex = str.substr(i + 1, 2);
+                std::string hex(p + 1, p + 2);
                 char decoded = std::stoi(hex, nullptr, 16);
                 unescaped << decoded;
-                i += 2;
+                p += 2;
             }
-            else if (str[i] == '+') {
+            else if (ch == '+') {
                 // 解码空格
                 unescaped << ' ';
             }
             else {
                 // 保留字符不解码
-                unescaped << str[i];
+                unescaped << ch;
             }
         }
-
         return unescaped.str();
     }
+
 
     bool decode_url_domain(const std::string &url, std::vector<std::string> &urlDomain)
     {
@@ -87,11 +92,13 @@ namespace url
     {
         size_t pos = url.find_first_of("?");
         if (pos == std::string::npos) {
-            return true;
+            pos = 0;
+        } else {
+            pos += 1;
         }
 
         size_t sz = url.size();
-        size_t i = pos + 1;
+        size_t i = pos;
         for (; i < sz; ++i) {
             std::string key;
             size_t j = i;

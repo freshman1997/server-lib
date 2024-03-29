@@ -61,6 +61,7 @@ namespace net::http
         FormDataFileItem(const std::string &origin, const std::string &tmpName, const std::unordered_map<std::string, std::string>&ctype) 
             : origin_name_(std::move(origin)), tmp_file_name_(std::move(tmpName)),content_type_(std::move(ctype))  {
             item_type_ = FormDataType::file_;
+            content_type_.erase("____tmp_file_name");
         }
 
         ~FormDataFileItem() {
