@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <iostream>
 #include <mutex>
-#include <thread>
 #include <time.h>
 #include <unistd.h>
 

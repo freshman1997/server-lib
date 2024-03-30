@@ -13,6 +13,7 @@
 
 #include "net/base/acceptor/acceptor.h"
 #include "net/base/acceptor/tcp_acceptor.h"
+#include "net/bit_torrent/structure/bencoding.h"
 #include "net/http/header_key.h"
 #include "net/http/request_context.h"
 #include "net/http/http_server.h"
@@ -124,7 +125,7 @@ public:
         resp->add_header("Content-Range", bytes);
 
         size_t r = content_size_ + offset > length_ ? length_ - offset : content_size_;
-        std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_ << std::endl;
+        //std::cout << "offset: " << offset << ", length: " << r << ", size: " << length_ << std::endl;
 
         resp->add_header("Content-length", std::to_string(r));
 
@@ -264,13 +265,16 @@ int main()
 {
     srand(time(nullptr));
 
+    /*auto data = net::bit_torrent::BencodingDataConverter::parse("l4:spam4:eggse");
+    if (data) {
+        std:: cout << data->to_string() << std::endl;
+    } else {
+        std:: cout << "parse failed!" << std::endl;
+    }*/
+
     test_http_server();
     //std::cout << base::util::base64_encode("hello:hello1") << std::endl;
     //std::cout << base::util::base64_decode("aGVsbG86aGVsbG8x") << std::endl;
 
-    net::http::MultipartFormDataParser text_content_parser;
-
-    const char *text = "Content-Disposition: form-data; name=\"password\"; filename=\"a.txt\"\nContent-Type: text/plain";
-    const auto &res = text_content_parser.parse_content_disposition(text, text + 90);
     return 0;
 }

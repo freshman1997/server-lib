@@ -68,9 +68,7 @@ namespace net
         if (ret > 0) {
             if (ret >= output_buffer_.get_current_buffer()->readable_bytes()) {
                 output_buffer_.get_current_buffer()->reset();
-                if (output_buffer_.get_size() > 1) {
-                    output_buffer_.free_current_buffer();
-                } 
+                output_buffer_.free_current_buffer(); 
             } else {
                 output_buffer_.get_current_buffer()->add_read_index(ret);
                 std::cout << "still remains data: " << output_buffer_.get_current_buffer()->readable_bytes() << " bytes.\n";

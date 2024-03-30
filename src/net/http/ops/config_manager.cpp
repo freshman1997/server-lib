@@ -82,7 +82,8 @@ namespace net::http
     
     bool HttpConfigManager::reload_config()
     {
-        return load_config();
+        is_good_ = load_config();
+        return is_good_;
     }
 
     bool HttpConfigManager::load_config()

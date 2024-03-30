@@ -42,6 +42,7 @@ void BufferedPool::free(Buffer *buf)
         return;
     }
 
+    buf->resize(8192);
     free_list_.push_front(buf);
 }
 
@@ -49,4 +50,13 @@ void BufferedPool::check_size()
 {
     std::size_t sz = get_size();
 
+}
+
+std::size_t BufferedPool::get_buffer_size()
+{
+    std::size_t sz = 0;
+    for (const auto &item : using_list_) {
+        sz += item->get_buff_size();
+    }
+    return sz;
 }

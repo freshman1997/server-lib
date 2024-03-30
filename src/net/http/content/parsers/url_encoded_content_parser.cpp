@@ -13,7 +13,7 @@ namespace net::http
     bool UrlEncodedContentParser::parse(HttpRequest *req)
     {
         const std::string &data = url::url_decode(req->body_begin(), req->body_end());
-        url::decode_parameters(data, req->get_request_params());
+        url::decode_parameters(data, req->get_request_params(), true);
         return true;
     }
 }

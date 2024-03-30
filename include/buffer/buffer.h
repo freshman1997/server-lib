@@ -225,7 +225,8 @@ public:
 
     void resize(size_t size = 1024)
     {
-        buffs.resize(buffs.size() + size);
+        std::vector<char> newBuffs(size);
+        buffs.swap(newBuffs);
     }
 
     size_t get_buff_size() const

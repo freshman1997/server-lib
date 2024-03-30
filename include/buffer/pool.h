@@ -13,6 +13,8 @@ public:
         return using_list_.size() + free_list_.size();
     }
 
+    std::size_t get_buffer_size();
+
     Buffer * allocate(std::size_t sz = 8192);
 
     void free(Buffer *buf);

@@ -88,10 +88,14 @@ namespace url
         return true;
     }
 
-    bool decode_parameters(const std::string &url, std::unordered_map<std::string, std::string> &headers)
+    bool decode_parameters(const std::string &url, std::unordered_map<std::string, std::string> &headers, bool fromBody)
     {
         size_t pos = url.find_first_of("?");
         if (pos == std::string::npos) {
+            if (!fromBody) {
+                return true;
+            }
+            
             pos = 0;
         } else {
             pos += 1;
