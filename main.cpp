@@ -11,6 +11,7 @@
 #include <ctime>
 #include <cstdlib>
 
+#include "buffer/buffer.h"
 #include "net/base/acceptor/acceptor.h"
 #include "net/base/acceptor/tcp_acceptor.h"
 #include "net/bit_torrent/structure/bencoding.h"
@@ -265,12 +266,22 @@ int main()
 {
     srand(time(nullptr));
 
-    /*auto data = net::bit_torrent::BencodingDataConverter::parse("l4:spam4:eggse");
-    if (data) {
-        std:: cout << data->to_string() << std::endl;
-    } else {
-        std:: cout << "parse failed!" << std::endl;
-    }*/
+    std::fstream file("/home/yuan/Desktop/1.torrent", std::ios_base::in);
+    if (file.good()) {
+        file.seekg(0, std::ios_base::end);
+        std::size_t len = file.tellg();
+        file.seekg(0, std::ios_base::beg);
+        Buffer buf(len);
+        file.read(buf.buffer_begin(), len);
+        buf.fill(len);
+
+        const auto &data = net::bit_torrent::BencodingDataConverter::parse(buf.peek(), buf.peek() + buf.readable_bytes());
+        if (!data) {
+            std:: cout << data->to_string() << std::endl;
+        } else {
+            std:: cout << "parse failed!" << std::endl;
+        }
+    }
 
     test_http_server();
     //std::cout << base::util::base64_encode("hello:hello1") << std::endl;

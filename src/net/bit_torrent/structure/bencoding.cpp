@@ -50,6 +50,24 @@ namespace net::bit_torrent
         return do_parse(begin, end).second;
     }
 
+    std::vector<BaseData *> BencodingDataConverter::parse_datas(const char *begin, const char *end)
+    {
+        std::vector<BaseData *> res;
+
+        while (true) {
+            const auto &block = do_parse(begin, end);
+            if (block.first < 0) {
+                break;
+            }
+
+            res.push_back(block.second);
+            begin += block.first;
+        }
+
+        return res;
+    }
+
+
     static std::pair<int, BaseData *> parse_integer(const char *begin, const char *end)
     {
         std::string str;
@@ -66,7 +84,7 @@ namespace net::bit_torrent
             return {-1, nullptr};
         }
 
-        return {p - begin + 1, new IntegerData(std::atoi(str.c_str()))};
+        return {p - begin + 2, new IntegerData(std::atoi(str.c_str()))};
     }
 
     static std::pair<int, BaseData *> parse_string(const char *begin, const char *end)
@@ -88,15 +106,11 @@ namespace net::bit_torrent
 
         std::size_t len = std::atoi(str.c_str());
         str.clear();
-        const char *from = p;
-        
-        for (int i = 0; i < len && p <= end; ++i, ++p);
-
-        if (p - from < len) {
+        if (end - p < len) {
             return {-1, nullptr};
         }
 
-        return {p - begin, new StringData(from, p)};
+        return {p - begin + len, new StringData(p, p + len)};
     }
 
     static std::pair<int, BaseData *> parse_list(const char *begin, const char *end)
@@ -119,7 +133,7 @@ namespace net::bit_torrent
             list->push(res.second);
         }
 
-        return {p - begin, list};
+        return {p - begin + 2, list};
     }
 
     static std::pair<int, BaseData *> parse_dictionary(const char *begin, const char *end)
@@ -154,22 +168,22 @@ namespace net::bit_torrent
             delete key.second;
         }
 
-        return {p - begin, dict};
+        return {p - begin + 2, dict};
     }
 
     static std::pair<int, BaseData *> do_parse(const char *begin, const char *end)
     {
-        const char *p = begin;
-        char ch = *p;
         std::pair<int, BaseData *> res{-1, nullptr};
+
+        char ch = *begin;
         if (std::isdigit(ch)) {
-            res = parse_string(p, end);
+            res = parse_string(begin, end);
         } else if (ch == 'i') {
-            res = parse_integer(p + 1, end);
+            res = parse_integer(begin + 1, end);
         } else if (ch == 'l') {
-            res = parse_list(p + 1, end);
+            res = parse_list(begin + 1, end);
         } else if (ch == 'd') {
-            res = parse_dictionary(p + 1, end);
+            res = parse_dictionary(begin + 1, end);
         }
 
         return res;

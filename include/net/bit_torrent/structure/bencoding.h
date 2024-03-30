@@ -163,8 +163,12 @@ namespace net::bit_torrent
     class BencodingDataConverter
     {
     public:
+        // 单个文件
         static BaseData * parse(const std::string &raw);
         static BaseData * parse(const char *begin, const char *end);
+
+        // 多个文件
+        static std::vector<BaseData *> parse_datas(const char *begin, const char *end);
     };
 }
 
