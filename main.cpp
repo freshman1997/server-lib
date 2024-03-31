@@ -276,7 +276,7 @@ int main()
         buf.fill(len);
 
         const auto &data = net::bit_torrent::BencodingDataConverter::parse(buf.peek(), buf.peek() + buf.readable_bytes());
-        if (!data) {
+        if (data) {
             std:: cout << data->to_string() << std::endl;
         } else {
             std:: cout << "parse failed!" << std::endl;

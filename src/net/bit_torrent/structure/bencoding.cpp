@@ -1,7 +1,5 @@
-#include "net/bit_torrent/structure/bencoding.h"
-#include <cctype>
 #include <sstream>
-#include <utility>
+#include "net/bit_torrent/structure/bencoding.h"
 
 namespace net::bit_torrent 
 {

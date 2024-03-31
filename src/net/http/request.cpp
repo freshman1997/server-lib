@@ -415,6 +415,7 @@ namespace net::http
     HttpRequest::HttpRequest(HttpRequestContext *context) : context_(context), is_good_(false)
     {
         parser_.set_req(this);
+        body_content_ = nullptr;
         reset();
     }
 
@@ -422,7 +423,6 @@ namespace net::http
     {
         if (body_content_) {
             delete body_content_;
-            body_content_ = nullptr;
         }
     }
 
@@ -511,8 +511,9 @@ namespace net::http
 
         if (body_content_) {
             delete body_content_;
-            body_content_ = nullptr;
         }
+
+        body_content_ = nullptr;
 
         content_type_extra_.clear();
         error_code_ = ResponseCode::internal_server_error;
