@@ -42,7 +42,16 @@ namespace net
 
     bool Socket::connect()
     {
-        return socket::connect(fd_, *addr) == 0;
+        int res = socket::connect(fd_, *addr);
+        if (res < 0) {
+            if (errno != EINPROGRESS) {
+                return false;
+            }
+
+            return true;
+        }
+
+        return res == 0;
     }
 
     void Socket::set_no_deylay(bool on)

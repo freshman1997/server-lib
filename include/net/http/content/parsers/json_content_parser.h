@@ -11,7 +11,7 @@ namespace net::http
         virtual bool can_parse(const content_type contentType);
 
         // 解析
-        virtual bool parse(HttpRequest *req);
+        virtual bool parse(HttpPacket *packet);
     };
 }
 

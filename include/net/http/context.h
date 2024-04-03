@@ -1,7 +1,7 @@
 #ifndef __HTTP_REQUEST_CONTEXT_H__
 #define __HTTP_REQUEST_CONTEXT_H__
-
 #include "net/http/response_code.h"
+
 namespace net 
 {
     class Connection;
@@ -12,12 +12,19 @@ namespace net::http
     class HttpRequest;
     class HttpResponse;
     class HttpSession;
+    class HttpPacket;
 
-    class HttpRequestContext
+    enum class Mode
+    {
+        server,
+        client
+    };
+
+    class HttpSessionContext
     {
     public:
-        HttpRequestContext(Connection *conn_);
-        ~HttpRequestContext();
+        HttpSessionContext(net::Connection *conn_);
+        ~HttpSessionContext();
 
         HttpRequest * get_request()
         {
@@ -29,7 +36,7 @@ namespace net::http
             return response_;
         }
 
-        Connection * get_connection()
+        net::Connection * get_connection()
         {
             return conn_;
         }
@@ -53,16 +60,24 @@ namespace net::http
 
         bool has_error();
 
-        ResponseCode get_error_code() const;
+        ResponseCode get_error_code();
 
         bool try_parse_request_content();
 
         void process_error(ResponseCode errorCode = ResponseCode::internal_server_error);
 
+        void set_mode(Mode mode)
+        {
+            mode_ = mode;
+        }
+        
+        inline HttpPacket * get_packet();
+        
     private:
         void reset();
         
     private:
+        Mode mode_;
         bool has_parsed_;
         Connection *conn_;
         HttpRequest *request_;

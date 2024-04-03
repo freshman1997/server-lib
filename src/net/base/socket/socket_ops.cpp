@@ -41,7 +41,7 @@ namespace net::socket
     int connect(int fd, const InetAddress &addr)
     {
         struct sockaddr_in saddr =  addr.to_ipv4_address();
-        return ::connect(fd, (const struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
+        return ::connect(fd, (const struct sockaddr *)&saddr, sizeof(saddr));
     }
 
     void set_reuse(int fd, bool on)

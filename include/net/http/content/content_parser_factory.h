@@ -5,7 +5,7 @@
 
 namespace net::http 
 {
-    class HttpRequest;
+    class HttpPacket;
     class ContentParser;
 
     class ContentParserFactory
@@ -14,7 +14,7 @@ namespace net::http
         ContentParserFactory();
         ~ContentParserFactory();
 
-        bool parse_content(HttpRequest *req);
+        bool parse_content(HttpPacket *packet);
 
     private:
         std::unordered_map<content_type, ContentParser *> parsers;

@@ -16,7 +16,8 @@
 #include "net/base/acceptor/tcp_acceptor.h"
 #include "net/bit_torrent/structure/bencoding.h"
 #include "net/http/header_key.h"
-#include "net/http/request_context.h"
+#include "net/http/context.h"
+#include "net/http/http_client.h"
 #include "net/http/http_server.h"
 #include "net/http/request.h"
 #include "net/http/response.h"
@@ -77,7 +78,7 @@ public:
     VideoTest()
     {
         content_size_ = -1;
-        file_.open("/home/yuan/Desktop/cz");
+        file_.open("/home/yuan/Desktop/cz.mp4");
         if (!file_.good()) {
             std::cout << "open file fail!\n";
             return;
@@ -262,8 +263,29 @@ void test_http_server()
     server.serve();
 }
 
+void test_http_client()
+{
+    net::http::HttpClient *client = new net::http::HttpClient;
+
+    client->connect({"183.2.172.185", 80}, 
+    [](net::http::HttpRequest *req) {
+        req->add_header("Connection", "close");
+        req->send();
+    },
+    [](net::http::HttpResponse *resp){
+        if (resp->good()) {
+            const char *begin = resp->body_begin();
+            std::string data(begin, resp->body_end());
+            std::cout << data << std::endl;
+            resp->get_context()->get_connection()->close();
+        }
+    });
+}
+
 int main()
 {
+    test_http_client();
+    return 0;
     srand(time(nullptr));
 
     std::fstream file("/home/yuan/Desktop/1.torrent", std::ios_base::in);

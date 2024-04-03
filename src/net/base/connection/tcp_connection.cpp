@@ -129,7 +129,6 @@ namespace net
                 closed_ = true;
             } else if (bytes == -1) {
                 if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
-                    std::cout << "on error!!\n";
                     connectionHandler_->on_error(this);
                     closed_ = true;
                 }
@@ -148,6 +147,7 @@ namespace net
 
     void TcpConnection::on_write_event()
     {
+        connectionHandler_->on_write(this);
         if (output_buffer_.get_current_buffer()->readable_bytes() > 0) {
             send();
         }
@@ -161,8 +161,10 @@ namespace net
 
     void TcpConnection::do_close()
     {
-        connectionHandler_->on_close(this);
+        channel_.disable_all();
+        eventHandler_->update_event(&channel_);
         channel_.set_handler(nullptr);
+        connectionHandler_->on_close(this);
         delete this;
     }
 }

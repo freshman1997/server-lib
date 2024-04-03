@@ -3,19 +3,29 @@
 #include <string>
 #include <unordered_map>
 
-#include "buffer/buffer.h"
-#include "net/http/request.h"
+#include "net/http/packet.h"
 #include "response_code.h"
 
 namespace net::http
 {
-    class HttpRequestContext;
+    class HttpSessionContext;
+    class HttpResponseParser;
     
-    class HttpResponse
+    class HttpResponse : public HttpPacket
     {
     public:
-        HttpResponse(HttpRequestContext *context);
+        HttpResponse(HttpSessionContext *context);
         ~HttpResponse();
+
+    public:
+        virtual void reset();
+
+        virtual bool pack_header();
+
+        virtual PacketType get_packet_type()
+        {
+            return PacketType::response;
+        }
 
     public:
         void set_response_code(ResponseCode code)
@@ -23,47 +33,16 @@ namespace net::http
             respCode_ = code;
         }
 
-        void set_response_version(HttpVersion version)
-        {
-            version_ = version;
-        }
-
-        void add_header(const std::string &k, const std::string &v)
-        {
-            if (k.empty()) {
-                return;
-            }
-
-            headers_[k] = v;
-        }
-
         void append_body(const char *data);
         
         void append_body(const std::string &data);
 
-        Buffer * get_buff()
-        {
-            return buffer_;
-        }
-
-        HttpRequestContext * get_context()
-        {
-            return context_;
-        }
-
-        void reset();
-
-        void send();
-        
     private:
         bool pack_response();
 
     private:
         ResponseCode respCode_ = ResponseCode::bad_request;
-        HttpVersion version_ = HttpVersion::v_1_1;
-        std::unordered_map<std::string, std::string> headers_;
-        Buffer * buffer_;
-        HttpRequestContext *context_;
     };
 }
+
 #endif

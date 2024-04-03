@@ -6,7 +6,7 @@
 
 #include "net/base/handler/connection_handler.h"
 #include "common.h"
-#include "net/http/request_context.h"
+#include "net/http/context.h"
 #include "request_dispatcher.h"
 
 namespace net
@@ -45,7 +45,7 @@ namespace net::http
 
         virtual void on_read(Connection *conn);
 
-        virtual void on_wirte(Connection *conn);
+        virtual void on_write(Connection *conn);
 
         virtual void on_close(Connection *conn);
 

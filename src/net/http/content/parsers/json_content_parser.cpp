@@ -12,18 +12,16 @@ namespace net::http
         return contentType == content_type::application_json;
     }
 
-    bool JsonContentParser::parse(HttpRequest *req)
+    bool JsonContentParser::parse(HttpPacket *packet)
     {
-        const nlohmann::json &jval = nlohmann::json::parse(req->body_begin(), req->body_end());
+        const nlohmann::json &jval = nlohmann::json::parse(packet->body_begin(), packet->body_end());
         if (jval.is_discarded()) {
             return false;
         }
 
         JsonContent *jc = new JsonContent;
         jc->jval = std::move(jval);
-        std::cout << jc->jval << std::endl;
-        Content *content = new Content(content_type::application_json, jc);
-        req->set_body_content(content);
+        packet->set_body_content(new Content(content_type::application_json, jc));
         return true;
     }
 }

@@ -40,7 +40,7 @@ namespace net::http
     void HttpServer::on_connected(Connection *conn)
     {
         uint64_t sessionId = (uint64_t)conn;
-        sessions_[sessionId] = new HttpSession(sessionId, new HttpRequestContext(conn));
+        sessions_[sessionId] = new HttpSession(sessionId, new HttpSessionContext(conn));
     }
 
     void HttpServer::on_error(Connection *conn)
@@ -80,7 +80,7 @@ namespace net::http
         }
     }
 
-    void HttpServer::on_wirte(Connection *conn)
+    void HttpServer::on_write(Connection *conn)
     {
         
     }

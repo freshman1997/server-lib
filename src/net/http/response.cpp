@@ -1,20 +1,23 @@
 #include "net/base/connection/connection.h"
+#include "net/http/response_parser.h"
 #include "net/http/response.h"
 #include "buffer/buffer.h"
 #include "buffer/pool.h"
-#include "net/http/request_context.h"
+#include "net/http/context.h"
 #include "net/http/response_code_desc.h"
 #include "singleton/singleton.h"
 
 namespace net::http
 {
-    HttpResponse::HttpResponse(HttpRequestContext *context) : context_(context), buffer_(singleton::singleton<BufferedPool>().allocate())
+    HttpResponse::HttpResponse(HttpSessionContext *context) : HttpPacket(context)
     {
+        parser_ = new HttpResponseParser(this);
+        reset();
     }
 
     HttpResponse::~HttpResponse()
     {
-        singleton::singleton<BufferedPool>().free(buffer_);
+        
     }
 
     void HttpResponse::append_body(const char *data)
@@ -29,22 +32,12 @@ namespace net::http
 
     void HttpResponse::reset()
     {
+        HttpPacket::reset();
         respCode_ = ResponseCode::bad_request;
-        version_ = HttpVersion::v_1_1;
-        headers_.clear();
         buffer_->reset();
     }
 
-    void HttpResponse::send()
-    {
-        bool res = pack_response();
-        if (res) {
-            context_->get_connection()->send(buffer_);
-            buffer_ = singleton::singleton<BufferedPool>().allocate();
-        }
-    }
-
-    bool HttpResponse::pack_response()
+    bool HttpResponse::pack_header()
     {
         auto descIt = responseCodeDescs.find(respCode_);
         if (descIt == responseCodeDescs.end() || respCode_ == ResponseCode::internal_server_error) {

@@ -6,7 +6,7 @@
 
 namespace net::http 
 {
-    class HttpRequest;
+    class HttpPacket;
 
     class ContentParser
     {
@@ -20,7 +20,7 @@ namespace net::http
         virtual bool can_parse(const content_type contentType) = 0;
 
         // 解析
-        virtual bool parse(HttpRequest *req) = 0;
+        virtual bool parse(HttpPacket *packet) = 0;
     };
 
 }

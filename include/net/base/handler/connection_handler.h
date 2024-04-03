@@ -14,7 +14,7 @@ namespace net
 
         virtual void on_read(Connection *conn) = 0;
 
-        virtual void on_wirte(Connection *conn) = 0;
+        virtual void on_write(Connection *conn) = 0;
 
         virtual void on_close(Connection *conn) = 0;
     };

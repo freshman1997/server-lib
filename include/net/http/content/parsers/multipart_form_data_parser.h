@@ -26,12 +26,12 @@ namespace net::http
         virtual bool can_parse(const content_type contentType);
 
         // 解析
-        virtual bool parse(HttpRequest *req);
+        virtual bool parse(HttpPacket *packet);
 
     private:
         ContentDisposition parse_content_disposition(const char *begin, const char *end);
         std::pair<uint32_t, std::string> parse_part_value(const char *begin, const char *end);
-        std::tuple<std::string, std::unordered_map<std::string, std::string>, uint32_t> parse_part_file_content(HttpRequest *req, const char *begin, const char *end, const std::string &originName);
+        std::tuple<std::string, std::unordered_map<std::string, std::string>, uint32_t> parse_part_file_content(HttpPacket *packet, const char *begin, const char *end, const std::string &originName);
     };
 }
 

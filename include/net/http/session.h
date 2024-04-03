@@ -25,12 +25,12 @@ namespace net::http
         std::string sval;
     };
 
-    class HttpRequestContext;
+    class HttpSessionContext;
 
     class HttpSession
     {
     public:
-        HttpSession(uint64_t id, HttpRequestContext *context);
+        HttpSession(uint64_t id, HttpSessionContext *context);
         ~HttpSession();
         
         void add_session_value(const std::string &key, int ival);
@@ -42,7 +42,7 @@ namespace net::http
             return session_id_;
         }
 
-        HttpRequestContext * get_context()
+        HttpSessionContext * get_context()
         {
             return context_;
         }
@@ -50,7 +50,7 @@ namespace net::http
     private:
         uint64_t session_id_;
         std::unordered_map<std::string, SessionItem> session_items_;
-        HttpRequestContext *context_;
+        HttpSessionContext *context_;
     };
 }
 

@@ -8,5 +8,6 @@ namespace net::http
         {ResponseCode::partial_content, "206 Partial Content"},
         {ResponseCode::not_found, "404 Not Found"},
         {ResponseCode::internal_server_error, "500 Internal Server Error"},
+        {ResponseCode::gateway_timeout, "504 Gateway timeout"},
     };
 }

@@ -3,9 +3,7 @@
 
 BufferedPool::BufferedPool()
 {
-    free_list_.push_front(new Buffer);
-    free_list_.push_front(new Buffer);
-    free_list_.push_front(new Buffer);
+    
 }
 
 BufferedPool::~BufferedPool()

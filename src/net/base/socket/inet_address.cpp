@@ -34,7 +34,7 @@ namespace net
         ::memset(&addr, 0, sizeof(struct sockaddr_in));
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port_);
-        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        addr.sin_addr.s_addr = ip_.empty() ? htonl(INADDR_ANY) : inet_addr(ip_.c_str());
         return addr;
     }
 }

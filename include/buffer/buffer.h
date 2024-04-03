@@ -237,7 +237,9 @@ public:
     void append_buffer(Buffer &buff)
     {
         if (buff.readable_bytes() > writable_size()) {
-            resize(get_buff_size() - writable_size() + buff.readable_bytes());
+            std::vector<char> newBuffs(get_buff_size() - writable_size() + buff.readable_bytes());
+            std::memcpy(&*newBuffs.begin(), begin(), readable_bytes());
+            buffs.swap(newBuffs);
         }
 
         std::memcpy(buffer_begin(), buff.begin(), buff.readable_bytes());

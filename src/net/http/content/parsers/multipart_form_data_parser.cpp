@@ -2,7 +2,7 @@
 #include "base/utils/base64.h"
 #include "net/http/content/types.h"
 #include "net/http/content_type.h"
-#include "net/http/request.h"
+#include "net/http/packet.h"
 #include "net/http/header_key.h"
 #include "net/http/ops/option.h"
 #include <cstdlib>
@@ -102,11 +102,11 @@ namespace net::http
         return contentType == content_type::multpart_form_data;
     }
 
-    bool MultipartFormDataParser::parse(HttpRequest *req)
+    bool MultipartFormDataParser::parse(HttpPacket *packet)
     {
-        const char *begin = req->body_begin();
-        const char *end = req->body_end();
-        const auto &contentExtra = req->get_content_type_extra();
+        const char *begin = packet->body_begin();
+        const char *end = packet->body_end();
+        const auto &contentExtra = packet->get_content_type_extra();
         auto it = contentExtra.find("boundary");
         if (it == contentExtra.end()) {
             return false;
@@ -155,7 +155,7 @@ namespace net::http
                 begin += res.first;
                 fd->properties[pit->second] = FormDataStringItem(res.second);
             } else {
-                const auto &res = parse_part_file_content(req, begin, end, fit->second);
+                const auto &res = parse_part_file_content(packet, begin, end, fit->second);
                 if (std::get<0>(res).empty()) {
                     delete content;
                     return false;
@@ -180,7 +180,7 @@ namespace net::http
             }
         }
 
-        req->set_body_content(content);
+        packet->set_body_content(content);
 
         return true;
     }
@@ -276,7 +276,7 @@ namespace net::http
     }
 
     std::tuple<std::string, std::unordered_map<std::string, std::string>, uint32_t> MultipartFormDataParser::parse_part_file_content(
-        HttpRequest *req, const char *begin, const char *end, const std::string &originName)
+        HttpPacket *packet, const char *begin, const char *end, const std::string &originName)
     {
         const char *p = begin;
         content_type ctype;
@@ -297,7 +297,7 @@ namespace net::http
         }
 
         std::string ctypeText;
-        const auto &res = req->parse_content_type(begin, end, ctypeText, extra);
+        const auto &res = packet->parse_content_type(begin, end, ctypeText, extra);
         if (!res.first || ctypeText.empty()){
             return {{}, {}, 0};
         }
@@ -315,7 +315,7 @@ namespace net::http
             extra["____tmp_file_name"] = tmpName;
         }
 
-        const auto &contentExtra = req->get_content_type_extra();
+        const auto &contentExtra = packet->get_content_type_extra();
         auto it = contentExtra.find("boundary");
         const std::string &boundaryStart = "--" + it->second;
         const char *from = begin;

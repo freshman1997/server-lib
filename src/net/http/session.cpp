@@ -1,9 +1,9 @@
 #include "net/http/session.h"
-#include "net/http/request_context.h"
+#include "net/http/context.h"
 
 namespace net::http 
 {
-    HttpSession::HttpSession(uint64_t id, HttpRequestContext *context) : session_id_(id), context_(context)
+    HttpSession::HttpSession(uint64_t id, HttpSessionContext *context) : session_id_(id), context_(context)
     {
         context_->set_session(this);
     }
@@ -13,6 +13,7 @@ namespace net::http
         if (context_) {
             delete context_;
         }
+        context_ = nullptr;
     }
 
     void HttpSession::add_session_value(const std::string &key, int ival)
