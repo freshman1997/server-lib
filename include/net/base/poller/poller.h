@@ -1,6 +1,7 @@
 #ifndef __POLLER_H__
 #define __POLLER_H__
-#include <ctime>
+#include <cstdint>
+
 namespace net 
 {
     class Channel;
@@ -9,7 +10,7 @@ namespace net
     public:
         virtual ~Poller() {}
         
-        virtual time_t poll(int timeout) = 0;
+        virtual uint32_t poll(uint32_t timeout) = 0;
 
         virtual void update_channel(Channel *channel) = 0;
 

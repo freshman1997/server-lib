@@ -4,6 +4,9 @@
 
 namespace net::http::config
 {
+    // 连接空闲时长
+    extern const int connection_idle_timeout;
+    
     // 配置文件路径
     extern const char * config_file_name;
 

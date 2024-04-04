@@ -1,11 +1,9 @@
 #include <cstddef>
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ios>
 #include <iostream>
-#include <memory>
 #include <string>
 #include <fstream>
 #include <ctime>
@@ -15,6 +13,7 @@
 #include "net/base/acceptor/acceptor.h"
 #include "net/base/acceptor/tcp_acceptor.h"
 #include "net/bit_torrent/structure/bencoding.h"
+#include "net/http/content/types.h"
 #include "net/http/header_key.h"
 #include "net/http/context.h"
 #include "net/http/http_client.h"
@@ -23,8 +22,6 @@
 #include "net/http/response.h"
 #include "net/base/poller/epoll_poller.h"
 #include "net/base/poller/poller.h"
-#include "net/base/poller/select_poller.h"
-#include "nlohmann/json_fwd.hpp"
 #include "thread/task.h"
 #include "thread/thread_pool.h"
 #include "net/base/socket/socket.h"
@@ -36,9 +33,6 @@
 #include "net/base/event/event_loop.h"
 #include "net/base/connection/connection.h"
 
-#include "base/utils/base64.h"
-#include "nlohmann/json.hpp"
-#include "net/http/content/parsers/multipart_form_data_parser.h"
 
 #ifdef _WIN32
 #pragma comment(lib,"ws2_32.lib")
@@ -78,7 +72,7 @@ public:
     VideoTest()
     {
         content_size_ = -1;
-        file_.open("/home/yuan/Desktop/cz.mp4");
+        file_.open("/home/yuan/Desktop/cz");
         if (!file_.good()) {
             std::cout << "open file fail!\n";
             return;
@@ -267,13 +261,14 @@ void test_http_client()
 {
     net::http::HttpClient *client = new net::http::HttpClient;
 
-    client->connect({"183.2.172.185", 80}, 
+    client->connect({"www.baidu.com", 80}, 
     [](net::http::HttpRequest *req) {
         req->add_header("Connection", "close");
         req->send();
     },
     [](net::http::HttpResponse *resp){
         if (resp->good()) {
+            const net::http::Content *content = resp->get_body_content();
             const char *begin = resp->body_begin();
             std::string data(begin, resp->body_end());
             std::cout << data << std::endl;

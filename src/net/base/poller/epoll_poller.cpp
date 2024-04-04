@@ -1,10 +1,10 @@
 #include <cstring>
-#include <ctime>
 #include <set>
 #include <unistd.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
 
+#include "base/time.h"
 #include "net/base/poller/epoll_poller.h"
 #include "net/base/channel/channel.h"
 
@@ -30,9 +30,9 @@ namespace net
         ::close(epoll_fd_);
     }
 
-    time_t EpollPoller::poll(int timeout)
+    uint32_t EpollPoller::poll(uint32_t timeout)
     {
-        time_t tm = time(nullptr);
+        uint32_t tm = base::time::get_tick_count();
         int nevent = ::epoll_wait(epoll_fd_, &*epoll_events_.begin(), (int)epoll_events_.size(), timeout);
         if (nevent < 0) {
             return tm;

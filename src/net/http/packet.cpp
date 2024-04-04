@@ -22,7 +22,7 @@ namespace net::http
         parser_ = nullptr;
         buffer_ = nullptr;
         body_length_ = 0;
-        buffer_ = singleton::singleton<BufferedPool>().allocate();
+        buffer_ = singleton::Singleton<BufferedPool>().allocate();
     }
 
     HttpPacket::~HttpPacket()
@@ -37,7 +37,7 @@ namespace net::http
             parser_ = nullptr;
         }
 
-        singleton::singleton<BufferedPool>().free(buffer_);
+        singleton::Singleton<BufferedPool>().free(buffer_);
     }
 
     void HttpPacket::reset()
@@ -205,7 +205,7 @@ namespace net::http
             return true;
         }
 
-        return singleton::singleton<ContentParserFactory>().parse_content(this);
+        return singleton::Singleton<ContentParserFactory>().parse_content(this);
     }
 
     bool HttpPacket::parse(Buffer &buff)
@@ -243,7 +243,7 @@ namespace net::http
         if (res) {
             if (buffer_) {
                 context_->get_connection()->send(buffer_);
-                buffer_ = singleton::singleton<BufferedPool>().allocate();
+                buffer_ = singleton::Singleton<BufferedPool>().allocate();
             }
         } else {
             is_good_ = false;

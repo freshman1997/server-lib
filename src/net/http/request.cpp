@@ -4,8 +4,6 @@
 #include "net/http/request.h"
 #include "net/http/request_parser.h"
 
-#include <iostream>
-
 namespace net::http 
 {
     static const char* http_method_descs[9] = {

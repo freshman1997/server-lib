@@ -86,6 +86,7 @@ namespace timer
         uint64_t get_remain() const;
         void on_schedule(WheelTimerItem *item);
         void trigger();
+        TimerTask * get_task();
 
     private:
         TimerState state_;

@@ -2,12 +2,12 @@
 #include "net/base/connection/connection.h"
 #include "net/base/connection/tcp_connection.h"
 #include "net/base/poller/epoll_poller.h"
-#include "net/base/poller/select_poller.h"
 #include "net/http/context.h"
 #include "net/http/http_client.h"
 #include "net/base/socket/socket.h"
+#include "net/http/ops/option.h"
 #include "net/http/session.h"
-#include "timer/timer_manager.h"
+#include "singleton/singleton.h"
 #include "timer/wheel_timer_manager.h"
 
 namespace net::http 
@@ -17,7 +17,7 @@ namespace net::http
         session_ = nullptr;
         ccb_ = nullptr;
         rcb_ = nullptr;
-        connTimer_ = nullptr;
+        conn_timer_ = nullptr;
     }
 
     HttpClient::~HttpClient()
@@ -26,8 +26,8 @@ namespace net::http
             delete session_;
         }
 
-        if (connTimer_) {
-            connTimer_->cancel();
+        if (conn_timer_) {
+            conn_timer_->cancel();
         }
 
         ev_loop_->quit();
@@ -69,6 +69,7 @@ namespace net::http
                 rcb_(context->get_response());
             }
         }
+        session_->reset_timer();
     }
 
     void HttpClient::on_write(Connection *conn)
@@ -76,11 +77,11 @@ namespace net::http
         if (!session_) {
             HttpSessionContext *ctx = new HttpSessionContext(conn);
             ctx->set_mode(Mode::client);
-            session_ = new HttpSession((uint64_t)conn, ctx);
+            session_ = new HttpSession((uint64_t)conn, ctx, timer_manager_);
             if (ccb_) {
-                if (connTimer_) {
-                    connTimer_->cancel();
-                    connTimer_ = nullptr;
+                if (conn_timer_) {
+                    conn_timer_->cancel();
+                    conn_timer_ = nullptr;
                 }
 
                 ccb_(ctx->get_request());
@@ -113,12 +114,11 @@ namespace net::http
             return false;
         }
 
-        Connection *conn = new TcpConnection(addr.get_ip().c_str(), addr.get_port(), sock->get_fd());
-        net::EpollPoller poller;
+        Connection *conn = new TcpConnection(sock->get_address()->get_ip(), addr.get_port(), sock->get_fd());
         timer::WheelTimerManager manager;
-        connTimer_ = manager.timeout(10 * 1000, this);
+        conn_timer_ = manager.timeout(config::connection_idle_timeout, this);
 
-        net::EventLoop loop(&poller, &manager);
+        net::EventLoop loop(&singleton::Singleton<net::EpollPoller>(), &manager);
 
         conn->set_connection_handler(this);
         loop.update_event(conn->get_channel());
@@ -127,6 +127,7 @@ namespace net::http
         rcb_ = rcb;
         ccb_ = ccb;
         ev_loop_ = &loop;
+        timer_manager_ = &manager;
         loop.loop();
         
         return true;

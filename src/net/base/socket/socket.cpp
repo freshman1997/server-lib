@@ -1,7 +1,13 @@
+#include <cctype>
+#include <cstring>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
 
 #include "net/base/socket/inet_address.h"
 #include "net/base/socket/socket.h"
@@ -9,8 +15,34 @@
 
 namespace net
 {
-    Socket::Socket(const char *ip, int port) : addr(new InetAddress(ip, port)), fd_(socket::create_ipv4_socket(true))
-    {}
+    static bool is_host(const std::string &domain)
+    {
+        for (const char ch : domain) {
+            if (!std::isdigit(ch) && ch != '.') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    Socket::Socket(const char *ip, int port)
+    {
+        if (is_host(ip)) {
+            fd_ = 0;
+            struct hostent *h;
+            h = ::gethostbyname(ip);
+            if(h) {
+                struct sockaddr_in addr_in;
+                memcpy(&addr_in.sin_addr.s_addr, h->h_addr,4);
+                addr_in.sin_port = htons(port);
+                addr = new InetAddress(addr_in);
+                fd_ = socket::create_ipv4_socket(true);
+            }
+        } else {
+            addr = new InetAddress(ip, port);
+            fd_ = socket::create_ipv4_socket(true);
+        }
+    }
 
     Socket::~Socket()
     {

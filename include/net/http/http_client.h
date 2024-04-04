@@ -49,7 +49,8 @@ namespace net::http
         HttpSession *session_;
         response_callback rcb_;
         connected_callback ccb_;
-        timer::Timer *connTimer_;
+        timer::TimerManager *timer_manager_;
+        timer::Timer *conn_timer_;
     };
 }
 

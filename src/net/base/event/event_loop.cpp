@@ -1,6 +1,5 @@
 #include <cassert>
 #include <condition_variable>
-#include <cstdint>
 #include <iostream>
 #include <mutex>
 #include <time.h>

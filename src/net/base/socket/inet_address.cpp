@@ -16,10 +16,8 @@ namespace net
 
     InetAddress::InetAddress(const struct sockaddr_in &addr)
     {
-        if (addr.sin_family == AF_INET) {
-            port_ = endian::networkToHost16(addr.sin_port);
-            ip_ = ::inet_ntoa(addr.sin_addr);
-        }
+        port_ = endian::networkToHost16(addr.sin_port);
+        ip_ = ::inet_ntoa(addr.sin_addr);
     }
 
     InetAddress::InetAddress(const InetAddress &addr)

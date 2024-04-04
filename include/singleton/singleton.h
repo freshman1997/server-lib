@@ -4,7 +4,7 @@
 namespace singleton 
 {
     template<class T>
-    T & singleton()
+    T & Singleton()
     {
         static T instance;
         return instance;

@@ -4,6 +4,8 @@
 
 namespace net::http::config
 {
+    const int connection_idle_timeout = 30 * 1000;
+    
     const char * config_file_name = "http.json";
 
     const char * server_name = KEY_TO_STRING(server_name);

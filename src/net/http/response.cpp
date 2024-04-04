@@ -5,7 +5,6 @@
 #include "buffer/pool.h"
 #include "net/http/context.h"
 #include "net/http/response_code_desc.h"
-#include "singleton/singleton.h"
 
 namespace net::http
 {

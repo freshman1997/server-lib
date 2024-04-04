@@ -1,6 +1,5 @@
 #include <arpa/inet.h>
 #include <cassert>
-#include <memory>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -11,7 +10,6 @@
 #include "net/base/connection/tcp_connection.h"
 #include "net/base/handler/event_handler.h"
 #include "net/base/channel/channel.h"
-#include "net/base/socket/inet_address.h"
 #include "net/base/socket/socket.h"
 
 namespace net
@@ -38,7 +36,6 @@ namespace net
         channel_.set_fd(socket_->get_fd());
         channel_.set_handler(this);
         channel_.enable_read();
-        channel_.enable_write();
 
         return true;
     }

@@ -242,7 +242,7 @@ public:
             buffs.swap(newBuffs);
         }
 
-        std::memcpy(buffer_begin(), buff.begin(), buff.readable_bytes());
+        std::memcpy(buffer_begin(), buff.peek(), buff.readable_bytes());
         fill(buff.readable_bytes());
     }
 

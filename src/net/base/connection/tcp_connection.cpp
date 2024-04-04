@@ -28,6 +28,11 @@ namespace net
 
     TcpConnection::~TcpConnection()
     {
+        channel_.disable_all();
+        eventHandler_->update_event(&channel_);
+        channel_.set_handler(nullptr);
+        connectionHandler_->on_close(this);
+
         std::cout << "connection closed, ip: " << addr_.get_ip() << ", port: " << addr_.get_port() 
                 << ", fd: " << channel_.get_fd() << "\n";
     }
@@ -54,7 +59,7 @@ namespace net
 
     void TcpConnection::send(Buffer * buff)
     {
-        if (!buff) {
+        if (!buff || closed_) {
             return;
         }
         
@@ -64,22 +69,23 @@ namespace net
     void TcpConnection::send()
     {
         assert(output_buffer_.get_current_buffer()->readable_bytes() > 0);
-        int ret = ::write(channel_.get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes());
-        if (ret > 0) {
-            if (ret >= output_buffer_.get_current_buffer()->readable_bytes()) {
-                output_buffer_.get_current_buffer()->reset();
-                output_buffer_.free_current_buffer(); 
-            } else {
-                output_buffer_.get_current_buffer()->add_read_index(ret);
-                std::cout << "still remains data: " << output_buffer_.get_current_buffer()->readable_bytes() << " bytes.\n";
-                return;
+        std::size_t sz = output_buffer_.get_size();
+        for (int i = 0; i < sz; ++i) {
+            int ret = ::send(channel_.get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), 0);
+            if (ret > 0) {
+                if (ret >= output_buffer_.get_current_buffer()->readable_bytes()) {
+                    output_buffer_.get_current_buffer()->reset();
+                    output_buffer_.free_current_buffer();
+                } else {
+                    output_buffer_.get_current_buffer()->add_read_index(ret);
+                    std::cout << "still remains data: " << output_buffer_.get_current_buffer()->readable_bytes() << " bytes.\n";
+                    return;
+                }
+            } else if (ret < 0) {
+                closed_ = true;
+                do_close();
+                break;
             }
-        } else if (ret < 0) {
-            closed_ = true;
-        }
-
-        if (closed_) {
-            do_close();
         }
     }
 
@@ -161,10 +167,6 @@ namespace net
 
     void TcpConnection::do_close()
     {
-        channel_.disable_all();
-        eventHandler_->update_event(&channel_);
-        channel_.set_handler(nullptr);
-        connectionHandler_->on_close(this);
         delete this;
     }
 }

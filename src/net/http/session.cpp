@@ -1,11 +1,16 @@
 #include "net/http/session.h"
 #include "net/http/context.h"
+#include "net/http/ops/option.h"
+#include "net/base/connection/connection.h"
+
+#include <iostream>
 
 namespace net::http 
 {
-    HttpSession::HttpSession(uint64_t id, HttpSessionContext *context) : session_id_(id), context_(context)
+    HttpSession::HttpSession(uint64_t id, HttpSessionContext *context, timer::TimerManager *timer_manager) : session_id_(id), context_(context), timer_manager_(timer_manager)
     {
         context_->set_session(this);
+        conn_timer_ = timer_manager_->timeout(config::connection_idle_timeout, this);
     }
 
     HttpSession::~HttpSession()
@@ -13,7 +18,7 @@ namespace net::http
         if (context_) {
             delete context_;
         }
-        context_ = nullptr;
+        conn_timer_->cancel();
     }
 
     void HttpSession::add_session_value(const std::string &key, int ival)
@@ -29,5 +34,17 @@ namespace net::http
     void HttpSession::add_session_value(const std::string &key, const std::string &sval)
     {
         session_items_[key] = { SessionItemType::sval, 0, sval };
+    }
+
+    void HttpSession::on_timer(timer::Timer *timer)
+    {
+        std::cout << "connection idle timeout !!\n";
+        context_->get_connection()->abort();
+    }
+
+    void HttpSession::reset_timer()
+    {
+        conn_timer_->cancel();
+        conn_timer_ = timer_manager_->timeout(config::connection_idle_timeout, this);
     }
 }

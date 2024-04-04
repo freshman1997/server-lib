@@ -1,3 +1,4 @@
+#include "net/base/poller/poll_poller.h"
 #include <functional>
 #include <iostream>
 #include <unistd.h>
@@ -11,7 +12,6 @@
 #include "net/base/acceptor/tcp_acceptor.h"
 #include "net/base/event/event_loop.h"
 #include "net/http/http_server.h"
-#include "net/base/poller/select_poller.h"
 #include "net/base/socket/socket.h"
 #include "net/base/connection/connection.h"
 #include "net/http/request.h"
@@ -20,6 +20,7 @@
 #include "net/http/ops/config_manager.h"
 #include "net/http/ops/option.h"
 #include "singleton/singleton.h"
+#include "net/base/poller/epoll_poller.h"
 
 namespace net::http
 {
@@ -40,7 +41,8 @@ namespace net::http
     void HttpServer::on_connected(Connection *conn)
     {
         uint64_t sessionId = (uint64_t)conn;
-        sessions_[sessionId] = new HttpSession(sessionId, new HttpSessionContext(conn));
+        sessions_[sessionId] = new HttpSession(sessionId, new HttpSessionContext(conn),
+             &singleton::Singleton<timer::WheelTimerManager>());
     }
 
     void HttpServer::on_error(Connection *conn)
@@ -50,7 +52,15 @@ namespace net::http
 
     void HttpServer::on_read(Connection *conn)
     {
-        auto context = sessions_[(uint64_t)conn]->get_context();
+        uint64_t sessionId = (uint64_t)conn;
+        auto it = sessions_.find(sessionId);
+        if (it == sessions_.end()) {
+            std::cout << "----------------> error\n";
+            return;
+        }
+
+        auto session = it->second;
+        auto context = session->get_context();
         if (!context->parse()) {
             if (context->has_error()) {
                 context->process_error(context->get_error_code());
@@ -75,7 +85,10 @@ namespace net::http
             } else {
                 // 404
                 context->process_error(ResponseCode::not_found);
-                return;
+            }
+
+            if (sessions_.count(sessionId)) {
+                session->reset_timer();
             }
         }
     }
@@ -93,8 +106,8 @@ namespace net::http
 
     bool HttpServer::init(int port)
     {
-        if (singleton::singleton<HttpConfigManager>().good()) {
-            std::cout << singleton::singleton<HttpConfigManager>().get_string_property("server_name") << " starting...\n";
+        if (singleton::Singleton<HttpConfigManager>().good()) {
+            std::cout << singleton::Singleton<HttpConfigManager>().get_string_property("server_name") << " starting...\n";
         }
 
         net::Socket *sock = new net::Socket("", port);
@@ -123,9 +136,7 @@ namespace net::http
 
     void HttpServer::serve()
     {
-        net::SelectPoller poller;
-        timer::WheelTimerManager manager;
-        net::EventLoop loop(&poller, &manager);
+        net::EventLoop loop(&singleton::Singleton<net::PollPoller>(), &singleton::Singleton<timer::WheelTimerManager>());
         acceptor_->set_event_handler(&loop);
 
         loop.update_event(acceptor_->get_channel());
@@ -163,7 +174,7 @@ namespace net::http
     void HttpServer::load_static_paths()
     {
         // 必须要支持 /static/* 这种形式
-        auto &cfgManager = singleton::singleton<HttpConfigManager>();
+        auto &cfgManager = singleton::Singleton<HttpConfigManager>();
         const std::vector<nlohmann::json> &paths = cfgManager.get_type_array_properties<nlohmann::json>(config::static_file_paths);
         for (const auto &path : paths) {
             const std::string &root = path[config::static_file_paths_root];

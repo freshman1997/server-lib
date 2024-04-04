@@ -43,7 +43,7 @@ namespace net
 
     private:
         InetAddress *addr;
-        const int fd_;
+        int fd_;
     };
 }
 #endif

@@ -4,6 +4,7 @@
 #include <vector>
 #include <poll.h>
 
+#include "base/time.h"
 #include "net/base/poller/poll_poller.h"
 #include "net/base/channel/channel.h"
 
@@ -24,9 +25,9 @@ namespace net
 
     }
 
-    time_t PollPoller::poll(int timeout)
+    uint32_t PollPoller::poll(uint32_t timeout)
     {
-        time_t tm = time(nullptr);
+        uint32_t tm = base::time::get_tick_count();
 
         if (!helper::removed_fds_.empty()) {
             for (auto &fd : helper::removed_fds_) {
@@ -58,8 +59,6 @@ namespace net
             
             if (helper::fds_[i].revents & POLLOUT) {
                 ev |= Channel::WRITE_EVENT;
-                helper::fds_[i].events &= (~POLLOUT);
-                helper::fds_[i].events |= POLLIN;
             }
 
             if (ev != Channel::NONE_EVENT) {

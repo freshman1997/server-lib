@@ -11,6 +11,7 @@
 #include <map>
 #include <vector>
 
+#include "base/time.h"
 #include "net/base/channel/channel.h"
 #include "net/base/poller/select_poller.h"
 
@@ -39,9 +40,9 @@ namespace net
         FD_ZERO(&helper::writes_);
     }
 
-    time_t SelectPoller::poll(int timeout)
+    uint32_t SelectPoller::poll(uint32_t timeout)
     {
-        time_t tm = time(nullptr);
+        uint32_t tm = base::time::get_tick_count();
 
         if (!helper::removed_fds_.empty()) {
             for (auto &fd : helper::removed_fds_) {

@@ -181,6 +181,7 @@ namespace timer
     void WheelTimer::cancel()
     {
         state_ = TimerState::cancal;
+        task_ = nullptr;
     }
 
     void WheelTimer::reset()
@@ -266,5 +267,10 @@ namespace timer
                 }
             }
         }
+    }
+
+    TimerTask * WheelTimer::get_task()
+    {
+        return task_;
     }
 }

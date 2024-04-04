@@ -2,7 +2,6 @@
 #define __NET_HTTP_REQUEST_H__
 
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "net/http/packet.h"
