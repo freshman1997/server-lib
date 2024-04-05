@@ -5,9 +5,9 @@
 
 namespace net::http
 {
-    bool UrlEncodedContentParser::can_parse(const content_type contentType)
+    bool UrlEncodedContentParser::can_parse(ContentType contentType)
     {
-        return contentType == content_type::x_www_form_urlencoded;
+        return contentType == ContentType::x_www_form_urlencoded;
     }
 
     bool UrlEncodedContentParser::parse(HttpPacket *packet)

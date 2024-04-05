@@ -17,7 +17,7 @@ namespace net::http
         bool parse_content(HttpPacket *packet);
 
     private:
-        std::unordered_map<content_type, ContentParser *> parsers;
+        std::unordered_map<ContentType, ContentParser *> parsers;
     };
 }
 

@@ -17,6 +17,7 @@ namespace net
 
         socket::set_none_block(fd, true);
         socket::set_keep_alive(fd, true);
+        //socket::set_no_delay(fd, true);
 
         channel_.set_fd(fd);
         channel_.set_handler(this);
@@ -82,8 +83,7 @@ namespace net
                     return;
                 }
             } else if (ret < 0) {
-                closed_ = true;
-                do_close();
+                abort();
                 break;
             }
         }

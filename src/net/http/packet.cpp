@@ -48,9 +48,9 @@ namespace net::http
         params_.clear();
         headers_.clear();
         parser_->reset();
-        content_type_ = content_type::not_support;
+        content_type_ = ContentType::not_support;
         error_code_ = ResponseCode::bad_request;
-        content_type_ = content_type::not_support;
+        content_type_ = ContentType::not_support;
 
         if (body_content_) {
             delete body_content_;

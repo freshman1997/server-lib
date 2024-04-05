@@ -4,7 +4,7 @@
 
 namespace base::time
 {
-    int32_t get_tick_count();
+    uint32_t get_tick_count();
 
     void init_time(uint32_t unit);
 

@@ -11,14 +11,14 @@ namespace net::http
 {
     ContentParserFactory::ContentParserFactory()
     {
-        parsers[content_type::text_plain] = new TextContentParser;
-        parsers[content_type::text_html] = new TextContentParser;
-        parsers[content_type::text_javascript] = new TextContentParser;
-        parsers[content_type::text_style_sheet] = new TextContentParser;
+        parsers[ContentType::text_plain] = new TextContentParser;
+        parsers[ContentType::text_html] = new TextContentParser;
+        parsers[ContentType::text_javascript] = new TextContentParser;
+        parsers[ContentType::text_style_sheet] = new TextContentParser;
 
-        parsers[content_type::multpart_form_data] = new MultipartFormDataParser;
-        parsers[content_type::application_json] = new JsonContentParser;
-        parsers[content_type::x_www_form_urlencoded] = new UrlEncodedContentParser;
+        parsers[ContentType::multpart_form_data] = new MultipartFormDataParser;
+        parsers[ContentType::application_json] = new JsonContentParser;
+        parsers[ContentType::x_www_form_urlencoded] = new UrlEncodedContentParser;
     }
 
     ContentParserFactory::~ContentParserFactory()

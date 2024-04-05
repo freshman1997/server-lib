@@ -4,7 +4,6 @@ namespace net::http
 {
     bool ContentParser::can_parse(const std::string &contentType)
     {
-        content_type type = find_content_type(contentType);
-        return can_parse(type);
+        return can_parse(find_content_type(contentType));
     }
 }

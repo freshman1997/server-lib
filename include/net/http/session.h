@@ -3,6 +3,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "net/http/common.h"
 #include "timer/timer.h"
 #include "timer/timer_manager.h"
 #include "timer/timer_task.h"
@@ -15,6 +16,7 @@ namespace net::http
         ival,
         dval,
         sval,
+        pval
     };
 
     struct SessionItem
@@ -24,6 +26,7 @@ namespace net::http
         {
             int     ival;
             double  dval;
+            void    *pval;
         } 
         number;
         std::string sval;
@@ -39,7 +42,15 @@ namespace net::http
         
         void add_session_value(const std::string &key, int ival);
         void add_session_value(const std::string &key, double dval);
+        void add_session_value(const std::string &key, void *pval);
         void add_session_value(const std::string &key, const std::string &sval);
+
+        SessionItem * get_session_value(const std::string &key);
+
+        void remove_session_value(const std::string &key)
+        {
+            session_items_.erase(key);
+        }
 
         uint64_t get_session_id() const 
         {
@@ -54,6 +65,11 @@ namespace net::http
         timer::TimerManager * get_timer_manager()
         {
             return timer_manager_;
+        }
+
+        void set_close_call_back(close_callback ccb)
+        {
+            close_cb_ = ccb;
         }
 
     public:
@@ -73,6 +89,7 @@ namespace net::http
         HttpSessionContext *context_;
         timer::TimerManager *timer_manager_;
         timer::Timer *conn_timer_;
+        close_callback close_cb_;
     };
 }
 

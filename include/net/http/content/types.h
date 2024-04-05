@@ -105,10 +105,10 @@ namespace net::http
 
     struct Content
     {
-        content_type type_ = content_type::not_support;
+        ContentType type_ = ContentType::not_support;
         ContentData *content_data_ = nullptr;
 
-        Content(content_type type, ContentData *data) : type_(type), content_data_(data) {}
+        Content(ContentType type, ContentData *data) : type_(type), content_data_(data) {}
         ~Content() 
         {
             if (content_data_) {

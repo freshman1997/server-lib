@@ -97,9 +97,9 @@ namespace net::http
         return helper::dispistion_type_names[(std::size_t)type];
     }
 
-    bool MultipartFormDataParser::can_parse(const content_type contentType)
+    bool MultipartFormDataParser::can_parse(ContentType contentType)
     {
-        return contentType == content_type::multpart_form_data;
+        return contentType == ContentType::multpart_form_data;
     }
 
     bool MultipartFormDataParser::parse(HttpPacket *packet)
@@ -121,7 +121,7 @@ namespace net::http
         std::string boundaryEnd = "--" + it->second + "--";
         FormDataContent *fd = new FormDataContent;
         fd->type = helper::dispistion_type_names[(std::size_t)ContentDispositionType::form_data_];
-        Content *content = new Content(content_type::multpart_form_data, fd);
+        Content *content = new Content(ContentType::multpart_form_data, fd);
         while (begin != end)
         {
             begin += boundaryStart.size();
@@ -279,7 +279,7 @@ namespace net::http
         HttpPacket *packet, const char *begin, const char *end, const std::string &originName)
     {
         const char *p = begin;
-        content_type ctype;
+        ContentType ctype;
         std::unordered_map<std::string, std::string> extra;
         std::string ctypeName;
         while (begin <= end && *begin != ':') {

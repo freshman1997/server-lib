@@ -4,7 +4,7 @@
 
 namespace net::http
 {
-    enum class content_type : char
+    enum class ContentType : char
     {
         not_support = -1,
         text_plain = 0,
@@ -20,10 +20,13 @@ namespace net::http
         media_ogg,
         video_mp4,
         video_flv,
+        video_mkv,
         MAX
     };
 
-    content_type find_content_type(const std::string &name);
+    ContentType find_content_type(const std::string &name);
+
+    std::string get_content_type(const std::string &ext);
 }
 
 #endif

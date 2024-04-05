@@ -4,10 +4,10 @@
 
 namespace net::http
 {
-    bool TextContentParser::can_parse(const content_type contentType)
+    bool TextContentParser::can_parse(ContentType contentType)
     {
-        return contentType == content_type::text_plain || contentType == content_type::text_html
-            || contentType == content_type::text_javascript || contentType == content_type::text_style_sheet;
+        return contentType == ContentType::text_plain || contentType == ContentType::text_html
+            || contentType == ContentType::text_javascript || contentType == ContentType::text_style_sheet;
     }
 
     bool TextContentParser::parse(HttpPacket *packet)

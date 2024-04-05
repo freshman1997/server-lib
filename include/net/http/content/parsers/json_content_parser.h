@@ -8,7 +8,7 @@ namespace net::http
     {
     public:
         
-        virtual bool can_parse(const content_type contentType);
+        virtual bool can_parse(ContentType contentType);
 
         // 解析
         virtual bool parse(HttpPacket *packet);

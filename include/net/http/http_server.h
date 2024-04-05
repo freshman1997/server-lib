@@ -57,7 +57,7 @@ namespace net::http
         void stop();
 
     public:
-        void on(const std::string &url, request_function func);
+        void on(const std::string &url, request_function func, bool is_prefix = false);
 
     private:
         void free_session(Connection *conn);

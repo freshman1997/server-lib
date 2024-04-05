@@ -11,10 +11,16 @@ namespace net::http
     {
         context_->set_session(this);
         conn_timer_ = timer_manager_->timeout(config::connection_idle_timeout, this);
+        close_cb_ = nullptr;
     }
 
     HttpSession::~HttpSession()
     {
+        if (close_cb_) {
+            close_cb_(this);
+            close_cb_ = nullptr;
+        }
+
         if (context_) {
             delete context_;
         }
@@ -34,6 +40,20 @@ namespace net::http
     void HttpSession::add_session_value(const std::string &key, const std::string &sval)
     {
         session_items_[key] = { SessionItemType::sval, 0, sval };
+    }
+
+    void HttpSession::add_session_value(const std::string &key, void *pval)
+    {
+        session_items_[key] = { SessionItemType::pval, {.pval = pval}, {} };
+    }
+
+    SessionItem * HttpSession::get_session_value(const std::string &key)
+    {
+        auto it = session_items_.find(key);
+        if (it == session_items_.end()) {
+            return nullptr;
+        }
+        return &it->second;
     }
 
     void HttpSession::on_timer(timer::Timer *timer)

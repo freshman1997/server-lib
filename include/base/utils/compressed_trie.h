@@ -13,6 +13,7 @@ namespace base
     {
         struct Node {
             bool is_word = false;
+            bool is_prefix = false;
             std::unordered_map<char, Node *> children;
         };
 
@@ -21,14 +22,16 @@ namespace base
         ~CompressTrie();
 
     public:
-        void insert(const std::string &word);
+        void insert(const std::string &word, bool is_prefix = false);
 
-        bool contains(const std::string &word);
+        bool contains(const std::string &word) const;
 
-        bool start_with(const std::string &word);
+        bool start_with(const std::string &word) const;
+
+        int find_prefix(const std::string &word, bool check_prefix = false) const;
 
     private:
-        Node *doInsert(Node *node, char ch, bool is_word);
+        Node *doInsert(Node *node, char ch, bool is_word, bool is_prefix);
         void free(Node *node);
 
     private:

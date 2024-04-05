@@ -7,7 +7,7 @@ namespace base::time
     uint32_t time_unit_ = 100;
     uint32_t tick_ = 0;
 
-    int32_t get_tick_count()
+    uint32_t get_tick_count()
     {
         auto time_now = std::chrono::system_clock::now();
         auto duration_in_ms = std::chrono::duration_cast<std::chrono::milliseconds>(time_now.time_since_epoch());

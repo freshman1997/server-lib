@@ -5,5 +5,5 @@
     "static_file_paths": [
         { "root": "/static", "path": "static" }
     ],
-    "playable_types": [".mp4", ".mp3", ".flv"]
+    "playable_types": [".mp4", ".mp3", ".flv", ".mkv"]
 }

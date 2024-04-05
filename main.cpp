@@ -8,7 +8,9 @@
 #include <fstream>
 #include <ctime>
 #include <cstdlib>
+#include <signal.h>
 
+#include "base/utils/compressed_trie.h"
 #include "buffer/buffer.h"
 #include "net/base/acceptor/acceptor.h"
 #include "net/base/acceptor/tcp_acceptor.h"
@@ -72,7 +74,7 @@ public:
     VideoTest()
     {
         content_size_ = -1;
-        file_.open("/home/yuan/Desktop/cz");
+        file_.open("/home/yuan/Desktop/cz.mp4");
         if (!file_.good()) {
             std::cout << "open file fail!\n";
             return;
@@ -277,13 +279,34 @@ void test_http_client()
     });
 }
 
+void test_url()
+{
+    base::CompressTrie trie;
+    trie.insert("/.cache/clangd/");
+    trie.insert("/include/base");
+
+    trie.insert("/static", true);
+
+    if (trie.find_prefix("/static/cz", true) < 0) {
+        std::cout << "start with\n";
+    }
+}
+
+void sigpipe_handler(int signum) 
+{
+    std::cout << "Caught SIGPIPE signal: " << signum << '\n';
+}
+
 int main()
 {
-    test_http_client();
-    return 0;
+    // 注册SIGPIPE信号处理函数
+    signal(SIGPIPE, sigpipe_handler);
+    
+    //test_http_client();
+    //return 0;
     srand(time(nullptr));
 
-    std::fstream file("/home/yuan/Desktop/1.torrent", std::ios_base::in);
+    std::fstream file("/home/yuan/Desktop/11.torrent", std::ios_base::in);
     if (file.good()) {
         file.seekg(0, std::ios_base::end);
         std::size_t len = file.tellg();

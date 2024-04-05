@@ -7,9 +7,9 @@
 
 namespace net::http 
 {
-    bool JsonContentParser::can_parse(const content_type contentType)
+    bool JsonContentParser::can_parse(ContentType contentType)
     {
-        return contentType == content_type::application_json;
+        return contentType == ContentType::application_json;
     }
 
     bool JsonContentParser::parse(HttpPacket *packet)
@@ -21,7 +21,7 @@ namespace net::http
 
         JsonContent *jc = new JsonContent;
         jc->jval = std::move(jval);
-        packet->set_body_content(new Content(content_type::application_json, jc));
+        packet->set_body_content(new Content(ContentType::application_json, jc));
         return true;
     }
 }

@@ -1,9 +1,10 @@
 #include <unordered_map>
+#include <utility>
 #include "net/http/content_type.h"
 
 namespace net::http
 {
-    static const char * content_type_names[] = 
+    static const char * ContentType_names[] = 
     {
         "text/plain",
         "text/html",
@@ -16,26 +17,39 @@ namespace net::http
         "media/ogg",
         "video/mp4",
         "video/flv",
+        "video/mkv",
     };
 
-    static const std::unordered_map<std::string, content_type> content_type_mapping = 
+    static const std::unordered_map<std::string, std::pair<std::string, ContentType>> ContentType_mapping = 
     {
-        {"text/plain", content_type::text_plain},
-        {"text/html", content_type::text_html},
-        {"text/style", content_type::text_style_sheet},
-        {"text/javascript", content_type::text_javascript},
-        {"application/json", content_type::application_json},
-        {"multipart/form-data", content_type::multpart_form_data},
-        {"application/x-www-form-urlencoded", content_type::x_www_form_urlencoded},
-        {"media/mp3", content_type::media_mp3},
-        {"media/ogg", content_type::media_ogg},
-        {"video/mp4", content_type::video_mp4},
-        {"video/flv", content_type::video_flv},
+        {"text/plain", {".txt", ContentType::text_plain} },
+        {"text/html", {".html", ContentType::text_html}},
+        {"text/style", {".css", ContentType::text_style_sheet}},
+        {"text/javascript", {".js", ContentType::text_javascript}},
+        {"application/json", {".json", ContentType::application_json}},
+        {"multipart/form-data", {"", ContentType::multpart_form_data}},
+        {"application/x-www-form-urlencoded", {"", ContentType::x_www_form_urlencoded}},
+        {"media/mp3", {".mp3", ContentType::media_mp3}},
+        {"media/ogg", {".ogg", ContentType::media_ogg}},
+        {"video/mp4", {".mp4", ContentType::video_mp4}},
+        {"video/flv", {".flv", ContentType::video_flv}},
+        {"video/mkv", {".mkv", ContentType::video_mkv}},
     };
 
-    content_type find_content_type(const std::string &name)
+    ContentType find_content_type(const std::string &name)
     {
-        auto it = content_type_mapping.find(name);
-        return it == content_type_mapping.end() ? content_type::not_support : it->second;
+        auto it = ContentType_mapping.find(name);
+        return it == ContentType_mapping.end() ? ContentType::not_support : it->second.second;
+    }
+
+    std::string get_content_type(const std::string &ext)
+    {
+        for (const auto &item : ContentType_mapping) {
+            if (!item.first.empty() && item.second.first == ext) {
+                return item.first;
+            }
+        }
+
+        return {};
     }
 }

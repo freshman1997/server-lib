@@ -11,11 +11,14 @@ namespace net::http
     class HttpRequestDispatcher
     {
     public:
-        void register_handler(const std::string &url, request_function func);
+        void register_handler(const std::string &url, request_function func, bool is_prefix = false);
 
         request_function get_handler(const std::string &url) const;
 
-    private:
+        const base::CompressTrie & get_compress_trie() const
+        {
+            return compress_trie_;
+        }
 
     private:
         std::unordered_map<std::string, request_function> mappings_;

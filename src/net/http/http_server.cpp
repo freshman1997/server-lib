@@ -1,5 +1,4 @@
-#include "net/base/poller/poll_poller.h"
-#include <functional>
+#include <fstream>
 #include <iostream>
 #include <unistd.h>
 
@@ -21,6 +20,9 @@
 #include "net/http/ops/option.h"
 #include "singleton/singleton.h"
 #include "net/base/poller/epoll_poller.h"
+#include "net/http/response.h"
+#include "net/http/content_type.h"
+#include "net/http/header_key.h"
 
 namespace net::http
 {
@@ -136,7 +138,7 @@ namespace net::http
 
     void HttpServer::serve()
     {
-        net::EventLoop loop(&singleton::Singleton<net::PollPoller>(), &singleton::Singleton<timer::WheelTimerManager>());
+        net::EventLoop loop(&singleton::Singleton<net::EpollPoller>(), &singleton::Singleton<timer::WheelTimerManager>());
         acceptor_->set_event_handler(&loop);
 
         loop.update_event(acceptor_->get_channel());
@@ -150,13 +152,13 @@ namespace net::http
         event_loop_->quit();
     }
 
-    void HttpServer::on(const std::string &url, request_function func)
+    void HttpServer::on(const std::string &url, request_function func, bool is_prefix)
     {
         if (url.empty() || !func) {
             return;
         }
 
-        dispatcher_.register_handler(url, func);
+        dispatcher_.register_handler(url, func, is_prefix);
     }
 
     void HttpServer::free_session(Connection *conn)
@@ -183,7 +185,8 @@ namespace net::http
                 continue;
             }
 
-            on(root, std::bind(&HttpServer::serve_static, this, std::placeholders::_1, std::placeholders::_2));
+            static_paths_[root] = rootPath;
+            on(root, std::bind(&HttpServer::serve_static, this, std::placeholders::_1, std::placeholders::_2), true);
         }
 
         const std::vector<std::string> &types = cfgManager.get_type_array_properties<std::string>(config::playable_types);
@@ -194,6 +197,123 @@ namespace net::http
 
     void HttpServer::serve_static(HttpRequest *req, HttpResponse *resp)
     {
+        const std::string &url = req->get_raw_url();
+        int prefixIdx = -dispatcher_.get_compress_trie().find_prefix(url, true);
+        std::string prefix = url.substr(0, prefixIdx);
+        const std::string &pathPrefix = static_paths_[prefix];
+        if (pathPrefix.empty()) {
+            resp->get_context()->process_error();
+            return;
+        }
 
+        if (prefixIdx + 1 > url.size()) {
+            resp->get_context()->process_error(ResponseCode::not_found);
+            return;
+        }
+
+        const std::string &fileRelativePath = url.substr(prefixIdx + 1);
+        std::size_t pos = fileRelativePath.find_last_of('.');
+        if (pos == std::string::npos) {
+            resp->get_context()->process_error();
+            return;
+        }
+
+        const std::string &ext = fileRelativePath.substr(pos);
+        if (!play_types_.count(ext)) {
+            resp->get_context()->process_error();
+            return;
+        }
+
+        std::string path;
+        if (pathPrefix[pathPrefix.size() - 1] == '/') {
+            path = pathPrefix + fileRelativePath;
+        } else {
+            path = pathPrefix + "/" + fileRelativePath;
+        }
+        
+        auto *session = req->get_context()->get_session();
+        SessionItem *data = session->get_session_value(fileRelativePath);
+        std::fstream *fileStream = nullptr;
+        if (!data) {
+            std::fstream *file_ = new std::fstream(path.c_str(), std::ios_base::in);
+            if (!file_->good()) {
+                std::cout << "open file fail!\n";
+                resp->get_context()->process_error(ResponseCode::not_found);
+                return;
+            }
+
+            session->add_session_value(fileRelativePath, file_);
+            fileStream = file_;
+            session->set_close_call_back([fileRelativePath](HttpSession *session) {
+                SessionItem *data = session->get_session_value(fileRelativePath);
+                if (data) {
+                    std::fstream *stream = (std::fstream *) data->number.pval;
+                    stream->close();
+                    session->remove_session_value(fileRelativePath);
+                    delete stream;
+                }
+            });
+        } else {
+            fileStream = (std::fstream *) data->number.pval;
+        }
+        
+        int content_size_ = -1;
+        fileStream->seekg(0, std::ios_base::end);
+        std::size_t length_ = fileStream->tellg();
+        const std::string &contentType = get_content_type(ext);
+        if (length_ == 0 || contentType.empty()) {
+            resp->get_context()->process_error(ResponseCode::bad_request);
+            return;
+        }
+
+        content_size_ = config::client_max_content_length;
+        if (content_size_ < 0) {
+            resp->get_context()->process_error();
+            return;
+        }
+
+        const std::string *range = req->get_header(net::http::http_header_key::range);
+        long long offset = 0;
+
+        if (range) {
+            size_t pos = range->find_first_of("=");
+            if (std::string::npos == pos) {
+                resp->get_context()->process_error();
+                return;
+            }
+
+            size_t pos1 = range->find_first_of("-");
+            offset = std::atol(range->substr(pos + 1, pos1 - pos).c_str());
+        }
+
+        std::string bytes = "bytes ";
+        bytes.append(std::to_string(offset))
+            .append("-")
+            .append(std::to_string(length_ - 1))
+            .append("/")
+            .append(std::to_string(length_));
+        
+        resp->add_header("Content-Type", contentType);
+        resp->add_header("Content-Range", bytes);
+
+        size_t r = content_size_ + offset > length_ ? length_ - offset : content_size_;
+        resp->add_header("Content-length", std::to_string(r));
+
+        fileStream->seekg(offset, std::ios::beg);
+        resp->get_buff()->reset();
+        if (resp->get_buff()->writable_size() < content_size_) {
+            resp->get_buff()->resize(content_size_);
+        }
+
+        fileStream->read(resp->get_buff()->buffer_begin(), content_size_);
+        resp->get_buff()->fill(r);
+
+        if (fileStream->eof()) {
+            fileStream->clear();
+        }
+
+        resp->add_header("Accept-Ranges", "bytes");
+        resp->set_response_code(net::http::ResponseCode::partial_content);
+        resp->send();
     }
 }

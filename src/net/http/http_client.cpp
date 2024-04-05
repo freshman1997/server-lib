@@ -87,6 +87,7 @@ namespace net::http
                 ccb_(ctx->get_request());
             }
         }
+        session_->reset_timer();
     }
 
     void HttpClient::on_close(Connection *conn)

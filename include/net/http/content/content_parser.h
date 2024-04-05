@@ -17,7 +17,7 @@ namespace net::http
         // 检查是否可以解析
         bool can_parse(const std::string &contentType);
         
-        virtual bool can_parse(const content_type contentType) = 0;
+        virtual bool can_parse(ContentType contentType) = 0;
 
         // 解析
         virtual bool parse(HttpPacket *packet) = 0;

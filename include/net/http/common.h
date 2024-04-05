@@ -8,6 +8,11 @@ namespace net::http
     class HttpResponse;
 
     typedef std::function<void (HttpRequest *req, HttpResponse *resp)> request_function;
+
+
+    class HttpSession;
+
+    typedef std::function<void (HttpSession *)> close_callback;
 }
 
 #endif

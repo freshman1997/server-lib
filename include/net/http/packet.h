@@ -2,8 +2,8 @@
 #define __NET_HTTP_PACKET_H__
 #include <string>
 #include "buffer/buffer.h"
-#include "net/http/content/types.h"
 #include "net/http/content_type.h"
+#include "net/http/content/types.h"
 #include "net/http/response_code.h"
 
 namespace net::http 
@@ -74,7 +74,7 @@ namespace net::http
 
         void read_body_done();
 
-        content_type get_content_type() const
+        ContentType get_content_type() const
         {
             return content_type_;
         }
@@ -130,7 +130,7 @@ namespace net::http
         bool is_good_;
         ResponseCode error_code_;
         uint32_t body_length_;
-        content_type content_type_;
+        ContentType content_type_;
         std::unordered_map<std::string, std::string> params_;
         std::unordered_map<std::string, std::string> headers_;
         std::string content_type_text_;
