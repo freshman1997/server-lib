@@ -1,3 +1,4 @@
+#include "base/time.h"
 #include <fstream>
 #include <iostream>
 #include <unistd.h>
@@ -266,7 +267,7 @@ namespace net::http
             return;
         }
 
-        content_size_ = config::client_max_content_length;
+        content_size_ = 1024 * 1024;
         if (content_size_ < 0) {
             resp->get_context()->process_error();
             return;

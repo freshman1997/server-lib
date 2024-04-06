@@ -119,4 +119,9 @@ namespace timer
             }
         }
     }
+
+    uint32_t WheelTimerManager::get_time_unit()
+    {
+        return time_unit_;
+    }
 }

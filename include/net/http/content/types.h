@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "net/http/content_type.h"
 #include "nlohmann/json.hpp"
@@ -101,6 +102,29 @@ namespace net::http
     {
         std::string type;
         std::unordered_map<std::string, FormDataItem> properties;
+    };
+
+    struct RangeDataItem
+    {
+        struct Chunk
+        {
+            TextContent content;
+            uint32_t from;
+            uint32_t to;
+            uint32_t length;
+        } chunk;
+
+        std::pair<std::string, std::unordered_map<std::string, std::string>> content_type_;
+    };
+
+    struct RangeDataContent : public ContentData
+    {
+        std::vector<RangeDataItem *> contents;
+        ~RangeDataContent() {
+            for (const auto it : contents) {
+                delete it;
+            }
+        }
     };
 
     struct Content

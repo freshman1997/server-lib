@@ -14,6 +14,7 @@ namespace net::http
         application_json,
 
         multpart_form_data,
+        multpart_byte_ranges,
         x_www_form_urlencoded,
 
         media_mp3,

@@ -51,6 +51,7 @@ namespace net
 
     private:
         bool quit_;
+        bool is_waiting_;
         Poller *poller_;
         timer::TimerManager *timer_manager_;
         std::unordered_map<int, Channel *> channels_;

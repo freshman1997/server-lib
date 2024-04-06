@@ -1,4 +1,4 @@
-#include "net/http/content/parsers/multipart_form_data_parser.h"
+#include "net/http/content/parsers/multipart_content_parser.h"
 #include "base/utils/base64.h"
 #include "net/http/content/types.h"
 #include "net/http/content_type.h"
@@ -80,6 +80,17 @@ namespace net::http
 
             return 0;
         }
+
+        static void read_next(const char *begin, const char *end, char ending, std::string &str)
+        {
+            while (begin <= end) {
+                char ch = *begin;
+                if (ch == ending) {
+                    break;
+                }
+                str.push_back(ch);
+            }
+        }
     }
 
     ContentDispositionType get_content_disposition_type(const std::string &name)
@@ -122,7 +133,7 @@ namespace net::http
         FormDataContent *fd = new FormDataContent;
         fd->type = helper::dispistion_type_names[(std::size_t)ContentDispositionType::form_data_];
         Content *content = new Content(ContentType::multpart_form_data, fd);
-        while (begin != end)
+        while (begin <= end)
         {
             begin += boundaryStart.size();
             begin += helper::skip_new_line(begin);
@@ -334,5 +345,180 @@ namespace net::http
         }
 
         return {ctypeText, extra, begin - p};
+    }
+
+    bool MultipartByterangesParser::can_parse(ContentType contentType)
+    {
+        return contentType == ContentType::multpart_byte_ranges;
+    }
+
+    bool MultipartByterangesParser::parse(HttpPacket *packet)
+    {
+        const std::string *rangeStr = packet->get_header(http_header_key::range);
+        if (!rangeStr || rangeStr->empty()) {
+            return false;
+        }
+
+        const auto &ranges = parse_range(*rangeStr);
+        if (ranges.empty()) {
+            return false;
+        }
+
+        const char *begin = packet->body_begin();
+        const char *end = packet->body_end();
+
+        const auto &contentExtra = packet->get_content_type_extra();
+        auto it = contentExtra.find("boundary");
+        if (it == contentExtra.end()) {
+            return false;
+        }
+        
+        std::string boundaryStart = "--" + it->second;
+        if (end - begin < boundaryStart.size()) {
+            return false;
+        }
+
+        std::string boundaryEnd = "--" + it->second + "--";
+        RangeDataContent *rangeContent = new RangeDataContent;
+        Content *content = new Content(ContentType::multpart_form_data, rangeContent);
+        
+        while (begin <= end)
+        {
+            // skip boundary
+            if (!helper::str_cmp(begin, begin + boundaryStart.size(), boundaryStart.c_str())) {
+                delete content;
+                return false;
+            }
+
+            begin += boundaryStart.size();
+            begin += helper::skip_new_line(begin);
+
+            RangeDataItem *item = new RangeDataItem;
+            rangeContent->contents.push_back(item);
+
+            const auto &res = packet->parse_content_type(begin, end, item->content_type_.first, item->content_type_.second);
+            if (!res.first || item->content_type_.first.empty()){
+                delete content;
+                return false;
+            }
+
+            begin += res.second;
+            begin += helper::skip_new_line(begin);
+
+            const auto &rangeRes = parse_content_range(begin, end);
+            if (!std::get<0>(rangeRes)) {
+                delete content;
+                return false;
+            }
+
+            begin += std::get<4>(rangeRes);
+
+            item->chunk.from = std::get<1>(rangeRes);
+            item->chunk.to = std::get<2>(rangeRes);
+            item->chunk.length = std::get<3>(rangeRes);
+            item->chunk.content.begin = begin;
+
+            if (item->chunk.from > item->chunk.to || item->chunk.length == 0) {
+                delete content;
+                return false;
+            }
+
+            begin += item->chunk.to - item->chunk.from;
+            item->chunk.content.end = begin;
+            
+            begin += helper::skip_new_line(begin);
+
+            if (helper::str_cmp(begin, begin + boundaryEnd.size(), boundaryEnd.c_str())) {
+                break;
+            }
+        }
+
+        packet->set_body_content(content);
+
+        return true;
+    }
+
+    std::vector<std::pair<uint32_t, uint32_t>> MultipartByterangesParser::parse_range(const std::string &range)
+    {
+        std::vector<std::pair<uint32_t, uint32_t>> res;
+
+        std::string from, to;
+        bool next = false;
+        for (std::size_t i = 0; i < range.size(); ++i) {
+            char ch = range[i];
+            if (ch == ',') {
+                if (from.empty() || to.empty()) {
+                    return {};
+                }
+
+                res.push_back({std::atoi(from.c_str()), std::atoi(to.c_str())});
+
+                from.clear();
+                to.clear();
+                next = false;
+            }
+
+            if (ch == '-') {
+                next = true;
+            }
+
+            if (next) {
+                to.push_back(ch);
+            } else {
+                from.push_back(ch);
+            }
+        }
+
+        if (!from.empty() && !to.empty()) {
+            res.push_back({std::atoi(from.c_str()), std::atoi(to.c_str())});
+        }
+
+        return res;
+    }
+
+    std::tuple<bool, uint32_t, uint32_t, uint32_t, uint32_t> MultipartByterangesParser::parse_content_range(const char *begin, const char *end)
+    {
+        const char *p = begin;
+        if (!helper::str_cmp(p, p + 13, http_header_key::content_range)) {
+            return {false, 0, 0, 0, 0};
+        }
+
+        p += 13;
+
+        if (*p == ':') {
+            ++p;
+        }
+
+        p += helper::skip_new_line(p);
+
+        if (!helper::str_cmp(p, p + 5, "bytes")) {
+            return {false, 0, 0, 0, 0};
+        }
+
+        p += 5;
+        p += helper::skip_new_line(p);
+
+        std::string from;
+        helper::read_next(p, end, '-', from);
+
+        p += from.size() + (from.empty() ? 0 : 1);
+
+        std::string to;
+        helper::read_next(p, end, '/', to);
+        if (to.empty()) {
+            return {false, 0, 0, 0, 0};
+        }
+
+        p += to.size() + 1;
+
+        std::string sz;
+        helper::read_next(p, end, '\r', sz);
+        if (sz.empty()) {
+            return {false, 0, 0, 0, 0};
+        }
+
+        p += sz.size() + 2;
+
+        return {true, std::atoi(from.c_str()), std::atoi(to.c_str()), std::atoi(sz.c_str()), p - begin};
     }
 }

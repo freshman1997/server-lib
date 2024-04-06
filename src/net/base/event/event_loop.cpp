@@ -2,7 +2,6 @@
 #include <condition_variable>
 #include <iostream>
 #include <mutex>
-#include <time.h>
 #include <unistd.h>
 
 #include "net/base/channel/channel.h"
@@ -22,7 +21,7 @@ namespace helper
 
 namespace net 
 {
-    EventLoop::EventLoop(Poller *_poller, timer::TimerManager *timer_manager) : poller_(_poller), timer_manager_(timer_manager), quit_(false)
+    EventLoop::EventLoop(Poller *_poller, timer::TimerManager *timer_manager) : poller_(_poller), timer_manager_(timer_manager), quit_(false), is_waiting_(false)
     {
     }
 
@@ -34,18 +33,23 @@ namespace net
     {
         assert(poller_);
 
+        uint32_t from = base::time::get_tick_count();
         while (!quit_) {
-            uint32_t from = base::time::get_tick_count();
-            time_t tm = poller_->poll(2);
-            timer_manager_->tick();
-            uint32_t to = base::time::get_tick_count();
-            if (to - from < 2) {
+            uint32_t to = poller_->poll(2);
+            if (to - from >= timer_manager_->get_time_unit()) {
+                from = to;
+                timer_manager_->tick();
+            }
+
+            /*if (to - from < timer_manager_->get_time_unit()) {
                 {
                     std::unique_lock<std::mutex> lock(helper::m);
                     auto now = std::chrono::system_clock::now();
-                    helper::cond.wait_until(lock, now + std::chrono::milliseconds(1));
+                    is_waiting_ = true;
+                    helper::cond.wait_until(lock, now + std::chrono::milliseconds(timer_manager_->get_time_unit() - (to - from)));
+                    is_waiting_ = false;
                 }
-            }
+            }*/
         }
     }
 

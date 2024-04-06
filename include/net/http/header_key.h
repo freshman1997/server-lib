@@ -8,6 +8,7 @@ namespace net::http::http_header_key
 {
     extern const char *content_type;
     extern const char *content_length;
+    extern const char *content_range;
     extern const char *accept;                 // text/html, application/xhtml+xml, application/xml;q=0.9, */*;q=0.8 
     extern const char *accept_ch;              // 
     extern const char *accept_language;

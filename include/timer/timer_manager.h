@@ -20,6 +20,8 @@ namespace timer
         virtual bool schedule(Timer *timer) = 0;
 
         virtual void tick() = 0;
+
+        virtual uint32_t get_time_unit() = 0;
     };
 }
 

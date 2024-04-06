@@ -22,6 +22,7 @@ namespace timer
         virtual Timer * interval(uint32_t timeout, uint32_t interval, TimerTask *task, int32_t period = 0);
         virtual bool schedule(Timer *timer);
         virtual void tick();
+        virtual uint32_t get_time_unit();
 
     private:
         void place_timer(WheelTimer *timer);

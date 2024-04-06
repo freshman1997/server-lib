@@ -1,6 +1,6 @@
 #include "net/http/content/content_parser_factory.h"
 #include "net/http/content/parsers/json_content_parser.h"
-#include "net/http/content/parsers/multipart_form_data_parser.h"
+#include "net/http/content/parsers/multipart_content_parser.h"
 #include "net/http/content/parsers/text_content_parser.h"
 #include "net/http/content/parsers/url_encoded_content_parser.h"
 #include "net/http/content_type.h"
@@ -17,6 +17,7 @@ namespace net::http
         parsers[ContentType::text_style_sheet] = new TextContentParser;
 
         parsers[ContentType::multpart_form_data] = new MultipartFormDataParser;
+        parsers[ContentType::multpart_byte_ranges] = new MultipartByterangesParser;
         parsers[ContentType::application_json] = new JsonContentParser;
         parsers[ContentType::x_www_form_urlencoded] = new UrlEncodedContentParser;
     }
