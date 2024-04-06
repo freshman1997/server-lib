@@ -15,11 +15,11 @@ namespace net
     public:
         virtual bool is_connected();
 
-        virtual const InetAddress & get_remote_address() const;
+        virtual const InetAddress & get_remote_address();
 
-        virtual Buffer * get_input_buff();
+        virtual Buffer * get_input_buff(bool take = false);
 
-        virtual Buffer * get_output_buff();
+        virtual Buffer * get_output_buff(bool take = false);
 
         virtual void send(Buffer *buff);
 
@@ -36,6 +36,9 @@ namespace net
         virtual Channel * get_channel();
         
         virtual void set_connection_handler(ConnectionHandler *handler);
+
+        virtual const Socket * get_scoket();
+
     };
 }
 

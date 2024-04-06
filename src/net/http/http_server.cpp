@@ -24,10 +24,11 @@
 #include "net/http/content_type.h"
 #include "net/http/header_key.h"
 #include "net/http/header_util.h"
+#include "net/http/proxy.h"
 
 namespace net::http
 {
-    HttpServer::HttpServer()
+    HttpServer::HttpServer() : quit_(false), state_(State::invalid), acceptor_(nullptr), event_loop_(nullptr), proxy_(nullptr)
     {
         
     }
@@ -39,6 +40,14 @@ namespace net::http
         }
 
         sessions_.clear();
+
+        if (proxy_) {
+            delete proxy_;
+        }
+
+        if (acceptor_) {
+            delete acceptor_;
+        }
     }
 
     void HttpServer::on_connected(Connection *conn)
@@ -77,20 +86,24 @@ namespace net::http
         }
 
         if (context->is_completed()) {
-            if (!context->try_parse_request_content()) {
-                context->process_error(ResponseCode::bad_request);
-                return;
-            }
-
-            auto handler = dispatcher_.get_handler(context->get_request()->get_raw_url());
-            if (handler) {
-                handler(context->get_request(), context->get_response());
+            if (proxy_ && proxy_->is_proxy(context->get_request()->get_raw_url())) {
+                proxy_->serve_proxy(context->get_request(), context->get_response());
             } else {
-                // 404
-                context->process_error(ResponseCode::not_found);
+                if (!context->try_parse_request_content()) {
+                    context->process_error(ResponseCode::bad_request);
+                    return;
+                }
+
+                auto handler = dispatcher_.get_handler(context->get_request()->get_raw_url());
+                if (handler) {
+                    handler(context->get_request(), context->get_response());
+                } else {
+                    // 404
+                    context->process_error(ResponseCode::not_found);
+                }
             }
 
-            if (sessions_.count(sessionId)) {
+            if (config::close_idle_connection && sessions_.count(sessionId)) {
                 session->reset_timer();
             }
         }
@@ -148,6 +161,14 @@ namespace net::http
         loop.set_connection_handler(this);
 
         std::cout << singleton::Singleton<HttpConfigManager>().get_string_property("server_name", "web server") << " started\n";
+
+        const auto &proxiesCfg = singleton::Singleton<HttpConfigManager>().get_type_array_properties<nlohmann::json>("proxies");
+        if (!proxiesCfg.empty()) {
+            proxy_ = new HttpProxy(this);
+            if (!proxy_->load_proxy_config_and_init()) {
+                return;
+            }
+        }
 
         loop.loop();
     }
@@ -262,7 +283,7 @@ namespace net::http
             fileStream = (std::fstream *) data->number.pval;
         }
         
-        int contentSize = config::client_max_content_length;
+        std::size_t contentSize = config::client_max_content_length;
         fileStream->seekg(0, std::ios_base::end);
         std::size_t length = fileStream->tellg();
         const std::string &contentType = get_content_type(ext);

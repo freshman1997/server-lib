@@ -66,7 +66,7 @@ namespace net::http
             }
 
             if (rcb_) {
-                rcb_(context->get_response());
+                rcb_(context->get_request(), context->get_response());
             }
         }
         session_->reset_timer();
@@ -95,7 +95,7 @@ namespace net::http
         delete this;
     }
 
-    bool HttpClient::connect(const InetAddress &addr, connected_callback ccb, response_callback rcb)
+    bool HttpClient::connect(const InetAddress &addr, connected_callback ccb, request_function rcb)
     {
         if (!ccb || !rcb) {
             std::cout << "must set callback!!\n";
@@ -108,7 +108,6 @@ namespace net::http
             return false;
         }
 
-        sock->set_reuse(true);
         sock->set_none_block(true);
         if (!sock->connect()) {
             std::cout << " connect failed " << std::endl;
@@ -117,7 +116,7 @@ namespace net::http
 
         config::load_config();
 
-        Connection *conn = new TcpConnection(sock->get_address()->get_ip(), addr.get_port(), sock->get_fd());
+        Connection *conn = new TcpConnection(sock);
         timer::WheelTimerManager manager;
         conn_timer_ = manager.timeout(config::connection_idle_timeout, this);
 
@@ -133,6 +132,8 @@ namespace net::http
         timer_manager_ = &manager;
         loop.loop();
         
+        delete conn;
+
         return true;
     }
 

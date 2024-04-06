@@ -268,7 +268,7 @@ void test_http_client()
         req->add_header("Connection", "close");
         req->send();
     },
-    [](net::http::HttpResponse *resp){
+    [](net::http::HttpRequest *req, net::http::HttpResponse *resp){
         if (resp->good()) {
             const net::http::Content *content = resp->get_body_content();
             const char *begin = resp->body_begin();

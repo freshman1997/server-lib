@@ -9,6 +9,7 @@ namespace net
     class InetAddress;
     class Channel;
     class ConnectionHandler;
+    class Socket;
 
     enum class ConnectionType
     {
@@ -20,13 +21,15 @@ namespace net
     class Connection : public SelectHandler
     {
     public:
+        virtual ~Connection() {}
+
         virtual bool is_connected() = 0;
 
-        virtual const InetAddress & get_remote_address() const = 0;
+        virtual const InetAddress & get_remote_address() = 0;
 
-        virtual Buffer * get_input_buff() = 0;
+        virtual Buffer * get_input_buff(bool take = false) = 0;
 
-        virtual Buffer * get_output_buff() = 0;
+        virtual Buffer * get_output_buff(bool take = false) = 0;
 
         virtual void send(Buffer *buff) = 0;
 
@@ -43,6 +46,8 @@ namespace net
         virtual Channel * get_channel() = 0;
         
         virtual void set_connection_handler(ConnectionHandler *handler) = 0;
+
+        virtual const Socket * get_scoket() = 0;
     };
 }
 

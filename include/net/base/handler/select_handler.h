@@ -8,6 +8,8 @@ namespace net
     class SelectHandler
     {
     public:
+        virtual ~SelectHandler() {}
+
         virtual void on_read_event() = 0;
 
         virtual void on_write_event() = 0;

@@ -1,13 +1,14 @@
 #ifndef __SOCKET_H__
 #define __SOCKET_H__
-#include "inet_address.h"
 
 namespace net
 {
+    class InetAddress;
+    
     class Socket
     {
     public:
-        explicit Socket(const char *ip, int port);
+        explicit Socket(const char *ip, int port, int fd = -1);
         ~Socket();
 
         bool bind();

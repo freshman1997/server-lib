@@ -25,10 +25,12 @@ namespace net
         return false;
     }
 
-    Socket::Socket(const char *ip, int port)
+    Socket::Socket(const char *ip, int port, int fd)
     {
+        fd_ = fd;
+        addr = nullptr;
+
         if (is_host(ip)) {
-            fd_ = 0;
             struct hostent *h;
             h = ::gethostbyname(ip);
             if(h) {
@@ -36,18 +38,28 @@ namespace net
                 memcpy(&addr_in.sin_addr.s_addr, h->h_addr,4);
                 addr_in.sin_port = htons(port);
                 addr = new InetAddress(addr_in);
-                fd_ = socket::create_ipv4_socket(true);
+                addr->set_domain(ip);
+                if (fd < 0) {
+                    fd_ = socket::create_ipv4_socket(true);
+                }
             }
         } else {
             addr = new InetAddress(ip, port);
-            fd_ = socket::create_ipv4_socket(true);
+            if (fd < 0) {
+                fd_ = socket::create_ipv4_socket(true);
+            }
         }
     }
 
     Socket::~Socket()
     {
-        ::close(fd_);
-        delete addr;
+        if (fd_ > 0) {
+            ::close(fd_);
+        }
+
+        if (addr) {
+            delete addr;
+        }
     }
 
     bool Socket::bind()

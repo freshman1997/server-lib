@@ -185,7 +185,7 @@ public:
 
     void reset_read_index(size_t idx)
     {
-        if (idx <= 0 || idx >= buffs.size()) {
+        if (idx < 0 || idx >= buffs.size()) {
             return;
         }
 

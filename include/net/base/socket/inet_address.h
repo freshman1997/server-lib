@@ -16,6 +16,10 @@ namespace net
 
         InetAddress(const InetAddress &addr);
 
+        friend bool operator==(const InetAddress &addr1, const InetAddress &addr2);
+
+        friend bool operator!=(const InetAddress &addr1, const InetAddress &addr2);
+
         void set_addr(const std::string &ip, int port)
         {
             ip_ = ip;
@@ -34,10 +38,25 @@ namespace net
 
         struct sockaddr_in to_ipv4_address() const;
 
+        const std::string & get_domain() const 
+        {
+            return domain_;
+        }
+
+        void set_domain(const std::string &domain)
+        {
+            domain_ = domain;
+        }
+
     private:
         int port_;
         std::string ip_;
+        std::string domain_;
     };
+
+    bool operator==(const InetAddress &addr1, const InetAddress &addr2);
+
+    bool operator!=(const InetAddress &addr1, const InetAddress &addr2);
 }
 
 #endif

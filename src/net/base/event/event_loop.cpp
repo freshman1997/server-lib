@@ -53,7 +53,7 @@ namespace net
         }
     }
 
-    void EventLoop::on_new_connection(Connection *conn, Acceptor *acceptor)
+    void EventLoop::on_new_connection(Connection *conn, bool callConnected)
     {
         if (conn) {
             const InetAddress &addr = conn->get_remote_address();
@@ -67,16 +67,18 @@ namespace net
                 assert(new_fd > 0);
                 channel->set_new_fd(new_fd);
             }
-
-            conn->set_connection_handler(connHandler_);
+            
             poller_->update_channel(channel);
             channels_[channel->get_fd()] = channel;
 
-            connHandler_->on_connected(conn);
+            if (callConnected) {
+                conn->set_connection_handler(connHandler_);
+                connHandler_->on_connected(conn);
+            }
         }
     }
 
-    void EventLoop::on_quit(Acceptor *acceptor)
+    void EventLoop::on_quit()
     {
         quit_ = true;
     }
@@ -92,7 +94,6 @@ namespace net
         if (it != channels_.end()) {
             poller_->remove_channel(channel);
             channels_.erase(it);
-            ::close(channel->get_fd());
         }
     }
 

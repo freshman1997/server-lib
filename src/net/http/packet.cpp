@@ -250,4 +250,17 @@ namespace net::http
             is_good_ = false;
         }
     }
+
+    Buffer * HttpPacket::get_buff(bool take)
+    {
+        if (!take) {
+            return buffer_;
+        }
+
+        Buffer *buf = buffer_;
+        buffer_ = singleton::Singleton<BufferedPool>().allocate();
+        buf->reset_read_index(0);
+        
+        return buf;
+    }
 }

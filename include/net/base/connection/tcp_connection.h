@@ -18,15 +18,17 @@ namespace net
     public:
         TcpConnection(const std::string ip, int port, int fd);
 
+        TcpConnection(Socket *scok);
+
         virtual ~TcpConnection();
 
         virtual bool is_connected();
 
-        virtual const InetAddress & get_remote_address() const;
+        virtual const InetAddress & get_remote_address();
 
-        virtual Buffer * get_input_buff();
+        virtual Buffer * get_input_buff(bool take = false);
 
-        virtual Buffer * get_output_buff();
+        virtual Buffer * get_output_buff(bool take = false);
 
         virtual void send(Buffer * buff);
 
@@ -44,6 +46,8 @@ namespace net
 
         virtual void set_connection_handler(ConnectionHandler *connectionHandler);
 
+        virtual const Socket * get_scoket();
+
     public: // select handler
         virtual void on_read_event();
 
@@ -54,9 +58,11 @@ namespace net
     private:
         void do_close();
 
+        void init();
+
     private:
-        InetAddress addr_;
         Channel channel_;
+        Socket *socket_;
         AcceptHandler *acceptHandler_;
         ConnectionHandler *connectionHandler_;
         EventHandler *eventHandler_;

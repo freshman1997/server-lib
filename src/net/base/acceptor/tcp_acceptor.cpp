@@ -53,21 +53,21 @@ namespace net
         int conn_fd = socket_->accept(peer_addr);
         if (conn_fd < 0) {
             std::cout << "error connection " << std::endl;
-            handler_->on_quit(this);
+            handler_->on_quit();
             delete this;
         } else {
             Connection *conn = new TcpConnection(::inet_ntoa(peer_addr.sin_addr), 
                         ntohs(peer_addr.sin_port), conn_fd);
             conn->set_event_handler(handler_);
 
-            handler_->on_new_connection(conn, this);
+            handler_->on_new_connection(conn);
         }
     }
 
     void TcpAcceptor::on_write_event()
     {
         if (handler_) {
-            handler_->on_quit(this);
+            handler_->on_quit();
         }
 
         on_close();

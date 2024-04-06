@@ -118,10 +118,7 @@ namespace net::http
 
         bool parse_content();
 
-        Buffer * get_buff()
-        {
-            return buffer_;
-        }
+        Buffer * get_buff(bool take = false);
 
     protected:
         HttpSessionContext *context_;

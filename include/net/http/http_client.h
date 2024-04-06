@@ -5,17 +5,13 @@
 #include "net/base/socket/inet_address.h"
 #include "timer/timer.h"
 #include "timer/timer_task.h"
+#include "net/http/common.h"
 
 #include <functional>
 
 namespace net::http 
 {
-    class HttpSession;
-    class HttpResponse;
-    class HttpRequest;
-
-    typedef std::function<void (HttpResponse *resp)> response_callback;
-    typedef std::function<void (HttpRequest *resp)> connected_callback;
+    typedef std::function<void (HttpRequest *req)> connected_callback;
 
     class HttpClient : public ConnectionHandler, public timer::TimerTask
     {
@@ -35,7 +31,7 @@ namespace net::http
         virtual void on_close(Connection *conn);
 
     public:
-        bool connect(const InetAddress &addr, connected_callback ccb, response_callback rcb);
+        bool connect(const InetAddress &addr, connected_callback ccb, request_function rcb);
     
         virtual void on_timer(timer::Timer *timer);
 
@@ -47,7 +43,7 @@ namespace net::http
     private:
         net::EventLoop *ev_loop_;
         HttpSession *session_;
-        response_callback rcb_;
+        request_function rcb_;
         connected_callback ccb_;
         timer::TimerManager *timer_manager_;
         timer::Timer *conn_timer_;

@@ -35,4 +35,14 @@ namespace net
         addr.sin_addr.s_addr = ip_.empty() ? htonl(INADDR_ANY) : inet_addr(ip_.c_str());
         return addr;
     }
+
+    bool operator==(const InetAddress &addr1, const InetAddress &addr2)
+    {
+        return addr1.get_ip() == addr2.get_ip() && addr1.get_port() == addr2.get_port();
+    }
+
+    bool operator!=(const InetAddress &addr1, const InetAddress &addr2)
+    {
+        return !operator==(addr1, addr2);
+    }
 }

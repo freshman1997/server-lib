@@ -18,7 +18,7 @@ namespace net
 
 namespace net::http 
 {
-    class HttpSession;
+    class HttpProxy;
 
     class HttpServer : public ConnectionHandler
     {
@@ -56,6 +56,11 @@ namespace net::http
 
         void stop();
 
+        EventLoop * get_event_loop()
+        {
+            return event_loop_;
+        }
+
     public:
         void on(const std::string &url, request_function func, bool is_prefix = false);
 
@@ -75,6 +80,7 @@ namespace net::http
         HttpRequestDispatcher dispatcher_;
         std::unordered_map<std::string, std::string> static_paths_;
         std::set<std::string> play_types_;
+        HttpProxy *proxy_;
     };
 }
 

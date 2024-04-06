@@ -11,7 +11,7 @@
     "playable_types": [".mp4", ".ogg"],
     "proxies": [
         {
-            "root": "",
+            "root": "/game",
             "target": ["127.0.0.1", 12334]
         }
     ]

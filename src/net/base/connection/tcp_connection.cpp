@@ -4,6 +4,7 @@
 #include "net/base/handler/connection_handler.h"
 #include "net/base/socket/socket_ops.h"
 #include "net/base/handler/event_handler.h"
+#include "net/base/socket/socket.h"
 
 #include <cassert>
 #include <iostream>
@@ -13,13 +14,22 @@ namespace net
 {
     TcpConnection::TcpConnection(const std::string ip, int port, int fd)
     {
-        addr_.set_addr(ip, port);
+        socket_ = new Socket(ip.c_str(), port, fd);
+        init();
+    }
 
-        socket::set_none_block(fd, true);
-        socket::set_keep_alive(fd, true);
-        //socket::set_no_delay(fd, true);
+    TcpConnection::TcpConnection(Socket *scok) : socket_(scok)
+    {
+        init();
+    }
 
-        channel_.set_fd(fd);
+    void TcpConnection::init()
+    {
+        socket::set_none_block(socket_->get_fd(), true);
+        socket::set_keep_alive(socket_->get_fd(), true);
+        socket::set_no_delay(socket_->get_fd(), true);
+
+        channel_.set_fd(socket_->get_fd());
         channel_.set_handler(this);
         channel_.enable_read();
         channel_.enable_write();
@@ -33,9 +43,11 @@ namespace net
         eventHandler_->update_event(&channel_);
         channel_.set_handler(nullptr);
         connectionHandler_->on_close(this);
-
-        std::cout << "connection closed, ip: " << addr_.get_ip() << ", port: " << addr_.get_port() 
+        
+        std::cout << "connection closed, ip: " << socket_->get_address()->get_ip() << ", port: " << socket_->get_address()->get_port() 
                 << ", fd: " << channel_.get_fd() << "\n";
+        
+        delete socket_;
     }
 
     bool TcpConnection::is_connected()
@@ -43,19 +55,19 @@ namespace net
         return true;
     }
 
-    const InetAddress & TcpConnection::get_remote_address() const
+    const InetAddress & TcpConnection::get_remote_address()
     {
-        return addr_;
+        return *socket_->get_address();
     }
 
-    Buffer * TcpConnection::get_input_buff()
+    Buffer * TcpConnection::get_input_buff(bool take)
     {
-        return input_buffer_.get_current_buffer();
+        return take ? input_buffer_.take_current_buffer() : input_buffer_.get_current_buffer();
     }
 
-    Buffer * TcpConnection::get_output_buff()
+    Buffer * TcpConnection::get_output_buff(bool take)
     {
-        return output_buffer_.get_current_buffer();
+        return take ? output_buffer_.take_current_buffer() : output_buffer_.get_current_buffer();
     }
 
     void TcpConnection::send(Buffer * buff)
@@ -65,6 +77,13 @@ namespace net
         }
         
         output_buffer_.append_buffer(buff);
+        if (output_buffer_.get_current_buffer()->readable_bytes() == 0) {
+            output_buffer_.get_current_buffer()->reset();
+            output_buffer_.free_current_buffer();
+        }
+
+        // try send
+        send();
     }
 
     void TcpConnection::send()
@@ -169,5 +188,10 @@ namespace net
     void TcpConnection::do_close()
     {
         delete this;
+    }
+
+    const Socket * TcpConnection::get_scoket()
+    {
+        return socket_;
     }
 }

@@ -18,6 +18,8 @@ public:
 
     void append_buffer(Buffer *buf);
 
+    Buffer * take_current_buffer();
+
     std::size_t get_size() const 
     {
         return buffers_.size();
