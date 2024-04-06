@@ -83,6 +83,7 @@ namespace net
                     return;
                 }
             } else if (ret < 0) {
+                connectionHandler_->on_error(this);
                 abort();
                 break;
             }

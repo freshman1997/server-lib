@@ -115,6 +115,8 @@ namespace net::http
             return false;
         }
 
+        config::load_config();
+
         Connection *conn = new TcpConnection(sock->get_address()->get_ip(), addr.get_port(), sock->get_fd());
         timer::WheelTimerManager manager;
         conn_timer_ = manager.timeout(config::connection_idle_timeout, this);

@@ -1,9 +1,0 @@
-{
-    "server_name": "Jackey Web Server",
-    "max_content_length": 2097152,
-    "parse_form_data_content_types": ["application/json"],
-    "static_file_paths": [
-        { "root": "/static", "path": "static" }
-    ],
-    "playable_types": [".mp4", ".mp3", ".flv", ".mkv"]
-}

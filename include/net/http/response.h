@@ -1,8 +1,5 @@
 #ifndef __RESPONSE_H__
 #define __RESPONSE_H__
-#include <string>
-#include <unordered_map>
-
 #include "net/http/packet.h"
 #include "response_code.h"
 
@@ -36,6 +33,8 @@ namespace net::http
         void append_body(const char *data);
         
         void append_body(const std::string &data);
+
+        void process_error(ResponseCode errorCode = ResponseCode::internal_server_error);
 
     private:
         bool pack_response();

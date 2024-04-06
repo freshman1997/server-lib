@@ -60,6 +60,7 @@ namespace net::http
 
         content_type_extra_.clear();
         error_code_ = ResponseCode::internal_server_error;
+        buffer_->reset();
     }
 
     const std::string * HttpPacket::get_header(const std::string &key)

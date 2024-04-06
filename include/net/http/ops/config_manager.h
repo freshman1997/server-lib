@@ -19,11 +19,11 @@ namespace net::http
         bool reload_config();
 
     public:
-        uint32_t get_uint_property(const std::string &key);
-        int32_t get_int_property(const std::string &key);
-        bool get_bool_property(const std::string &key);
-        double get_double_property(const std::string &key);
-        std::string get_string_property(const std::string &key);
+        uint32_t get_uint_property(const std::string &key, uint32_t defVal = 0);
+        int32_t get_int_property(const std::string &key, int defVal = 0);
+        bool get_bool_property(const std::string &key, bool defVal = false);
+        double get_double_property(const std::string &key, double defVal = 0);
+        std::string get_string_property(const std::string &key, const std::string &defVal = "");
 
         template<typename T>
         std::vector<T> get_type_array_properties(const std::string &key)

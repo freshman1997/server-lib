@@ -1,4 +1,5 @@
 #include "net/http/content/parsers/multipart_content_parser.h"
+#include "net/http/header_util.h"
 #include "base/utils/base64.h"
 #include "net/http/content/types.h"
 #include "net/http/content_type.h"
@@ -10,104 +11,6 @@
 
 namespace net::http 
 {
-    namespace helper
-    {
-        std::unordered_map<std::string, ContentDispositionType> dispistion_type_mapping_ = {
-            {"inline", ContentDispositionType::inline_},
-            {"attachment", ContentDispositionType::attachment_},
-            {"form-data", ContentDispositionType::form_data_},
-        };
-
-        const char * dispistion_type_names[] = {
-            "inline",
-            "attachment",
-            "form-data"
-        };
-
-        std::string filename_ = "filename";
-        std::string name_ = "name";
-
-        static bool str_cmp(const char *begin, const char *end, const char *str)
-        {
-            const char *p = begin;
-            const char *p1 = str;
-            for (;p != end && *p1; ++p, ++p1) {
-                if (std::tolower(*p) != *p1) {
-                    return false;
-                }
-            }
-
-            return p == end && !(*p1);
-        }
-
-        static std::string read_identifier(const char *p, const char *end)
-        {
-            std::string id;
-            bool quoted = false;
-            bool ended = false;
-            for (; p != end; ++p) {
-                char ch = *p;
-                if (ch == ' ') {
-                    continue;
-                }
-
-                if (ch == '\"') {
-                    if (quoted) break;
-                    quoted = true;
-                    continue;
-                }
-
-                if (ch == '=' || ch == ':' || ch == ';' || ch == '\r') {
-                    break;
-                }
-
-                id.push_back(std::tolower(ch));
-            }
-
-            return id;
-        }
-
-        static uint32_t skip_new_line(const char *data)
-        {
-            char ch = *data;
-            if (ch == '\r') {
-                return 2;
-            }
-
-            if (ch == '\n') {
-                return 1;
-            }
-
-            return 0;
-        }
-
-        static void read_next(const char *begin, const char *end, char ending, std::string &str)
-        {
-            while (begin <= end) {
-                char ch = *begin;
-                if (ch == ending) {
-                    break;
-                }
-                str.push_back(ch);
-            }
-        }
-    }
-
-    ContentDispositionType get_content_disposition_type(const std::string &name)
-    {
-        auto it = helper::dispistion_type_mapping_.find(name);
-        return it == helper::dispistion_type_mapping_.end() ? ContentDispositionType::unknow_ : it->second;
-    }
-
-    std::string content_disposition_to_string(ContentDispositionType type)
-    {
-        if (type == ContentDispositionType::unknow_) {
-            return {};
-        }
-
-        return helper::dispistion_type_names[(std::size_t)type];
-    }
-
     bool MultipartFormDataParser::can_parse(ContentType contentType)
     {
         return contentType == ContentType::multpart_form_data;
@@ -131,7 +34,7 @@ namespace net::http
 
         std::string boundaryEnd = "--" + it->second + "--";
         FormDataContent *fd = new FormDataContent;
-        fd->type = helper::dispistion_type_names[(std::size_t)ContentDispositionType::form_data_];
+        fd->type = helper::dispistion_type_names[(std::size_t)helper::ContentDispositionType::form_data_];
         Content *content = new Content(ContentType::multpart_form_data, fd);
         while (begin <= end)
         {
@@ -144,8 +47,8 @@ namespace net::http
                 return false;
             }
 
-            ContentDispositionType disType = get_content_disposition_type(dis.second.first);
-            if (disType != ContentDispositionType::form_data_) {
+            helper::ContentDispositionType disType = helper::get_content_disposition_type(dis.second.first);
+            if (disType != helper::ContentDispositionType::form_data_) {
                 delete content;
                 return false;
             }
@@ -354,16 +257,6 @@ namespace net::http
 
     bool MultipartByterangesParser::parse(HttpPacket *packet)
     {
-        const std::string *rangeStr = packet->get_header(http_header_key::range);
-        if (!rangeStr || rangeStr->empty()) {
-            return false;
-        }
-
-        const auto &ranges = parse_range(*rangeStr);
-        if (ranges.empty()) {
-            return false;
-        }
-
         const char *begin = packet->body_begin();
         const char *end = packet->body_end();
 
@@ -436,44 +329,6 @@ namespace net::http
         packet->set_body_content(content);
 
         return true;
-    }
-
-    std::vector<std::pair<uint32_t, uint32_t>> MultipartByterangesParser::parse_range(const std::string &range)
-    {
-        std::vector<std::pair<uint32_t, uint32_t>> res;
-
-        std::string from, to;
-        bool next = false;
-        for (std::size_t i = 0; i < range.size(); ++i) {
-            char ch = range[i];
-            if (ch == ',') {
-                if (from.empty() || to.empty()) {
-                    return {};
-                }
-
-                res.push_back({std::atoi(from.c_str()), std::atoi(to.c_str())});
-
-                from.clear();
-                to.clear();
-                next = false;
-            }
-
-            if (ch == '-') {
-                next = true;
-            }
-
-            if (next) {
-                to.push_back(ch);
-            } else {
-                from.push_back(ch);
-            }
-        }
-
-        if (!from.empty() && !to.empty()) {
-            res.push_back({std::atoi(from.c_str()), std::atoi(to.c_str())});
-        }
-
-        return res;
     }
 
     std::tuple<bool, uint32_t, uint32_t, uint32_t, uint32_t> MultipartByterangesParser::parse_content_range(const char *begin, const char *end)

@@ -3,24 +3,11 @@
 #include <cstdint>
 #include <unordered_map>
 #include <utility>
-#include <vector>
 #include "net/http/content/content_parser.h"
 
 namespace net::http 
 {
     typedef std::pair<uint32_t, std::pair<std::string, std::unordered_map<std::string, std::string>>> ContentDisposition;
-
-    enum class ContentDispositionType
-    {
-        unknow_ = -1,
-        inline_ = 0,
-        attachment_,
-        form_data_,
-    };
-
-    ContentDispositionType get_content_disposition_type(const std::string &name);
-
-    std::string content_disposition_to_string(ContentDispositionType type);
 
     class MultipartFormDataParser : public ContentParser
     {
@@ -47,7 +34,6 @@ namespace net::http
         virtual bool parse(HttpPacket *packet);
     
     private:
-        std::vector<std::pair<uint32_t, uint32_t>> parse_range(const std::string &range);
         std::tuple<bool, uint32_t, uint32_t, uint32_t, uint32_t> parse_content_range(const char *begin, const char *end);
     };
 }

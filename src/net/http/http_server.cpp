@@ -1,4 +1,3 @@
-#include "base/time.h"
 #include <fstream>
 #include <iostream>
 #include <unistd.h>
@@ -24,6 +23,7 @@
 #include "net/http/response.h"
 #include "net/http/content_type.h"
 #include "net/http/header_key.h"
+#include "net/http/header_util.h"
 
 namespace net::http
 {
@@ -132,6 +132,7 @@ namespace net::http
             return false;
         }
 
+        config::load_config();
         load_static_paths();
 
         return true;
@@ -145,6 +146,9 @@ namespace net::http
         loop.update_event(acceptor_->get_channel());
         this->event_loop_ = &loop;
         loop.set_connection_handler(this);
+
+        std::cout << singleton::Singleton<HttpConfigManager>().get_string_property("server_name", "web server") << " started\n";
+
         loop.loop();
     }
 
@@ -203,25 +207,25 @@ namespace net::http
         std::string prefix = url.substr(0, prefixIdx);
         const std::string &pathPrefix = static_paths_[prefix];
         if (pathPrefix.empty()) {
-            resp->get_context()->process_error();
+            resp->process_error();
             return;
         }
 
         if (prefixIdx + 1 > url.size()) {
-            resp->get_context()->process_error(ResponseCode::not_found);
+            resp->process_error(ResponseCode::not_found);
             return;
         }
 
         const std::string &fileRelativePath = url.substr(prefixIdx + 1);
         std::size_t pos = fileRelativePath.find_last_of('.');
         if (pos == std::string::npos) {
-            resp->get_context()->process_error();
+            resp->process_error();
             return;
         }
 
         const std::string &ext = fileRelativePath.substr(pos);
         if (!play_types_.count(ext)) {
-            resp->get_context()->process_error();
+            resp->process_error();
             return;
         }
 
@@ -239,7 +243,7 @@ namespace net::http
             std::fstream *file_ = new std::fstream(path.c_str(), std::ios_base::in);
             if (!file_->good()) {
                 std::cout << "open file fail!\n";
-                resp->get_context()->process_error(ResponseCode::not_found);
+                resp->process_error(ResponseCode::not_found);
                 return;
             }
 
@@ -258,56 +262,47 @@ namespace net::http
             fileStream = (std::fstream *) data->number.pval;
         }
         
-        int content_size_ = -1;
+        int contentSize = config::client_max_content_length;
         fileStream->seekg(0, std::ios_base::end);
-        std::size_t length_ = fileStream->tellg();
+        std::size_t length = fileStream->tellg();
         const std::string &contentType = get_content_type(ext);
-        if (length_ == 0 || contentType.empty()) {
-            resp->get_context()->process_error(ResponseCode::bad_request);
+        if (length == 0 || contentType.empty()) {
+            resp->process_error(ResponseCode::bad_request);
             return;
         }
 
-        content_size_ = 1024 * 1024;
-        if (content_size_ < 0) {
-            resp->get_context()->process_error();
-            return;
-        }
+        std::size_t offset = 0;
 
         const std::string *range = req->get_header(net::http::http_header_key::range);
-        long long offset = 0;
-
         if (range) {
-            size_t pos = range->find_first_of("=");
-            if (std::string::npos == pos) {
-                resp->get_context()->process_error();
+            const auto &ranges = helper::parse_range(*range);
+            if (ranges.empty()) {
+                resp->process_error(ResponseCode::bad_request);
                 return;
             }
-
-            size_t pos1 = range->find_first_of("-");
-            offset = std::atol(range->substr(pos + 1, pos1 - pos).c_str());
+            offset = ranges[0].first;
         }
 
         std::string bytes = "bytes ";
         bytes.append(std::to_string(offset))
             .append("-")
-            .append(std::to_string(length_ - 1))
+            .append(std::to_string(length - 1))
             .append("/")
-            .append(std::to_string(length_));
+            .append(std::to_string(length));
         
         resp->add_header("Content-Type", contentType);
         resp->add_header("Content-Range", bytes);
 
-        size_t r = content_size_ + offset > length_ ? length_ - offset : content_size_;
-        resp->add_header("Content-length", std::to_string(r));
+        std::size_t sz = contentSize + offset > length ? length - offset : contentSize;
+        resp->add_header("Content-length", std::to_string(sz));
 
         fileStream->seekg(offset, std::ios::beg);
-        resp->get_buff()->reset();
-        if (resp->get_buff()->writable_size() < content_size_) {
-            resp->get_buff()->resize(content_size_);
+        if (resp->get_buff()->writable_size() < sz) {
+            resp->get_buff()->resize(sz);
         }
 
-        fileStream->read(resp->get_buff()->buffer_begin(), content_size_);
-        resp->get_buff()->fill(r);
+        fileStream->read(resp->get_buff()->buffer_begin(), sz);
+        resp->get_buff()->fill(sz);
 
         if (fileStream->eof()) {
             fileStream->clear();

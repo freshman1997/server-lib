@@ -4,7 +4,6 @@
 #include "net/http/request.h"
 #include "net/http/response.h"
 #include "net/http/response_code.h"
-#include "net/http/response_code_desc.h"
 
 namespace net::http 
 {
@@ -77,33 +76,11 @@ namespace net::http
     
     void HttpSessionContext::process_error(ResponseCode errorCode)
     {
-        std::string response;
-        switch (errorCode) {
-            case ResponseCode::bad_request: {
-                errorCode = ResponseCode::bad_request;
-                break;
-            }
-            case ResponseCode::not_found: {
-                errorCode = ResponseCode::not_found;
-                break;
-            }
-            default: {
-                errorCode = ResponseCode::internal_server_error;
-                break;
-            }
+        if (mode_ == Mode::server) {
+            response_->process_error(errorCode);
         }
-
-        std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">"+ responseCodeDescs[errorCode] +"</h1>";;
-        response = "HTTP/1.1 " + std::to_string((int)errorCode) + " " + responseCodeDescs[errorCode] 
-                    + "\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " 
-                    + std::to_string(msg.size()) + "\r\n\r\n" + msg;
-
-        auto buff = conn_->get_output_buff();
-        buff->write_string(response);
-        conn_->send();
-        conn_->close();
     }
-
+    
     HttpPacket * HttpSessionContext::get_packet()
     {
         return mode_ == Mode::server ? 

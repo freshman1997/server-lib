@@ -1,0 +1,18 @@
+{
+    "server_name": "Jackey Web Server",
+    "connection_idle_timeout": 30000,
+    "close_idle_connection": false,
+    "max_content_length": 2097152,
+    "form_data_upload_save": false,
+    "parse_form_data_content_types": ["application/json"],
+    "static_file_paths": [
+        { "root": "/static", "path": "/home/yuan/Desktop" }
+    ],
+    "playable_types": [".mp4", ".ogg"],
+    "proxies": [
+        {
+            "root": "",
+            "target": ["127.0.0.1", 12334]
+        }
+    ]
+}

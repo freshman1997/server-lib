@@ -10,7 +10,12 @@ namespace net::http
     HttpSession::HttpSession(uint64_t id, HttpSessionContext *context, timer::TimerManager *timer_manager) : session_id_(id), context_(context), timer_manager_(timer_manager)
     {
         context_->set_session(this);
-        conn_timer_ = timer_manager_->timeout(config::connection_idle_timeout, this);
+        
+        conn_timer_ = nullptr;
+        if (config::close_idle_connection) {
+            conn_timer_ = timer_manager_->timeout(config::connection_idle_timeout, this);
+        }
+
         close_cb_ = nullptr;
     }
 
@@ -24,7 +29,10 @@ namespace net::http
         if (context_) {
             delete context_;
         }
-        conn_timer_->cancel();
+        
+        if (conn_timer_) {
+            conn_timer_->cancel();
+        }
     }
 
     void HttpSession::add_session_value(const std::string &key, int ival)
@@ -59,12 +67,14 @@ namespace net::http
     void HttpSession::on_timer(timer::Timer *timer)
     {
         std::cout << "connection idle timeout !!\n";
-        context_->get_connection()->abort();
+        context_->get_connection()->close();
     }
 
     void HttpSession::reset_timer()
     {
-        conn_timer_->cancel();
-        conn_timer_ = timer_manager_->timeout(config::connection_idle_timeout, this);
+        if (config::close_idle_connection) {
+            conn_timer_->cancel();
+            conn_timer_ = timer_manager_->timeout(config::connection_idle_timeout, this);
+        }
     }
 }
