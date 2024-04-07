@@ -32,7 +32,7 @@ namespace net
             handler_->on_read_event();
         }
 
-        if (event & WRITE_EVENT && events_ & WRITE_EVENT) {
+        if (handler_ && event & WRITE_EVENT && events_ & WRITE_EVENT) {
             handler_->on_write_event();
         }
     }

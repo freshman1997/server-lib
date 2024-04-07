@@ -53,13 +53,12 @@ namespace net::http
     void HttpServer::on_connected(Connection *conn)
     {
         uint64_t sessionId = (uint64_t)conn;
-        sessions_[sessionId] = new HttpSession(sessionId, new HttpSessionContext(conn),
-             &singleton::Singleton<timer::WheelTimerManager>());
+        sessions_[sessionId] = new HttpSession(sessionId, new HttpSessionContext(conn), timer_manager_);
     }
 
     void HttpServer::on_error(Connection *conn)
     {
-        free_session(conn);
+        
     }
 
     void HttpServer::on_read(Connection *conn)
@@ -153,7 +152,11 @@ namespace net::http
 
     void HttpServer::serve()
     {
-        net::EventLoop loop(&singleton::Singleton<net::EpollPoller>(), &singleton::Singleton<timer::WheelTimerManager>());
+        timer::WheelTimerManager timerManager;
+        timer_manager_ = &timerManager;
+
+        net::EpollPoller poller;
+        net::EventLoop loop(&poller, &timerManager);
         acceptor_->set_event_handler(&loop);
 
         loop.update_event(acceptor_->get_channel());
@@ -192,6 +195,10 @@ namespace net::http
         uint64_t sessionId = (uint64_t)conn;
         auto it = sessions_.find(sessionId);
         if (it != sessions_.end()) {
+            if (proxy_) {
+                proxy_->on_client_close(conn);
+            }
+
             delete it->second;
             sessions_.erase(it);
         } else {

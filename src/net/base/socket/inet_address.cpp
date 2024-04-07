@@ -38,6 +38,9 @@ namespace net
 
     bool operator==(const InetAddress &addr1, const InetAddress &addr2)
     {
+        if (!addr1.domain_.empty() && !addr2.domain_.empty()) {
+            return addr1.get_ip() == addr2.get_ip() && addr1.get_port() == addr2.get_port() && addr1.domain_ == addr2.domain_;
+        }
         return addr1.get_ip() == addr2.get_ip() && addr1.get_port() == addr2.get_port();
     }
 

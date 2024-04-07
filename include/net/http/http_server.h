@@ -8,6 +8,7 @@
 #include "common.h"
 #include "net/http/context.h"
 #include "request_dispatcher.h"
+#include "timer/timer_manager.h"
 
 namespace net
 {
@@ -61,6 +62,11 @@ namespace net::http
             return event_loop_;
         }
 
+        timer::TimerManager * get_timer_manager()
+        {
+            return timer_manager_;
+        }
+
     public:
         void on(const std::string &url, request_function func, bool is_prefix = false);
 
@@ -76,6 +82,7 @@ namespace net::http
         State state_;
         Acceptor *acceptor_;
         EventLoop *event_loop_;
+        timer::TimerManager *timer_manager_;
         std::unordered_map<uint64_t, HttpSession *> sessions_;
         HttpRequestDispatcher dispatcher_;
         std::unordered_map<std::string, std::string> static_paths_;

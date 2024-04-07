@@ -132,8 +132,6 @@ namespace net::http
         timer_manager_ = &manager;
         loop.loop();
         
-        delete conn;
-
         return true;
     }
 

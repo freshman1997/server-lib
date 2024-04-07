@@ -12,6 +12,7 @@ namespace timer
         cancal,
     };
 
+    class TimerTask;
     class Timer
     {
     public:
@@ -28,7 +29,9 @@ namespace timer
         virtual bool is_done() = 0;
 
         virtual bool is_cancel() = 0;
-    
+
+        virtual TimerTask * get_task() = 0;
+        
     };
 }
 

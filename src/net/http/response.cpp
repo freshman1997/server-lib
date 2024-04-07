@@ -70,7 +70,7 @@ namespace net::http
         }
 
         std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">"+ it->second +"</h1>";;
-        std::string response = "HTTP/1.1 " + std::to_string((int)errorCode) + " " + it->second 
+        std::string response = "HTTP/1.1 " + it->second 
                     + "\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " 
                     + std::to_string(msg.size()) + "\r\n\r\n" + msg;
 

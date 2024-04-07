@@ -76,6 +76,7 @@ namespace timer
         virtual bool is_processing();
         virtual bool is_done();
         virtual bool is_cancel();
+        TimerTask * get_task();
 
     public:
         WheelTimer * get_prev();
@@ -86,7 +87,6 @@ namespace timer
         uint64_t get_remain() const;
         void on_schedule(WheelTimerItem *item);
         void trigger();
-        TimerTask * get_task();
 
     private:
         TimerState state_;

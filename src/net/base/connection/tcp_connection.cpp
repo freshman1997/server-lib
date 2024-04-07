@@ -75,7 +75,7 @@ namespace net
         if (!buff || closed_) {
             return;
         }
-        
+
         output_buffer_.append_buffer(buff);
         if (output_buffer_.get_current_buffer()->readable_bytes() == 0) {
             output_buffer_.get_current_buffer()->reset();

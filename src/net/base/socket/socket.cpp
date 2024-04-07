@@ -29,7 +29,8 @@ namespace net
     {
         fd_ = fd;
         addr = nullptr;
-
+        id_ = -1;
+        
         if (is_host(ip)) {
             struct hostent *h;
             h = ::gethostbyname(ip);

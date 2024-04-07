@@ -1,9 +1,13 @@
 #include <cassert>
+#include <cstdint>
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
 #include <iterator>
 
+#include "buffer/pool.h"
+#include "net/base/connection/connection.h"
+#include "net/base/socket/inet_address.h"
 #include "net/http/proxy.h"
 #include "net/base/connection/tcp_connection.h"
 #include "net/base/socket/socket.h"
@@ -16,16 +20,35 @@
 #include "net/http/response.h"
 #include "net/http/http_server.h"
 #include "net/base/event/event_loop.h"
+#include "timer/timer.h"
+#include "timer/timer_manager.h"
 
 namespace net::http
 {
+    void RemoteConnectTask::on_timer(timer::Timer *timer)
+    {
+        std::cout << "connection to remote server fail ===> " << addr_.to_address_key() << '\n';
+        if (resp_) {
+            resp_->process_error(ResponseCode::gateway_timeout);
+        }
+
+        if (proxy_) {
+            proxy_->on_connection_timeout(this);
+        }
+    }
+
+    void RemoteConnectTask::on_finished(timer::Timer *timer)
+    {
+    }
+
     HttpProxy::HttpProxy()
     {
         server_ = nullptr;
         srand(time(nullptr));
+        tasK_id_ = 0;
     }
 
-    HttpProxy::HttpProxy(HttpServer *server) : server_(server)
+    HttpProxy::HttpProxy(HttpServer *server) : server_(server), tasK_id_(0)
     {
         srand(time(nullptr));
     }
@@ -81,21 +104,35 @@ namespace net::http
             if (it->second.second) {
                 cs_connection_mapping_.erase(it->second.second);
             }
-            url_connection_mapping_[it->second.first].erase(conn);
             sc_connection_mapping_.erase(it);
+        }
+
+        bool hasDeleted = false;
+        for (auto &item : url_connection_mapping_) {
+            auto cIt = item.second.find(conn);
+            if (cIt != item.second.end()) {
+                hasDeleted = true;
+                item.second.erase(cIt);
+                break;
+            }
+        }
+
+        if (!hasDeleted) {
+            std::cout << ">>>>>>>>>>>>> can not delete connection!!! <<<<<<<<<<<<<\n";
         }
     }
 
-    bool HttpProxy::init_proxy_connection(const std::pair<std::string, short> &cfg)
+    bool HttpProxy::init_proxy_connection(const std::string &ip, short port, int taskId)
     {
-        net::Socket *sock = new net::Socket(cfg.first.c_str(), cfg.second);
+        net::Socket *sock = new net::Socket(ip.c_str(), port);
+        sock->set_id(taskId);
         if (!sock->valid()) {
-            std::cout << "create socket fail, ip: " << cfg.first << ", port: " << cfg.second << std::endl;
+            std::cout << "create socket fail, ip: " << ip << ", port: " << port << std::endl;
             return false;
         }
 
         if (!sock->connect()) {
-            std::cout << " connect failed, ip: " << cfg.first << ", port: " << cfg.second << std::endl;
+            std::cout << " connect failed, ip: " << ip << ", port: " << port << std::endl;
             return false;
         }
 
@@ -137,13 +174,11 @@ namespace net::http
             const std::string &root = proxyCfg["root"];
             const std::string &ip = target[0];
             short port = target[1];
-            proxy_configs_[proxyCfg["root"]] = {ip, port};
+            proxy_configs_[proxyCfg["root"]].push_back({ip, port});
 
             url_trie_.insert(root, true);
 
-            if (!init_proxy_connection({ip, port})) {
-                return false;
-            }
+            url_connection_mapping_[root] = {};
         }
 
         std::cout << "proxy configs loaded: " << proxy_configs_.size() << " item\n";
@@ -165,6 +200,21 @@ namespace net::http
             }
             cs_connection_mapping_.erase(it);
         }
+
+        const std::string &key = conn->get_remote_address().to_address_key();
+        auto cIt = task_client_mapping_.find(key);
+        if (cIt != task_client_mapping_.end()) {
+            std::cout << "client close ===> " << key << '\n';
+
+            auto taskIt = conn_tasks_.find(cIt->second);
+            if (taskIt != conn_tasks_.end()) {
+                RemoteConnectTask *task = static_cast<RemoteConnectTask *>(taskIt->second->get_task());
+                task->req_ = nullptr;
+                task->resp_ = nullptr;
+            }
+
+            task_client_mapping_.erase(cIt);
+        }
     }
 
     void HttpProxy::serve_proxy(HttpRequest *req, HttpResponse *resp)
@@ -176,6 +226,11 @@ namespace net::http
         if (it != cs_connection_mapping_.end()) {
             useConn = it->second;
         } else {
+            if (!server_) {
+                resp->process_error();
+                return;
+            }
+
             int idx = -url_trie_.find_prefix(req->get_raw_url());
             const std::string &url = req->get_raw_url().substr(0, idx);
             auto cIt = url_connection_mapping_.find(url);
@@ -185,6 +240,29 @@ namespace net::http
             }
 
             if (cIt->second.empty()) {
+                auto cfgIt = proxy_configs_.find(url);
+                if (cfgIt != proxy_configs_.end() && cfgIt->second.size() > 0) {
+                    int taskId = gen_task_id();
+                    if (taskId < 0) {
+                        resp->process_error();
+                        return;
+                    }
+
+                    const InetAddress &remoteAddr = cfgIt->second[rand() % cfgIt->second.size()];
+                    if (!init_proxy_connection(remoteAddr.get_ip(), remoteAddr.get_port(), taskId)) {
+                        resp->process_error(ResponseCode::bad_gateway);
+                        return;
+                    }
+
+                    timer::TimerManager *timerManager = server_->get_timer_manager();
+                    RemoteConnectTask *task = new RemoteConnectTask(taskId, req, resp, 
+                        remoteAddr, this, url, conn->get_remote_address().to_address_key());
+                    
+                    conn_tasks_[taskId] = timerManager->timeout(5 * 1000, task);
+                    task_client_mapping_[conn->get_remote_address().to_address_key()] = taskId;
+                    return;
+                }
+
                 resp->process_error(ResponseCode::bad_gateway);
                 return;
             }
@@ -198,19 +276,70 @@ namespace net::http
             sc_connection_mapping_[useConn] = {url, conn};
         }
 
-        // do forwarding
-        useConn->send(conn->get_input_buff(true));
-        if (req->get_buff()->readable_bytes() > 0) {
-            useConn->send(req->get_buff(true));
-        }
+        do_forward_packet(resp, useConn, conn->get_input_buff(true), req->get_buff(true));
     }
 
     void HttpProxy::put_conncetion(Connection *conn)
     {
-        for (const auto &cfg : proxy_configs_) {
-            if (cfg.second == conn->get_remote_address()) {
-                url_connection_mapping_[cfg.first].insert(conn);
-                break;
+        auto cIt = conn_tasks_.find(conn->get_scoket()->get_id());
+        if (cIt != conn_tasks_.end()) {
+            RemoteConnectTask *task = static_cast<RemoteConnectTask *>(cIt->second->get_task());
+            cIt->second->cancel();
+
+            Connection *clientConn = task->req_->get_context()->get_connection();
+            url_connection_mapping_[task->url_].insert(conn);
+            cs_connection_mapping_[clientConn] = conn;
+            sc_connection_mapping_[conn] = {task->url_, clientConn};
+
+            do_forward_packet(task->resp_, conn, clientConn->get_input_buff(true), task->req_->get_buff(true));
+
+            task_client_mapping_.erase(task->client_addr_);
+            delete task;
+        } else {
+            std::cout << "------------> internal error occured !!!\n";
+        }
+    }
+
+    void HttpProxy::on_connection_timeout(RemoteConnectTask *task)
+    {
+        auto cIt = conn_tasks_.find(task->task_id_);
+        if (cIt != conn_tasks_.end()) {
+            RemoteConnectTask *task = static_cast<RemoteConnectTask *>(cIt->second->get_task());
+            conn_tasks_.erase(cIt);
+            task_client_mapping_.erase(task->client_addr_);
+            delete task;
+        } else {
+            std::cout << "------------> internal error occured !!!\n";
+        }
+    }
+
+    int HttpProxy::gen_task_id()
+    {
+        uint32_t id = ++tasK_id_;
+        if (id >= INT32_MAX) {
+            tasK_id_ = 0;
+            if (conn_tasks_.count(tasK_id_)) {
+                return -1;
+            }
+        }
+
+        return (int)id;
+    }
+
+    void HttpProxy::do_forward_packet(HttpResponse *resp, Connection *conn,  Buffer *buf1, Buffer *buf2)
+    {
+        if (buf1->readable_bytes() == 0) {
+            std::cout << ">>>>>>>bool>>>> !!! empty data\n";
+            singleton::Singleton<BufferedPool>().free(buf1);
+            singleton::Singleton<BufferedPool>().free(buf2);
+            resp->process_error();
+        } else {
+            // do forwarding
+            conn->send(buf1);
+            if (buf2->readable_bytes() > 0) {
+                conn->send(buf2);
+            } else {
+                singleton::Singleton<BufferedPool>().free(buf2);
             }
         }
     }

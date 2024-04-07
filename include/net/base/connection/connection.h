@@ -21,8 +21,6 @@ namespace net
     class Connection : public SelectHandler
     {
     public:
-        virtual ~Connection() {}
-
         virtual bool is_connected() = 0;
 
         virtual const InetAddress & get_remote_address() = 0;

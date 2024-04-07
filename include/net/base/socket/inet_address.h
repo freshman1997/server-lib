@@ -48,6 +48,15 @@ namespace net
             domain_ = domain;
         }
 
+        std::string to_address_key(bool only = false) const
+        {
+            if (only) {
+                return domain_.empty() ? ip_ + ":" + std::to_string(port_) : domain_ + ":" + std::to_string(port_);
+            }
+            
+            return domain_ + ":" + ip_ + ":" + std::to_string(port_);
+        }
+
     private:
         int port_;
         std::string ip_;
