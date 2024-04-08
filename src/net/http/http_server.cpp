@@ -1,3 +1,6 @@
+#include "net/base/poller/select_poller.h"
+#include <cassert>
+#include <cstddef>
 #include <fstream>
 #include <iostream>
 #include <unistd.h>
@@ -155,7 +158,7 @@ namespace net::http
         timer::WheelTimerManager timerManager;
         timer_manager_ = &timerManager;
 
-        net::EpollPoller poller;
+        net::SelectPoller poller;
         net::EventLoop loop(&poller, &timerManager);
         acceptor_->set_event_handler(&loop);
 

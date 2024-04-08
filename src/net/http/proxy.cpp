@@ -64,7 +64,11 @@ namespace net::http
 
     void HttpProxy::on_connected(Connection *conn)
     {
-        
+        auto it = sc_connection_mapping_.find(conn);
+        if (it == sc_connection_mapping_.end()) {
+            put_conncetion(conn);
+            std::cout << "connect to server, ip: " << conn->get_remote_address().get_ip() << ", port: " << conn->get_remote_address().get_port() << " successfully\n";
+        }
     }
 
     void HttpProxy::on_error(Connection *conn)
@@ -81,16 +85,14 @@ namespace net::http
         }
 
         // forwarding
-        it->second.second->send(conn->get_input_buff(true));
+        Buffer *buf = conn->get_input_buff(true);
+        std::cout << "==============================> " << buf->readable_bytes() << '\n';
+        it->second.second->write_and_flush(buf);
     }
 
     void HttpProxy::on_write(Connection *conn)
     {
-        auto it = sc_connection_mapping_.find(conn);
-        if (it == sc_connection_mapping_.end()) {
-            put_conncetion(conn);
-            std::cout << "connect to server, ip: " << conn->get_remote_address().get_ip() << ", port: " << conn->get_remote_address().get_port() << " successfully\n";
-        }
+        
     }
 
     void HttpProxy::on_close(Connection *conn)
@@ -327,10 +329,11 @@ namespace net::http
             resp->process_error();
         } else {
             // do forwarding
-            conn->send(buf1);
             if (buf2->readable_bytes() > 0) {
-                conn->send(buf2);
+                conn->write(buf1);
+                conn->write_and_flush(buf2);
             } else {
+                conn->write_and_flush(buf1);
                 singleton::Singleton<BufferedPool>().free(buf2);
             }
         }

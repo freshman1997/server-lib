@@ -6,7 +6,6 @@
 #include "net/base/handler/event_handler.h"
 #include "net/base/socket/socket.h"
 
-#include <cassert>
 #include <iostream>
 #include <unistd.h>
 
@@ -70,25 +69,36 @@ namespace net
         return take ? output_buffer_.take_current_buffer() : output_buffer_.get_current_buffer();
     }
 
-    void TcpConnection::send(Buffer * buff)
+    void TcpConnection::write(Buffer * buff)
     {
         if (!buff || closed_) {
             return;
         }
 
-        output_buffer_.append_buffer(buff);
         if (output_buffer_.get_current_buffer()->readable_bytes() == 0) {
             output_buffer_.get_current_buffer()->reset();
             output_buffer_.free_current_buffer();
         }
 
-        // try send
+        output_buffer_.append_buffer(buff);
+    }
+
+    void TcpConnection::write_and_flush(Buffer *buff)
+    {
+        if (!buff || closed_) {
+            return;
+        }
+
+        write(buff);
         send();
     }
 
     void TcpConnection::send()
     {
-        assert(output_buffer_.get_current_buffer()->readable_bytes() > 0);
+        if (output_buffer_.get_current_buffer()->readable_bytes() == 0) {
+            return;
+        }
+
         std::size_t sz = output_buffer_.get_size();
         for (int i = 0; i < sz; ++i) {
             int ret = ::send(channel_.get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), 0);

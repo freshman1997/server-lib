@@ -21,7 +21,9 @@ namespace net
 
         virtual Buffer * get_output_buff(bool take = false);
 
-        virtual void send(Buffer *buff);
+        virtual void write(Buffer *buff);
+
+        virtual void write_and_flush(Buffer *buff);
 
         virtual void send();
 
