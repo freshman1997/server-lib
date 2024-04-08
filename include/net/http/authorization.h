@@ -8,6 +8,7 @@ namespace net::http
     enum class authorization_type
     {
         basic = 0,
+        digest,
     };
 
     class HttpAuthorization

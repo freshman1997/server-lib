@@ -46,10 +46,7 @@ namespace net::http
         
         auto outputBuffer = context_->get_connection()->get_output_buff();
         std::string header("HTTP/1.1");
-        header.append(" ");
-        header.append(std::to_string((uint32_t)respCode_));
-        header.append(" ");
-        header.append(descIt->second).append("\r\n");
+        header.append(" ").append(descIt->second).append("\r\n");
 
         for (const auto &item : headers_) {
             header.append(item.first).append(": ").append(item.second).append("\r\n");

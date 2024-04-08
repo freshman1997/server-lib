@@ -37,13 +37,6 @@ namespace net::http
         }
     }
 
-    void RemoteResponseTask::on_timer(timer::Timer *timer)
-    {
-        resp_->process_error(ResponseCode::gateway_timeout);
-        proxy_->on_connection_response_timeout(conn_);
-        conn_->close();
-    }
-
     HttpProxy::HttpProxy()
     {
         server_ = nullptr;
@@ -89,12 +82,6 @@ namespace net::http
 
         // forwarding
         it->second.second->send(conn->get_input_buff(true));
-        auto timerIt = response_timers_.find(conn);
-        if (timerIt != response_timers_.end()) {
-            timerIt->second->cancel();
-            delete timerIt->second->get_task();
-            response_timers_.erase(timerIt);
-        }
     }
 
     void HttpProxy::on_write(Connection *conn)
@@ -108,6 +95,7 @@ namespace net::http
 
     void HttpProxy::on_close(Connection *conn)
     {
+        std::cout << ">>>>>>>>>>>>> remote connection close: " << conn << " <<<<<<<<<<<<<\n";
         auto it = sc_connection_mapping_.find(conn);
         if (it != sc_connection_mapping_.end()) {
             if (it->second.second) {
@@ -213,15 +201,11 @@ namespace net::http
         const std::string &key = conn->get_remote_address().to_address_key();
         auto cIt = task_client_mapping_.find(key);
         if (cIt != task_client_mapping_.end()) {
-            std::cout << "client close ===> " << key << '\n';
-
             auto taskIt = conn_tasks_.find(cIt->second);
             if (taskIt != conn_tasks_.end()) {
-                RemoteConnectTask *task = static_cast<RemoteConnectTask *>(taskIt->second->get_task());
-                task->req_ = nullptr;
-                task->resp_ = nullptr;
+                taskIt->second->cancel();
+                conn_tasks_.erase(taskIt);
             }
-
             task_client_mapping_.erase(cIt);
         }
     }
@@ -305,8 +289,6 @@ namespace net::http
             conn->get_scoket()->set_id(-1);
             task_client_mapping_.erase(task->client_addr_);
             delete task;
-        } else {
-            std::cout << "------------> internal error occured !!!\n";
         }
     }
 
@@ -336,7 +318,7 @@ namespace net::http
         return (int)id;
     }
 
-    void HttpProxy::do_forward_packet(HttpResponse *resp, Connection *conn,  Buffer *buf1, Buffer *buf2)
+    void HttpProxy::do_forward_packet(HttpResponse *resp, Connection *conn, Buffer *buf1, Buffer *buf2)
     {
         if (buf1->readable_bytes() == 0) {
             std::cout << ">>>>>>>bool>>>> !!! empty data\n";
@@ -351,14 +333,6 @@ namespace net::http
             } else {
                 singleton::Singleton<BufferedPool>().free(buf2);
             }
-
-            response_timers_[conn] = server_->get_timer_manager()->timeout(10 * 1000, new RemoteResponseTask(this, resp, conn));
         }
-    }
-
-    void HttpProxy::on_connection_response_timeout(Connection *conn)
-    {
-        std::cout << "remove response timer: " << conn << '\n';
-        response_timers_.erase(conn);
     }
 }

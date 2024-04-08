@@ -44,9 +44,10 @@ namespace net::http
     {
         is_good_ = false;
         body_length_ = 0;
-        version_ = HttpVersion::invalid;
+        version_ = HttpVersion::v_1_1;
         params_.clear();
         headers_.clear();
+        content_type_text_.clear();
         parser_->reset();
         content_type_ = ContentType::not_support;
         error_code_ = ResponseCode::bad_request;

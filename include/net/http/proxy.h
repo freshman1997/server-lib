@@ -45,26 +45,6 @@ namespace net::http
         std::string client_addr_;
     };
 
-    class RemoteResponseTask : public timer::TimerTask
-    {
-    public:
-        RemoteResponseTask(HttpProxy *proxy, HttpResponse *resp, Connection *conn) : proxy_(proxy), resp_(resp), conn_(conn)
-        {}
-
-    public:
-        virtual void on_timer(timer::Timer *timer);
-
-        virtual void on_finished(timer::Timer *timer)
-        {
-            delete this;
-        }
-
-    public:
-        HttpProxy *proxy_ = nullptr;
-        HttpResponse *resp_ = nullptr;
-        Connection *conn_ = nullptr;
-    };
-
     class HttpProxy : public ConnectionHandler
     {
     public:
@@ -99,7 +79,7 @@ namespace net::http
 
         void on_connection_timeout(RemoteConnectTask *task);
 
-        void on_connection_response_timeout(Connection *conn);
+        void check_response_timer(Connection *conn);
 
     private:
         bool init_proxy_connection(const std::string &ip, short port, int taskId);
@@ -136,8 +116,6 @@ namespace net::http
 
         // <client addr, taskId>
         std::unordered_map<std::string, uint32_t> task_client_mapping_;
-
-        std::unordered_map<Connection *, timer::Timer *> response_timers_;
     };
 }
 
