@@ -37,8 +37,11 @@ namespace net::http
         }
     }
 
-    void RemoteConnectTask::on_finished(timer::Timer *timer)
+    void RemoteResponseTask::on_timer(timer::Timer *timer)
     {
+        resp_->process_error(ResponseCode::gateway_timeout);
+        proxy_->on_connection_response_timeout(conn_);
+        conn_->close();
     }
 
     HttpProxy::HttpProxy()
@@ -86,6 +89,12 @@ namespace net::http
 
         // forwarding
         it->second.second->send(conn->get_input_buff(true));
+        auto timerIt = response_timers_.find(conn);
+        if (timerIt != response_timers_.end()) {
+            timerIt->second->cancel();
+            delete timerIt->second->get_task();
+            response_timers_.erase(timerIt);
+        }
     }
 
     void HttpProxy::on_write(Connection *conn)
@@ -293,6 +302,7 @@ namespace net::http
 
             do_forward_packet(task->resp_, conn, clientConn->get_input_buff(true), task->req_->get_buff(true));
 
+            conn->get_scoket()->set_id(-1);
             task_client_mapping_.erase(task->client_addr_);
             delete task;
         } else {
@@ -341,6 +351,14 @@ namespace net::http
             } else {
                 singleton::Singleton<BufferedPool>().free(buf2);
             }
+
+            response_timers_[conn] = server_->get_timer_manager()->timeout(10 * 1000, new RemoteResponseTask(this, resp, conn));
         }
+    }
+
+    void HttpProxy::on_connection_response_timeout(Connection *conn)
+    {
+        std::cout << "remove response timer: " << conn << '\n';
+        response_timers_.erase(conn);
     }
 }

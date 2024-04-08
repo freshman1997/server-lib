@@ -46,7 +46,7 @@ namespace net
 
         virtual void set_connection_handler(ConnectionHandler *connectionHandler);
 
-        virtual const Socket * get_scoket();
+        virtual Socket * get_scoket();
 
     public: // select handler
         virtual void on_read_event();

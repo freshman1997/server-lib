@@ -190,7 +190,7 @@ namespace net
         delete this;
     }
 
-    const Socket * TcpConnection::get_scoket()
+    Socket * TcpConnection::get_scoket()
     {
         return socket_;
     }

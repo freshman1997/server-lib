@@ -45,7 +45,7 @@ namespace net
         
         virtual void set_connection_handler(ConnectionHandler *handler) = 0;
 
-        virtual const Socket * get_scoket() = 0;
+        virtual Socket * get_scoket() = 0;
     };
 }
 
