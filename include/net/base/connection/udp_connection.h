@@ -13,6 +13,8 @@ namespace net
         ~UdpConnection();
 
     public:
+        virtual ConnectionState get_connection_state();
+
         virtual bool is_connected();
 
         virtual const InetAddress & get_remote_address();

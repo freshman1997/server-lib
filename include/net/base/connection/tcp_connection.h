@@ -22,6 +22,8 @@ namespace net
 
         virtual ~TcpConnection();
 
+        virtual ConnectionState get_connection_state();
+
         virtual bool is_connected();
 
         virtual const InetAddress & get_remote_address();
@@ -71,6 +73,7 @@ namespace net
         LinkedBuffer input_buffer_;
         LinkedBuffer output_buffer_;
         bool closed_;
+        ConnectionState state_;
     };
 }
 

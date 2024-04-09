@@ -140,7 +140,7 @@ namespace net::http
         conn->set_event_handler(server_->get_event_loop());
         server_->get_event_loop()->update_event(conn->get_channel());
         
-        server_->get_event_loop()->on_new_connection(conn, false);
+        server_->get_event_loop()->on_new_connection(conn);
 
         return true;
     }

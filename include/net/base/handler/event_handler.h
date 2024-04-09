@@ -10,7 +10,7 @@ namespace net
     class EventHandler
     {
     public:
-        virtual void on_new_connection(Connection *conn, bool callConnected = true) = 0;
+        virtual void on_new_connection(Connection *conn) = 0;
 
         virtual void on_quit() = 0;
 

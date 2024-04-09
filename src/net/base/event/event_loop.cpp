@@ -53,7 +53,7 @@ namespace net
         }
     }
 
-    void EventLoop::on_new_connection(Connection *conn, bool callConnected)
+    void EventLoop::on_new_connection(Connection *conn)
     {
         if (conn) {
             const InetAddress &addr = conn->get_remote_address();
@@ -71,10 +71,7 @@ namespace net
             poller_->update_channel(channel);
             channels_[channel->get_fd()] = channel;
 
-            if (callConnected) {
-                conn->set_connection_handler(connHandler_);
-                connHandler_->on_connected(conn);
-            }
+            conn->set_connection_handler(connHandler_);
         }
     }
 

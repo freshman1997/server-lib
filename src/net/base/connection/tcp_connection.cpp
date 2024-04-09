@@ -34,6 +34,7 @@ namespace net
         channel_.enable_write();
 
         closed_ = false;
+        state_ = ConnectionState::connecting;
     }
 
     TcpConnection::~TcpConnection()
@@ -49,9 +50,14 @@ namespace net
         delete socket_;
     }
 
+    ConnectionState TcpConnection::get_connection_state()
+    {
+        return state_;
+    }
+
     bool TcpConnection::is_connected()
     {
-        return true;
+        return state_ == ConnectionState::connected;
     }
 
     const InetAddress & TcpConnection::get_remote_address()
@@ -129,6 +135,7 @@ namespace net
     // 发送完数据后返回
     void TcpConnection::close()
     {
+        state_ = ConnectionState::closing;
         closed_ = true;
         if (output_buffer_.get_current_buffer()->readable_bytes() > 0) {
             channel_.disable_read();
@@ -175,14 +182,25 @@ namespace net
         }
 
         if (closed_) {
-            close();
+            abort();
         } else if (read) {
+            // 第一次可读可写表示连接已经建立
+            if (state_ == ConnectionState::connecting) {
+                state_ = ConnectionState::connected;
+                connectionHandler_->on_connected(this);
+            }
             connectionHandler_->on_read(this);
         }
     }
 
     void TcpConnection::on_write_event()
     {
+        // 第一次可读可写表示连接已经建立
+        if (state_ == ConnectionState::connecting) {
+            state_ = ConnectionState::connected;
+            connectionHandler_->on_connected(this);
+        }
+
         connectionHandler_->on_write(this);
         if (output_buffer_.get_current_buffer()->readable_bytes() > 0) {
             send();
@@ -197,6 +215,7 @@ namespace net
 
     void TcpConnection::do_close()
     {
+        state_ = ConnectionState::closed;
         delete this;
     }
 

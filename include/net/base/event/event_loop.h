@@ -31,7 +31,7 @@ namespace net
             quit_ = true;
         }
 
-        virtual void on_new_connection(Connection *conn, bool callConnected = true);
+        virtual void on_new_connection(Connection *conn);
 
         virtual void on_quit();
 

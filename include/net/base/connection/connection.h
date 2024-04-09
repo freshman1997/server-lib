@@ -17,10 +17,20 @@ namespace net
         UDP
     };
 
+    enum class ConnectionState
+    {
+        connecting,         // 建立连接中
+        connected,          // 已连接
+        closing,            // 关闭连接种
+        closed              // 已关闭
+    };
+
     // 表示一个连接
     class Connection : public SelectHandler
     {
     public:
+        virtual ConnectionState get_connection_state() = 0;
+
         virtual bool is_connected() = 0;
 
         virtual const InetAddress & get_remote_address() = 0;
