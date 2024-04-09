@@ -43,6 +43,8 @@ namespace net::http::config
 
     /* default config value end */
 
+    extern int proxy_connect_timeout;
+
     void load_config();
 }
 

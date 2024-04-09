@@ -1,13 +1,12 @@
 #include <cassert>
-#include <cstdint>
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
-#include <iterator>
 
 #include "buffer/pool.h"
 #include "net/base/connection/connection.h"
 #include "net/base/socket/inet_address.h"
+#include "net/http/ops/option.h"
 #include "net/http/proxy.h"
 #include "net/base/connection/tcp_connection.h"
 #include "net/base/socket/socket.h"
@@ -85,9 +84,7 @@ namespace net::http
         }
 
         // forwarding
-        Buffer *buf = conn->get_input_buff(true);
-        std::cout << "==============================> " << buf->readable_bytes() << '\n';
-        it->second.second->write_and_flush(buf);
+        it->second.second->write_and_flush(conn->get_input_buff(true));
     }
 
     void HttpProxy::on_write(Connection *conn)
@@ -136,11 +133,10 @@ namespace net::http
         }
 
         Connection *conn = new TcpConnection(sock);
+        server_->get_event_loop()->on_new_connection(conn);
+
         conn->set_connection_handler(this);
         conn->set_event_handler(server_->get_event_loop());
-        server_->get_event_loop()->update_event(conn->get_channel());
-        
-        server_->get_event_loop()->on_new_connection(conn);
 
         return true;
     }
@@ -253,7 +249,7 @@ namespace net::http
                     RemoteConnectTask *task = new RemoteConnectTask(taskId, req, resp, 
                         remoteAddr, this, url, conn->get_remote_address().to_address_key());
                     
-                    conn_tasks_[taskId] = timerManager->timeout(5 * 1000, task);
+                    conn_tasks_[taskId] = timerManager->timeout(config::proxy_connect_timeout, task);
                     task_client_mapping_[conn->get_remote_address().to_address_key()] = taskId;
                     return;
                 }
@@ -302,8 +298,6 @@ namespace net::http
             conn_tasks_.erase(cIt);
             task_client_mapping_.erase(task->client_addr_);
             delete task;
-        } else {
-            std::cout << "------------> internal error occured !!!\n";
         }
     }
 
@@ -316,7 +310,6 @@ namespace net::http
                 return -1;
             }
         }
-
         return (int)id;
     }
 

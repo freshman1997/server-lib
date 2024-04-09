@@ -35,7 +35,17 @@ namespace net::http
 
     void HttpClient::on_connected(Connection *conn)
     {
+        HttpSessionContext *ctx = new HttpSessionContext(conn);
+        ctx->set_mode(Mode::client);
+        session_ = new HttpSession((uint64_t)conn, ctx, timer_manager_);
+        if (ccb_) {
+            if (conn_timer_) {
+                conn_timer_->cancel();
+                conn_timer_ = nullptr;
+            }
 
+            ccb_(ctx->get_request());
+        }
     }
 
     void HttpClient::on_error(Connection *conn)
@@ -74,20 +84,7 @@ namespace net::http
 
     void HttpClient::on_write(Connection *conn)
     {
-        if (!session_) {
-            HttpSessionContext *ctx = new HttpSessionContext(conn);
-            ctx->set_mode(Mode::client);
-            session_ = new HttpSession((uint64_t)conn, ctx, timer_manager_);
-            if (ccb_) {
-                if (conn_timer_) {
-                    conn_timer_->cancel();
-                    conn_timer_ = nullptr;
-                }
-
-                ccb_(ctx->get_request());
-            }
-        }
-        session_->reset_timer();
+        
     }
 
     void HttpClient::on_close(Connection *conn)

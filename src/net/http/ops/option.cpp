@@ -27,6 +27,8 @@ namespace net::http::config
 
     bool form_data_upload_save = false;
 
+    int proxy_connect_timeout = 5 * 1000;
+
     void load_config()
     {
         auto &cfgManager = singleton::Singleton<HttpConfigManager>();

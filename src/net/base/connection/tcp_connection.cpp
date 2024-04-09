@@ -43,6 +43,7 @@ namespace net
         eventHandler_->update_event(&channel_);
         channel_.set_handler(nullptr);
         connectionHandler_->on_close(this);
+        state_ = ConnectionState::closed;
         
         std::cout << "connection closed, ip: " << socket_->get_address()->get_ip() << ", port: " << socket_->get_address()->get_port() 
                 << ", fd: " << channel_.get_fd() << "\n";
@@ -81,12 +82,11 @@ namespace net
             return;
         }
 
+        output_buffer_.append_buffer(buff);
         if (output_buffer_.get_current_buffer()->readable_bytes() == 0) {
             output_buffer_.get_current_buffer()->reset();
             output_buffer_.free_current_buffer();
         }
-
-        output_buffer_.append_buffer(buff);
     }
 
     void TcpConnection::write_and_flush(Buffer *buff)
@@ -215,7 +215,6 @@ namespace net
 
     void TcpConnection::do_close()
     {
-        state_ = ConnectionState::closed;
         delete this;
     }
 
