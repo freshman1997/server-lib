@@ -244,12 +244,13 @@ namespace net::http
         bool res = pack_header();
         if (res) {
             if (buffer_) {
-                context_->get_connection()->write_and_flush(buffer_);
+                context_->get_connection()->write(buffer_);
                 buffer_ = singleton::Singleton<BufferedPool>().allocate();
             }
         } else {
             is_good_ = false;
         }
+        context_->get_connection()->send();
     }
 
     Buffer * HttpPacket::get_buff(bool take)

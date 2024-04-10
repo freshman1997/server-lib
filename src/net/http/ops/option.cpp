@@ -29,6 +29,8 @@ namespace net::http::config
 
     int proxy_connect_timeout = 5 * 1000;
 
+    int proxy_max_pending = 10;
+
     void load_config()
     {
         auto &cfgManager = singleton::Singleton<HttpConfigManager>();

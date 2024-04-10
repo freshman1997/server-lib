@@ -31,13 +31,15 @@ namespace net::http
         virtual void on_close(Connection *conn);
 
     public:
+        bool query(const std::string &url);
+
         bool connect(const InetAddress &addr, connected_callback ccb, request_function rcb);
     
         virtual void on_timer(timer::Timer *timer);
 
         virtual void on_finished(timer::Timer *timer)
         {
-
+            delete this;
         }
 
     private:

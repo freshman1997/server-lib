@@ -135,9 +135,10 @@ namespace net
     // 发送完数据后返回
     void TcpConnection::close()
     {
+        ConnectionState lastState = state_;
         state_ = ConnectionState::closing;
         closed_ = true;
-        if (output_buffer_.get_current_buffer()->readable_bytes() > 0) {
+        if (lastState == ConnectionState::connecting || output_buffer_.get_current_buffer()->readable_bytes() > 0) {
             channel_.disable_read();
             eventHandler_->update_event(&channel_);
             return;
@@ -186,8 +187,8 @@ namespace net
         } else if (read) {
             // 第一次可读可写表示连接已经建立
             if (state_ == ConnectionState::connecting) {
-                state_ = ConnectionState::connected;
                 connectionHandler_->on_connected(this);
+                state_ = ConnectionState::connected;
             }
             connectionHandler_->on_read(this);
         }
@@ -197,8 +198,8 @@ namespace net
     {
         // 第一次可读可写表示连接已经建立
         if (state_ == ConnectionState::connecting) {
-            state_ = ConnectionState::connected;
             connectionHandler_->on_connected(this);
+            state_ = ConnectionState::connected;
         }
 
         connectionHandler_->on_write(this);

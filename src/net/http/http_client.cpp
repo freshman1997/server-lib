@@ -92,6 +92,12 @@ namespace net::http
         delete this;
     }
 
+    bool HttpClient::query(const std::string &url)
+    {
+        //TODO decode url
+        return false;
+    }
+
     bool HttpClient::connect(const InetAddress &addr, connected_callback ccb, request_function rcb)
     {
         if (!ccb || !rcb) {

@@ -22,9 +22,9 @@ namespace net::http
     class RemoteConnectTask : public timer::TimerTask
     {
     public:
-        RemoteConnectTask(int id, HttpRequest *req, HttpResponse *resp, const InetAddress &addr
-            , HttpProxy *proxy, const std::string &url, const std::string &client_addr) 
-            : task_id_(id), req_(req), resp_(resp), addr_(addr), proxy_(proxy), url_(url), client_addr_(client_addr)
+        RemoteConnectTask(int id, HttpRequest *req, HttpResponse *resp, Connection *remoteConn,
+            HttpProxy *proxy, const std::string &url, const std::string &client_addr) 
+            : task_id_(id), req_(req), resp_(resp), remote_conn_(remoteConn), proxy_(proxy), url_(url), client_addr_(client_addr)
         {}
 
     public:
@@ -39,7 +39,7 @@ namespace net::http
         int task_id_;
         HttpRequest  *req_ = nullptr;
         HttpResponse *resp_ = nullptr;
-        const InetAddress addr_;
+        Connection *remote_conn_;
         HttpProxy *proxy_ = nullptr;
         std::string url_;
         std::string client_addr_;
@@ -82,7 +82,7 @@ namespace net::http
         void check_response_timer(Connection *conn);
 
     private:
-        bool init_proxy_connection(const std::string &ip, short port, int taskId);
+        Connection * init_proxy_connection(const std::string &ip, short port, int taskId);
 
         void put_conncetion(Connection *conn);
 
@@ -90,17 +90,16 @@ namespace net::http
 
         void do_forward_packet(HttpResponse *resp, Connection *conn, Buffer *buf1, Buffer *buf2);
 
+        void clear_connection_pending_request(Connection *conn);
+
     private:
         int tasK_id_;
 
         // <url, <ip, port>>
         std::unordered_map<std::string, std::vector<InetAddress>> proxy_configs_;
 
-        // <url, [conn, ...]>
-        std::unordered_map<std::string, std::set<Connection *>> url_connection_mapping_;
-
         // <server conn, <url, client conn>>
-        std::unordered_map<Connection *, std::pair<std::string, Connection *>> sc_connection_mapping_;
+        std::unordered_map<Connection *, Connection *> sc_connection_mapping_;
 
         // <client conn, server conn>
         std::unordered_map<Connection *, Connection *> cs_connection_mapping_;
@@ -114,8 +113,8 @@ namespace net::http
         // <taskId, conn timer>
         std::unordered_map<uint32_t, timer::Timer *> conn_tasks_;
 
-        // <client addr, taskId>
-        std::unordered_map<std::string, uint32_t> task_client_mapping_;
+        // pending requests after the connect task
+        std::unordered_map<uint32_t, std::vector<Buffer *>> pending_requests_;
     };
 }
 
