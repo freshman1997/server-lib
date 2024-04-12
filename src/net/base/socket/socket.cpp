@@ -1,3 +1,4 @@
+#include <cassert>
 #include <cctype>
 #include <cstring>
 #include <netinet/in.h>
@@ -6,8 +7,6 @@
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <sys/socket.h>
-#include <netdb.h>
-#include <arpa/inet.h>
 
 #include "net/base/socket/inet_address.h"
 #include "net/base/socket/socket.h"
@@ -15,39 +14,22 @@
 
 namespace net
 {
-    static bool is_host(const std::string &domain)
-    {
-        for (const char ch : domain) {
-            if (!std::isdigit(ch) && ch != '.') {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    Socket::Socket(const char *ip, int port, int fd)
+    Socket::Socket(const char *ip, int port, bool udp, int fd)
     {
         fd_ = fd;
         addr = nullptr;
         id_ = -1;
         
-        if (is_host(ip)) {
-            struct hostent *h;
-            h = ::gethostbyname(ip);
-            if(h) {
-                struct sockaddr_in addr_in;
-                memcpy(&addr_in.sin_addr.s_addr, h->h_addr,4);
-                addr_in.sin_port = htons(port);
-                addr = new InetAddress(addr_in);
-                addr->set_domain(ip);
-                if (fd < 0) {
-                    fd_ = socket::create_ipv4_socket(true);
-                }
-            }
-        } else {
-            addr = new InetAddress(ip, port);
+        const std::string &realIp = InetAddress::get_address_by_host(ip);
+        assert(realIp.size() > 0);
+        if (!realIp.empty()) {
+            addr = new InetAddress(realIp.c_str(), port);
             if (fd < 0) {
-                fd_ = socket::create_ipv4_socket(true);
+                if (!udp) {
+                    fd_ = socket::create_ipv4_tcp_socket(true);
+                } else {
+                    fd_ = socket::create_ipv4_udp_socket(true);
+                }
             }
         }
     }

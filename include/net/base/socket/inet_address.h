@@ -57,6 +57,9 @@ namespace net
             return domain_ + ":" + ip_ + ":" + std::to_string(port_);
         }
 
+    public:
+        static std::string get_address_by_host(const std::string &host);
+
     private:
         int port_;
         std::string ip_;

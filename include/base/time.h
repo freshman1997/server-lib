@@ -4,11 +4,11 @@
 
 namespace base::time
 {
-    uint32_t get_tick_count();
+    uint64_t get_tick_count();
 
     void init_time(uint32_t unit);
 
-    uint32_t get_passed_time();
+    uint64_t get_passed_time();
 }
 
 #endif

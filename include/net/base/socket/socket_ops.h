@@ -4,7 +4,12 @@
 
 namespace net::socket
 {
-    int create_ipv4_socket(bool noneBlock = false);
+    int create_ipv4_socket(int flag, int protocol);
+
+    int create_ipv4_tcp_socket(bool noneBlock = false);
+
+    int create_ipv4_udp_socket(bool noneBlock = false);
+
 
     void close_fd(int fd);
 

@@ -7,7 +7,6 @@
 namespace net
 {
     class Socket;
-    class Channel;
 
     class TcpAcceptor : public Acceptor
     {
@@ -36,7 +35,7 @@ namespace net
     public:
         const Socket * get_socket() const;
 
-    private:
+    protected:
         Channel channel_;
         Socket *socket_;
         EventHandler *handler_;

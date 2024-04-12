@@ -33,15 +33,15 @@ namespace net
     {
         assert(poller_);
 
-        uint32_t from = base::time::get_tick_count();
+        uint64_t from = base::time::get_tick_count();
         while (!quit_) {
-            uint32_t to = poller_->poll(2);
+            uint64_t to = poller_->poll(2);
             if (to - from >= timer_manager_->get_time_unit()) {
                 from = to;
                 timer_manager_->tick();
             }
 
-            /*if (to - from < timer_manager_->get_time_unit()) {
+            if (to - from < timer_manager_->get_time_unit()) {
                 {
                     std::unique_lock<std::mutex> lock(helper::m);
                     auto now = std::chrono::system_clock::now();
@@ -49,7 +49,7 @@ namespace net
                     helper::cond.wait_until(lock, now + std::chrono::milliseconds(timer_manager_->get_time_unit() - (to - from)));
                     is_waiting_ = false;
                 }
-            }*/
+            }
         }
     }
 
@@ -78,6 +78,7 @@ namespace net
     void EventLoop::on_quit()
     {
         quit_ = true;
+        helper::cond.notify_all();
     }
 
     void EventLoop::on_close(Connection *conn)

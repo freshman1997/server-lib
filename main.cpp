@@ -205,7 +205,7 @@ private:
 
 void test_evloop()
 {
-    net::Socket *sock = new net::Socket("", 12333);
+    net::Socket *sock = new net::Socket("127.0.0.1", 12333);
     if (!sock->valid()) {
         cout << "create socket fail!!\n";
         return;
@@ -290,6 +290,33 @@ void test_url()
     if (trie.find_prefix("/static/cz", true) < 0) {
         std::cout << "start with\n";
     }
+}
+
+void test_udp()
+{
+    net::Socket *sock = new net::Socket("127.0.0.1", 12333, true);
+    if (!sock->valid()) {
+        cout << "create socket fail!!\n";
+        return;
+    }
+
+    sock->set_reuse(true);
+    sock->set_none_block(true);
+    if (!sock->bind()) {
+        std::cout << " bind failed " << std::endl;
+        return;
+    }
+
+    net::Acceptor *acceptor = new net::TcpAcceptor(sock);
+    if (!acceptor->listen()) {
+        std::cout << " listen failed " << std::endl;
+        return;
+    }
+
+    net::Poller *poller = new net::EpollPoller;
+    timer::WheelTimerManager *manager = new timer::WheelTimerManager;
+    net::EventLoop loop(poller, manager);
+    loop.loop();
 }
 
 void sigpipe_handler(int signum) 

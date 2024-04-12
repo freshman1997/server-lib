@@ -10,7 +10,7 @@ namespace net
     public:
         virtual ~Poller() {}
         
-        virtual uint32_t poll(uint32_t timeout) = 0;
+        virtual uint64_t poll(uint32_t timeout) = 0;
 
         virtual void update_channel(Channel *channel) = 0;
 

@@ -147,15 +147,14 @@ namespace net::http
             }
 
             const std::string &root = proxyCfg["root"];
-            const std::string &ip = target[0];
+            const std::string &host = target[0];
             short port = target[1];
-            proxy_configs_[proxyCfg["root"]].push_back({ip, port});
+            proxy_configs_[proxyCfg["root"]].push_back({host, port});
 
             url_trie_.insert(root, true);
+
+            std::cout << "register http proxy, root: " << root << ", host: " << host << ", port: " << port << '\n';
         }
-
-        std::cout << "proxy configs loaded: " << proxy_configs_.size() << " item\n";
-
         return true;
     }
 

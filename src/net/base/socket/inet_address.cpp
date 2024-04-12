@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 
 namespace net 
 {
@@ -47,5 +48,20 @@ namespace net
     bool operator!=(const InetAddress &addr1, const InetAddress &addr2)
     {
         return !operator==(addr1, addr2);
+    }
+
+    std::string InetAddress::get_address_by_host(const std::string &host)
+    {
+#ifndef _WIN32
+        struct hostent *h = ::gethostbyname(host.c_str());
+        if(h) {
+            struct sockaddr_in addr_in;
+            memcpy(&addr_in.sin_addr.s_addr, h->h_addr,4);
+            return ::inet_ntoa(addr_in.sin_addr);
+        } else {
+            return "";
+        }
+#else
+#endif
     }
 }

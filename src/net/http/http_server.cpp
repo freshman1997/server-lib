@@ -128,7 +128,7 @@ namespace net::http
             std::cout << singleton::Singleton<HttpConfigManager>().get_string_property("server_name") << " starting...\n";
         }
 
-        net::Socket *sock = new net::Socket("", port);
+        net::Socket *sock = new net::Socket("127.0.0.1", port);
         if (!sock->valid()) {
             std::cout << "create socket fail!!\n";
             return false;
@@ -166,8 +166,6 @@ namespace net::http
         this->event_loop_ = &loop;
         loop.set_connection_handler(this);
 
-        std::cout << singleton::Singleton<HttpConfigManager>().get_string_property("server_name", "web server") << " started\n";
-
         const auto &proxiesCfg = singleton::Singleton<HttpConfigManager>().get_type_array_properties<nlohmann::json>("proxies");
         if (!proxiesCfg.empty()) {
             proxy_ = new HttpProxy(this);
@@ -175,6 +173,8 @@ namespace net::http
                 return;
             }
         }
+
+        std::cout << singleton::Singleton<HttpConfigManager>().get_string_property("server_name", "web server") << " started\n";
 
         loop.loop();
     }

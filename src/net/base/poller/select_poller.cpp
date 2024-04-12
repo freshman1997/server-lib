@@ -40,9 +40,9 @@ namespace net
         FD_ZERO(&helper::writes_);
     }
 
-    uint32_t SelectPoller::poll(uint32_t timeout)
+    uint64_t SelectPoller::poll(uint32_t timeout)
     {
-        uint32_t tm = base::time::get_tick_count();
+        uint64_t tm = base::time::get_tick_count();
 
         if (!helper::removed_fds_.empty()) {
             for (auto &fd : helper::removed_fds_) {

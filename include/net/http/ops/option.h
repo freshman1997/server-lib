@@ -47,6 +47,8 @@ namespace net::http::config
 
     extern int proxy_max_pending;
 
+    extern int proxy_buffer_max;
+
     void load_config();
 }
 

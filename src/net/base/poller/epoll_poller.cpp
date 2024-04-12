@@ -30,9 +30,9 @@ namespace net
         ::close(epoll_fd_);
     }
 
-    uint32_t EpollPoller::poll(uint32_t timeout)
+    uint64_t EpollPoller::poll(uint32_t timeout)
     {
-        uint32_t tm = base::time::get_tick_count();
+        uint64_t tm = base::time::get_tick_count();
         int nevent = ::epoll_wait(epoll_fd_, &*epoll_events_.begin(), (int)epoll_events_.size(), timeout);
         if (nevent < 0) {
             return tm;

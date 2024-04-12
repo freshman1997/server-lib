@@ -8,7 +8,7 @@ namespace net
     class Socket
     {
     public:
-        explicit Socket(const char *ip, int port, int fd = -1);
+        explicit Socket(const char *ip, int port, bool udp = false, int fd = -1);
         ~Socket();
 
         bool bind();

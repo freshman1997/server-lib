@@ -7,12 +7,26 @@
 
 namespace net::socket
 {
-    int create_ipv4_socket(bool noneBlock)
+    int create_ipv4_socket(int flag, int protocol)
+    {
+        return ::socket(AF_INET, flag, protocol);
+    }
+
+    int create_ipv4_tcp_socket(bool noneBlock)
     {
         if (!noneBlock) {
-            return ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            return create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
         } else {
-            return ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
+            return create_ipv4_socket(SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
+        }
+    }
+
+    int create_ipv4_udp_socket(bool noneBlock)
+    {
+        if (!noneBlock) {
+            return create_ipv4_socket(SOCK_DGRAM, IPPROTO_UDP);
+        } else {
+            return create_ipv4_socket(SOCK_DGRAM | SOCK_NONBLOCK, IPPROTO_UDP);
         }
     }
 

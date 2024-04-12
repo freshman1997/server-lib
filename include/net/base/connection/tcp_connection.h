@@ -10,9 +10,6 @@
 
 namespace net
 {
-    class AcceptHandler;
-    class TcpConnectionHandler;
-
     class TcpConnection : public Connection
     {
     public:
@@ -59,15 +56,14 @@ namespace net
 
         virtual void set_event_handler(EventHandler *eventHandler);
 
-    private:
+    protected:
         void do_close();
 
         void init();
 
-    private:
+    protected:
         Channel channel_;
         Socket *socket_;
-        AcceptHandler *acceptHandler_;
         ConnectionHandler *connectionHandler_;
         EventHandler *eventHandler_;
         LinkedBuffer input_buffer_;

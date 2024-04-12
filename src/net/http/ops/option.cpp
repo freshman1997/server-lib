@@ -31,6 +31,9 @@ namespace net::http::config
 
     int proxy_max_pending = 10;
 
+    // 代理最大缓冲区
+    int proxy_buffer_max = 1024 * 1024 * 3;
+
     void load_config()
     {
         auto &cfgManager = singleton::Singleton<HttpConfigManager>();
