@@ -21,8 +21,9 @@ namespace net
 
     TcpAcceptor::~TcpAcceptor()
     {
+        ::close(socket_->get_fd());
         delete socket_;
-        std::cout << "acceptor close\n";
+        std::cout << "tcp acceptor close\n";
     }
 
     bool TcpAcceptor::listen()
@@ -42,7 +43,7 @@ namespace net
 
     void TcpAcceptor::on_close()
     {
-        ::close(channel_.get_fd());
+        delete this;
     }
 
     void TcpAcceptor::on_read_event()

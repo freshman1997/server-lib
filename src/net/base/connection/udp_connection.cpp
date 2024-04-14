@@ -74,19 +74,4 @@ namespace net
             connectionHandler_->on_read(this);
         }
     }
-
-    bool UdpConnection::listen()
-    {
-        return socket_->listen();
-    }
-
-    void UdpConnection::on_close()
-    {
-
-    }
-
-    Channel * UdpConnection::get_channel()
-    {
-        return &channel_;
-    }
 }
