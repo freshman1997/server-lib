@@ -1,3 +1,4 @@
+#include "net/base/poller/select_poller.h"
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -8,7 +9,15 @@
 #include <fstream>
 #include <ctime>
 #include <cstdlib>
+
+#ifndef _WIN32
 #include <signal.h>
+#else
+#include <winsock2.h>
+#include <WS2tcpip.h>
+#include <stdio.h>
+#include <windows.h>
+#endif
 
 #include "base/utils/compressed_trie.h"
 #include "buffer/buffer.h"
@@ -34,11 +43,6 @@
 
 #include "net/base/event/event_loop.h"
 #include "net/base/connection/connection.h"
-
-
-#ifdef _WIN32
-#pragma comment(lib,"ws2_32.lib")
-#endif
 
 class PrintTask : public thread::Task
 {
@@ -224,7 +228,7 @@ void test_evloop()
         return;
     }
 
-    net::Poller *poller = new net::EpollPoller;
+    net::Poller *poller = new net::SelectPoller;
     timer::WheelTimerManager *manager = new timer::WheelTimerManager;
     TimerTask *t = new PrintTask1;
     Timer *timer = manager->interval(2000, 2000, t, 100);
@@ -313,7 +317,7 @@ void test_udp()
         return;
     }
 
-    net::Poller *poller = new net::EpollPoller;
+    net::Poller *poller = new net::SelectPoller;
     timer::WheelTimerManager *manager = new timer::WheelTimerManager;
     net::EventLoop loop(poller, manager);
     loop.loop();
@@ -326,8 +330,17 @@ void sigpipe_handler(int signum)
 
 int main()
 {
+#ifndef _WIN32
     // 注册SIGPIPE信号处理函数
     signal(SIGPIPE, sigpipe_handler);
+#else
+    WSADATA wsa;
+    int iResult = WSAStartup(MAKEWORD(2, 2), &wsa);
+    if (iResult != NO_ERROR) {
+        wprintf(L"WSAStartup failed with error: %ld\n", iResult);
+        return 1;
+    }
+#endif
     
     //test_http_client();
     //return 0;
@@ -353,6 +366,8 @@ int main()
     test_http_server();
     //std::cout << base::util::base64_encode("hello:hello1") << std::endl;
     //std::cout << base::util::base64_decode("aGVsbG86aGVsbG8x") << std::endl;
-
+#ifdef _WIN32
+    WSACleanup();
+#endif
     return 0;
 }

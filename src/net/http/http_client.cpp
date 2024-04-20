@@ -2,6 +2,7 @@
 #include "net/base/connection/connection.h"
 #include "net/base/connection/tcp_connection.h"
 #include "net/base/poller/epoll_poller.h"
+#include "net/base/poller/select_poller.h"
 #include "net/http/context.h"
 #include "net/http/http_client.h"
 #include "net/base/socket/socket.h"
@@ -123,7 +124,7 @@ namespace net::http
         timer::WheelTimerManager manager;
         conn_timer_ = manager.timeout(config::connection_idle_timeout, this);
 
-        net::EventLoop loop(&singleton::Singleton<net::EpollPoller>(), &manager);
+        net::EventLoop loop(&singleton::Singleton<net::SelectPoller>(), &manager);
 
         conn->set_connection_handler(this);
         loop.update_event(conn->get_channel());

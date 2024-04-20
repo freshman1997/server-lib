@@ -1,12 +1,20 @@
 #include <cassert>
 #include <cctype>
 #include <cstring>
+
+#ifdef _WIN32
+#include <io.h>
+#include <winsock2.h>
+#include <windows.h>
+#else
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#endif
+
 
 #include "net/base/socket/inet_address.h"
 #include "net/base/socket/socket.h"
@@ -37,7 +45,7 @@ namespace net
     Socket::~Socket()
     {
         if (fd_ > 0) {
-            ::close(fd_);
+            socket::close_fd(fd_);
         }
 
         if (addr) {

@@ -1,5 +1,10 @@
 #include <iostream>
+#ifndef _WIN32
 #include <unistd.h>
+#else
+#include <winsock2.h>
+#include <windows.h>
+#endif
 
 #include "net/base/acceptor/udp_acceptor.h"
 #include "net/base/handler/event_handler.h"
@@ -14,7 +19,6 @@ namespace net
 
     UdpAcceptor::~UdpAcceptor()
     {
-        ::close(sock_->get_fd());
         delete sock_;
         std::cout << "udp acceptor close\n";
     }

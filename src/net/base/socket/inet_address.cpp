@@ -2,10 +2,14 @@
 #include "endian/endian.hpp"
 
 #include <cstring>
+#include <inaddr.h>
+#include <winsock.h>
+#ifndef _WIN32
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#endif
 
 namespace net 
 {
@@ -62,6 +66,16 @@ namespace net
             return "";
         }
 #else
+    char *pstr;
+    hostent *phost = gethostbyname(host.c_str());
+    int i = 0;
+    for (pstr = phost->h_addr_list[0]; pstr != nullptr; pstr = phost->h_addr_list[++i]) {
+        u_long tmp = *(u_long *)pstr;
+        in_addr addr;
+        addr.S_un.S_addr = tmp;
+        return ::inet_ntoa(addr);
+    }
+    return "";
 #endif
     }
 }

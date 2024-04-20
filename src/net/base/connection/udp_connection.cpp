@@ -1,5 +1,5 @@
 #include <iostream>
-#include <unistd.h>
+#include <winsock.h>
 
 #include "net/base/connection/udp_connection.h"
 #include "net/base/connection/tcp_connection.h"
@@ -23,7 +23,7 @@ namespace net
         }
 
         std::size_t sz = output_buffer_.get_size();
-        for (int i = 0; i < sz; ++i) {
+        for (std::size_t i = 0; i < sz; ++i) {
             int ret = ::send(channel_.get_fd(), output_buffer_.get_current_buffer()->peek(), 
             output_buffer_.get_current_buffer()->readable_bytes() > UDP_DATA_LIMIT ? UDP_DATA_LIMIT : output_buffer_.get_current_buffer()->readable_bytes(), 0);
             if (ret > 0) {
@@ -48,7 +48,11 @@ namespace net
         input_buffer_.get_current_buffer()->reset();
 
         bool read = false;
+    #ifndef _WIN32
         int bytes = ::read(channel_.get_fd(), input_buffer_.get_current_buffer()->buffer_begin(), input_buffer_.get_current_buffer()->writable_size());
+    #else
+        int bytes = recv(channel_.get_fd(), input_buffer_.get_current_buffer()->buffer_begin(), input_buffer_.get_current_buffer()->writable_size(), 0);
+    #endif
         if (bytes <= 0) {
             if (bytes == 0) {
                 closed_ = true;

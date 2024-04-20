@@ -4,6 +4,7 @@
 #include "net/base/connection/connection.h"
 #include "net/base/event/event_loop.h"
 #include "net/base/poller/epoll_poller.h"
+#include "net/base/poller/select_poller.h"
 #include "net/base/socket/socket.h"
 #include "net/ftp/session.h"
 #include "timer/wheel_timer_manager.h"
@@ -49,7 +50,7 @@ namespace net::ftp
         }
 
         timer::WheelTimerManager timerManager;
-        EpollPoller poller;
+        SelectPoller poller;
         EventLoop evLoop(&poller, &timerManager);
 
         ev_loop_ = &evLoop;

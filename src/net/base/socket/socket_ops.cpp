@@ -1,7 +1,13 @@
+#ifdef _WIN32
+#include <winsock2.h>
+#include <WS2tcpip.h>
+#include <windows.h>
 #include <fcntl.h>
+#else
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#endif
 
 #include "net/base/socket/socket_ops.h"
 
@@ -16,8 +22,16 @@ namespace net::socket
     {
         if (!noneBlock) {
             return create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
-        } else {
+        } else {   
+            #ifndef _WIN32
             return create_ipv4_socket(SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
+            #else
+            int fd = create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
+            if (fd != INVALID_SOCKET) {
+                set_none_block(fd, true);
+            }
+            return fd;
+            #endif
         }
     }
 
@@ -26,13 +40,25 @@ namespace net::socket
         if (!noneBlock) {
             return create_ipv4_socket(SOCK_DGRAM, IPPROTO_UDP);
         } else {
+            #ifndef _WIN32
             return create_ipv4_socket(SOCK_DGRAM | SOCK_NONBLOCK, IPPROTO_UDP);
+            #else
+            int fd = create_ipv4_socket(SOCK_DGRAM | FIONBIO, IPPROTO_TCP);
+            if (fd != INVALID_SOCKET) {
+                set_none_block(fd, true);
+            }
+            return fd;
+            #endif
         }
     }
 
     void close_fd(int fd)
     {
+    #ifndef _WIN32
         ::close(fd);
+    #else
+        ::closesocket(fd);
+    #endif
     }
 
     int bind(int fd, const InetAddress &addr)
@@ -48,8 +74,13 @@ namespace net::socket
 
     int accept(int fd, struct sockaddr_in &peer_addr)
     {
+        #ifndef _WIN32
         socklen_t ssz = (socklen_t)sizeof(peer_addr);
         return ::accept(fd, (struct sockaddr *)&peer_addr, &ssz);
+        #else
+        int len = sizeof(peer_addr);
+        return ::accept(fd, (struct sockaddr*) &peer_addr, &len);
+        #endif
     }
 
     int connect(int fd, const InetAddress &addr)
@@ -60,30 +91,55 @@ namespace net::socket
 
     void set_reuse(int fd, bool on)
     {
+        #ifndef _WIN32
         int optval = on ? 1 : 0;
         ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
                &optval, static_cast<socklen_t>(sizeof optval));
+        #else
+        u_long optval = on ? 1 : 0;
+        ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+               (char *)&optval, sizeof(optval));
+        #endif
     }
 
     void set_no_delay(int fd, bool on)
     {
+        #ifndef _WIN32
         int optval = on ? 1 : 0;
         ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY,
                &optval, static_cast<socklen_t>(sizeof optval));
+        #else
+        u_long optval = on ? 1 : 0;
+        ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY,
+               (char *)&optval, sizeof(optval));
+        #endif
     }
 
     void set_keep_alive(int fd, bool on)
     {
+        #ifndef _WIN32
         int optval = on ? 1 : 0;
         ::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE,
                &optval, static_cast<socklen_t>(sizeof optval));
+        #else
+        u_long optval = on ? 1 : 0;
+        ::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE,
+               (char *)&optval, sizeof(optval));
+        #endif
     }
 
     void set_none_block(int fd, bool on)
     {
+    #ifndef _WIN32
         if (on) {
             int flags = fcntl(fd, F_GETFL);
             fcntl(fd, F_SETFL, flags |= O_NONBLOCK);
         }
+    #else
+        u_long mode = on ? 1 : 0;
+        if (ioctlsocket(fd, FIONBIO, &mode) == SOCKET_ERROR) {
+            WSACleanup();
+        }
+    #endif
     }
 }

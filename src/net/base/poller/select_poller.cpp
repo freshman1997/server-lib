@@ -31,11 +31,6 @@ namespace net
 {
     SelectPoller::SelectPoller()
     {
-        #ifdef _WIN32
-            WSADATA data;
-            WSAStartup(MAKEWORD(2, 2), &data);
-        #endif
-        
         FD_ZERO(&helper::reads_);
         FD_ZERO(&helper::writes_);
     }

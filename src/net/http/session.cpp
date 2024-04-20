@@ -52,7 +52,10 @@ namespace net::http
 
     void HttpSession::add_session_value(const std::string &key, void *pval)
     {
-        session_items_[key] = { SessionItemType::pval, {.pval = pval}, {} };
+        SessionItem item;
+        item.type = SessionItemType::pval;
+        item.number.pval = pval;
+        session_items_[key] = item;
     }
 
     SessionItem * HttpSession::get_session_value(const std::string &key)

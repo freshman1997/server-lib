@@ -1,7 +1,12 @@
 #ifndef __INET_ADDRESS_H__
 #define __INET_ADDRESS_H__
 #include <string>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <windows.h>
+#else
 #include <netinet/in.h>
+#endif
 
 namespace net
 {

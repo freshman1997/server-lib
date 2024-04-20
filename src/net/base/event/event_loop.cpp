@@ -2,7 +2,6 @@
 #include <condition_variable>
 #include <iostream>
 #include <mutex>
-#include <unistd.h>
 
 #include "net/base/channel/channel.h"
 #include "net/base/event/event_loop.h"
@@ -13,6 +12,9 @@
 #include "net/base/acceptor/acceptor.h"
 #include "base/time.h"
 
+#ifdef _WIN32
+#include <io.h>
+#endif
 namespace helper 
 {
     std::mutex m;
@@ -60,10 +62,15 @@ namespace net
             Channel * channel = conn->get_channel();
 
             std::cout << "new connection, ip: " << addr.get_ip() << ", port: " << addr.get_port() << ", fd: " << channel->get_fd()<< std::endl;
-            
+        
+        
             auto it = channels_.find(channel->get_fd());
             if (it != channels_.end()) {
+            #ifndef _WIN32
                 int new_fd = ::dup(channel->get_fd());
+            #else
+                int new_fd = ::_dup(channel->get_fd());
+            #endif
                 assert(new_fd > 0);
                 channel->set_new_fd(new_fd);
             }

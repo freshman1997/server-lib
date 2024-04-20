@@ -1,3 +1,4 @@
+#ifndef _WIN32
 #include <algorithm>
 #include <sys/poll.h>
 #include <unordered_map>
@@ -122,3 +123,4 @@ namespace net
         helper::removed_fds_.push_back(channel->get_fd());
     }
 }
+#endif

@@ -1,3 +1,4 @@
+#ifndef _WIN32
 #include <cstring>
 #include <set>
 #include <unistd.h>
@@ -106,3 +107,4 @@ namespace net
         }
     }
 }
+#endif

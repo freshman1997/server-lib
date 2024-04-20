@@ -1,8 +1,15 @@
-#include <arpa/inet.h>
 #include <cassert>
+#ifndef _WIN32
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#else
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#include <winsock2.h>
+#include <windows.h>
+#include <io.h>
+#endif
 #include <iostream>
 
 #include "net/base/acceptor/tcp_acceptor.h"
@@ -21,7 +28,6 @@ namespace net
 
     TcpAcceptor::~TcpAcceptor()
     {
-        ::close(socket_->get_fd());
         delete socket_;
         std::cout << "tcp acceptor close\n";
     }
