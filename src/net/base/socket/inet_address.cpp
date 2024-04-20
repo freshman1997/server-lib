@@ -2,9 +2,11 @@
 #include "endian/endian.hpp"
 
 #include <cstring>
+
+#ifdef _WIN32
 #include <inaddr.h>
 #include <winsock.h>
-#ifndef _WIN32
+#else
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>

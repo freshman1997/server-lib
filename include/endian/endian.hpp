@@ -1,7 +1,6 @@
 #ifndef __ENDIAN_H__
 #define __ENDIAN_H__
 #include <stdint.h>
-#include <winsock.h>
 
 #ifndef _WIN32
 #include <endian.h>

@@ -7,6 +7,7 @@
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <fcntl.h>
 #endif
 
 #include "net/base/socket/socket_ops.h"

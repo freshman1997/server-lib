@@ -1,5 +1,9 @@
 #include <iostream>
+#ifdef _WIN32
 #include <winsock.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "net/base/connection/udp_connection.h"
 #include "net/base/connection/tcp_connection.h"

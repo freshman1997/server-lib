@@ -4,14 +4,13 @@
 #include <cstdio>
 #include <fstream>
 #include <iostream>
-#include <locale>
 #include <string>
-#include <winnls.h>
-#include <winnt.h>
 
 #ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
+#include <winnls.h>
+#include <winnt.h>
 #else
 #include <unistd.h>
 #endif
