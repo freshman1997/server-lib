@@ -1,9 +1,19 @@
 #ifndef __NET_FTP_FILE_STREAM_H__
 #define __NET_FTP_FILE_STREAM_H__
+#include <fstream>
+
 #include "net/base/handler/connection_handler.h"
 
 namespace net::ftp 
 {
+    class FtpSession;
+
+    enum class StreamMode : char
+    {
+        Sender,
+        Receiver
+    };
+    
     class FtpFileStream : public ConnectionHandler
     {
     public:
@@ -21,18 +31,19 @@ namespace net::ftp
 
         virtual void on_close(Connection *conn);
 
+    public:
+        void using_mode(StreamMode mode)
+        {
+            mode_ = mode;
+        }
+
+        void open_file_stream(const std::string &filepath);
+
     protected:
-        
-    };
-
-    class FtpServerFileStream : public FtpFileStream
-    {
-
-    };
-
-    class FtpClientFileStream : public FtpFileStream
-    {
-
+        bool connected_;
+        StreamMode mode_;
+        FtpSession *session_;
+        std::fstream *file_stream_;
     };
 }
 

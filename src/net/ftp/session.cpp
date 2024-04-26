@@ -18,6 +18,15 @@ namespace net::ftp
 
     }
 
+    void FtpSession::on_packet()
+    {
+
+    }
+
+    void FtpSession::on_stream_close()
+    {
+        
+    }
 
     bool FtpSession::on_login(const std::string &username, std::string &passwd)
     {

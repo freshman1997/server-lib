@@ -81,7 +81,13 @@ namespace net::ftp
 
     void FtpServer::on_read(Connection *conn)
     {
-
+        auto it = sessions_.find(conn);
+        if (it != sessions_.end()) {
+            std::cout << "internal error occured!!!\n";
+            conn->close();
+            return;
+        }
+        it->second->on_packet();
     }
 
     void FtpServer::on_write(Connection *conn)

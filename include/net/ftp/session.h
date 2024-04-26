@@ -47,6 +47,8 @@ namespace net::ftp
             return file_stream_;
         }
 
+        bool start_file_stream_transe();
+
     private:
         FtpFileStream *file_stream_;
         std::string username_;
@@ -59,6 +61,11 @@ namespace net::ftp
     public:
         FtpSession(Connection *conn);
         ~FtpSession();
+
+    public:
+        void on_packet();
+
+        void on_stream_close();
 
     public:
         Connection * get_connection()
