@@ -4,6 +4,8 @@
 
 #ifndef _WIN32
 #include <endian.h>
+#else
+#include <windows.h>
 #endif
 
 // TODO win 下的实现

@@ -158,10 +158,10 @@ public:
         /*using namespace nlohmann;
         json jData = json::parse(req->body_begin(), req->body_end());
         */
-        std::string jData(req->body_begin(), req->body_end());
-        req->read_body_done();
+        //std::string jData(req->body_begin(), req->body_end());
+        //req->read_body_done();
 
-        std::cout << jData << std::endl;
+        //std::cout << jData << std::endl;
 
         std::string body = "{\"success\": 1}";
         resp->add_header("Content-length", std::to_string(body.size()));

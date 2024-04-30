@@ -29,15 +29,12 @@ namespace net
         id_ = -1;
         
         const std::string &realIp = InetAddress::get_address_by_host(ip);
-        assert(realIp.size() > 0);
-        if (!realIp.empty()) {
-            addr = new InetAddress(realIp.c_str(), port);
-            if (fd < 0) {
-                if (!udp) {
-                    fd_ = socket::create_ipv4_tcp_socket(true);
-                } else {
-                    fd_ = socket::create_ipv4_udp_socket(true);
-                }
+        addr = new InetAddress(realIp.c_str(), port);
+        if (fd < 0) {
+            if (!udp) {
+                fd_ = socket::create_ipv4_tcp_socket(true);
+            } else {
+                fd_ = socket::create_ipv4_udp_socket(true);
             }
         }
     }
