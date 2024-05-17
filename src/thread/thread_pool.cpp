@@ -1,11 +1,10 @@
 #include "thread/thread_pool.h"
 #include "thread/worker_thread.h"
+#include <iostream>
 
 namespace thread 
 {
-    const int ThreadPool::default_thread_num = 1;
-
-    ThreadPool::ThreadPool() : ThreadPool(default_thread_num)
+    ThreadPool::ThreadPool() : ThreadPool(2)
     {
     }
 
@@ -16,12 +15,11 @@ namespace thread
 
     ThreadPool::~ThreadPool()
     {
+        cond_.notify_all();
         for (auto &it : threads_) {
             it->stop();
         }
         
-        cond_.notify_all();
-
         for (auto &it : tasks_) {
             delete it;
         }

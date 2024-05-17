@@ -12,6 +12,13 @@ namespace thread
         stop_.store(false);
     }
 
+    Thread::~Thread()
+    {
+        if (th) {
+            delete th;
+        }
+    }
+
     void Thread::start()
     {
         assert(th == nullptr);

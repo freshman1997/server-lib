@@ -16,5 +16,6 @@ namespace thread
         }
 
         pool_->run_worker(this);
+        delete this;
     }
 }

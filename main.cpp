@@ -363,11 +363,16 @@ int main()
         }
     }
 
-    test_http_server();
+    //test_http_server();
     //std::cout << base::util::base64_encode("hello:hello1") << std::endl;
     //std::cout << base::util::base64_decode("aGVsbG86aGVsbG8x") << std::endl;
 #ifdef _WIN32
     WSACleanup();
 #endif
+    thread::ThreadPool pool;
+    pool.push_task(new PrintTask);
+    pool.push_task(new PrintTask);
+    pool.start();
+
     return 0;
 }

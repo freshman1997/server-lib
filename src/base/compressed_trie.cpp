@@ -73,7 +73,7 @@ namespace base
             return i;
         }
 
-        return node->is_prefix ? -i : i;
+        return node->is_prefix ? (i == 0 ? -1 : -i) : i;
     }
 
     CompressTrie::Node *CompressTrie::doInsert(Node *node, char ch, bool is_word, bool is_prefix)

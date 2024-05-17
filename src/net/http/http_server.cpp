@@ -160,19 +160,22 @@ namespace net::http
         net::Socket *sock = new net::Socket("", port);
         if (!sock->valid()) {
             std::cout << "create socket fail!!\n";
+            delete sock;
             return false;
         }
 
         sock->set_reuse(true);
         sock->set_none_block(true);
         if (!sock->bind()) {
-            std::cout << " bind failed " << std::endl;
+            std::cout << " bind port " << port << " failed !!" << std::endl;
+            delete sock;
             return false;
         }
 
         acceptor_ = new TcpAcceptor(sock);
         if (!acceptor_->listen()) {
             std::cout << " listen failed " << std::endl;
+            delete acceptor_;
             return false;
         }
 

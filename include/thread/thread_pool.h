@@ -28,7 +28,6 @@ namespace thread
     private:
         void init();
         void run_worker(WorkerThread *);
-        static const int default_thread_num;
 
     private:
         int thread_amount_;

@@ -12,6 +12,8 @@ namespace thread
     public:
         Thread(int id);
 
+        ~Thread();
+
         void start();
 
         void join();
@@ -21,6 +23,11 @@ namespace thread
         void detach();
 
         bool is_stop() { return stop_.load() == true; }
+
+        std::string get_thread_name()
+        {
+            return thread_name_;
+        }
 
     private:
         void set_default_name();
