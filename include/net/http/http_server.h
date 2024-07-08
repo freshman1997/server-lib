@@ -4,11 +4,11 @@
 #include <string>
 #include <unordered_map>
 
-#include "net/base/handler/connection_handler.h"
+#include "../base/handler/connection_handler.h"
 #include "common.h"
-#include "net/http/context.h"
+#include "context.h"
 #include "request_dispatcher.h"
-#include "timer/timer_manager.h"
+#include "../../timer/timer_manager.h"
 
 namespace net
 {
@@ -82,7 +82,7 @@ namespace net::http
         State state_;
         Acceptor *acceptor_;
         EventLoop *event_loop_;
-        timer::TimerManager *timer_manager_;
+        timer::TimerManager *timer_manager_{};
         std::unordered_map<uint64_t, HttpSession *> sessions_;
         HttpRequestDispatcher dispatcher_;
         std::unordered_map<std::string, std::string> static_paths_;

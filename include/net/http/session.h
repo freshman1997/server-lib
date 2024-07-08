@@ -3,7 +3,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "net/http/common.h"
+#include "common.h"
 #include "timer/timer.h"
 #include "timer/timer_manager.h"
 #include "timer/timer_task.h"
@@ -14,6 +14,7 @@ namespace net::http
     {
         invalid = -1,
         ival,
+        sz_val,
         dval,
         sval,
         pval
@@ -25,6 +26,7 @@ namespace net::http
         union 
         {
             int     ival;
+            std::size_t sz_val;
             double  dval;
             void    *pval;
         } 
@@ -38,9 +40,10 @@ namespace net::http
     {
     public:
         HttpSession(uint64_t id, HttpSessionContext *context, timer::TimerManager *timer_manager);
-        ~HttpSession();
+        ~HttpSession() override;
         
         void add_session_value(const std::string &key, int ival);
+        void add_session_value(const std::string &key, std::size_t sz);
         void add_session_value(const std::string &key, double dval);
         void add_session_value(const std::string &key, void *pval);
         void add_session_value(const std::string &key, const std::string &sval);
@@ -74,11 +77,6 @@ namespace net::http
 
     public:
         void on_timer(timer::Timer *timer);
-
-        virtual void on_finished(timer::Timer *timer)
-        {
-
-        }
 
     public:
         void reset_timer();

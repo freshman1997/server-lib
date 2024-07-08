@@ -162,11 +162,7 @@ namespace timer
 
     WheelTimer::~WheelTimer()
     {
-        if (task_) {
-            task_->on_finished(this);
-            task_ = nullptr;
-        }
-
+        task_ = nullptr;
         if (item_) {
             item_->on_delete(this);
             item_ = nullptr;

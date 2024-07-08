@@ -1,5 +1,5 @@
-#ifndef __COMPRESS_TRIE_H__
-#define __COMPRESS_TRIE_H__
+#ifndef COMPRESS_TRIE_H_
+#define COMPRESS_TRIE_H_
 #include <string>
 #include <unordered_map>
 

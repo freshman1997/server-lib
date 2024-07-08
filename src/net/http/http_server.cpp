@@ -1,5 +1,4 @@
 #include "net/base/poller/select_poller.h"
-#include <cassert>
 #include <cstddef>
 #include <cstdio>
 #include <fstream>
@@ -21,7 +20,6 @@
 #include "net/base/event/event_loop.h"
 #include "net/http/http_server.h"
 #include "net/base/socket/socket.h"
-#include "net/base/connection/connection.h"
 #include "net/http/request.h"
 #include "net/http/session.h"
 #include "net/http/response_code.h"
@@ -36,31 +34,31 @@
 #include "net/http/proxy.h"
 
 #ifdef _WIN32
-static std::string UTF8ToGBEx(const char *utf8)
+std::string UTF8ToGBEx(const char *utf8)
 {
     if (!utf8 || strlen(utf8) < 1)
         return "";
 
     std::stringstream ss;
-    int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
-    wchar_t *wstr = new wchar_t[len + 1];
+    int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
+    auto *wstr = new wchar_t[len + 1];
     memset(wstr, 0, len + 1);
     MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wstr, len);
-    len = WideCharToMultiByte(CP_ACP, 0, wstr, -1, NULL, 0, NULL, NULL);
-    char *str = new char[len + 1];
+    len = WideCharToMultiByte(CP_ACP, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
+    auto *str = new char[len + 1];
     memset(str, 0, len + 1);
-    WideCharToMultiByte(CP_ACP, 0, wstr, -1, str, len, NULL, NULL);
+    WideCharToMultiByte(CP_ACP, 0, wstr, -1, str, len, nullptr, nullptr);
     ss << str;
     delete[]wstr;
     delete[]str;
     return ss.str();
 }
-#endif // WIN32
+#endif // _WIN32
 
 
 namespace net::http
 {
-    HttpServer::HttpServer() : quit_(false), state_(State::invalid), acceptor_(nullptr), event_loop_(nullptr), proxy_(nullptr)
+    HttpServer::HttpServer() : quit_(false), state_(State::invalid), acceptor_(nullptr), event_loop_(nullptr), timer_manager_(nullptr), proxy_(nullptr)
     {
         
     }
@@ -190,7 +188,7 @@ namespace net::http
         timer::WheelTimerManager timerManager;
         timer_manager_ = &timerManager;
 
-        net::EpollPoller poller;
+        net::SelectPoller poller;
         net::EventLoop loop(&poller, &timerManager);
         acceptor_->set_event_handler(&loop);
 
@@ -266,8 +264,8 @@ namespace net::http
     void HttpServer::serve_static(HttpRequest *req, HttpResponse *resp)
     {
         const std::string &url = req->get_raw_url();
-        int prefixIdx = -dispatcher_.get_compress_trie().find_prefix(url, true);
-        std::string prefix = url.substr(0, prefixIdx);
+        const int prefixIdx = -dispatcher_.get_compress_trie().find_prefix(url, true);
+        const std::string prefix = url.substr(0, prefixIdx);
         const std::string &pathPrefix = static_paths_[prefix];
         if (pathPrefix.empty()) {
             resp->process_error();
@@ -280,7 +278,7 @@ namespace net::http
         }
 
         const std::string &fileRelativePath = url.substr(prefixIdx + 1);
-        std::size_t pos = fileRelativePath.find_last_of('.');
+        const std::size_t pos = fileRelativePath.find_last_of('.');
         if (pos == std::string::npos) {
             resp->process_error();
             return;
@@ -298,15 +296,22 @@ namespace net::http
         } else {
             path = pathPrefix + "/" + fileRelativePath;
         }
-        
+
         auto *session = req->get_context()->get_session();
-        SessionItem *data = session->get_session_value(fileRelativePath);
-        std::fstream *fileStream = nullptr;
+        const SessionItem *data = session->get_session_value(fileRelativePath);
+        if (const SessionItem *last = session->get_session_value("last"); last && data && last->number.pval != data->number.pval) {
+            auto *stream = static_cast<std::fstream *>(last->number.pval);
+            stream->close();
+            session->remove_session_value(fileRelativePath);
+            delete stream;
+        }
+
+        std::ifstream *fileStream;
         if (!data) {
-        #ifdef _WIN32
+#ifdef _WIN32
             path = UTF8ToGBEx(path.c_str());
-        #endif
-            std::fstream *file_ = new std::fstream(path.c_str(), std::ios_base::in);
+#endif
+            auto *file_ = new std::ifstream(path.c_str(), std::ios::binary);
             if (!file_->good()) {
                 std::cout << "open file fail!\n";
                 resp->process_error(ResponseCode::not_found);
@@ -316,23 +321,31 @@ namespace net::http
             }
 
             session->add_session_value(fileRelativePath, file_);
+            session->add_session_value("last", file_);
             fileStream = file_;
-            session->set_close_call_back([fileRelativePath](HttpSession *session) {
-                SessionItem *data = session->get_session_value(fileRelativePath);
-                if (data) {
-                    std::fstream *stream = (std::fstream *) data->number.pval;
+            session->set_close_call_back([fileRelativePath](HttpSession *httpSession) {
+                if (const SessionItem *item = httpSession->get_session_value(fileRelativePath)) {
+                    auto *stream = static_cast<std::ifstream *>(item->number.pval);
                     stream->close();
-                    session->remove_session_value(fileRelativePath);
+                    httpSession->remove_session_value(fileRelativePath);
                     delete stream;
                 }
             });
         } else {
-            fileStream = (std::fstream *) data->number.pval;
+            fileStream = static_cast<std::ifstream *>(data->number.pval);
         }
-        
-        std::size_t contentSize = config::client_max_content_length;
-        fileStream->seekg(0, std::ios_base::end);
-        std::size_t length = fileStream->tellg();
+
+        const std::size_t contentSize = config::client_max_content_length;
+        std::size_t length;
+        const std::string lenKey = "_length";
+        if (const SessionItem *lenItem = session->get_session_value(lenKey); !lenItem) {
+            fileStream->seekg(0, std::ios_base::end);
+            length = fileStream->tellg();
+            session->add_session_value(lenKey, length);
+        } else {
+            length = lenItem->number.sz_val;
+        }
+
         const std::string &contentType = get_content_type(ext);
         if (length == 0 || contentType.empty()) {
             resp->process_error(ResponseCode::bad_request);
@@ -341,8 +354,7 @@ namespace net::http
 
         std::size_t offset = 0;
 
-        const std::string *range = req->get_header(net::http::http_header_key::range);
-        if (range) {
+        if (const std::string *range = req->get_header(net::http::http_header_key::range)) {
             const auto &ranges = helper::parse_range(*range);
             if (ranges.empty()) {
                 resp->process_error(ResponseCode::bad_request);

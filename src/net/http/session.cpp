@@ -40,9 +40,20 @@ namespace net::http
         session_items_[key] = { SessionItemType::ival, ival, {} };
     }
 
+    void HttpSession::add_session_value(const std::string &key, std::size_t sz)
+    {
+        SessionItem item;
+        item.type = SessionItemType::sz_val;
+        item.number.sz_val = sz;
+        session_items_[key] = item;
+    }
+
     void HttpSession::add_session_value(const std::string &key, double dval)
     {
-        session_items_[key] = { SessionItemType::dval, {.dval = dval}, {} };
+        SessionItem item;
+        item.type = SessionItemType::dval;
+        item.number.dval = dval;
+        session_items_[key] = item;
     }
 
     void HttpSession::add_session_value(const std::string &key, const std::string &sval)

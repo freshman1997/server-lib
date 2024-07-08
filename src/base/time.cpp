@@ -4,17 +4,17 @@
 
 namespace base::time
 {
-    uint32_t time_unit_ = 100;
-    uint64_t tick_ = 0;
+    static uint32_t time_unit_ = 100;
+    static uint64_t tick_ = 0;
 
     uint64_t get_tick_count()
     {
-        auto time_now = std::chrono::system_clock::now();
-        auto duration_in_ms = std::chrono::duration_cast<std::chrono::milliseconds>(time_now.time_since_epoch());
+        const auto time_now = std::chrono::system_clock::now();
+        const auto duration_in_ms = std::chrono::duration_cast<std::chrono::milliseconds>(time_now.time_since_epoch());
         return duration_in_ms.count();
     }
 
-    void init_time(uint32_t unit)
+    void init_time(const uint32_t unit)
     {
         time_unit_ = unit;
         tick_ = get_tick_count();
@@ -27,8 +27,8 @@ namespace base::time
             return 0;
         }
 
-        uint64_t cur_tick = get_tick_count();
-        uint32_t passed = (cur_tick - tick_) / time_unit_;
+        const uint64_t cur_tick = get_tick_count();
+        const uint64_t passed = (cur_tick - tick_) / time_unit_;
         tick_ += passed * time_unit_;
 
         return passed;

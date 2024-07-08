@@ -1,17 +1,17 @@
-#ifndef __NET_HTTP_JSON_CONTENT_PARSER_H__
-#define __NET_HTTP_JSON_CONTENT_PARSER_H__
+#ifndef NET_HTTP_JSON_CONTENT_PARSER_H_
+#define NET_HTTP_JSON_CONTENT_PARSER_H_
 #include "net/http/content/content_parser.h"
 
 namespace net::http 
 {
-    class JsonContentParser : public ContentParser
+    class JsonContentParser final : public ContentParser
     {
     public:
         
-        virtual bool can_parse(ContentType contentType);
+        bool can_parse(ContentType contentType) override;
 
         // 解析
-        virtual bool parse(HttpPacket *packet);
+        bool parse(HttpPacket *packet) override;
     };
 }
 

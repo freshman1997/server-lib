@@ -2,9 +2,10 @@
 #define __NET_FTP_SESSION_H__
 
 #include "net/base/connection/connection.h"
-#include "net/base/socket/inet_address.h"
 #include <string>
 #include <unordered_map>
+#include <cstdint>
+
 namespace net::ftp 
 {
     class FtpFileStream;

@@ -7,7 +7,7 @@
 
 namespace net::http 
 {
-    HttpSessionContext::HttpSessionContext(net::Connection *conn) : conn_(conn), has_parsed_(false), mode_(Mode::server)
+    HttpSessionContext::HttpSessionContext(Connection *conn) : mode_(Mode::server), has_parsed_(false), conn_(conn)
     {
         request_ = new HttpRequest(this);
         response_ = new HttpResponse(this);
@@ -19,7 +19,7 @@ namespace net::http
         delete response_;
     }
 
-    void HttpSessionContext::reset()
+    void HttpSessionContext::reset() const
     {
         request_->reset();
         response_->reset();
@@ -54,34 +54,34 @@ namespace net::http
         return false;
     }
 
-    bool HttpSessionContext::has_error()
+    bool HttpSessionContext::has_error() const
     {
         return !get_packet()->good();
     }
 
-    void HttpSessionContext::send()
+    void HttpSessionContext::send() const
     {
         get_packet()->send();
     }
 
-    ResponseCode HttpSessionContext::get_error_code() 
+    ResponseCode HttpSessionContext::get_error_code() const
     {
         return get_packet()->get_error_code();
     }
 
-    bool HttpSessionContext::try_parse_request_content()
+    bool HttpSessionContext::try_parse_request_content() const
     {
         return get_packet()->parse_content();
     }
     
-    void HttpSessionContext::process_error(ResponseCode errorCode)
+    void HttpSessionContext::process_error(const ResponseCode errorCode) const
     {
         if (mode_ == Mode::server) {
             response_->process_error(errorCode);
         }
     }
     
-    HttpPacket * HttpSessionContext::get_packet()
+    HttpPacket * HttpSessionContext::get_packet() const
     {
         return mode_ == Mode::server ? 
             static_cast<HttpPacket *>(request_) : static_cast<HttpPacket *>(response_);

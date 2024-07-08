@@ -65,11 +65,6 @@ public:
         std::cout << " timer task printing ==> " << idx <<  std::endl;
         ++idx;
     }
-
-    virtual void on_finished(Timer *timer)
-    {
-        std::cout << " timer task finished " << std::endl;
-    }
 };
 
 class VideoTest
@@ -78,7 +73,7 @@ public:
     VideoTest()
     {
         content_size_ = -1;
-        file_.open("/home/yuan/Desktop/cz.mp4");
+        file_.open("e:/1.mp4");
         if (!file_.good()) {
             std::cout << "open file fail!\n";
             return;
@@ -328,16 +323,35 @@ void sigpipe_handler(int signum)
     std::cout << "Caught SIGPIPE signal: " << signum << '\n';
 }
 
+#ifndef _WIN32
+extern std::string UTF8ToGBEx(const char *utf8);
+#endif
+
+void test_args()
+{
+    cout << '\n';
+}
+
+template <typename T, typename ...Args>
+void test_args(T arg, Args ...args)
+{
+    cout << arg << ", ";
+    if (sizeof ...(args) > 0) {
+        test_args(args...);
+    }
+}
+
+
 int main()
 {
+    test_args(1, 2, 3, 4, 5);
 #ifndef _WIN32
     // 注册SIGPIPE信号处理函数
     signal(SIGPIPE, sigpipe_handler);
 #else
     WSADATA wsa;
-    int iResult = WSAStartup(MAKEWORD(2, 2), &wsa);
-    if (iResult != NO_ERROR) {
-        wprintf(L"WSAStartup failed with error: %ld\n", iResult);
+    if (const int iResult = WSAStartup(MAKEWORD(2, 2), &wsa);iResult != NO_ERROR) {
+        wprintf(L"WSAStartup failed with error: %d\n", iResult);
         return 1;
     }
 #endif
@@ -346,7 +360,7 @@ int main()
     //return 0;
     srand(time(nullptr));
 
-    std::fstream file("/home/yuan/Desktop/11.torrent", std::ios_base::in);
+    /*std::fstream file(UTF8ToGBEx("E:/迅雷下载/EE7E7F2648291605782E3CB59033DE7BED4A9E65.torrent"), std::ios_base::in);
     if (file.good()) {
         file.seekg(0, std::ios_base::end);
         std::size_t len = file.tellg();
@@ -361,18 +375,18 @@ int main()
         } else {
             std:: cout << "parse failed!" << std::endl;
         }
-    }
+    }*/
 
-    //test_http_server();
+    test_http_server();
     //std::cout << base::util::base64_encode("hello:hello1") << std::endl;
     //std::cout << base::util::base64_decode("aGVsbG86aGVsbG8x") << std::endl;
 #ifdef _WIN32
     WSACleanup();
 #endif
-    thread::ThreadPool pool;
-    pool.push_task(new PrintTask);
-    pool.push_task(new PrintTask);
-    pool.start();
+    //thread::ThreadPool pool;
+    //pool.push_task(new PrintTask);
+    //pool.push_task(new PrintTask);
+    //pool.start();
 
     return 0;
 }

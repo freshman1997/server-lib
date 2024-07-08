@@ -9,14 +9,14 @@ namespace net::http
 {
     typedef std::pair<uint32_t, std::pair<std::string, std::unordered_map<std::string, std::string>>> ContentDisposition;
 
-    class MultipartFormDataParser : public ContentParser
+    class MultipartFormDataParser final : public ContentParser
     {
     public:
         // 检查是否可以解析
-        virtual bool can_parse(ContentType contentType);
+        bool can_parse(ContentType contentType) override;
 
         // 解析
-        virtual bool parse(HttpPacket *packet);
+        bool parse(HttpPacket *packet) override;
 
     private:
         ContentDisposition parse_content_disposition(const char *begin, const char *end);
@@ -28,10 +28,10 @@ namespace net::http
     {
     public:
         // 检查是否可以解析
-        virtual bool can_parse(ContentType contentType);
+        bool can_parse(ContentType contentType) override;
 
         // 解析
-        virtual bool parse(HttpPacket *packet);
+        bool parse(HttpPacket *packet) override;
     
     private:
         std::tuple<bool, uint32_t, uint32_t, uint32_t, uint32_t> parse_content_range(const char *begin, const char *end);

@@ -35,9 +35,8 @@ namespace net::http::helper
     {
         std::string id;
         bool quoted = false;
-        bool ended = false;
         for (; p != end; ++p) {
-            char ch = *p;
+            const char ch = *p;
             if (ch == ' ') {
                 continue;
             }
@@ -60,7 +59,7 @@ namespace net::http::helper
 
     uint32_t skip_new_line(const char *data)
     {
-        char ch = *data;
+        const char ch = *data;
         if (ch == '\r') {
             return 2;
         }
@@ -85,7 +84,7 @@ namespace net::http::helper
 
     ContentDispositionType get_content_disposition_type(const std::string &name)
     {
-        auto it = dispistion_type_mapping_.find(name);
+        const auto it = dispistion_type_mapping_.find(name);
         return it == dispistion_type_mapping_.end() ? ContentDispositionType::unknow_ : it->second;
     }
 
@@ -95,7 +94,7 @@ namespace net::http::helper
             return {};
         }
 
-        return dispistion_type_names[(std::size_t)type];
+        return dispistion_type_names[static_cast<std::size_t>(type)];
     }
 
     std::vector<std::pair<std::size_t, std::size_t>> parse_range(const std::string &range)
@@ -127,7 +126,7 @@ namespace net::http::helper
                     return {};
                 }
 
-                res.push_back({beg, end});
+                res.emplace_back(beg, end);
 
                 from.clear();
                 to.clear();
@@ -148,7 +147,7 @@ namespace net::http::helper
         }
         
         if (!from.empty()) {
-            res.push_back({std::atol(from.c_str()), std::atol(to.c_str())});
+            res.emplace_back(std::atol(from.c_str()), std::atol(to.c_str()));
         }
 
         return res;

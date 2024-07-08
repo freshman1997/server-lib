@@ -4,14 +4,14 @@
 
 namespace net::http 
 {
-    class TextContentParser : public ContentParser
+    class TextContentParser final : public ContentParser
     {
     public:
         // 检查是否可以解析
-        virtual bool can_parse(ContentType contentType);
+        bool can_parse(ContentType contentType) override;
 
         // 解析
-        virtual bool parse(HttpPacket *packet);
+        bool parse(HttpPacket *packet) override;
     };
 }
 

@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "timer/timer.h"
+#include "timer.h"
 
 namespace timer 
 {

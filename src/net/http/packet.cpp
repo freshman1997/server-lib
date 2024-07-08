@@ -241,8 +241,7 @@ namespace net::http
 
     void HttpPacket::send()
     {
-        bool res = pack_header();
-        if (res) {
+        if (pack_header()) {
             if (buffer_) {
                 context_->get_connection()->write(buffer_);
                 buffer_ = singleton::Singleton<BufferedPool>().allocate();

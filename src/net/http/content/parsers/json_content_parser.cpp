@@ -7,7 +7,7 @@
 
 namespace net::http 
 {
-    bool JsonContentParser::can_parse(ContentType contentType)
+    bool JsonContentParser::can_parse(const ContentType contentType)
     {
         return contentType == ContentType::application_json;
     }

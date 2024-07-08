@@ -1,7 +1,3 @@
-#include <cassert>
-#include <cctype>
-#include <cstring>
-
 #ifdef _WIN32
 #include <io.h>
 #include <winsock2.h>
@@ -28,7 +24,7 @@ namespace net
         addr = nullptr;
         id_ = -1;
         
-        const std::string &realIp = InetAddress::get_address_by_host(ip);
+        const std::string &realIp = !*ip ? "" : InetAddress::get_address_by_host(ip);
         addr = new InetAddress(realIp.c_str(), port);
         if (fd < 0) {
             if (!udp) {

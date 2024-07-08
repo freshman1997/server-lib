@@ -4,12 +4,12 @@
 
 namespace net::http
 {
-    class UrlEncodedContentParser : public ContentParser
+    class UrlEncodedContentParser final : public ContentParser
     {
     public:
-        virtual bool can_parse(ContentType contentType);
+        bool can_parse(ContentType contentType) override;
 
-        virtual bool parse(HttpPacket *packet);
+        bool parse(HttpPacket *packet) override;
     };
 }
 

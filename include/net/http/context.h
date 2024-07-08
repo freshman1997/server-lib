@@ -1,6 +1,6 @@
 #ifndef __HTTP_REQUEST_CONTEXT_H__
 #define __HTTP_REQUEST_CONTEXT_H__
-#include "net/http/response_code.h"
+#include "response_code.h"
 
 namespace net 
 {
@@ -51,30 +51,30 @@ namespace net::http
             return session_;
         }
 
-        void send();
+        void send() const;
 
     public:
         bool parse();
 
         bool is_completed();
 
-        bool has_error();
+        bool has_error() const;
 
-        ResponseCode get_error_code();
+        ResponseCode get_error_code() const;
 
-        bool try_parse_request_content();
+        bool try_parse_request_content() const;
 
-        void process_error(ResponseCode errorCode = ResponseCode::internal_server_error);
+        void process_error(ResponseCode errorCode = ResponseCode::internal_server_error) const;
 
         void set_mode(Mode mode)
         {
             mode_ = mode;
         }
         
-        inline HttpPacket * get_packet();
+        inline HttpPacket * get_packet() const;
         
     private:
-        void reset();
+        void reset() const;
         
     private:
         Mode mode_;
@@ -82,7 +82,7 @@ namespace net::http
         Connection *conn_;
         HttpRequest *request_;
         HttpResponse *response_;
-        HttpSession *session_;
+        HttpSession *session_{};
     };
 }
 

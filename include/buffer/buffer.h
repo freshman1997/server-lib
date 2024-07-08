@@ -173,19 +173,19 @@ public:
         return write_index - read_index;
     }
 
-    size_t get_read_index() const 
+    size_t get_read_index() const
     {
         return read_index;
     }
 
-    size_t get_write_index() const 
+    size_t get_write_index() const
     {
         return write_index;
     }
 
-    void reset_read_index(size_t idx)
+    void reset_read_index(const size_t idx)
     {
-        if (idx < 0 || idx >= buffs.size()) {
+        if (idx >= buffs.size()) {
             return;
         }
 
@@ -223,18 +223,18 @@ public:
         write_index += bytes;
     }
 
-    void resize(size_t size = 1024)
+    void resize(const size_t size = 1024)
     {
         std::vector<char> newBuffs(size);
         buffs.swap(newBuffs);
     }
 
-    size_t get_buff_size() const
+    std::size_t get_buff_size() const
     {
         return buffs.size();
     }
 
-    void append_buffer(Buffer &buff)
+    void append_buffer(const Buffer &buff)
     {
         if (buff.readable_bytes() > writable_size()) {
             std::vector<char> newBuffs(get_buff_size() - writable_size() + buff.readable_bytes());
@@ -247,10 +247,10 @@ public:
     }
 
 private:
-    void write(void * data, size_t len)
+    void write(const void * data, const size_t len)
     {
-        const char* d = static_cast<const char*>(data);
-        std::copy(d, d + len, begin() + write_index);
+        const auto d = static_cast<const char*>(data);
+        std::copy_n(d, len, begin() + write_index);
         write_index += len;
     }
 
@@ -265,7 +265,7 @@ private:
     }
 
 public:
-    Buffer(int size = 0) : read_index(0), write_index(0)
+    explicit Buffer(const std::size_t size = 0) : read_index(0), write_index(0)
     {
         if (size == 0) {
             buffs.resize(8192);

@@ -17,7 +17,7 @@ BufferedPool::~BufferedPool()
     }
 }
 
-Buffer * BufferedPool::allocate(std::size_t sz)
+Buffer * BufferedPool::allocate(const std::size_t sz)
 {
     if (free_list_.empty()) {
         free_list_.push_front(new Buffer(sz));

@@ -33,7 +33,7 @@ namespace thread
         void set_default_name();
 
     protected:
-        std::atomic<bool> stop_;
+        std::atomic<bool> stop_{};
         bool join_;
         int tid_;
         std::thread *th;

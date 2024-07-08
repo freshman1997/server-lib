@@ -30,11 +30,6 @@ namespace net::http
     public:
         virtual void on_timer(timer::Timer *timer);
 
-        virtual void on_finished(timer::Timer *timer)
-        {
-            delete this;
-        }
-
     public:
         int task_id_;
         HttpRequest  *req_ = nullptr;

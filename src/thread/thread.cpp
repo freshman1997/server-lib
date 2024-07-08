@@ -7,7 +7,7 @@
 
 namespace thread
 {
-    Thread::Thread(int id) : Task(true), join_(false), tid_(id), th(nullptr)
+    Thread::Thread(const int id) : Task(true), join_(false), tid_(id), th(nullptr)
     {
         stop_.store(false);
     }
@@ -23,7 +23,7 @@ namespace thread
     {
         assert(th == nullptr);
         set_default_name();
-        th = new std::thread(std::bind(&Thread::run, this));
+        th = new std::thread([this] { run(); });
     }
 
     void Thread::join()
@@ -37,7 +37,7 @@ namespace thread
     void Thread::stop()
     {
         assert(th != nullptr);
-        stop_.store(true, std::memory_order_acq_rel);
+        stop_.store(true, std::memory_order_release);
     }
 
     void Thread::detach()
