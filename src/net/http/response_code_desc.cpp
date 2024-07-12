@@ -10,5 +10,6 @@ namespace net::http
         {ResponseCode::internal_server_error, "500 Internal Server Error"},
         {ResponseCode::gateway_timeout, "504 Gateway Timeout"},
         {ResponseCode::bad_gateway, "502 Bad Gateway"},
+        {ResponseCode::forbidden, "403 Forbidden"},
     };
 }

@@ -27,12 +27,16 @@ Buffer * LinkedBuffer::allocate_buffer(std::size_t sz)
     return buf;
 }
 
-void LinkedBuffer::free_current_buffer()
+void LinkedBuffer::free_current_buffer(Buffer *replaceBuff)
 {
-    if (buffers_.size() > 1) {
+    if (replaceBuff || buffers_.size() > 1) {
         Buffer *buf = buffers_.back();
         buffers_.pop_back();
         singleton::Singleton<BufferedPool>().free(buf);
+    }
+
+    if (replaceBuff) {
+        append_buffer(replaceBuff);
     }
 }
 

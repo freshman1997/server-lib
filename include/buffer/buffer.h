@@ -135,18 +135,15 @@ public:
         write(str.c_str(), str.size());
     }
 
-    void write_string(const char *str)
+    void write_string(const char *str, std::size_t length = 0)
     {
-        size_t len = strlen(str);
+        size_t len = length ? length : strlen(str);
         if (len < write_index + 1) {
             resize(buffs.size() + len);
         }
-
-        const char *p = str;
-        while (*p) {
-            buffs[write_index++] = *p++;
-        }
+        std::memcpy(peek_for(), str, len);
     }
+    
 public:
     char* begin()
     { 
@@ -164,6 +161,11 @@ public:
     }
 
     const char* peek() const
+    { 
+        return begin() + read_index;
+    }
+
+    char * peek_for()
     { 
         return begin() + read_index;
     }
@@ -244,6 +246,11 @@ public:
 
         std::memcpy(buffer_begin(), buff.peek(), buff.readable_bytes());
         fill(buff.readable_bytes());
+    }
+
+    bool empty()
+    {
+        return readable_bytes() == 0;
     }
 
 private:

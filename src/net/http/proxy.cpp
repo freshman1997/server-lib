@@ -34,10 +34,9 @@ namespace net::http
     {
         server_ = nullptr;
         srand(time(nullptr));
-        tasK_id_ = 0;
     }
 
-    HttpProxy::HttpProxy(HttpServer *server) : server_(server), tasK_id_(0)
+    HttpProxy::HttpProxy(HttpServer *server) : server_(server)
     {
         srand(time(nullptr));
     }
@@ -98,10 +97,9 @@ namespace net::http
         clear_connection_pending_request(conn);
     }
 
-    Connection * HttpProxy::init_proxy_connection(const std::string &ip, short port, int taskId)
+    Connection * HttpProxy::init_proxy_connection(const std::string &ip, short port)
     {
         net::Socket *sock = new net::Socket(ip.c_str(), port);
-        sock->set_id(taskId);
         if (!sock->valid()) {
             std::cout << "create socket fail, ip: " << ip << ", port: " << port << std::endl;
             return nullptr;
@@ -188,14 +186,15 @@ namespace net::http
                 return;
             }
 
-            if (conn->get_scoket()->get_id() > 0) {
-                if (pending_requests_[conn->get_scoket()->get_id()].size() > config::proxy_max_pending) {
+            auto pIt = pending_requests_.find(conn);
+            if (pIt != pending_requests_.end()) {
+                if (pIt->second.size() > config::proxy_max_pending) {
                     clear_connection_pending_request(conn);
                     resp->process_error();
                 } else {
-                    pending_requests_[conn->get_scoket()->get_id()].push_back(conn->get_input_buff(true));
+                    pIt->second.push_back(conn->get_input_buff(true));
                     if (req->get_body_length() > 0) {
-                        pending_requests_[conn->get_scoket()->get_id()].push_back(req->get_buff(true));
+                        pIt->second.push_back(req->get_buff(true));
                     }
                 }
                 return;
@@ -205,29 +204,22 @@ namespace net::http
             const std::string &url = req->get_raw_url().substr(0, idx);
             auto cfgIt = proxy_configs_.find(url);
             if (cfgIt != proxy_configs_.end() && cfgIt->second.size() > 0) {
-                int taskId = gen_task_id();
-                if (taskId < 0) {
-                    resp->process_error();
-                    return;
-                }
-
                 const InetAddress &remoteAddr = cfgIt->second[rand() % cfgIt->second.size()];
-                Connection *remoteConn = init_proxy_connection(remoteAddr.get_ip(), remoteAddr.get_port(), taskId);
+                Connection *remoteConn = init_proxy_connection(remoteAddr.get_ip(), remoteAddr.get_port());
                 if (!remoteConn) {
                     resp->process_error(ResponseCode::bad_gateway);
                     return;
                 }
 
                 timer::TimerManager *timerManager = server_->get_timer_manager();
-                RemoteConnectTask *task = new RemoteConnectTask(taskId, req, resp, 
+                RemoteConnectTask *task = new RemoteConnectTask(conn, req, resp, 
                     remoteConn, this, url, conn->get_remote_address().to_address_key());
                 
-                conn->get_scoket()->set_id(taskId);
-                conn_tasks_[taskId] = timerManager->timeout(config::proxy_connect_timeout, task);
+                conn_tasks_[conn] = timerManager->timeout(config::proxy_connect_timeout, task);
 
-                pending_requests_[conn->get_scoket()->get_id()].push_back(conn->get_input_buff(true));
+                pending_requests_[conn].push_back(conn->get_input_buff(true));
                 if (req->get_body_length() > 0) {
-                    pending_requests_[conn->get_scoket()->get_id()].push_back(req->get_buff(true));
+                    pending_requests_[conn].push_back(req->get_buff(true));
                 }
             } else {
                 resp->process_error(ResponseCode::bad_gateway);
@@ -237,7 +229,7 @@ namespace net::http
 
     void HttpProxy::put_conncetion(Connection *conn)
     {
-        auto cIt = conn_tasks_.find(conn->get_scoket()->get_id());
+        auto cIt = conn_tasks_.find(conn);
         if (cIt != conn_tasks_.end()) {
             RemoteConnectTask *task = static_cast<RemoteConnectTask *>(cIt->second->get_task());
             cIt->second->cancel();
@@ -246,39 +238,23 @@ namespace net::http
             cs_connection_mapping_[clientConn] = conn;
             sc_connection_mapping_[conn] = clientConn;
 
-            auto rIt = pending_requests_.find(conn->get_scoket()->get_id());
+            auto rIt = pending_requests_.find(conn);
             if (rIt != pending_requests_.end()) {
                 for (auto buf : rIt->second) {
                     conn->write(buf);
                 }
                 pending_requests_.erase(rIt);
             }
-
-            conn->get_scoket()->set_id(-1);
-            clientConn->get_scoket()->set_id(-1);
-
             delete task;
         }
     }
 
     void HttpProxy::on_connection_timeout(RemoteConnectTask *task)
     {
-        pending_requests_.erase(task->task_id_);
-        conn_tasks_.erase(task->task_id_);
+        pending_requests_.erase(task->conn_);
+        conn_tasks_.erase(task->conn_);
         std::cout << "connection to remote server fail ===> " << task->remote_conn_->get_remote_address().to_address_key() << '\n';
         task->remote_conn_->close();
-    }
-
-    int HttpProxy::gen_task_id()
-    {
-        uint32_t id = ++tasK_id_;
-        if (id >= INT32_MAX) {
-            tasK_id_ = 0;
-            if (conn_tasks_.count(tasK_id_)) {
-                return -1;
-            }
-        }
-        return (int)id;
     }
 
     void HttpProxy::do_forward_packet(HttpResponse *resp, Connection *conn, Buffer *buf1, Buffer *buf2)
@@ -302,8 +278,8 @@ namespace net::http
 
     void HttpProxy::clear_connection_pending_request(Connection *conn)
     {
-        if (conn->get_scoket()->get_id() > 0) {
-            auto it = pending_requests_.find(conn->get_scoket()->get_id());
+        auto it = pending_requests_.find(conn);
+        if (it != pending_requests_.end()) {
             for (auto buf : it->second) {
                 singleton::Singleton<BufferedPool>().free(buf);
             }

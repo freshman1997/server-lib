@@ -21,7 +21,7 @@ namespace net
     {
         connecting,         // 建立连接中
         connected,          // 已连接
-        closing,            // 关闭连接种
+        closing,            // 关闭连接中
         closed              // 已关闭
     };
 
@@ -57,7 +57,7 @@ namespace net
         
         virtual void set_connection_handler(ConnectionHandler *handler) = 0;
 
-        virtual Socket * get_scoket() = 0;
+        virtual ConnectionHandler * get_connection_handler() = 0;
     };
 }
 

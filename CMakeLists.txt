@@ -4,15 +4,18 @@ set(CMAKE_CXX_STANDARD 17)
 include_directories(
     include/
     third_party/json/include/
+    third_party/kcp/
 )
 
 FILE(GLOB_RECURSE SERVER_SRC "./src/*.cpp")
+
+add_subdirectory(third_party/kcp)
 
 add_executable(server ${SERVER_SRC} main.cpp)
 
 
 if(UNIX)
-target_link_libraries(server PUBLIC pthread)
+    target_link_libraries(server PUBLIC pthread kcp)
 else()
-target_link_libraries(server PUBLIC wsock32)
+    target_link_libraries(server PUBLIC wsock32)
 endif()

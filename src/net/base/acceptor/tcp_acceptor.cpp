@@ -85,9 +85,4 @@ namespace net
         handler_ = handler;
         handler_->update_event(&channel_);
     }
-
-    const Socket * TcpAcceptor::get_socket() const
-    {
-        return socket_;
-    }
 }

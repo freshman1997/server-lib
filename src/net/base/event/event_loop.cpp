@@ -63,22 +63,27 @@ namespace net
             const InetAddress &addr = conn->get_remote_address();
             Channel * channel = conn->get_channel();
 
-            std::cout << "new connection, ip: " << addr.get_ip() << ", port: " << addr.get_port() << ", fd: " << channel->get_fd()<< std::endl;
-        
-        
-            auto it = channels_.find(channel->get_fd());
-            if (it != channels_.end()) {
-            #ifndef _WIN32
-                int new_fd = ::dup(channel->get_fd());
-            #else
-                int new_fd = ::_dup(channel->get_fd());
-            #endif
-                assert(new_fd > 0);
-                channel->set_new_fd(new_fd);
+            if (channel) {
+                std::cout << "new connection, ip: " << addr.get_ip() << ", port: " << addr.get_port() << ", fd: " << channel->get_fd()<< std::endl;
+            } else {
+                std::cout << "new connection, ip: " << addr.get_ip() << ", port: " << addr.get_port() << std::endl;
             }
-            
-            poller_->update_channel(channel);
-            channels_[channel->get_fd()] = channel;
+        
+            if (conn->get_conn_type() == ConnectionType::TCP) {
+                auto it = channels_.find(channel->get_fd());
+                if (it != channels_.end()) {
+                #ifndef _WIN32
+                    int new_fd = ::dup(channel->get_fd());
+                #else
+                    int new_fd = ::_dup(channel->get_fd());
+                #endif
+                    assert(new_fd > 0);
+                    channel->set_new_fd(new_fd);
+                }
+                
+                poller_->update_channel(channel);
+                channels_[channel->get_fd()] = channel;
+            }
 
             conn->set_connection_handler(connHandler_);
         }
@@ -102,12 +107,6 @@ namespace net
             poller_->remove_channel(channel);
             channels_.erase(it);
         }
-    }
-
-    bool EventLoop::is_unique(int fd)
-    {
-        auto it = channels_.find(fd);
-        return it == channels_.end();
     }
 
     void EventLoop::update_event(Channel *channel)

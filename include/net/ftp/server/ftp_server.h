@@ -1,7 +1,7 @@
 #ifndef __NET_FTP_FTP_SERVER_H__
 #define __NET_FTP_FTP_SERVER_H__
-#include "../base/handler/connection_handler.h"
 #include <unordered_map>
+#include "net/base/handler/connection_handler.h"
 
 namespace net 
 {
@@ -37,7 +37,7 @@ namespace net::ftp
         virtual void on_close(Connection *conn);
 
     public:
-        EventLoop * get_even_loop()
+        EventLoop * get_event_loop()
         {
             return ev_loop_;
         }

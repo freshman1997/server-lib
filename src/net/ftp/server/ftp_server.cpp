@@ -1,4 +1,4 @@
-#include "net/ftp/ftp_server.h"
+#include "net/ftp/server/ftp_server.h"
 #include "net/base/acceptor/acceptor.h"
 #include "net/base/acceptor/tcp_acceptor.h"
 #include "net/base/connection/connection.h"
@@ -6,7 +6,7 @@
 #include "net/base/poller/epoll_poller.h"
 #include "net/base/poller/select_poller.h"
 #include "net/base/socket/socket.h"
-#include "net/ftp/session.h"
+#include "net/ftp/server/session.h"
 #include "timer/wheel_timer_manager.h"
 
 #include <iostream>

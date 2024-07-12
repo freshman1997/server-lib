@@ -16,8 +16,6 @@ namespace net
 
         virtual void on_close(Connection *conn) = 0;
 
-        virtual bool is_unique(int fd) = 0;
-
         virtual void update_event(Channel *channel) = 0;
     };
 }

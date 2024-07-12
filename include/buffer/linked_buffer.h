@@ -12,7 +12,7 @@ public:
 public:
     Buffer * get_current_buffer();
 
-    void free_current_buffer();
+    void free_current_buffer(Buffer *replaceBuff = nullptr);
 
     Buffer * allocate_buffer(std::size_t sz = 8192);
 

@@ -47,8 +47,8 @@ namespace net
 
         virtual void set_connection_handler(ConnectionHandler *connectionHandler);
 
-        virtual Socket * get_scoket();
-
+        virtual ConnectionHandler * get_connection_handler();
+        
     public: // select handler
         virtual void on_read_event();
 

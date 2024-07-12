@@ -22,16 +22,16 @@ namespace net::http
     class RemoteConnectTask : public timer::TimerTask
     {
     public:
-        RemoteConnectTask(int id, HttpRequest *req, HttpResponse *resp, Connection *remoteConn,
+        RemoteConnectTask(Connection *conn, HttpRequest *req, HttpResponse *resp, Connection *remoteConn,
             HttpProxy *proxy, const std::string &url, const std::string &client_addr) 
-            : task_id_(id), req_(req), resp_(resp), remote_conn_(remoteConn), proxy_(proxy), url_(url), client_addr_(client_addr)
+            : conn_(conn), req_(req), resp_(resp), remote_conn_(remoteConn), proxy_(proxy), url_(url), client_addr_(client_addr)
         {}
 
     public:
         virtual void on_timer(timer::Timer *timer);
 
     public:
-        int task_id_;
+        Connection *conn_ = nullptr;
         HttpRequest  *req_ = nullptr;
         HttpResponse *resp_ = nullptr;
         Connection *remote_conn_;
@@ -77,19 +77,15 @@ namespace net::http
         void check_response_timer(Connection *conn);
 
     private:
-        Connection * init_proxy_connection(const std::string &ip, short port, int taskId);
+        Connection * init_proxy_connection(const std::string &ip, short port);
 
         void put_conncetion(Connection *conn);
-
-        int gen_task_id();
 
         void do_forward_packet(HttpResponse *resp, Connection *conn, Buffer *buf1, Buffer *buf2);
 
         void clear_connection_pending_request(Connection *conn);
 
     private:
-        int tasK_id_;
-
         // <url, <ip, port>>
         std::unordered_map<std::string, std::vector<InetAddress>> proxy_configs_;
 
@@ -106,10 +102,10 @@ namespace net::http
         base::CompressTrie url_trie_;
 
         // <taskId, conn timer>
-        std::unordered_map<uint32_t, timer::Timer *> conn_tasks_;
+        std::unordered_map<Connection *, timer::Timer *> conn_tasks_;
 
         // pending requests after the connect task
-        std::unordered_map<uint32_t, std::vector<Buffer *>> pending_requests_;
+        std::unordered_map<Connection *, std::vector<Buffer *>> pending_requests_;
     };
 }
 

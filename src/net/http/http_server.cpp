@@ -4,7 +4,6 @@
 #include <fstream>
 #include <iostream>
 #include <string>
-#include <sstream>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -188,7 +187,14 @@ namespace net::http
         timer::WheelTimerManager timerManager;
         timer_manager_ = &timerManager;
 
+#ifdef __unix__
+        net::EpollPoller poller;
+#elif defined _WIN32
         net::SelectPoller poller;
+#elif defined __APPLE__
+        net::SelectPoller poller;
+#endif
+
         net::EventLoop loop(&poller, &timerManager);
         acceptor_->set_event_handler(&loop);
 
@@ -286,7 +292,7 @@ namespace net::http
 
         const std::string &ext = fileRelativePath.substr(pos);
         if (!play_types_.count(ext)) {
-            resp->process_error();
+            resp->process_error(ResponseCode::forbidden);
             return;
         }
 
@@ -389,6 +395,8 @@ namespace net::http
         }
 
         resp->add_header("Accept-Ranges", "bytes");
+        resp->add_header("X-Content-Type-Options", "nosniff");
+        resp->add_header("Cache-Control", "no-cache");
         resp->set_response_code(net::http::ResponseCode::partial_content);
         resp->send();
     }

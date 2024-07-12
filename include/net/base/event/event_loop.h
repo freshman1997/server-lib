@@ -37,8 +37,6 @@ namespace net
 
         virtual void on_close(Connection *conn);
 
-        virtual bool is_unique(int fd);
-
         virtual void update_event(Channel *channel);
 
     public:

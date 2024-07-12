@@ -9,6 +9,8 @@ namespace base::time
     void init_time(uint32_t unit);
 
     uint64_t get_passed_time();
+
+    uint32_t now();
 }
 
 #endif

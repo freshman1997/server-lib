@@ -1,3 +1,6 @@
 [submodule "third_party/json"]
 	path = third_party/json
 	url = https://github.com/nlohmann/json.git
+[submodule "third_party/kcp"]
+	path = third_party/kcp
+	url = https://github.com/skywind3000/kcp

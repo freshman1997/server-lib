@@ -1,7 +1,15 @@
 #ifndef __NET_BASE_UDP_ACCEPTOR_H__
 #define __NET_BASE_UDP_ACCEPTOR_H__
+#include "buffer/buffer.h"
 #include "net/base/acceptor/acceptor.h"
+#include "net/base/acceptor/udp/udp_instance.h"
 #include "net/base/channel/channel.h"
+#include "net/base/socket/inet_address.h"
+
+namespace timer 
+{
+    class TimerManager;
+}
 
 namespace net
 {
@@ -10,7 +18,7 @@ namespace net
     class UdpAcceptor : public Acceptor
     {
     public:
-        UdpAcceptor(Socket *socket);
+        UdpAcceptor(Socket *socket, timer::TimerManager *timerManager);
 
         ~UdpAcceptor();
 
@@ -20,6 +28,10 @@ namespace net
 
         virtual Channel * get_channel();
 
+        int send_to(Connection *conn, Buffer *buff);
+
+        int send_to(const InetAddress &addr, Buffer *buff);
+
     public: // select handler
         virtual void on_read_event();
 
@@ -27,10 +39,18 @@ namespace net
 
         virtual void set_event_handler(EventHandler *eventHandler);
 
+    public:
+        timer::TimerManager * get_timer_manager()
+        {
+            return timer_manager_;
+        }
+
     private:
         Channel channel_;
         Socket *sock_;
         EventHandler *handler_;
+        timer::TimerManager *timer_manager_;
+        UdpInstance instance_;
     };
 }
 

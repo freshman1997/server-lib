@@ -89,7 +89,7 @@ namespace net
         }
 
         output_buffer_.append_buffer(buff);
-        if (output_buffer_.get_current_buffer()->readable_bytes() == 0) {
+        if (output_buffer_.get_current_buffer()->empty()) {
             output_buffer_.get_current_buffer()->reset();
             output_buffer_.free_current_buffer();
         }
@@ -107,7 +107,7 @@ namespace net
 
     void TcpConnection::send()
     {
-        if (output_buffer_.get_current_buffer()->readable_bytes() == 0) {
+        if (output_buffer_.get_current_buffer()->empty()) {
             return;
         }
 
@@ -201,8 +201,8 @@ namespace net
         } else if (read) {
             // 第一次可读可写表示连接已经建立
             if (state_ == ConnectionState::connecting) {
-                connectionHandler_->on_connected(this);
                 state_ = ConnectionState::connected;
+                connectionHandler_->on_connected(this);
             }
             connectionHandler_->on_read(this);
         }
@@ -212,8 +212,8 @@ namespace net
     {
         // 第一次可读可写表示连接已经建立
         if (state_ == ConnectionState::connecting) {
-            connectionHandler_->on_connected(this);
             state_ = ConnectionState::connected;
+            connectionHandler_->on_connected(this);
         }
 
         connectionHandler_->on_write(this);
@@ -233,8 +233,8 @@ namespace net
         delete this;
     }
 
-    Socket * TcpConnection::get_scoket()
+    ConnectionHandler * TcpConnection::get_connection_handler()
     {
-        return socket_;
+        return connectionHandler_;
     }
 }

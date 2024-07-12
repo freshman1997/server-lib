@@ -33,4 +33,9 @@ namespace base::time
 
         return passed;
     }
+
+    uint32_t now()
+    {
+        return (uint32_t)get_tick_count();
+    }
 }

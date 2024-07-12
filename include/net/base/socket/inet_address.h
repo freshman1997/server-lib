@@ -21,9 +21,20 @@ namespace net
 
         InetAddress(const InetAddress &addr);
 
-        friend bool operator==(const InetAddress &addr1, const InetAddress &addr2);
+        //InetAddress(InetAddress &&addr);
 
-        friend bool operator!=(const InetAddress &addr1, const InetAddress &addr2);
+        ~InetAddress() = default;
+
+    public:
+        //InetAddress operator=(const InetAddress &other);
+
+        //InetAddress operator=(const InetAddress &&other);
+
+        bool operator==(const InetAddress &other) const;
+
+        bool operator!=(const InetAddress &other);
+
+        bool operator<(const InetAddress &other);
 
         void set_addr(const std::string &ip, int port)
         {
@@ -43,23 +54,9 @@ namespace net
 
         struct sockaddr_in to_ipv4_address() const;
 
-        const std::string & get_domain() const 
+        std::string to_address_key() const
         {
-            return domain_;
-        }
-
-        void set_domain(const std::string &domain)
-        {
-            domain_ = domain;
-        }
-
-        std::string to_address_key(bool only = false) const
-        {
-            if (only) {
-                return domain_.empty() ? ip_ + ":" + std::to_string(port_) : domain_ + ":" + std::to_string(port_);
-            }
-            
-            return domain_ + ":" + ip_ + ":" + std::to_string(port_);
+            return ip_ + ":" + std::to_string(port_);
         }
 
     public:
@@ -68,12 +65,21 @@ namespace net
     private:
         int port_;
         std::string ip_;
-        std::string domain_;
     };
+}
 
-    bool operator==(const InetAddress &addr1, const InetAddress &addr2);
-
-    bool operator!=(const InetAddress &addr1, const InetAddress &addr2);
+namespace std 
+{
+    template<>
+    struct hash<net::InetAddress> : public __hash_base<size_t, net::InetAddress>
+    {
+        size_t operator()(const net::InetAddress &address) const noexcept
+        {
+            std::size_t h1 = std::hash<std::string>{}(address.get_ip());
+            std::size_t h2 = std::hash<int>{}(address.get_port());
+            return h1 ^ (h2 << 1); // or use boost::hash_combine
+        }
+    };
 }
 
 #endif

@@ -32,9 +32,6 @@ namespace net
 
         virtual void set_event_handler(EventHandler *eventHandler);
 
-    public:
-        const Socket * get_socket() const;
-
     protected:
         Channel channel_;
         Socket *socket_;

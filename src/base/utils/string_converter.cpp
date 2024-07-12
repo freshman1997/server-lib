@@ -1,7 +1,9 @@
 //
 // Created by jackeyuan on 2024/5/26.
 //
+#ifdef _WIN32
 #include "base/utils/string_converter.h"
+
 #include <windows.h>
 
 namespace base::encoding
@@ -38,3 +40,4 @@ namespace base::encoding
         return strTemp;
     }
 }
+#endif

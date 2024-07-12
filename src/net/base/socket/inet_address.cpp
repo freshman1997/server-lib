@@ -2,6 +2,7 @@
 #include "endian/endian.hpp"
 
 #include <cstring>
+#include <functional>
 
 #ifdef _WIN32
 #include <inaddr.h>
@@ -33,6 +34,12 @@ namespace net
         this->port_ = addr.get_port();
     }
 
+    /*InetAddress::InetAddress(InetAddress &&addr)
+    {
+        this->ip_ = std::move(addr.get_ip());
+        this->port_ = std::move(addr.get_port());
+    }*/
+
     struct sockaddr_in InetAddress::to_ipv4_address() const
     {
         struct sockaddr_in addr;
@@ -43,17 +50,22 @@ namespace net
         return addr;
     }
 
-    bool operator==(const InetAddress &addr1, const InetAddress &addr2)
+    bool InetAddress::operator==(const InetAddress &other) const
     {
-        if (!addr1.domain_.empty() && !addr2.domain_.empty()) {
-            return addr1.get_ip() == addr2.get_ip() && addr1.get_port() == addr2.get_port() && addr1.domain_ == addr2.domain_;
-        }
-        return addr1.get_ip() == addr2.get_ip() && addr1.get_port() == addr2.get_port();
+        return get_ip() == other.get_ip() && get_port() == other.get_port();
     }
 
-    bool operator!=(const InetAddress &addr1, const InetAddress &addr2)
+    bool InetAddress::operator!=(const InetAddress &other)
     {
-        return !operator==(addr1, addr2);
+        return !operator==(other);
+    }
+
+    bool InetAddress::operator<(const InetAddress &other)
+    {
+        if (ip_ != other.ip_) {
+            return ip_ < other.ip_;
+        }
+        return port_ < other.port_;
     }
 
     std::string InetAddress::get_address_by_host(const std::string &host)

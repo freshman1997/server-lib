@@ -1,4 +1,6 @@
+#include "net/base/acceptor/udp_acceptor.h"
 #include "net/base/poller/select_poller.h"
+#include "net/dns/dns_server.h"
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -43,6 +45,8 @@
 
 #include "net/base/event/event_loop.h"
 #include "net/base/connection/connection.h"
+
+#include "ikcp.h"
 
 class PrintTask : public thread::Task
 {
@@ -306,15 +310,15 @@ void test_udp()
         return;
     }
 
-    net::Acceptor *acceptor = new net::TcpAcceptor(sock);
+    timer::WheelTimerManager manager;
+    net::Acceptor *acceptor = new net::UdpAcceptor(sock, &manager);
     if (!acceptor->listen()) {
         std::cout << " listen failed " << std::endl;
         return;
     }
 
-    net::Poller *poller = new net::SelectPoller;
-    timer::WheelTimerManager *manager = new timer::WheelTimerManager;
-    net::EventLoop loop(poller, manager);
+    net::SelectPoller poller;
+    net::EventLoop loop(&poller, &manager);
     loop.loop();
 }
 
@@ -323,7 +327,7 @@ void sigpipe_handler(int signum)
     std::cout << "Caught SIGPIPE signal: " << signum << '\n';
 }
 
-#ifndef _WIN32
+#ifdef _WIN32
 extern std::string UTF8ToGBEx(const char *utf8);
 #endif
 
@@ -344,6 +348,9 @@ void test_args(T arg, Args ...args)
 
 int main()
 {
+    net::dns::DnsServer server;
+    server.serve(9090);
+
     test_args(1, 2, 3, 4, 5);
 #ifndef _WIN32
     // 注册SIGPIPE信号处理函数
