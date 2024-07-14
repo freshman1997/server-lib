@@ -49,6 +49,7 @@ namespace net::ftp
         virtual void quit();
 
     private:
+        bool closing_;
         EventLoop *ev_loop_;
         timer::TimerManager *timer_manager_;
         FtpSessionManager session_manager_;

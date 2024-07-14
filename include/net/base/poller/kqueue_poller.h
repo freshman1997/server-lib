@@ -1,12 +1,12 @@
-#ifndef __NET_BASE_POLLER_SELECT_POLLER_H__
-#define __NET_BASE_POLLER_SELECT_POLLER_H__
+#ifndef __NET_BASE_POLLER_KQUEUE_POLLER_H__
+#define __NET_BASE_POLLER_KQUEUE_POLLER_H__
 #include "../poller/poller.h"
-namespace net 
+namespace net
 {
-    class SelectPoller : public Poller
+    class KQueuePoller : public Poller
     {
     public:
-        SelectPoller();
+        KQueuePoller();
 
         virtual uint64_t poll(uint32_t timeout);
 

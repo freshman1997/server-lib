@@ -46,15 +46,25 @@ namespace net
     TcpConnection::~TcpConnection()
     {
         channel_.disable_all();
-        eventHandler_->update_event(&channel_);
         channel_.set_handler(nullptr);
-        connectionHandler_->on_close(this);
+
+        if (eventHandler_) {
+            eventHandler_->update_event(&channel_);
+            eventHandler_->on_close(this);
+        }
+
+        if (connectionHandler_) {
+            connectionHandler_->on_close(this);
+        }
+
         state_ = ConnectionState::closed;
         
-        std::cout << "connection closed, ip: " << socket_->get_address()->get_ip() << ", port: " << socket_->get_address()->get_port() 
-                << ", fd: " << channel_.get_fd() << "\n";
-        
-        delete socket_;
+        if (socket_) {
+            std::cout << "connection closed, ip: " << socket_->get_address()->get_ip() << ", port: " << socket_->get_address()->get_port() 
+                    << ", fd: " << channel_.get_fd() << "\n";
+            
+            delete socket_;
+        }
     }
 
     ConnectionState TcpConnection::get_connection_state()

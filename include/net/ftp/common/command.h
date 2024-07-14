@@ -1,6 +1,5 @@
 #ifndef __NET_FTP_COMMAND_H__
 #define __NET_FTP_COMMAND_H__
-#include "singleton/singleton.h"
 #include <string>
 #include <unordered_map>
 

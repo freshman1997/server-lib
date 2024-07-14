@@ -120,13 +120,7 @@ namespace net
             conn->get_connection_handler()->on_write(conn);
         }
 
-        sockaddr_in addr;
-        memset(&addr, 0, sizeof(sockaddr));
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = inet_addr(conn->get_remote_address().get_ip().c_str());
-        addr.sin_port = htons(conn->get_remote_address().get_port());
-        
-        int ret = ::sendto(sock_->get_fd(), buff->peek(), buff->readable_bytes() > UDP_DATA_LIMIT ? UDP_DATA_LIMIT : buff->readable_bytes(), 0, (struct sockaddr *)&addr, sizeof(addr));
+        int ret = send_to(conn->get_remote_address(), buff);
         if (ret > 0) {
             if (ret >= buff->readable_bytes()) {
                 buff->reset();
@@ -145,9 +139,15 @@ namespace net
         return ret;
     }
 
-    int UdpAcceptor::send_to(const InetAddress &addr, Buffer *buff)
+    int UdpAcceptor::send_to(const InetAddress &address, Buffer *buff)
     {
-        return 0;
+        sockaddr_in addr;
+        memset(&addr, 0, sizeof(sockaddr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = address.get_net_ip();
+        addr.sin_port = htons(address.get_port());
+        return ::sendto(sock_->get_fd(), buff->peek(), buff->readable_bytes() > UDP_DATA_LIMIT ? UDP_DATA_LIMIT : buff->readable_bytes(), 
+            0, (struct sockaddr *)&addr, sizeof(addr));
     }
 
     void UdpAcceptor::set_event_handler(EventHandler *handler)

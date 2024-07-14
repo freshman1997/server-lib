@@ -47,6 +47,8 @@ namespace net::ftp
         server
     };
 
+    class FtpSession;
+    
     class FtpSessionContext
     {
         friend class FtpSession;
@@ -71,6 +73,7 @@ namespace net::ftp
 
     private:
         bool verified_;
+        FtpSession *instance_;
         FtpFileStream *file_stream_;
         FtpApp *app_;
         Connection *conn_;

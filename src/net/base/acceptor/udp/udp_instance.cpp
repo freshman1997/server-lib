@@ -79,6 +79,7 @@ namespace net
             return;
         }
 
+        // TODO 有待优化
         conns_.erase(conn->get_remote_address());
         for (auto it = queue_.begin(); it != queue_.end(); ) {
             if (it->first == conn) {

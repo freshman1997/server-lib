@@ -2,7 +2,6 @@
 #include "endian/endian.hpp"
 
 #include <cstring>
-#include <functional>
 
 #ifdef _WIN32
 #include <inaddr.h>
@@ -16,29 +15,37 @@
 
 namespace net 
 {
-    InetAddress::InetAddress() : port_(0)
+    InetAddress::InetAddress() : port_(0), net_ip_(0)
     {
     }
 
-    InetAddress::InetAddress(std::string ip, int port) : ip_(std::move(ip)), port_(port) {}
+    InetAddress::InetAddress(std::string ip, int port, uint32_t netIp) : ip_(std::move(ip)), port_(port), net_ip_(netIp) 
+    {
+        if (net_ip_ == 0) {
+            set_net_ip();
+        }
+    }
 
     InetAddress::InetAddress(const struct sockaddr_in &addr)
     {
-        port_ = endian::networkToHost16(addr.sin_port);
-        ip_ = ::inet_ntoa(addr.sin_addr);
+        this->port_ = endian::networkToHost16(addr.sin_port);
+        this->ip_ = ::inet_ntoa(addr.sin_addr);
+        this->net_ip_ = addr.sin_addr.s_addr;
     }
 
     InetAddress::InetAddress(const InetAddress &addr)
     {
         this->ip_ = addr.get_ip();
         this->port_ = addr.get_port();
+        this->net_ip_ = addr.get_net_ip();
     }
 
-    /*InetAddress::InetAddress(InetAddress &&addr)
+    InetAddress::InetAddress(InetAddress &&addr)
     {
         this->ip_ = std::move(addr.get_ip());
         this->port_ = std::move(addr.get_port());
-    }*/
+        this->net_ip_ = std::move(addr.get_net_ip());
+    }
 
     struct sockaddr_in InetAddress::to_ipv4_address() const
     {
@@ -48,6 +55,22 @@ namespace net
         addr.sin_port = htons(port_);
         addr.sin_addr.s_addr = ip_.empty() ? htonl(INADDR_ANY) : inet_addr(ip_.c_str());
         return addr;
+    }
+
+    const InetAddress & InetAddress::operator=(const InetAddress &other)
+    {
+        this->ip_ = other.get_ip();
+        this->port_ = other.get_port();
+        this->net_ip_ = other.get_net_ip();
+        return *this;
+    }
+
+    const InetAddress & InetAddress::operator=(const InetAddress &&other)
+    {
+        this->ip_ = std::move(other.get_ip());
+        this->port_ = std::move(other.get_port());
+        this->net_ip_ = std::move(other.get_net_ip());
+        return *this;
     }
 
     bool InetAddress::operator==(const InetAddress &other) const
@@ -91,5 +114,15 @@ namespace net
     }
     return "";
 #endif
+    }
+
+    void InetAddress::set_net_ip()
+    {
+        net_ip_ = ip_.empty() ? htonl(INADDR_ANY) : inet_addr(ip_.c_str());
+    }
+
+    uint32_t InetAddress::get_net_ip() const
+    {
+        return net_ip_;
     }
 }

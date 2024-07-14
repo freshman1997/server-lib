@@ -1,4 +1,4 @@
-#ifndef _WIN32
+#ifdef __linux__
 #include <cstring>
 #include <set>
 #include <unistd.h>

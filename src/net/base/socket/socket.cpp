@@ -43,6 +43,7 @@ namespace net
 
         if (addr) {
             delete addr;
+            addr = nullptr;
         }
     }
 

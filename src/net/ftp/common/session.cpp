@@ -14,7 +14,21 @@ namespace net::ftp
 
     void FtpSessionContext::close()
     {
+        if (conn_) {
+            conn_->close();
+            conn_ = nullptr;
+        }
 
+        if (file_stream_) {
+            file_stream_->quit();
+            file_stream_ = nullptr;
+        }
+
+        if (app_) {
+            app_->on_session_closed(instance_);
+            app_->quit();
+            app_ = nullptr;
+        }
     }
 
     FtpSession::FtpSession(Connection *conn, FtpApp *entry, FtpSessionWorkMode workMode, bool keepUtilSent) : work_mode_(workMode), keep_util_sent_(keepUtilSent), close_(false)
@@ -22,11 +36,13 @@ namespace net::ftp
         context_.conn_ = conn;
         context_.app_ = entry;
         context_.conn_->set_connection_handler(this);
+        context_.instance_ = this;
     }
 
     FtpSession::~FtpSession()
     {
         context_.close();
+        std::cout << "ftp session closed!\n";
     }
 
     void FtpSession::on_connected(Connection *conn)
@@ -52,12 +68,24 @@ namespace net::ftp
 
     void FtpSession::on_write(Connection *conn)
     {
-            
+        if (work_mode_ == FtpSessionWorkMode::client) {
+            if (!context_.cmd_queue_.empty()) {
+                const std::string &cmd = context_.cmd_queue_.front();
+                conn->get_output_buff()->write_string(cmd);
+                conn->send();
+                context_.cmd_queue_.pop();
+            }
+        }
     }
 
     void FtpSession::on_close(Connection *conn)
     {
+        if (close_) {
+            return;
+        }
+
         close_ = true;
+        context_.conn_ = nullptr;
         if (!keep_util_sent_) {
             delete this;
         }

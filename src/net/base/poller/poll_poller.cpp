@@ -1,4 +1,4 @@
-#ifndef _WIN32
+#ifdef __linux__
 #include <algorithm>
 #include <sys/poll.h>
 #include <unordered_map>

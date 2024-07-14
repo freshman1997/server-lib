@@ -25,6 +25,11 @@ namespace net::ftp
             return sessions_;
         }
 
+        void clear()
+        {
+            sessions_.clear();
+        }
+
     private:
         std::unordered_map<Connection *, FtpSession *> sessions_;
     };

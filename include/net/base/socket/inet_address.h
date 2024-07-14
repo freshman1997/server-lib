@@ -1,5 +1,6 @@
 #ifndef __INET_ADDRESS_H__
 #define __INET_ADDRESS_H__
+#include <cstdint>
 #include <string>
 #ifdef _WIN32
 #include <winsock2.h>
@@ -15,20 +16,20 @@ namespace net
     public:
         InetAddress();
         
-        InetAddress(std::string ip, int port);
+        InetAddress(std::string ip, int port, uint32_t netIp = 0);
 
         InetAddress(const struct sockaddr_in &);
 
         InetAddress(const InetAddress &addr);
 
-        //InetAddress(InetAddress &&addr);
+        InetAddress(InetAddress &&addr);
 
         ~InetAddress() = default;
 
     public:
-        //InetAddress operator=(const InetAddress &other);
+        const InetAddress & operator=(const InetAddress &other);
 
-        //InetAddress operator=(const InetAddress &&other);
+        const InetAddress & operator=(const InetAddress &&other);
 
         bool operator==(const InetAddress &other) const;
 
@@ -40,6 +41,7 @@ namespace net
         {
             ip_ = ip;
             port_ = port;
+            set_net_ip();
         }
 
         int get_port() const 
@@ -51,6 +53,10 @@ namespace net
         {
             return ip_;
         }
+
+        void set_net_ip();
+
+        uint32_t get_net_ip() const;
 
         struct sockaddr_in to_ipv4_address() const;
 
@@ -64,6 +70,7 @@ namespace net
 
     private:
         int port_;
+        uint32_t net_ip_;
         std::string ip_;
     };
 }

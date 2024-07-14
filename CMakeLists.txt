@@ -14,8 +14,8 @@ add_subdirectory(third_party/kcp)
 add_executable(server ${SERVER_SRC} main.cpp)
 
 
-if(UNIX)
+if(UNIX OR APPLE)
     target_link_libraries(server PUBLIC pthread kcp)
-else()
+elseif(WIN32)
     target_link_libraries(server PUBLIC wsock32 kcp)
 endif()

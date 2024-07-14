@@ -12,13 +12,14 @@
 
 namespace net::ftp 
 {
-    FtpServer::FtpServer()
+    FtpServer::FtpServer() : closing_(false)
     {
 
     }
 
     FtpServer::~FtpServer()
     {
+        std::cout << "ftp server exit now!\n";
         quit();
     }
 
@@ -36,6 +37,9 @@ namespace net::ftp
             delete sock;
             return false;
         }
+
+        sock->set_reuse(true);
+        sock->set_none_block(true);
 
         TcpAcceptor *acceptor = new TcpAcceptor(sock);
         if (!acceptor->listen()) {
@@ -107,21 +111,26 @@ namespace net::ftp
 
     void FtpServer::on_session_closed(FtpSession *session)
     {
-        if (!session) {
+        if (!session || closing_) {
             return;
         }
-        ev_loop_->on_close(session->get_connection());
         session_manager_.remove_session(session->get_connection());
         session->quit();
     }
 
     void FtpServer::quit()
     {
+        if (closing_) {
+            return;
+        }
+
+        closing_ = true;
         auto sessions = session_manager_.get_sessions();
         for (auto item : sessions) {
             item.second->quit();
         }
-        
+
+        session_manager_.clear();
         timer_manager_ = nullptr;
 
         if (ev_loop_) {

@@ -20,7 +20,7 @@ namespace net::ftp
 
     FtpClient::~FtpClient()
     { 
-        
+        std::cout << "ftp client exit now!\n";
     }
 
     bool FtpClient::is_ok()
@@ -43,7 +43,8 @@ namespace net::ftp
 
     void FtpClient::on_session_closed(FtpSession *session)
     {
-        // do nothing
+        // 被动关闭需要置空 session_ 指针
+        session_ = nullptr;
     }
 
     void FtpClient::quit()
@@ -94,6 +95,8 @@ namespace net::ftp
 
     void FtpClient::add_command(const std::string &cmd)
     {
-        session_->add_command(cmd);
+        if (session_) {
+            session_->add_command(cmd);
+        }
     }
 }

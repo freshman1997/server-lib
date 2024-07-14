@@ -46,7 +46,9 @@ namespace net
             adapter_ = nullptr;
         }
 
-        instance_->on_connection_close(this);
+        if (instance_) {
+            instance_->on_connection_close(this);
+        }
     }
 
     ConnectionState UdpConnection::get_connection_state()
