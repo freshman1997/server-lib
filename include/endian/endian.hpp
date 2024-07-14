@@ -5,6 +5,7 @@
 #ifndef _WIN32
 #include <endian.h>
 #else
+#include <winsock2.h>
 #include <windows.h>
 #endif
 

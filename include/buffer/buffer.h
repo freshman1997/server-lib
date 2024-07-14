@@ -8,7 +8,7 @@
 #include <cstring>
 #include <vector>
 
-#include "endian/endian.hpp"
+#include "../endian/endian.hpp"
 
 // TODO fix 复用
 class Buffer
@@ -163,6 +163,11 @@ public:
     const char* peek() const
     { 
         return begin() + read_index;
+    }
+
+    const char* peek_end() const
+    { 
+        return begin() + read_index + readable_bytes();
     }
 
     char * peek_for()

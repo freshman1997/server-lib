@@ -84,8 +84,6 @@ namespace net
                 poller_->update_channel(channel);
                 channels_[channel->get_fd()] = channel;
             }
-
-            conn->set_connection_handler(connHandler_);
         }
     }
 

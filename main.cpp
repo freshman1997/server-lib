@@ -1,6 +1,9 @@
 #include "net/base/acceptor/udp_acceptor.h"
 #include "net/base/poller/select_poller.h"
 #include "net/dns/dns_server.h"
+#include "net/ftp/client/command_scanner.h"
+#include "net/ftp/client/ftp_client.h"
+#include "net/ftp/server/ftp_server.h"
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -11,6 +14,7 @@
 #include <fstream>
 #include <ctime>
 #include <cstdlib>
+#include <thread>
 
 #ifndef _WIN32
 #include <signal.h>
@@ -45,8 +49,6 @@
 
 #include "net/base/event/event_loop.h"
 #include "net/base/connection/connection.h"
-
-#include "ikcp.h"
 
 class PrintTask : public thread::Task
 {
@@ -345,12 +347,31 @@ void test_args(T arg, Args ...args)
     }
 }
 
+void test_ftp_client()
+{
+    net::ftp::FtpClient client;
+    std::thread runner([&client]() {
+        client.connect("", 12123);
+    });
+    runner.join();
+
+    net::ftp::CommandScanner scanner;
+    while (true) {
+        if (client.is_ok()) {
+            client.add_command(scanner.simpleCommand());
+        } else {
+            std::cout << "client didn't connected yet";
+        }
+    }
+}
+
+void test_ftp_server()
+{
+    net::ftp::FtpServer server;
+}
 
 int main()
 {
-    net::dns::DnsServer server;
-    server.serve(9090);
-
     test_args(1, 2, 3, 4, 5);
 #ifndef _WIN32
     // 注册SIGPIPE信号处理函数
@@ -383,6 +404,10 @@ int main()
             std:: cout << "parse failed!" << std::endl;
         }
     }*/
+
+	SOCKET sockClient = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    net::dns::DnsServer server;
+    server.serve(9090);
 
     test_http_server();
     //std::cout << base::util::base64_encode("hello:hello1") << std::endl;

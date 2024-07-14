@@ -1,7 +1,8 @@
 #ifndef __NET_FTP_FTP_SERVER_H__
 #define __NET_FTP_FTP_SERVER_H__
-#include <unordered_map>
-#include "net/base/handler/connection_handler.h"
+#include "../../base/handler/connection_handler.h"
+#include "../common/session_manager.h"
+#include "../handler/ftp_app.h"
 
 namespace net 
 {
@@ -17,7 +18,7 @@ namespace net::ftp
 { 
     class FtpSession;
 
-    class FtpServer : public ConnectionHandler
+    class FtpServer : public ConnectionHandler, public FtpApp
     {
     public:
         FtpServer();
@@ -36,24 +37,21 @@ namespace net::ftp
 
         virtual void on_close(Connection *conn);
 
-    public:
-        EventLoop * get_event_loop()
-        {
-            return ev_loop_;
-        }
+    public: // app
+        virtual bool is_ok();
 
-        timer::TimerManager * get_timer_manager()
-        {
-            return timer_manager_;
-        }
+        virtual timer::TimerManager * get_timer_manager();
 
-    private:
-        void on_free_session(FtpSession *session);
+        virtual EventLoop * get_event_loop();
+
+        virtual void on_session_closed(FtpSession *session);
+
+        virtual void quit();
 
     private:
         EventLoop *ev_loop_;
         timer::TimerManager *timer_manager_;
-        std::unordered_map<Connection *, FtpSession *> sessions_;
+        FtpSessionManager session_manager_;
     };
 }
 

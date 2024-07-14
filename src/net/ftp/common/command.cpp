@@ -1,4 +1,4 @@
-#include "net/ftp/server/command.h"
+#include "net/ftp/common/command.h"
 
 namespace net::ftp 
 {

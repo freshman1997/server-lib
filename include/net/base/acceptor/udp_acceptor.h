@@ -28,10 +28,6 @@ namespace net
 
         virtual Channel * get_channel();
 
-        int send_to(Connection *conn, Buffer *buff);
-
-        int send_to(const InetAddress &addr, Buffer *buff);
-
     public: // select handler
         virtual void on_read_event();
 
@@ -39,7 +35,13 @@ namespace net
 
         virtual void set_event_handler(EventHandler *eventHandler);
 
+        virtual void set_connection_handler(ConnectionHandler *connHandler);
+
     public:
+        int send_to(Connection *conn, Buffer *buff);
+
+        int send_to(const InetAddress &addr, Buffer *buff);
+
         timer::TimerManager * get_timer_manager()
         {
             return timer_manager_;
@@ -49,6 +51,7 @@ namespace net
         Channel channel_;
         Socket *sock_;
         EventHandler *handler_;
+        ConnectionHandler *conn_handler_;
         timer::TimerManager *timer_manager_;
         UdpInstance instance_;
     };

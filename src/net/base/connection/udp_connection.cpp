@@ -117,7 +117,6 @@ namespace net
         while (output_buffer_.get_size() > 0) {
             auto buff = output_buffer_.get_current_buffer();
             if (!buff->empty()) {
-                connectionHandler_->on_write(this);
                 instance_->on_send(this, output_buffer_.take_current_buffer());
             }
 

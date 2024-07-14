@@ -49,7 +49,7 @@ namespace net::dns
 
     bool DnsServer::serve(int port)
     {
-        Socket *sock = new Socket("192.168.96.128", port, true);
+        Socket *sock = new Socket("", port, true);
         if (!sock->valid()) {
             std::cout << "cant create socket file descriptor!\n";
             delete sock;
@@ -78,7 +78,7 @@ namespace net::dns
         EventLoop evLoop(&poller, &timerManager);
 
         acceptor->set_event_handler(&evLoop);
-        evLoop.set_connection_handler(this);
+        acceptor->set_connection_handler(this);
 
         evLoop.loop();
 

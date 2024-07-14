@@ -24,15 +24,15 @@ namespace net::socket
         if (!noneBlock) {
             return create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
         } else {   
-            #ifndef _WIN32
+        #ifndef _WIN32
             return create_ipv4_socket(SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
-            #else
+        #else
             int fd = create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
             if (fd != INVALID_SOCKET) {
                 set_none_block(fd, true);
             }
             return fd;
-            #endif
+        #endif
         }
     }
 
@@ -41,15 +41,15 @@ namespace net::socket
         if (!noneBlock) {
             return create_ipv4_socket(SOCK_DGRAM, IPPROTO_UDP);
         } else {
-            #ifndef _WIN32
+        #ifndef _WIN32
             return create_ipv4_socket(SOCK_DGRAM | SOCK_NONBLOCK, IPPROTO_UDP);
-            #else
-            int fd = create_ipv4_socket(SOCK_DGRAM | FIONBIO, IPPROTO_TCP);
+        #else
+            int fd = create_ipv4_socket(SOCK_DGRAM, IPPROTO_UDP);
             if (fd != INVALID_SOCKET) {
                 set_none_block(fd, true);
             }
             return fd;
-            #endif
+        #endif
         }
     }
 

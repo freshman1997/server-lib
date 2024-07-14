@@ -18,6 +18,7 @@
 #include "net/base/handler/event_handler.h"
 #include "net/base/channel/channel.h"
 #include "net/base/socket/socket.h"
+#include "net/base/handler/connection_handler.h"
 
 namespace net
 {
@@ -65,7 +66,9 @@ namespace net
         } else {
             Connection *conn = new TcpConnection(::inet_ntoa(peer_addr.sin_addr), 
                         ntohs(peer_addr.sin_port), conn_fd);
+                        
             conn->set_event_handler(handler_);
+            conn->set_connection_handler(conn_handler_);
 
             handler_->on_new_connection(conn);
         }
@@ -84,5 +87,10 @@ namespace net
     {
         handler_ = handler;
         handler_->update_event(&channel_);
+    }
+
+    void TcpAcceptor::set_connection_handler(ConnectionHandler *connHandler)
+    {
+        this->conn_handler_ = connHandler;
     }
 }

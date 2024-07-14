@@ -3,10 +3,9 @@
 #include "net/base/acceptor/tcp_acceptor.h"
 #include "net/base/connection/connection.h"
 #include "net/base/event/event_loop.h"
-#include "net/base/poller/epoll_poller.h"
 #include "net/base/poller/select_poller.h"
 #include "net/base/socket/socket.h"
-#include "net/ftp/server/session.h"
+#include "net/ftp/common/session.h"
 #include "timer/wheel_timer_manager.h"
 
 #include <iostream>
@@ -20,16 +19,12 @@ namespace net::ftp
 
     FtpServer::~FtpServer()
     {
-        for (auto &it : sessions_) {
-            on_free_session(it.second);
-            delete it.second;
-        }
-        sessions_.clear();
+        quit();
     }
 
     bool FtpServer::serve(int port)
     {
-        Socket *sock = new Socket("127.0.0.1", port);
+        Socket *sock = new Socket("", port);
         if (!sock->valid()) {
             std::cout << "cant create socket file descriptor!\n";
             delete sock;
@@ -56,7 +51,7 @@ namespace net::ftp
         ev_loop_ = &evLoop;
         timer_manager_ = &timerManager;
         acceptor->set_event_handler(ev_loop_);
-        ev_loop_->set_connection_handler(this);
+        acceptor->set_connection_handler(this);
 
         ev_loop_->loop();
 
@@ -65,55 +60,73 @@ namespace net::ftp
 
     void FtpServer::on_connected(Connection *conn)
     {
-        auto it = sessions_.find(conn);
-        if (it != sessions_.end()) {
+        auto session = session_manager_.get_session(conn);
+        if (session) {
             std::cout << "internal error occured!!!\n";
             conn->close();
             return;
         }
-        sessions_[conn] = new FtpSession(conn);
+        auto newSession = new FtpSession(conn, this);
+        session_manager_.add_session(conn, newSession);
     }
 
     void FtpServer::on_error(Connection *conn)
     {
-        
+
     }
 
     void FtpServer::on_read(Connection *conn)
     {
-        auto it = sessions_.find(conn);
-        if (it != sessions_.end()) {
-            std::cout << "internal error occured!!!\n";
-            conn->close();
-            return;
-        }
-        it->second->on_packet();
+        std::cerr << "on_read internal error occured!!!\n";
     }
 
     void FtpServer::on_write(Connection *conn)
     {
-
+        std::cerr << "on_write internal error occured!!!\n";
     }
 
     void FtpServer::on_close(Connection *conn)
     {
-        auto it = sessions_.find(conn);
-        if (it == sessions_.end()) {
-            std::cout << "internal error occured!!!\n";
-            return;
-        }
 
-        on_free_session(it->second);
-        delete it->second;
-        sessions_.erase(it);
     }
 
-    void FtpServer::on_free_session(FtpSession *session)
+    bool FtpServer::is_ok()
+    {
+        return ev_loop_ != nullptr;
+    }
+
+    timer::TimerManager * FtpServer::get_timer_manager()
+    {
+        return timer_manager_;
+    }
+
+    EventLoop * FtpServer::get_event_loop()
+    {
+        return ev_loop_;
+    }
+
+    void FtpServer::on_session_closed(FtpSession *session)
     {
         if (!session) {
             return;
         }
-
         ev_loop_->on_close(session->get_connection());
+        session_manager_.remove_session(session->get_connection());
+        session->quit();
+    }
+
+    void FtpServer::quit()
+    {
+        auto sessions = session_manager_.get_sessions();
+        for (auto item : sessions) {
+            item.second->quit();
+        }
+        
+        timer_manager_ = nullptr;
+
+        if (ev_loop_) {
+            ev_loop_->quit();
+            ev_loop_ = nullptr;
+        }
     }
 }

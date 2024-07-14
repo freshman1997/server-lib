@@ -40,11 +40,6 @@ namespace net
         virtual void update_event(Channel *channel);
 
     public:
-        void set_connection_handler(ConnectionHandler *connHandler)
-        {
-            this->connHandler_ = connHandler;
-        }
-
         void wakeup();
 
     private:
@@ -53,7 +48,6 @@ namespace net
         Poller *poller_;
         timer::TimerManager *timer_manager_;
         std::unordered_map<int, Channel *> channels_;
-        ConnectionHandler *connHandler_;
     };
 }
 #endif

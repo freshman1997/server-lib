@@ -27,6 +27,8 @@ namespace net::ftp
         virtual int execute(FtpSession *session, std::string &args) = 0;
 
         virtual CommandType get_command_type() = 0;
+
+        virtual std::string get_comand_name() = 0;        
     };
 
     class CommandFactory
@@ -40,10 +42,10 @@ namespace net::ftp
         std::unordered_map<std::string, Command *> commands;
     };
 
-    extern bool _0_reg_0_;
+    extern bool _0_reg_command_0_;
 
     #define REGISTER_COMMAND_IMPL(name, type, ...) \
-        bool _0_reg_0_ = singleton::Singleton<CommandFactory>().register_command(name, new type(...));
+        bool _0_reg_command_0_ = singleton::Singleton<CommandFactory>().register_command(name, new type(...));
 }
 
 #endif

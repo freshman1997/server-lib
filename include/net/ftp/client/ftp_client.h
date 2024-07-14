@@ -1,24 +1,42 @@
 #ifndef __NET_FTP_FTP_CLIENT_H__
 #define __NET_FTP_FTP_CLIENT_H__
-#include "net/base/handler/connection_handler.h"
+#include "../handler/ftp_app.h"
+#include "../common/session.h"
+#include "../../../timer/timer_manager.h"
+#include "../../base/event/event_loop.h"
+#include "../../base/socket/inet_address.h"
 
 namespace net::ftp 
 {
-    class FtpClient : public ConnectionHandler
+    class FtpClient : public FtpApp
     {
     public:
         FtpClient();
+        ~FtpClient();
+
+    public: // app
+        virtual bool is_ok();
+
+        virtual timer::TimerManager * get_timer_manager();
+
+        virtual EventLoop * get_event_loop();
+
+        virtual void on_session_closed(FtpSession *session);
+
+        virtual void quit();
 
     public:
-        virtual void on_connected(Connection *conn);
+        bool connect(const std::string &ip, short port);
 
-        virtual void on_error(Connection *conn);
+        FtpSession * get_session();
 
-        virtual void on_read(Connection *conn);
+        void add_command(const std::string &cmd);
 
-        virtual void on_write(Connection *conn);
-
-        virtual void on_close(Connection *conn);
+    private:
+        InetAddress addr_;
+        timer::TimerManager *timer_manager_;
+        EventLoop *ev_loop_;
+        FtpSession *session_;
     };
 }
 

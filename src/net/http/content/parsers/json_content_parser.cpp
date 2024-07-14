@@ -1,9 +1,8 @@
 #include "net/http/content/parsers/json_content_parser.h"
 #include "net/http/content/types.h"
 #include "net/http/content_type.h"
-#include "net/http/request.h"
+#include "net/http/packet.h"
 #include "nlohmann/json.hpp"
-#include <iostream>
 
 namespace net::http 
 {

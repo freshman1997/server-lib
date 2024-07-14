@@ -32,10 +32,13 @@ namespace net
 
         virtual void set_event_handler(EventHandler *eventHandler);
 
+        virtual void set_connection_handler(ConnectionHandler *connHandler);
+
     protected:
         Channel channel_;
         Socket *socket_;
         EventHandler *handler_;
+        ConnectionHandler *conn_handler_;
     };
 }
 

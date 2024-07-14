@@ -30,7 +30,7 @@ namespace net
             if (!udp) {
                 fd_ = socket::create_ipv4_tcp_socket(true);
             } else {
-                fd_ = socket::create_ipv4_udp_socket(false);
+                fd_ = socket::create_ipv4_udp_socket(true);
             }
         }
     }
