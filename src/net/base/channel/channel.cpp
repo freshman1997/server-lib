@@ -28,12 +28,12 @@ namespace net
             return;
         }
 
-        if (handler_ && event & WRITE_EVENT && events_ & WRITE_EVENT) {
-            handler_->on_write_event();
-        }
-
         if (handler_ && event & READ_EVENT && events_ & READ_EVENT) {
             handler_->on_read_event();
+        }
+
+        if (handler_ && event & WRITE_EVENT && events_ & WRITE_EVENT) {
+            handler_->on_write_event();
         }
     }
 }

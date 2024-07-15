@@ -32,10 +32,10 @@ namespace net::ftp
         struct _stat buf;
         _stat(filepath.c_str(), &buf);
         if (_S_IFREG & buf.st_mode) {
-            dest.push_back({});
             FileInfo info;
             info.origin_name_ = filepath;
             info.file_size_ = buf.st_size;
+            info.mode_ = StreamMode::Sender;
             dest.push_back(info);
             return;
         }
@@ -52,13 +52,11 @@ namespace net::ftp
                         list_files(p.assign(filepath).append("\\").append(fileinfo.name), dest);
                     }
                 } else {
-                    const char *pFile = strrchr(fileinfo.name, '.');
-                    if (pFile != NULL) {
-                        FileInfo info;
-                        info.origin_name_ = std::string().assign(filepath).append("\\").append(fileinfo.name);
-                        info.file_size_ = fileinfo.size;
-                        dest.push_back(info);
-                    }
+                    FileInfo info;
+                    info.origin_name_ = std::string().assign(filepath).append("\\").append(fileinfo.name);
+                    info.file_size_ = fileinfo.size;
+                    info.mode_ = StreamMode::Sender;
+                    dest.push_back(info);
                 }
             } while (_findnext(hFile, &fileinfo) == 0);
 
@@ -71,18 +69,15 @@ namespace net::ftp
         //参数1是传入参数，填写文件的绝对路径 | 参数2是传出参数,一个struct stat类型的结构体指针
 
         if (0 != res) {
-            printf("lstat failed");
-            exit(1);
+            return;
         }
 
         if (!S_ISDIR(statbuf.st_mode)) {
-            const char *pFile = strrchr(filepath.c_str(), '.');
-            if (pFile != NULL) {
-                FileInfo info;
-                info.origin_name_ = pFile;
-                info.file_size_ = statbuf.st_size;
-                dest.push_back(info);
-            }
+            FileInfo info;
+            info.origin_name_ = filepath;
+            info.file_size_ = statbuf.st_size;
+            info.mode_ = StreamMode::Sender;
+            dest.push_back(info);
         } else {
             DIR *dir;
             struct dirent *pDir;
@@ -94,13 +89,16 @@ namespace net::ftp
                 if(strcmp(pDir->d_name, ".") == 0 || strcmp(pDir->d_name,"..") == 0){
                     continue;
                 } else if(pDir->d_type == 8) { // 文件
-                    const char *pFile = strrchr(pDir->d_name, '.');
-                    if (pFile != NULL) {
-                        FileInfo info;
-                        info.origin_name_ = filepath + "/" + pDir->d_name;
-                        info.file_size_ = statbuf.st_size;
-                        dest.push_back(info);
+                    FileInfo info;
+                    info.origin_name_ = filepath + "/" + pDir->d_name;
+                    res = lstat(info.origin_name_.c_str(), &statbuf);
+                    if (0 != res) {
+                        return;
                     }
+                    
+                    info.file_size_ = statbuf.st_size;
+                    info.mode_ = StreamMode::Sender;
+                    dest.push_back(info);
                 } else if(pDir->d_type == 10){
                     continue;
                 } else if(pDir->d_type == 4) { // 子目录

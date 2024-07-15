@@ -1,5 +1,6 @@
 #include "net/base/acceptor/udp_acceptor.h"
 #include "net/base/poller/select_poller.h"
+#include "net/base/socket/inet_address.h"
 #include "net/dns/dns_server.h"
 #include "net/ftp/client/command_scanner.h"
 #include "net/ftp/client/ftp_client.h"
@@ -351,10 +352,10 @@ void test_ftp_client()
 {
     net::ftp::FtpClient client;
     std::thread runner([&client]() {
-        client.connect("192.168.96.128", 12123);
+        client.connect("192.168.96.1", 12123);
     });
-    runner.join();
 
+    std::this_thread::sleep_for(2s);
     net::ftp::CommandScanner scanner;
     while (true) {
         if (client.is_ok()) {
@@ -365,6 +366,7 @@ void test_ftp_client()
             break;
         }
     }
+    runner.join();
 }
 
 void test_ftp_server()
@@ -408,7 +410,7 @@ int main()
         }
     }*/
 
-	test_ftp_server();
+	test_ftp_client();
 
     net::dns::DnsServer server;
     server.serve(9090);

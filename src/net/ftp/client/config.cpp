@@ -8,7 +8,8 @@ namespace net::ftp
 
     std::size_t FtpClientConfig::get_read_amount()
     {
-        return static_cast<std::size_t>(config_json_[config_key_read_amount_]);
+        auto it = config_json_.find(config_key_read_amount_);
+        return it != config_json_.end() && it.value().is_number_integer() ? static_cast<std::size_t>(it.value()) : 1024 * 1024;
     }
 
     std::size_t FtpClientConfig::get_idle_timeout()

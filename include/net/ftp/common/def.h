@@ -32,6 +32,7 @@ namespace net::ftp
 
     struct FileInfo
     {
+        StreamMode     mode_               = StreamMode::Receiver;
         FileType       type_               = FileType::normal_file;
         FileState      state_              = FileState::init;
         bool           ready_              = false;

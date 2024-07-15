@@ -33,6 +33,7 @@ namespace net::ftp
 
     FtpFileStream::~FtpFileStream()
     {
+        std::cout << "~FtpFileStream()\n";
         if (conn_timer_) {
             conn_timer_->cancel();
             conn_timer_ = nullptr;
@@ -45,7 +46,6 @@ namespace net::ftp
 
         if (session_) {
             auto ptr  = session_->get_ptr_value("acceptor");
-            assert(ptr);
             if (ptr) {
                 auto acceptor = static_cast<TcpAcceptor *>(ptr);
                 acceptor->close();
@@ -80,16 +80,15 @@ namespace net::ftp
     void FtpFileStream::on_read(Connection *conn)
     {
         assert(session_);
-        if (state_ != FileSteamState::connected || state_ != FileSteamState::idle) {
+        if (state_ != FileSteamState::connected && state_ != FileSteamState::idle 
+            && state_ != FileSteamState::processing) {
             session_->on_error(this);
         } else {
-            if (!current_file_info_ || !current_file_info_->ready_) {
+            if (!current_file_info_ || current_file_info_->mode_ != StreamMode::Receiver || !current_file_info_->ready_) {
                 return;
             }
 
             state_ = FileSteamState::processing;
-            assert(mode_ == StreamMode::Receiver);
-            
             int ret = current_file_info_->write_file(conn->get_input_buff());
             if (ret < 0) {
                 state_ = FileSteamState::file_error;
@@ -97,6 +96,7 @@ namespace net::ftp
             } else if (current_file_info_->is_completed()) {
                 state_ = FileSteamState::idle;
                 session_->on_completed(this);
+                current_file_info_->ready_ = false;
                 last_active_time_ = base::time::now();
             }
         }
@@ -105,25 +105,26 @@ namespace net::ftp
     void FtpFileStream::on_write(Connection *conn)
     {
         assert(session_);
-        if (state_ != FileSteamState::connected || state_ != FileSteamState::idle) {
+        if (state_ != FileSteamState::connected && state_ != FileSteamState::idle 
+            && state_ != FileSteamState::processing) {
             session_->on_error(this);
         } else {
-            if (!current_file_info_ || !current_file_info_->ready_) {
+            if (!current_file_info_ || current_file_info_->mode_ != StreamMode::Sender || !current_file_info_->ready_) {
                 return;
             }
 
             state_ = FileSteamState::processing;
-            assert(mode_ == StreamMode::Sender);
-
-            int ret = current_file_info_->read_file(singleton::Singleton<FtpClientConfig>().get_read_amount(), conn->get_input_buff());
+            conn->get_output_buff()->reset();
+            int ret = current_file_info_->read_file(singleton::Singleton<FtpClientConfig>().get_read_amount(), conn->get_output_buff());
             if (ret <= 0) {
                 state_ = FileSteamState::file_error;
                 session_->on_error(this);
             } else {
                 conn->send();
-                if (current_file_info_->is_completed()) {
+                if (session_ && current_file_info_->is_completed()) {
                     state_ = FileSteamState::idle;
                     session_->on_completed(this);
+                    current_file_info_->ready_ = false;
                 }
                 last_active_time_ = base::time::now();
             }
@@ -135,12 +136,18 @@ namespace net::ftp
         if (state_ == FileSteamState::disconnected) {
             return;
         }
+        conn_ = nullptr;
         quit();
     }
 
     void FtpFileStream::on_timer(timer::Timer *timer)
     {
         assert(session_);
+        if (current_file_info_ && current_file_info_->state_ == FileState::processing) {
+            last_active_time_ = base::time::now();
+            return;
+        }
+
         if (state_ == FileSteamState::idle) {
             if (base::time::now() - last_active_time_ >= singleton::Singleton<FtpClientConfig>().get_idle_timeout()) {
                 state_ = FileSteamState::idle_timeout;
@@ -169,6 +176,7 @@ namespace net::ftp
     void FtpFileStream::set_work_file(FileInfo *info)
     {
         current_file_info_ = info;
+        std::cout << ">>> work file: " << info->origin_name_ << '\n';
     }
 
     FileInfo * FtpFileStream::get_work_file()
@@ -209,7 +217,6 @@ namespace net::ftp
         
         acceptor->set_event_handler(evLoop);
         acceptor->set_connection_handler(this);
-        evLoop->update_event(acceptor->get_channel());
 
         session_->set_item_value<void *>("acceptor", static_cast<void *>(acceptor));
 
