@@ -10,11 +10,12 @@
 namespace net::ftp 
 {
     class FtpApp;
+    class FtpSession;
 
     class FtpFileStream : public ConnectionHandler, public timer::TimerTask
     {
     public:
-        FtpFileStream(const InetAddress &addr, StreamMode mode, FtpApp *entry);
+        FtpFileStream(const InetAddress &addr, StreamMode mode, FtpSession *session);
         ~FtpFileStream();
 
     public:
@@ -32,8 +33,6 @@ namespace net::ftp
         virtual void on_timer(timer::Timer *timer);
 
     public:
-        void set_event_handler(FtpFileStreamEvent *eventHandler);
-
         void set_work_file(FileInfo *info);
 
         FileInfo * get_work_file();
@@ -41,6 +40,8 @@ namespace net::ftp
         FileSteamState get_state();
 
         Connection * get_cur_connection();
+
+        StreamMode get_stream_mode();
 
         bool start();
 
@@ -54,12 +55,12 @@ namespace net::ftp
     private:
         StreamMode mode_;
         FileSteamState state_;
+        uint32_t last_active_time_;
         InetAddress addr_;
         FileInfo *current_file_info_;
-        FtpFileStreamEvent *event_handler_;
+        FtpSession *session_;
         timer::Timer *conn_timer_;
         Connection *conn_;
-        FtpApp *entry_;
     };
 }
 

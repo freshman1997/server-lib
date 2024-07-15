@@ -18,7 +18,7 @@ namespace net
     public:
         virtual bool listen();
 
-        virtual void on_close();
+        virtual void close();
 
         virtual Channel * get_channel()
         {

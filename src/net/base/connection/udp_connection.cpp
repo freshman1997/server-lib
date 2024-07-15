@@ -191,6 +191,9 @@ namespace net
 
     void UdpConnection::do_close()
     {
+        if (closed_) {
+            return;
+        }
         delete this;
     }
 

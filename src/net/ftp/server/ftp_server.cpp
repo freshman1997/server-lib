@@ -115,7 +115,6 @@ namespace net::ftp
             return;
         }
         session_manager_.remove_session(session->get_connection());
-        session->quit();
     }
 
     void FtpServer::quit()

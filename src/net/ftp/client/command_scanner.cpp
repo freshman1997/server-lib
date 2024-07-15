@@ -1,5 +1,6 @@
 #include "net/ftp/client/command_scanner.h"
 #include <iostream>
+#include <string>
 
 namespace net::ftp 
 {
@@ -9,7 +10,7 @@ namespace net::ftp
         while (res.empty())
         {
             std::cout << "please enter command >> ";
-            std::cin >> res;
+            std::getline(std::cin, res);
         }
         return res;
     }

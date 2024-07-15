@@ -4,7 +4,9 @@ namespace net::ftp
 {
     void FtpSessionManager::add_session(Connection *conn, FtpSession *session)
     {
-        sessions_[conn] = session;
+        if (conn) {
+            sessions_[conn] = session;
+        }
     }
 
     FtpSession * FtpSessionManager::get_session(Connection *conn)
@@ -15,6 +17,8 @@ namespace net::ftp
 
     void FtpSessionManager::remove_session(Connection *conn)
     {
-        sessions_.erase(conn);
+        if (conn) {
+            sessions_.erase(conn);
+        }
     }
 }

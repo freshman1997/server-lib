@@ -45,6 +45,7 @@ namespace net::ftp
     {
         // 被动关闭需要置空 session_ 指针
         session_ = nullptr;
+        quit();
     }
 
     void FtpClient::quit()

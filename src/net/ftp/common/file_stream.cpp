@@ -4,26 +4,31 @@
 #include "net/base/socket/socket.h"
 #include "net/ftp/client/config.h"
 #include "net/ftp/common/def.h"
+#include "net/ftp/common/session.h"
 #include "net/ftp/handler/ftp_app.h"
 #include "singleton/singleton.h"
 #include "timer/timer.h"
 #include "net/base/connection/tcp_connection.h"
+#include "base/time.h"
 
 #include <cassert>
 #include <iostream>
 
 namespace net::ftp 
 {
-    FtpFileStream::FtpFileStream(const InetAddress &addr, StreamMode mode, FtpApp *entry)
+    FtpFileStream::FtpFileStream(const InetAddress &addr, StreamMode mode, FtpSession *session)
     {
         addr_ = addr;
         mode_ = mode;
         state_ = FileSteamState::init;
         current_file_info_ = nullptr;
-        event_handler_ = nullptr;
         conn_timer_ = nullptr;
         conn_ = nullptr;
-        entry_ = entry;
+        session_ = session;
+        auto timerManager = session_->get_app()->get_timer_manager();
+        assert(timerManager);
+        conn_timer_ = timerManager->interval(2 * 1000, 10 * 1000, this, -1);
+        last_active_time_ = 0;
     }
 
     FtpFileStream::~FtpFileStream()
@@ -33,35 +38,52 @@ namespace net::ftp
             conn_timer_ = nullptr;
         }
 
-        if (event_handler_) {
-            event_handler_->on_closed(this);
-            event_handler_ = nullptr;
+        if (conn_) {
+            conn_->close();
+            conn_ = nullptr;
+        }
+
+        if (session_) {
+            auto ptr  = session_->get_ptr_value("acceptor");
+            assert(ptr);
+            if (ptr) {
+                auto acceptor = static_cast<TcpAcceptor *>(ptr);
+                acceptor->close();
+                session_->remove_item("acceptor");
+            }
+            session_->on_closed(this);
+            session_ = nullptr;
         }
     }
 
     void FtpFileStream::on_connected(Connection *conn)
     {
+        if (conn_) {
+            conn->close();
+            return;
+        }
+
         state_ = FileSteamState::connected;
-        assert(event_handler_);
-        event_handler_->on_opened(this);
+        conn_ = conn;
+        assert(session_);
+        session_->on_opened(this);
+        last_active_time_ = base::time::now();
     }
 
     void FtpFileStream::on_error(Connection *conn)
     {
         state_ = FileSteamState::connection_error;
-        assert(event_handler_);
-        conn_ = conn;
-        event_handler_->on_error(this);
+        assert(session_);
+        session_->on_error(this);
     }
 
     void FtpFileStream::on_read(Connection *conn)
     {
-        assert(event_handler_);
-        conn_ = conn;
+        assert(session_);
         if (state_ != FileSteamState::connected || state_ != FileSteamState::idle) {
-            event_handler_->on_error(this);
+            session_->on_error(this);
         } else {
-            if (!current_file_info_) {
+            if (!current_file_info_ || !current_file_info_->ready_) {
                 return;
             }
 
@@ -71,29 +93,22 @@ namespace net::ftp
             int ret = current_file_info_->write_file(conn->get_input_buff());
             if (ret < 0) {
                 state_ = FileSteamState::file_error;
-                event_handler_->on_error(this);
+                session_->on_error(this);
             } else if (current_file_info_->is_completed()) {
                 state_ = FileSteamState::idle;
-                event_handler_->on_completed(this);
-
-                auto timerManager = entry_->get_timer_manager();
-                assert(timerManager);
-                if (conn_timer_) {
-                    conn_timer_->cancel();
-                }
-                conn_timer_ = timerManager->timeout(singleton::Singleton<FtpClientConfig>().get_idle_timeout(), this);
+                session_->on_completed(this);
+                last_active_time_ = base::time::now();
             }
         }
     }
 
     void FtpFileStream::on_write(Connection *conn)
     {
-        assert(event_handler_);
-        conn_ = conn;
+        assert(session_);
         if (state_ != FileSteamState::connected || state_ != FileSteamState::idle) {
-            event_handler_->on_error(this);
+            session_->on_error(this);
         } else {
-            if (!current_file_info_) {
+            if (!current_file_info_ || !current_file_info_->ready_) {
                 return;
             }
 
@@ -103,51 +118,52 @@ namespace net::ftp
             int ret = current_file_info_->read_file(singleton::Singleton<FtpClientConfig>().get_read_amount(), conn->get_input_buff());
             if (ret <= 0) {
                 state_ = FileSteamState::file_error;
-                event_handler_->on_error(this);
+                session_->on_error(this);
             } else {
                 conn->send();
                 if (current_file_info_->is_completed()) {
-                    event_handler_->on_completed(this);
                     state_ = FileSteamState::idle;
-
-                    auto timerManager = entry_->get_timer_manager();
-                    assert(timerManager);
-                    if (conn_timer_) {
-                        conn_timer_->cancel();
-                    }
-                    conn_timer_ = timerManager->timeout(singleton::Singleton<FtpClientConfig>().get_idle_timeout(), this);
+                    session_->on_completed(this);
                 }
+                last_active_time_ = base::time::now();
             }
         }
     }
 
     void FtpFileStream::on_close(Connection *conn)
     {
-        conn_ = conn;
-        delete this;
+        if (state_ == FileSteamState::disconnected) {
+            return;
+        }
+        quit();
     }
 
     void FtpFileStream::on_timer(timer::Timer *timer)
     {
-        assert(event_handler_);
+        assert(session_);
         if (state_ == FileSteamState::idle) {
-            state_ = FileSteamState::idle_timeout;
-            event_handler_->on_idle_timeout(this);
+            if (base::time::now() - last_active_time_ >= singleton::Singleton<FtpClientConfig>().get_idle_timeout()) {
+                state_ = FileSteamState::idle_timeout;
+                session_->on_idle_timeout(this);
+                quit();
+            }
         } else if (state_ == FileSteamState::connecting) {
             state_ = FileSteamState::connect_timeout;
-            event_handler_->on_connect_timeout(this);
+            session_->on_connect_timeout(this);
+            quit();
+        } else {
+            state_ = FileSteamState::idle;
         }
-        delete this;
-    }
-
-    void FtpFileStream::set_event_handler(FtpFileStreamEvent *eventHandler)
-    {
-        event_handler_ = eventHandler;
     }
 
     FileSteamState FtpFileStream::get_state()
     {
         return state_;
+    }
+
+    StreamMode FtpFileStream::get_stream_mode()
+    {
+        return mode_;
     }
 
     void FtpFileStream::set_work_file(FileInfo *info)
@@ -167,6 +183,7 @@ namespace net::ftp
 
     bool FtpFileStream::serve()
     {
+        assert(session_);
         Socket *sock = new Socket("", addr_.get_port());
         if (!sock->valid()) {
             std::cerr << "cant create socket file descriptor!\n";
@@ -187,12 +204,14 @@ namespace net::ftp
             return false;
         }
 
-        auto evLoop = entry_->get_event_loop();
+        auto evLoop = session_->get_app()->get_event_loop();
         assert(evLoop);
         
         acceptor->set_event_handler(evLoop);
         acceptor->set_connection_handler(this);
         evLoop->update_event(acceptor->get_channel());
+
+        session_->set_item_value<void *>("acceptor", static_cast<void *>(acceptor));
 
         return true;
     }
@@ -214,7 +233,7 @@ namespace net::ftp
         TcpConnection *conn = new TcpConnection(sock);
         conn->set_connection_handler(this);
 
-        auto evLoop = entry_->get_event_loop();
+        auto evLoop = session_->get_app()->get_event_loop();
         assert(evLoop);
 
         evLoop->update_event(conn->get_channel());
@@ -230,6 +249,7 @@ namespace net::ftp
 
     void FtpFileStream::quit()
     {
+        state_ = FileSteamState::disconnected;
         delete this;
     }
 }

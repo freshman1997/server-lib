@@ -351,7 +351,7 @@ void test_ftp_client()
 {
     net::ftp::FtpClient client;
     std::thread runner([&client]() {
-        client.connect("", 12123);
+        client.connect("192.168.96.128", 12123);
     });
     runner.join();
 
@@ -360,7 +360,9 @@ void test_ftp_client()
         if (client.is_ok()) {
             client.add_command(scanner.simpleCommand());
         } else {
-            std::cout << "client didn't connected yet";
+            std::this_thread::sleep_for(2s);
+            std::cout << "client didn't connected yet\n";
+            break;
         }
     }
 }
@@ -368,6 +370,7 @@ void test_ftp_client()
 void test_ftp_server()
 {
     net::ftp::FtpServer server;
+    server.serve(12123);
 }
 
 int main()
@@ -405,7 +408,8 @@ int main()
         }
     }*/
 
-	SOCKET sockClient = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	test_ftp_server();
+
     net::dns::DnsServer server;
     server.serve(9090);
 

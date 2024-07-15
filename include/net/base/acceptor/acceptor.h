@@ -14,7 +14,7 @@ namespace net
     public:
         virtual bool listen() = 0;
 
-        virtual void on_close() = 0;
+        virtual void close() = 0;
 
         virtual Channel * get_channel() = 0;
 

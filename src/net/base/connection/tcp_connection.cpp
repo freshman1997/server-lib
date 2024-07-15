@@ -23,7 +23,7 @@ namespace net
         init();
     }
 
-    TcpConnection::TcpConnection(Socket *scok) : socket_(scok)
+    TcpConnection::TcpConnection(Socket *sock) : socket_(sock)
     {
         init();
     }
@@ -45,19 +45,20 @@ namespace net
 
     TcpConnection::~TcpConnection()
     {
+        state_ = ConnectionState::closed;
         channel_.disable_all();
         channel_.set_handler(nullptr);
 
         if (eventHandler_) {
             eventHandler_->update_event(&channel_);
             eventHandler_->on_close(this);
+            eventHandler_ = nullptr;
         }
 
         if (connectionHandler_) {
             connectionHandler_->on_close(this);
+            connectionHandler_ = nullptr;
         }
-
-        state_ = ConnectionState::closed;
         
         if (socket_) {
             std::cout << "connection closed, ip: " << socket_->get_address()->get_ip() << ", port: " << socket_->get_address()->get_port() 

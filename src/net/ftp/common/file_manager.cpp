@@ -37,4 +37,9 @@ namespace net::ftp
         }
         return &file_infos_[++cur_idx_];
     }
+
+    void FileManager::add_file(const FileInfo &info)
+    {
+        file_infos_.push_back(info);
+    }
 }

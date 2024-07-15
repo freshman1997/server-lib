@@ -48,7 +48,7 @@ namespace net
         return true;
     }
 
-    void UdpAcceptor::on_close()
+    void UdpAcceptor::close()
     {
         delete this;
     }

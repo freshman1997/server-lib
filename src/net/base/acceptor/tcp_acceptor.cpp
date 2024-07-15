@@ -29,6 +29,10 @@ namespace net
 
     TcpAcceptor::~TcpAcceptor()
     {
+        if (handler_) {
+            channel_.disable_all();
+            handler_->update_event(&channel_);
+        }
         delete socket_;
         std::cout << "tcp acceptor close\n";
     }
@@ -48,7 +52,7 @@ namespace net
         return true;
     }
 
-    void TcpAcceptor::on_close()
+    void TcpAcceptor::close()
     {
         delete this;
     }
@@ -61,7 +65,6 @@ namespace net
         int conn_fd = socket_->accept(peer_addr);
         if (conn_fd < 0) {
             std::cout << "error connection " << std::endl;
-            handler_->on_quit();
             delete this;
         } else {
             Connection *conn = new TcpConnection(::inet_ntoa(peer_addr.sin_addr), 
@@ -76,11 +79,7 @@ namespace net
 
     void TcpAcceptor::on_write_event()
     {
-        if (handler_) {
-            handler_->on_quit();
-        }
-
-        on_close();
+        close();
     }
 
     void TcpAcceptor::set_event_handler(EventHandler *handler)

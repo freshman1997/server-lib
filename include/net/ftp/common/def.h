@@ -1,5 +1,6 @@
 #ifndef __NET_FTP_COMMON_DEF_H__
 #define __NET_FTP_COMMON_DEF_H__
+#include <fstream>
 #include <string>
 #include <string_view>
 
@@ -31,13 +32,17 @@ namespace net::ftp
 
     struct FileInfo
     {
-        FileType    type_;
-        FileState   state_;
-        std::string origin_name_;
-        std::string dest_name_;
-        std::size_t file_size_;
-        std::size_t current_progress_;
+        FileType       type_               = FileType::normal_file;
+        FileState      state_              = FileState::init;
+        bool           ready_              = false;
+        std::string    origin_name_        = "";
+        std::string    dest_name_          = "";
+        std::size_t    file_size_          = 0;
+        std::size_t    current_progress_   = 0;
+        std::fstream * fstream_            = nullptr;
 
+        ~FileInfo();
+        
         /**
          * @brief 根据给定数据大小，读取文件到buff中，小于则读取到文件末尾, 成功会修改 current_progress_ 的值
          *
@@ -58,7 +63,9 @@ namespace net::ftp
         bool is_completed()
         {
             return state_ == FileState::processed;
-        }        
+        }
+
+        std::string build_cmd_args();
     };
 
     enum class FileSteamState : char

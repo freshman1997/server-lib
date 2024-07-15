@@ -138,10 +138,7 @@ public:
     void write_string(const char *str, std::size_t length = 0)
     {
         size_t len = length ? length : strlen(str);
-        if (len < write_index + 1) {
-            resize(buffs.size() + len);
-        }
-        std::memcpy(peek_for(), str, len);
+        write(str, len);
     }
     
 public:

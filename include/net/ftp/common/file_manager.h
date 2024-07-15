@@ -18,6 +18,13 @@ namespace net::ftp
 
         FileInfo * get_next_file();
 
+        void add_file(const FileInfo &info);
+
+        void reset()
+        {
+            init();
+        }
+
     private:
         void init();
 
