@@ -59,15 +59,7 @@ namespace net
             events_ &= ~WRITE_EVENT;
         }
 
-        void set_handler(SelectHandler *handler)
-        {
-            handler_ = handler;
-        }
-
-        void set_new_fd(int new_fd) 
-        {
-            fd_ = new_fd;
-        }
+        void set_handler(SelectHandler *handler);
 
     public:
         static const int READ_EVENT;

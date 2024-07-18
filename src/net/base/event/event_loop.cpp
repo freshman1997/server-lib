@@ -70,36 +70,24 @@ namespace net
             }
         
             if (conn->get_conn_type() == ConnectionType::TCP) {
-                auto it = channels_.find(channel->get_fd());
-                if (it != channels_.end()) {
-                #ifndef _WIN32
-                    int new_fd = ::dup(channel->get_fd());
-                #else
-                    int new_fd = ::_dup(channel->get_fd());
-                #endif
-                    assert(new_fd > 0);
-                    channel->set_new_fd(new_fd);
-                }
-                
                 poller_->update_channel(channel);
                 channels_[channel->get_fd()] = channel;
             }
         }
     }
 
-    void EventLoop::on_quit()
+    void EventLoop::quit()
     {
         quit_ = true;
         helper::cond.notify_all();
     }
 
-    void EventLoop::on_close(Connection *conn)
+    void EventLoop::close_channel(Channel *channel)
     {
-        if (!conn) {
+        if (!channel) {
             return;
         }
 
-        Channel * channel = conn->get_channel();
         auto it = channels_.find(channel->get_fd());
         if (it != channels_.end()) {
             poller_->remove_channel(channel);
@@ -107,10 +95,11 @@ namespace net
         }
     }
 
-    void EventLoop::update_event(Channel *channel)
+    void EventLoop::update_channel(Channel *channel)
     {
         if (channel) {
             poller_->update_channel(channel);
+            channels_[channel->get_fd()] = channel;
         }
     }
 

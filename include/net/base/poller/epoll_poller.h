@@ -1,5 +1,6 @@
 #ifndef __NET_BASE_POLLER_EPOLL_POLLER_H__
 #define __NET_BASE_POLLER_EPOLL_POLLER_H__
+#include <set>
 #include <vector>
 #include "poller.h"
 
@@ -23,6 +24,7 @@ namespace net {
 
     private:
         int epoll_fd_;
+        std::set<int> fds_;
         std::vector<struct epoll_event> epoll_events_;
     };
 }

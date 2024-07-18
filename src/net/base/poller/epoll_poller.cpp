@@ -9,11 +9,6 @@
 #include "net/base/poller/epoll_poller.h"
 #include "net/base/channel/channel.h"
 
-namespace net::helper 
-{
-    std::set<int> fds_;
-}
-
 namespace net 
 {
     const int EpollPoller::MAX_EVENT = 4096;
@@ -67,8 +62,8 @@ namespace net
 
     void EpollPoller::update_channel(Channel *channel)
     {
-        auto it = helper::fds_.find(channel->get_fd());
-        if (it != helper::fds_.end()) {
+        auto it = fds_.find(channel->get_fd());
+        if (it != fds_.end()) {
             if (!channel->has_events()) {
                 remove_channel(channel);
             } else {
@@ -82,7 +77,7 @@ namespace net
     void EpollPoller::remove_channel(Channel *channel)
     {
         update(EPOLL_CTL_DEL, channel);
-        helper::fds_.erase(channel->get_fd());
+        fds_.erase(channel->get_fd());
     }
 
     void EpollPoller::update(int op, Channel *channel)

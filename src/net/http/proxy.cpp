@@ -12,7 +12,6 @@
 #include "net/base/socket/socket.h"
 #include "net/http/ops/config_manager.h"
 #include "net/http/response_code.h"
-#include "singleton/singleton.h"
 #include "nlohmann/json.hpp"
 #include "net/http/context.h"
 #include "net/http/request.h"
@@ -121,12 +120,12 @@ namespace net::http
 
     bool HttpProxy::load_proxy_config_and_init()
     {
-        auto &cfgManager = singleton::Singleton<HttpConfigManager>();
-        if (!cfgManager.good()) {
+        auto cfgManager = HttpConfigManager::get_instance();
+        if (!cfgManager->good()) {
             return false;
         }
 
-        const auto &proxiesCfg = cfgManager.get_type_array_properties<nlohmann::json>("proxies");
+        const auto &proxiesCfg = cfgManager->get_type_array_properties<nlohmann::json>("proxies");
         if (proxiesCfg.empty()) {
             return false;
         }
@@ -261,8 +260,8 @@ namespace net::http
     {
         if (buf1->readable_bytes() == 0) {
             std::cout << ">>>>>>>bool>>>> !!! empty data\n";
-            singleton::Singleton<BufferedPool>().free(buf1);
-            singleton::Singleton<BufferedPool>().free(buf2);
+            BufferedPool::get_instance()->free(buf1);
+            BufferedPool::get_instance()->free(buf2);
             resp->process_error();
         } else {
             // do forwarding
@@ -271,7 +270,7 @@ namespace net::http
                 conn->write_and_flush(buf2);
             } else {
                 conn->write_and_flush(buf1);
-                singleton::Singleton<BufferedPool>().free(buf2);
+                BufferedPool::get_instance()->free(buf2);
             }
         }
     }
@@ -281,7 +280,7 @@ namespace net::http
         auto it = pending_requests_.find(conn);
         if (it != pending_requests_.end()) {
             for (auto buf : it->second) {
-                singleton::Singleton<BufferedPool>().free(buf);
+                BufferedPool::get_instance()->free(buf);
             }
         }
     }

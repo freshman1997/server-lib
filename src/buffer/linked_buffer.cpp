@@ -1,6 +1,5 @@
 #include "buffer/linked_buffer.h"
 #include "buffer/pool.h"
-#include "singleton/singleton.h"
 #include "buffer/buffer.h"
 
 LinkedBuffer::LinkedBuffer()
@@ -11,7 +10,7 @@ LinkedBuffer::LinkedBuffer()
 LinkedBuffer::~LinkedBuffer()
 {
     for (const auto &item : buffers_) {
-        singleton::Singleton<BufferedPool>().free(item);
+        BufferedPool::get_instance()->free(item);
     }
 }
 
@@ -22,7 +21,7 @@ Buffer * LinkedBuffer::get_current_buffer()
 
 Buffer * LinkedBuffer::allocate_buffer(std::size_t sz)
 {
-    Buffer *buf = singleton::Singleton<BufferedPool>().allocate(sz);
+    Buffer *buf = BufferedPool::get_instance()->allocate(sz);
     buffers_.push_front(buf);
     return buf;
 }
@@ -32,7 +31,7 @@ void LinkedBuffer::free_current_buffer(Buffer *replaceBuff)
     if (replaceBuff || buffers_.size() > 1) {
         Buffer *buf = buffers_.back();
         buffers_.pop_back();
-        singleton::Singleton<BufferedPool>().free(buf);
+        BufferedPool::get_instance()->free(buf);
     }
 
     if (replaceBuff) {

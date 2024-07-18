@@ -1,10 +1,10 @@
 #ifndef __NET_BASE_UDP_ACCEPTOR_H__
 #define __NET_BASE_UDP_ACCEPTOR_H__
-#include "buffer/buffer.h"
-#include "net/base/acceptor/acceptor.h"
-#include "net/base/acceptor/udp/udp_instance.h"
-#include "net/base/channel/channel.h"
-#include "net/base/socket/inet_address.h"
+#include "../../../buffer/buffer.h"
+#include "../../base/acceptor/acceptor.h"
+#include "udp/udp_instance.h"
+#include "../../base/channel/channel.h"
+#include "../../base/socket/inet_address.h"
 
 namespace timer 
 {
@@ -48,7 +48,7 @@ namespace net
         }
 
     private:
-        Channel channel_;
+        Channel *channel_;
         Socket *sock_;
         EventHandler *handler_;
         ConnectionHandler *conn_handler_;

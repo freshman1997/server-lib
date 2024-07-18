@@ -1,4 +1,3 @@
-#include <iostream>
 #ifdef _WIN32
 #include <winsock2.h>
 #else
@@ -120,7 +119,6 @@ namespace net
     void SelectPoller::update_channel(Channel *channel)
     {
         if (!channel->has_events()) {
-            std::cout << "remove channel: " << channel << '\n';
             data_->removed_fds_.push_back(channel->get_fd());
             data_->sockets_[channel->get_fd()] = nullptr;
         } else {
@@ -130,7 +128,6 @@ namespace net
 
     void SelectPoller::remove_channel(Channel *channel)
     {
-        std::cout << "remove channel: " << channel << '\n';
         data_->removed_fds_.push_back(channel->get_fd());
         data_->sockets_[channel->get_fd()] = nullptr;
     }

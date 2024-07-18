@@ -1,8 +1,8 @@
 #ifndef __NET_FTP_FTP_SERVER_H__
 #define __NET_FTP_FTP_SERVER_H__
 #include "../../base/handler/connection_handler.h"
-#include "../common/session_manager.h"
 #include "../handler/ftp_app.h"
+#include "session_manager.h"
 
 namespace net 
 {
@@ -42,7 +42,7 @@ namespace net::ftp
 
         virtual timer::TimerManager * get_timer_manager();
 
-        virtual EventLoop * get_event_loop();
+        virtual EventHandler * get_event_handler();
 
         virtual void on_session_closed(FtpSession *session);
 

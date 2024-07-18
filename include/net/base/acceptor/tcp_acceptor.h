@@ -22,7 +22,7 @@ namespace net
 
         virtual Channel * get_channel()
         {
-            return &channel_;
+            return channel_;
         }
 
     public: // select handler
@@ -35,7 +35,7 @@ namespace net
         virtual void set_connection_handler(ConnectionHandler *connHandler);
 
     protected:
-        Channel channel_;
+        Channel *channel_;
         Socket *socket_;
         EventHandler *handler_;
         ConnectionHandler *conn_handler_;

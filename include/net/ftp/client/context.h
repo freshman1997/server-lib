@@ -3,7 +3,7 @@
 
 namespace net::ftp 
 {
-    class FtpClientContext
+    class ClientContext
     {
     public:
         

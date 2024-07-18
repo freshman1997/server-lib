@@ -12,6 +12,6 @@ namespace net::ftp
             std::cout << "please enter command >> ";
             std::getline(std::cin, res);
         }
-        return res;
+        return res + "\r\n";
     }
 }

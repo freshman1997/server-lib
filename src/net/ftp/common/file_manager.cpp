@@ -30,7 +30,7 @@ namespace net::ftp
         return !file_infos_.empty() && cur_idx_ + 1 >= file_infos_.size();
     }
 
-    FileInfo * FileManager::get_next_file()
+    FtpFileInfo * FileManager::get_next_file()
     {
         if (file_infos_.empty() || cur_idx_ + 1 >= file_infos_.size()) {
             return nullptr;
@@ -38,7 +38,7 @@ namespace net::ftp
         return &file_infos_[++cur_idx_];
     }
 
-    void FileManager::add_file(const FileInfo &info)
+    void FileManager::add_file(const FtpFileInfo &info)
     {
         file_infos_.push_back(info);
     }

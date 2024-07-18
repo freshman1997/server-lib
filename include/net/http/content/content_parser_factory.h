@@ -1,14 +1,18 @@
 #ifndef __NET_HTTP_CONTENT_PARSER_FACTORY_H__
 #define __NET_HTTP_CONTENT_PARSER_FACTORY_H__
 #include <unordered_map>
+#include <memory>
+
+
 #include "net/http/content_type.h"
+#include "singleton/singleton.h"
 
 namespace net::http 
 {
     class HttpPacket;
     class ContentParser;
 
-    class ContentParserFactory
+    class ContentParserFactory : public singleton::Singleton<ContentParserFactory>, public std::enable_shared_from_this<ContentParserFactory>
     {
     public:
         ContentParserFactory();

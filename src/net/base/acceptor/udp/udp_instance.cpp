@@ -23,7 +23,7 @@ namespace net
         conns_.clear();
 
         for (auto it : queue_) {
-            singleton::Singleton<BufferedPool>().free(it.second);
+            BufferedPool::get_instance()->free(it.second);
         }
         queue_.clear();
     }
@@ -83,7 +83,7 @@ namespace net
         conns_.erase(conn->get_remote_address());
         for (auto it = queue_.begin(); it != queue_.end(); ) {
             if (it->first == conn) {
-                singleton::Singleton<BufferedPool>().free(it->second);
+                BufferedPool::get_instance()->free(it->second);
                 it = queue_.erase(it);
             } else {
                 ++it;

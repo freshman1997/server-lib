@@ -1,6 +1,5 @@
 #include "net/http/ops/option.h"
 #include "net/http/ops/config_manager.h"
-#include "singleton/singleton.h"
 
 #define KEY_TO_STRING(key) (#key)
 
@@ -36,14 +35,14 @@ namespace net::http::config
 
     void load_config()
     {
-        auto &cfgManager = singleton::Singleton<HttpConfigManager>();
-        if (!cfgManager.good()) {
+        auto cfgManager = HttpConfigManager::get_instance();
+        if (!cfgManager->good()) {
             return;
         }
 
-        connection_idle_timeout = cfgManager.get_uint_property(KEY_TO_STRING(connection_idle_timeout), connection_idle_timeout);
-        client_max_content_length = cfgManager.get_uint_property(KEY_TO_STRING(max_content_length), client_max_content_length);
-        close_idle_connection = cfgManager.get_uint_property(KEY_TO_STRING(close_idle_connection), close_idle_connection);
-        form_data_upload_save = cfgManager.get_bool_property(KEY_TO_STRING(form_data_upload_save), form_data_upload_save);
+        connection_idle_timeout = cfgManager->get_uint_property(KEY_TO_STRING(connection_idle_timeout), connection_idle_timeout);
+        client_max_content_length = cfgManager->get_uint_property(KEY_TO_STRING(max_content_length), client_max_content_length);
+        close_idle_connection = cfgManager->get_uint_property(KEY_TO_STRING(close_idle_connection), close_idle_connection);
+        form_data_upload_save = cfgManager->get_bool_property(KEY_TO_STRING(form_data_upload_save), form_data_upload_save);
     }
 }

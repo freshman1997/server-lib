@@ -50,6 +50,8 @@ namespace net::http
 
         SessionItem * get_session_value(const std::string &key);
 
+        const std::unordered_map<std::string, SessionItem> & get_session_values();
+
         void remove_session_value(const std::string &key)
         {
             session_items_.erase(key);

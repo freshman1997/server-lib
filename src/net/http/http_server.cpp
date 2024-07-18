@@ -25,7 +25,6 @@
 #include "net/http/response_code.h"
 #include "net/http/ops/config_manager.h"
 #include "net/http/ops/option.h"
-#include "singleton/singleton.h"
 #include "net/http/response.h"
 #include "net/http/content_type.h"
 #include "net/http/header_key.h"
@@ -145,13 +144,13 @@ namespace net::http
     void HttpServer::on_close(Connection *conn)
     {
         free_session(conn);
-        event_loop_->on_close(conn);
+        event_loop_->close_channel(conn->get_channel());
     }
 
     bool HttpServer::init(int port)
     {
-        if (singleton::Singleton<HttpConfigManager>().good()) {
-            std::cout << singleton::Singleton<HttpConfigManager>().get_string_property("server_name") << " starting...\n";
+        if (HttpConfigManager::get_instance()->good()) {
+            std::cout << HttpConfigManager::get_instance()->get_string_property("server_name") << " starting...\n";
         }
 
         net::Socket *sock = new net::Socket("", port);
@@ -200,10 +199,10 @@ namespace net::http
         TcpAcceptor *acceptor = static_cast<TcpAcceptor *>(acceptor_);
         acceptor->set_connection_handler(this);
 
-        loop.update_event(acceptor_->get_channel());
+        loop.update_channel(acceptor_->get_channel());
         this->event_loop_ = &loop;
 
-        const auto &proxiesCfg = singleton::Singleton<HttpConfigManager>().get_type_array_properties<nlohmann::json>("proxies");
+        const auto &proxiesCfg = HttpConfigManager::get_instance()->get_type_array_properties<nlohmann::json>("proxies");
         if (!proxiesCfg.empty()) {
             proxy_ = new HttpProxy(this);
             if (!proxy_->load_proxy_config_and_init()) {
@@ -211,7 +210,7 @@ namespace net::http
             }
         }
 
-        std::cout << singleton::Singleton<HttpConfigManager>().get_string_property("server_name", "web server") << " started\n";
+        std::cout << HttpConfigManager::get_instance()->get_string_property("server_name", "web server") << " started\n";
 
         loop.loop();
     }
@@ -249,8 +248,8 @@ namespace net::http
     void HttpServer::load_static_paths()
     {
         // 必须要支持 /static/* 这种形式
-        auto &cfgManager = singleton::Singleton<HttpConfigManager>();
-        const std::vector<nlohmann::json> &paths = cfgManager.get_type_array_properties<nlohmann::json>(config::static_file_paths);
+        auto cfgManager = HttpConfigManager::get_instance();
+        const std::vector<nlohmann::json> &paths = cfgManager->get_type_array_properties<nlohmann::json>(config::static_file_paths);
         for (const auto &path : paths) {
             const std::string &root = path[config::static_file_paths_root];
             const std::string &rootPath = path[config::static_file_paths_path];
@@ -262,7 +261,7 @@ namespace net::http
             on(root, std::bind(&HttpServer::serve_static, this, std::placeholders::_1, std::placeholders::_2), true);
         }
 
-        const std::vector<std::string> &types = cfgManager.get_type_array_properties<std::string>(config::playable_types);
+        const std::vector<std::string> &types = cfgManager->get_type_array_properties<std::string>(config::playable_types);
         for (const auto &type : types) {
             play_types_.insert(type);
         }
@@ -306,13 +305,6 @@ namespace net::http
 
         auto *session = req->get_context()->get_session();
         const SessionItem *data = session->get_session_value(fileRelativePath);
-        if (const SessionItem *last = session->get_session_value("last"); last && data && last->number.pval != data->number.pval) {
-            auto *stream = static_cast<std::fstream *>(last->number.pval);
-            stream->close();
-            session->remove_session_value(fileRelativePath);
-            delete stream;
-        }
-
         std::ifstream *FtpFileStream;
         if (!data) {
 #ifdef _WIN32
@@ -327,15 +319,16 @@ namespace net::http
                 return;
             }
 
-            session->add_session_value(fileRelativePath, file_);
-            session->add_session_value("last", file_);
+            session->add_session_value(path, file_);
             FtpFileStream = file_;
             session->set_close_call_back([fileRelativePath](HttpSession *httpSession) {
-                if (const SessionItem *item = httpSession->get_session_value(fileRelativePath)) {
-                    auto *stream = static_cast<std::ifstream *>(item->number.pval);
-                    stream->close();
-                    httpSession->remove_session_value(fileRelativePath);
-                    delete stream;
+                const auto &items = httpSession->get_session_values();
+                for (const auto &item : items) {
+                    if (item.second.type == SessionItemType::pval && item.second.number.pval) {
+                        auto *stream = static_cast<std::ifstream *>(item.second.number.pval);
+                        stream->close();
+                        delete stream;
+                    }
                 }
             });
         } else {
@@ -344,7 +337,7 @@ namespace net::http
 
         const std::size_t contentSize = config::client_max_content_length;
         std::size_t length;
-        const std::string lenKey = "_length";
+        const std::string lenKey = path + "_length";
         if (const SessionItem *lenItem = session->get_session_value(lenKey); !lenItem) {
             FtpFileStream->seekg(0, std::ios_base::end);
             length = FtpFileStream->tellg();

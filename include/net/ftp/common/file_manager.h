@@ -16,9 +16,9 @@ namespace net::ftp
 
         bool is_completed();
 
-        FileInfo * get_next_file();
+        FtpFileInfo * get_next_file();
 
-        void add_file(const FileInfo &info);
+        void add_file(const FtpFileInfo &info);
 
         void reset()
         {
@@ -30,7 +30,7 @@ namespace net::ftp
 
     private:
         int cur_idx_;
-        std::vector<FileInfo> file_infos_;
+        std::vector<FtpFileInfo> file_infos_;
     };
 }
 

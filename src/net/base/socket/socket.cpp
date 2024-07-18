@@ -76,7 +76,6 @@ namespace net
             if (errno != EINPROGRESS) {
                 return false;
             }
-
             return true;
         }
 

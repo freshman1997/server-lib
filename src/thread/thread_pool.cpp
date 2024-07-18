@@ -1,6 +1,5 @@
 #include "thread/thread_pool.h"
 #include "thread/worker_thread.h"
-#include <iostream>
 
 namespace thread 
 {
@@ -39,7 +38,7 @@ namespace thread
         }
     }
 
-    void ThreadPool::push_task(Task *task)
+    void ThreadPool::push_task(Runnable *task)
     {
         std::unique_lock<std::mutex> lock(mut_);
         this->tasks_.push_back(task);
@@ -47,7 +46,7 @@ namespace thread
         cond_.notify_one();
     }
 
-    Task * ThreadPool::pop_task()
+    Runnable * ThreadPool::pop_task()
     {
         std::unique_lock<std::mutex> lock(mut_);
         
@@ -55,7 +54,7 @@ namespace thread
             return nullptr;
         }
 
-        Task *task = tasks_.back();
+        Runnable *task = tasks_.back();
         tasks_.pop_back();
 
         return task;
@@ -68,16 +67,14 @@ namespace thread
         }
 
         while (!thread->is_stop()) {
-            Task *task = pop_task();
+            Runnable *task = pop_task();
             if (!task) {
                 std::unique_lock<std::mutex> lock(mut_);
                 while (tasks_.empty() && !thread->is_stop()) {
                     cond_.wait(lock);
                 }
-
                 continue;
             }
-
             task->run();
             delete task;
         }

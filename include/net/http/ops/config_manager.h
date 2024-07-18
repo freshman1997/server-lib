@@ -3,12 +3,14 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <memory>
 
+#include "../../../singleton/singleton.h"
 #include "nlohmann/json.hpp"
 
 namespace net::http 
 {
-    class HttpConfigManager
+    class HttpConfigManager : public singleton::Singleton<HttpConfigManager>, public std::enable_shared_from_this<HttpConfigManager>
     {
     public:
         HttpConfigManager();

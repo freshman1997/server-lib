@@ -9,7 +9,7 @@
 
 namespace thread
 {
-    class Task;
+    class Runnable;
     class WorkerThread;
 
     class ThreadPool
@@ -21,8 +21,8 @@ namespace thread
         ~ThreadPool();
 
         void start();
-        void push_task(Task *);
-        Task * pop_task();
+        void push_task(Runnable *);
+        Runnable * pop_task();
 
         std::string fetch_thread_status();
     private:
@@ -33,7 +33,7 @@ namespace thread
         int thread_amount_;
         int timeout_;
         std::size_t max_queue_size_;
-        std::deque<Task *> tasks_;
+        std::deque<Runnable *> tasks_;
         std::vector<WorkerThread *> threads_;
         std::mutex mut_;
         std::condition_variable cond_;

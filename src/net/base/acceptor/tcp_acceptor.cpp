@@ -25,15 +25,23 @@ namespace net
     TcpAcceptor::TcpAcceptor(Socket *socket) : handler_(nullptr), socket_(socket)
     {
         assert(socket_);
+        channel_ = new Channel;
     }
 
     TcpAcceptor::~TcpAcceptor()
     {
         if (handler_) {
-            channel_.disable_all();
-            handler_->update_event(&channel_);
+            channel_->disable_all();
+            handler_->close_channel(channel_);
+            channel_->set_handler(nullptr);
+            channel_ = nullptr;
         }
-        delete socket_;
+        
+        if (socket_) {
+            delete socket_;
+            socket_ = nullptr;
+        }
+
         std::cout << "tcp acceptor close\n";
     }
 
@@ -41,13 +49,13 @@ namespace net
     {
         assert(socket_);
         if (!socket_->listen()) {
-            on_write_event();
+            close();
             return false;
         }
 
-        channel_.set_fd(socket_->get_fd());
-        channel_.set_handler(this);
-        channel_.enable_read();
+        channel_->set_fd(socket_->get_fd());
+        channel_->set_handler(this);
+        channel_->enable_read();
 
         return true;
     }
@@ -85,7 +93,8 @@ namespace net
     void TcpAcceptor::set_event_handler(EventHandler *handler)
     {
         handler_ = handler;
-        handler_->update_event(&channel_);
+        assert(channel_);
+        handler_->update_channel(channel_);
     }
 
     void TcpAcceptor::set_connection_handler(ConnectionHandler *connHandler)

@@ -12,11 +12,11 @@ namespace net
     public:
         virtual void on_new_connection(Connection *conn) = 0;
 
-        virtual void on_quit() = 0;
+        virtual void close_channel(Channel *channel) = 0;
 
-        virtual void on_close(Connection *conn) = 0;
+        virtual void update_channel(Channel *channel) = 0;
 
-        virtual void update_event(Channel *channel) = 0;
+        virtual void quit() = 0;
     };
 }
 

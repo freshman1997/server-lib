@@ -17,6 +17,11 @@ namespace net
         disable_all();
     }
 
+    void Channel::set_handler(SelectHandler *handler)
+    {
+        handler_ = handler;
+    }
+
     void Channel::on_event(int event)
     {
         if (!handler_) {
@@ -28,12 +33,20 @@ namespace net
             return;
         }
 
-        if (handler_ && event & READ_EVENT && events_ & READ_EVENT) {
+        if (event & READ_EVENT && events_ & READ_EVENT) {
             handler_->on_read_event();
+            if (handler_ == nullptr) {
+                delete this;
+                return;
+            }
         }
 
-        if (handler_ && event & WRITE_EVENT && events_ & WRITE_EVENT) {
+        if (event & WRITE_EVENT && events_ & WRITE_EVENT) {
             handler_->on_write_event();
+            if (handler_ == nullptr) {
+                delete this;
+                return;
+            }
         }
     }
 }

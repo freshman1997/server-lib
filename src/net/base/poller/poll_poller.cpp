@@ -9,71 +9,78 @@
 #include "net/base/poller/poll_poller.h"
 #include "net/base/channel/channel.h"
 
-namespace  
+namespace net
 {
-    namespace helper 
+    struct HelperData
     {
         std::vector<struct pollfd> fds_;
         std::unordered_map<int, net::Channel *> channels_;
         std::vector<int> removed_fds_;
-    }
-}
+    };
 
-namespace net
-{
     PollPoller::PollPoller()
     {
+        data_ = new HelperData;
+    }
 
+    PollPoller::~PollPoller()
+    {
+        if (data_) {
+            delete data_;
+            data_ = nullptr;
+        }
     }
 
     uint64_t PollPoller::poll(uint32_t timeout)
     {
         uint64_t tm = base::time::get_tick_count();
 
-        if (!helper::removed_fds_.empty()) {
-            for (auto &fd : helper::removed_fds_) {
-                auto it = helper::channels_.find(fd);
-                if (it != helper::channels_.end()) {
-                    helper::channels_.erase(fd);
-                    helper::fds_.erase(std::remove_if(helper::fds_.begin(), helper::fds_.end(), 
+        if (!data_->removed_fds_.empty()) {
+            for (auto &fd : data_->removed_fds_) {
+                auto it = data_->channels_.find(fd);
+                if (it != data_->channels_.end()) {
+                    data_->channels_.erase(fd);
+                    data_->fds_.erase(std::remove_if(data_->fds_.begin(), data_->fds_.end(), 
                     [fd](struct pollfd pfd) -> bool {
                         return fd == pfd.fd;
                     }));
                 }
             }
 
-            helper::removed_fds_.clear();
+            data_->removed_fds_.clear();
         }
 
-        int ret = ::poll(&*helper::fds_.begin(), helper::fds_.size(), timeout);
+        int ret = ::poll(&*data_->fds_.begin(), data_->fds_.size(), timeout);
         if (ret < 0) {
             // TODO
             return tm;
         }
 
-        for (int i = 0; i < helper::fds_.size(); ++i) {
+        for (int i = 0; i < data_->fds_.size(); ++i) {
             int ev = Channel::NONE_EVENT;
-            if (helper::fds_[i].revents & POLLRDHUP || helper::fds_[i].revents & POLLERR 
-                || helper::fds_[i].revents & POLLIN) {
+            if (data_->fds_[i].revents & POLLRDHUP || data_->fds_[i].revents & POLLERR 
+                || data_->fds_[i].revents & POLLIN) {
                 ev |= Channel::READ_EVENT;
             }
             
-            if (helper::fds_[i].revents & POLLOUT) {
+            if (data_->fds_[i].revents & POLLOUT) {
                 ev |= Channel::WRITE_EVENT;
             }
 
             if (ev != Channel::NONE_EVENT) {
-                Channel *channel = helper::channels_[helper::fds_[i].fd];
-                channel->on_event(ev);
+                Channel *channel = data_->channels_[data_->fds_[i].fd];
+                if (channel) {
+                    channel->on_event(ev);
+                }
             }
         }
 
         return tm;
     }
 
-    static void do_add_channel(Channel *channel)
+    static void do_add_channel(HelperData *data_, Channel *channel)
     {
-        helper::channels_[channel->get_fd()] = channel;
+        data_->channels_[channel->get_fd()] = channel;
         struct pollfd pfd;
         pfd.revents = 0;
         if (channel->get_events() & Channel::READ_EVENT) {
@@ -84,26 +91,26 @@ namespace net
             pfd.events |= POLLOUT;
         }
 
-        helper::fds_.push_back(pfd);
+        data_->fds_.push_back(pfd);
     }
 
     void PollPoller::update_channel(Channel *channel)
     {
-        auto it = helper::channels_.find(channel->get_fd());
-        if (it == helper::channels_.end()) {
-            do_add_channel(channel);
+        auto it = data_->channels_.find(channel->get_fd());
+        if (it == data_->channels_.end()) {
+            do_add_channel(data_, channel);
         } else {
             if (!channel->has_events()) {
                 remove_channel(channel);
             } else {
                 int fd = channel->get_fd();
-                auto it = std::find_if(helper::fds_.begin(), helper::fds_.end(), [fd](const struct pollfd &pfd) -> bool {
+                auto it = std::find_if(data_->fds_.begin(), data_->fds_.end(), [fd](const struct pollfd &pfd) -> bool {
                     return pfd.fd == fd;
                 });
 
-                helper::channels_[channel->get_fd()] = channel;
-                if (it != helper::fds_.end()) {
-                    helper::channels_[channel->get_fd()] = channel;
+                data_->channels_[channel->get_fd()] = channel;
+                if (it != data_->fds_.end()) {
+                    data_->channels_[channel->get_fd()] = channel;
                     if (channel->get_events() & Channel::READ_EVENT) {
                         it->events |= POLLIN | POLLERR;
                     }
@@ -112,7 +119,7 @@ namespace net
                         it->events |= POLLOUT;
                     }
                 } else {
-                    do_add_channel(channel);
+                    do_add_channel(data_, channel);
                 }
             }
         }
@@ -120,7 +127,8 @@ namespace net
 
     void PollPoller::remove_channel(Channel *channel)
     {
-        helper::removed_fds_.push_back(channel->get_fd());
+        data_->removed_fds_.push_back(channel->get_fd());
+        channels_[channel->get_fd()] = nullptr;
     }
 }
 #endif

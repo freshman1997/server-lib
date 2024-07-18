@@ -1,9 +1,11 @@
 #include "net/ftp/common/session.h"
-#include "base/time.h"
+#include "net/ftp/client/client_file_stream.h"
 #include "net/ftp/common/def.h"
 #include "net/ftp/handler/ftp_app.h"
 #include "net/ftp/common/file_stream.h"
-#include "nlohmann/json.hpp"
+#include "net/ftp/server/server_file_stream.h"
+#include "net/ftp/common/file_stream_session.h"
+
 #include <cassert>
 #include <iostream>
 #include <string>
@@ -18,7 +20,7 @@ namespace net::ftp
     FtpSessionContext::~FtpSessionContext()
     {
         for (auto it : values) {
-            if (it.second.type == FtpSessionValueType::string_val) {
+            if (it.second.item.sval && it.second.type == FtpSessionValueType::string_val) {
                 delete it.second.item.sval;
             }
         }
@@ -27,7 +29,7 @@ namespace net::ftp
     void FtpSessionContext::close()
     {
         if (file_stream_) {
-            file_stream_->quit();
+            file_stream_->quit(conn_->get_remote_address());
             file_stream_ = nullptr;
         }
 
@@ -44,10 +46,10 @@ namespace net::ftp
         }
     }
 
-    FtpSession::FtpSession(Connection *conn, FtpApp *entry, FtpSessionWorkMode workMode, bool keepUtilSent) : work_mode_(workMode), keep_util_sent_(keepUtilSent), close_(false)
+    FtpSession::FtpSession(Connection *conn, FtpApp *app, WorkMode mode, bool keepUtilSent) : work_mode_(mode), keep_util_sent_(keepUtilSent), close_(false)
     {
         context_.conn_ = conn;
-        context_.app_ = entry;
+        context_.app_ = app;
         context_.conn_->set_connection_handler(this);
         context_.instance_ = this;
     }
@@ -61,7 +63,7 @@ namespace net::ftp
 
     void FtpSession::on_connected(Connection *conn)
     {
-        
+        conn->get_input_buff()->resize(1024 * 1024 * 2);
     }
 
     void FtpSession::on_error(Connection *conn)
@@ -69,93 +71,9 @@ namespace net::ftp
 
     }
 
-    static bool str_cmp(const char *begin, const char *end, const char *str)
-    {
-        const char *p = begin;
-        const char *p1 = str;
-        for (;p != end && *p1; ++p, ++p1) {
-            if (std::tolower(*p) != *p1) {
-                return false;
-            }
-        }
-
-        return p == end && !(*p1);
-    }
-
-    void FtpSession::on_read(Connection *conn)
-    {
-        auto buff = conn->get_input_buff();
-        std::string cmd(buff->peek(), buff->peek_end());
-        std::cout << "cmd >>> " << cmd << '\n';
-
-        if (work_mode_ == FtpSessionWorkMode::server) {
-            if (cmd == "setup" && context_.file_stream_ == nullptr) {
-                if (start_file_stream({"", 12124}, StreamMode::Receiver)) {
-                    std::cout << "file stream connection settled!\n";
-                    conn->get_output_buff()->write_string("start connecting");
-                    conn->send();
-                } else {
-                    std::cout << "file stream connection settle failed!!!\n";
-                }
-            } else {
-                if (str_cmp(cmd.c_str(), cmd.c_str() + 6, "file: ")) {
-                    const nlohmann::json &jval = nlohmann::json::parse(cmd.c_str() + 6, cmd.c_str() + cmd.size());
-                    if (!jval.is_discarded()) {
-                        FileInfo info;
-                        info.ready_ = true;
-                        info.origin_name_ = jval["origin"];
-                        info.file_size_ = jval["size"];
-                        info.current_progress_ = jval["progress"];
-                        info.dest_name_ = "D:/misc/" + std::to_string(base::time::now()) + ".txt";
-                        context_.file_manager_.add_file(info);
-                        context_.file_stream_->set_work_file(context_.file_manager_.get_next_file());
-                        context_.conn_->get_output_buff()->write_string("ready");
-                        context_.conn_->send();
-                    } else {
-                        context_.file_stream_->quit();
-                    }
-                } else if (cmd == "quit") {
-                    context_.file_stream_->quit();
-                } else {
-                    conn->write_and_flush(conn->get_input_buff(true));
-                }
-            }
-        } else {
-            if (cmd == "start connecting" && context_.file_stream_ == nullptr) {
-                if (start_file_stream({"192.168.96.1", 12124}, StreamMode::Sender)) {
-                    std::cout << "file stream has connected to server!\n";
-                } else {
-                    std::cout << "file stream connect failed!!!\n";
-                }
-            } else if (cmd == "ready") {
-                assert(context_.file_stream_->get_work_file());
-                context_.file_stream_->get_work_file()->ready_ = true;
-            } else if (cmd == "next") {
-                if (auto file = context_.file_manager_.get_next_file()) {
-                    if (context_.file_stream_->get_stream_mode() == StreamMode::Sender) {
-                        assert(context_.conn_);
-                        context_.conn_->get_output_buff()->write_string("file: " + file->build_cmd_args());
-                        context_.conn_->send();
-                    }
-                    context_.file_stream_->set_work_file(file);
-                } else {
-                    context_.conn_->get_output_buff()->write_string("quit");
-                    context_.conn_->send();
-                }
-            }
-        }
-    }
-
     void FtpSession::on_write(Connection *conn)
     {
-        if (work_mode_ == FtpSessionWorkMode::client) {
-            if (!context_.cmd_queue_.empty()) {
-                const std::string &cmd = context_.cmd_queue_.front();
-                conn->get_output_buff()->write_string(cmd);
-                conn->send();
-                context_.cmd_queue_.pop();
-            }
-        }
+        
     }
 
     void FtpSession::on_close(Connection *conn)
@@ -174,49 +92,37 @@ namespace net::ftp
         }
     }
 
-    void FtpSession::on_opened(FtpFileStream *fs)
+    void FtpSession::on_opened(FtpFileStreamSession *fs)
     {
         std::cout << "file stream opened!\n";
-        if (fs->get_stream_mode() == StreamMode::Sender) {
-            context_.file_manager_.set_work_filepath("/home/yuan/test");
-        }
-
-        if (auto file = context_.file_manager_.get_next_file()) {
-            if (fs->get_stream_mode() == StreamMode::Sender) {
-                assert(context_.conn_);
-                context_.conn_->get_output_buff()->write_string("file: " + file->build_cmd_args());
-                context_.conn_->send();
-            }
-            context_.file_stream_->set_work_file(file);
-        }
     }
 
-    void FtpSession::on_connect_timeout(FtpFileStream *fs)
+    void FtpSession::on_connect_timeout(FtpFileStreamSession *fs)
     {
         check_file_stream(fs);
     }
 
-    void FtpSession::on_start(FtpFileStream *fs)
+    void FtpSession::on_start(FtpFileStreamSession *fs)
     {
         // TODO log
     }
 
-    void FtpSession::on_error(FtpFileStream *fs)
-    {
-        check_file_stream(fs);
-    }
-
-    void FtpSession::on_completed(FtpFileStream *fs)
+    void FtpSession::on_error(FtpFileStreamSession *fs)
     {
         
     }
 
-    void FtpSession::on_closed(FtpFileStream *fs)
+    void FtpSession::on_completed(FtpFileStreamSession *fs)
+    {
+        
+    }
+
+    void FtpSession::on_closed(FtpFileStreamSession *fs)
     {
         check_file_stream(fs);
     }
 
-    void FtpSession::on_idle_timeout(FtpFileStream *fs)
+    void FtpSession::on_idle_timeout(FtpFileStreamSession *fs)
     {
         check_file_stream(fs);
     }
@@ -226,26 +132,74 @@ namespace net::ftp
         delete this;
     }
 
-    bool FtpSession::on_login(const std::string &username, std::string &passwd)
+    bool FtpSession::login()
     {
-        return false;
+        if (context_.login_success()) {
+            return false;
+        }
+
+        if (!context_.user_.username_.empty() && !context_.user_.password_.empty()) {
+            // TODO check passwd
+        }
+
+        return true;
+    }
+
+    void FtpSession::set_username(const std::string &username)
+    {
+        context_.user_.username_ = username;
+    }
+
+    void FtpSession::set_password(const std::string &passwd)
+    {
+        context_.user_.password_ = passwd;
     }
 
     bool FtpSession::start_file_stream(const InetAddress &addr, StreamMode mode)
     {
         assert(context_.app_);
-        context_.file_stream_ = new FtpFileStream(addr, mode, this);
-        return context_.file_stream_->start();
+        if (mode == StreamMode::Receiver) {
+            context_.file_stream_ = new ServerFtpFileStream(this);
+        } else {
+            context_.file_stream_ = new ClientFtpFileStream(this);
+        }
+        return context_.file_stream_->start(addr);
     }
 
-    void FtpSession::add_command(const std::string &cmd)
+    void FtpSession::check_file_stream(FtpFileStreamSession *fs)
     {
-        context_.cmd_queue_.push(cmd);
+        if (fs && fs->get_connection()) {
+            context_.file_stream_->quit(fs->get_connection()->get_remote_address());
+        }
     }
 
-    void FtpSession::check_file_stream(FtpFileStream *fs)
+    bool FtpSession::send_command(const std::string &cmd)
     {
-        context_.file_manager_.reset();
-        context_.file_stream_ = nullptr;
+        if (!context_.conn_ && !context_.conn_->is_connected()) {
+            return false;
+        }
+
+        context_.conn_->get_output_buff()->write_string(cmd);
+        context_.conn_->send();
+        
+        return true;
+    }
+
+    void FtpSession::change_cwd(const std::string &filepath)
+    {
+        context_.cwd_ = filepath;
+    }
+
+    void FtpSession::on_error(int errcode)
+    {
+
+    }
+
+    bool FtpSession::set_work_file(FtpFileInfo *info)
+    {
+        if (!info || !context_.conn_) {
+            return false;
+        }
+        return context_.file_stream_->set_work_file(info, context_.conn_->get_remote_address().get_ip());
     }
 }

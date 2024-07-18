@@ -2,7 +2,7 @@
 #define __NET_FTP_HANDLER_ENTRY_H__
 namespace net 
 {
-    class EventLoop;
+    class EventHandler;
 }
 
 namespace timer 
@@ -21,7 +21,7 @@ namespace net::ftp
 
         virtual timer::TimerManager * get_timer_manager() = 0;
 
-        virtual EventLoop * get_event_loop() = 0;
+        virtual EventHandler * get_event_handler() = 0;
 
         virtual void on_session_closed(FtpSession *session) = 0;
 

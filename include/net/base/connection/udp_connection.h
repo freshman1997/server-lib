@@ -1,10 +1,10 @@
 #ifndef __NET_UDP_CONNECTION_H__
 #define __NET_UDP_CONNECTION_H__
-#include "buffer/linked_buffer.h"
-#include "net/base/connection/connection.h"
-#include "net/base/socket/inet_address.h"
-#include "timer/timer.h"
-#include "timer/timer_task.h"
+#include "../../../buffer/linked_buffer.h"
+#include "../../base/connection/connection.h"
+#include "../../base/socket/inet_address.h"
+#include "../../../timer/timer.h"
+#include "../../../timer/timer_task.h"
 
 namespace net
 {

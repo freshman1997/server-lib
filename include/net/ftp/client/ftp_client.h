@@ -19,7 +19,7 @@ namespace net::ftp
 
         virtual timer::TimerManager * get_timer_manager();
 
-        virtual EventLoop * get_event_loop();
+        virtual EventHandler * get_event_handler();
 
         virtual void on_session_closed(FtpSession *session);
 
@@ -28,9 +28,7 @@ namespace net::ftp
     public:
         bool connect(const std::string &ip, short port);
 
-        FtpSession * get_session();
-
-        void add_command(const std::string &cmd);
+        bool send_command(const std::string &cmd);
 
     private:
         InetAddress addr_;

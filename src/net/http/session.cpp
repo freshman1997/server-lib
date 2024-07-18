@@ -78,6 +78,11 @@ namespace net::http
         return &it->second;
     }
 
+    const std::unordered_map<std::string, SessionItem> & HttpSession::get_session_values()
+    {
+        return session_items_;
+    }
+
     void HttpSession::on_timer(timer::Timer *timer)
     {
         std::cout << "connection idle timeout !!\n";

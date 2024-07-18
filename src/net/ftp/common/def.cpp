@@ -1,13 +1,18 @@
 #include "net/ftp/common/def.h"
 #include "nlohmann/json.hpp"
 #include <cstddef>
+#include <ios>
 #include <iostream>
 #include <string>
 
 namespace net::ftp 
 {
 
-    FileInfo::~FileInfo()
+    std::string_view delimiter = "\r\n";
+    std::size_t default_write_buff_size = 1024 * 1024 * 2;
+    int default_session_idle_timeout = 10 * 1000;
+
+    FtpFileInfo::~FtpFileInfo()
     {
         if (fstream_) {
             fstream_->close();
@@ -16,7 +21,7 @@ namespace net::ftp
         }
     }
 
-    int FileInfo::read_file(std::size_t size, Buffer *buff)
+    int FtpFileInfo::read_file(std::size_t size, Buffer *buff)
     {
         if (!fstream_) {
             fstream_ = new std::fstream();
@@ -44,15 +49,14 @@ namespace net::ftp
             delete fstream_;
             fstream_ = nullptr;
         }
-        std::cout << "done >> " << current_progress_ << ", " << file_size_ << '\n';
         return read;
     }
 
-    int FileInfo::write_file(Buffer *buff)
+    int FtpFileInfo::write_file(Buffer *buff)
     {
         if (!fstream_) {
             fstream_ = new std::fstream();
-            fstream_->open(dest_name_.c_str(), std::ios_base::out);
+            fstream_->open(dest_name_.c_str(), std::ios_base::out | std::ios_base::app | std::ios_base::binary);
             if (fstream_->bad()) {
                 delete fstream_;
                 fstream_ = nullptr;
@@ -61,19 +65,21 @@ namespace net::ftp
             state_ = FileState::processing;
         }
 
-        fstream_->write(buff->peek(), buff->readable_bytes());
-        std::size_t read = fstream_->gcount();
+        std::size_t sz = buff->readable_bytes();
+        fstream_->write(buff->peek(), sz);
+        std::size_t written = sz;
+        current_progress_ += written;
         if (current_progress_ >= file_size_) {
-            state_ = FileState::processed;
+            fstream_->flush();
             fstream_->close();
             delete fstream_;
             fstream_ = nullptr;
+            state_ = FileState::processed;
         }
-
-        return read;
+        return written;
     }
 
-    std::string FileInfo::build_cmd_args()
+    std::string FtpFileInfo::build_cmd_args()
     {
         nlohmann::json jval;
         jval["type"] = "file";

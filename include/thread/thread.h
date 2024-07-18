@@ -4,10 +4,11 @@
 #include <thread>
 #include <atomic>
 
-#include "thread/task.h"
+#include "runnable.h"
+
 namespace thread 
 {
-    class Thread : public Task
+    class Thread : public Runnable
     {
     public:
         Thread(int id);

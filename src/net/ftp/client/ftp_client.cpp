@@ -1,10 +1,10 @@
 #include "net/ftp/client/ftp_client.h"
 #include "net/base/acceptor/tcp_acceptor.h"
 #include "net/base/connection/tcp_connection.h"
+#include "net/base/handler/event_handler.h"
 #include "net/base/poller/select_poller.h"
 #include "net/base/socket/socket.h"
-#include "net/ftp/common/session.h"
-#include "singleton/singleton.h"
+#include "net/ftp/client/client_session.h"
 #include "timer/wheel_timer_manager.h"
 
 #include <iostream>
@@ -36,7 +36,7 @@ namespace net::ftp
         return timer_manager_;
     }
 
-    EventLoop * FtpClient::get_event_loop()
+    EventHandler * FtpClient::get_event_handler()
     {
         return ev_loop_;
     }
@@ -74,30 +74,23 @@ namespace net::ftp
             return false;
         }
 
-        TcpConnection *conn = new TcpConnection(sock);
         timer::WheelTimerManager manager;
-
-        net::EventLoop loop(&singleton::Singleton<net::SelectPoller>(), &manager);
+        SelectPoller poller;
+        net::EventLoop loop(&poller, &manager);
         timer_manager_ = &manager;
         ev_loop_ = &loop;
 
-        session_ = new FtpSession(conn, this, FtpSessionWorkMode::client);
-        loop.update_event(conn->get_channel());
+        TcpConnection *conn = new TcpConnection(sock);
+        session_ = new ClientFtpSession(conn, this);
+        loop.update_channel(conn->get_channel());
         conn->set_event_handler(&loop);
         loop.loop();
         
         return true;
     }
 
-    FtpSession * FtpClient::get_session()
+    bool FtpClient::send_command(const std::string &cmd)
     {
-        return session_;
-    }
-
-    void FtpClient::add_command(const std::string &cmd)
-    {
-        if (session_) {
-            session_->add_command(cmd);
-        }
+        return session_ ? session_->send_command(cmd) : false;
     }
 }

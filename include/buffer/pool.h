@@ -2,10 +2,13 @@
 #define __BUFFER_POOL_H__
 #include <list>
 #include <set>
+#include <memory>
+
+#include "../singleton/singleton.h"
 
 class Buffer;
 
-class BufferedPool
+class BufferedPool : public singleton::Singleton<BufferedPool>, public std::enable_shared_from_this<BufferedPool>
 {
 public:
     std::size_t get_size() const

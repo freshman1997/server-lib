@@ -5,7 +5,6 @@
 #include "net/http/context.h"
 #include "net/http/header_key.h"
 #include "net/http/packet_parser.h"
-#include "singleton/singleton.h"
 
 namespace net::http 
 {
@@ -22,7 +21,7 @@ namespace net::http
         parser_ = nullptr;
         buffer_ = nullptr;
         body_length_ = 0;
-        buffer_ = singleton::Singleton<BufferedPool>().allocate();
+        buffer_ = BufferedPool::get_instance()->allocate();
     }
 
     HttpPacket::~HttpPacket()
@@ -37,7 +36,8 @@ namespace net::http
             parser_ = nullptr;
         }
 
-        singleton::Singleton<BufferedPool>().free(buffer_);
+        BufferedPool::get_instance()->free(buffer_);
+        buffer_ = nullptr;
     }
 
     void HttpPacket::reset()
@@ -207,7 +207,7 @@ namespace net::http
             return true;
         }
 
-        return singleton::Singleton<ContentParserFactory>().parse_content(this);
+        return ContentParserFactory::get_instance()->parse_content(this);
     }
 
     bool HttpPacket::parse(Buffer &buff)
@@ -244,7 +244,7 @@ namespace net::http
         if (pack_header()) {
             if (buffer_) {
                 context_->get_connection()->write(buffer_);
-                buffer_ = singleton::Singleton<BufferedPool>().allocate();
+                buffer_ = BufferedPool::get_instance()->allocate();
             }
         } else {
             is_good_ = false;
@@ -259,7 +259,7 @@ namespace net::http
         }
 
         Buffer *buf = buffer_;
-        buffer_ = singleton::Singleton<BufferedPool>().allocate();
+        buffer_ = BufferedPool::get_instance()->allocate();
         buf->reset_read_index(0);
         
         return buf;

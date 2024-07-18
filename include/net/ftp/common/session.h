@@ -12,7 +12,6 @@
 #include <type_traits>
 #include <unordered_map>
 #include <cstdint>
-#include <queue>
 
 namespace net::ftp 
 {
@@ -36,16 +35,9 @@ namespace net::ftp
             double          dval;
             std::string    *sval;
             void           *ptr;
-        } item;
+        } item{.ptr = nullptr};
 
         FtpSessionValueType type = FtpSessionValueType::invalid;
-    };
-
-
-    enum class FtpSessionWorkMode : char
-    {
-        client = 0,
-        server
     };
 
     class FtpSession;
@@ -63,37 +55,35 @@ namespace net::ftp
     public:
         bool login_success()
         {
-            return !password_.empty() && verified_;
+            return !user_.logined_;
         }
 
         bool start_file_stream_transe();
 
     private:
-        bool verified_;
         FtpSession *instance_;
         FtpFileStream *file_stream_;
         FtpApp *app_;
         Connection *conn_;
-        std::string username_;
-        std::string password_;
+        User user_;
         FileManager file_manager_;
+        std::string cwd_;
         std::unordered_map<std::string, FtpSessionValue> values;
-        std::queue<std::string> cmd_queue_;
     };
 
     class FtpSession : public ConnectionHandler, public FtpFileStreamEvent
     {
         friend class FtpSessionContext;
     public:
-        FtpSession(Connection *conn, FtpApp *entry, FtpSessionWorkMode workMode = FtpSessionWorkMode::server, bool keepUtilSent = false);
-        ~FtpSession();
+        FtpSession(Connection *conn, FtpApp *app, WorkMode mode, bool keepUtilSent = false);
+        virtual ~FtpSession();
 
     public:
         virtual void on_connected(Connection *conn);
 
         virtual void on_error(Connection *conn);
 
-        virtual void on_read(Connection *conn);
+        virtual void on_read(Connection *conn) = 0;
 
         virtual void on_write(Connection *conn);
 
@@ -103,19 +93,19 @@ namespace net::ftp
         virtual void on_timer(timer::Timer *timer);
 
     public: // file stream event
-        virtual void on_opened(FtpFileStream *fs);
+        virtual void on_opened(FtpFileStreamSession *fs);
 
-        virtual void on_connect_timeout(FtpFileStream *fs);
+        virtual void on_connect_timeout(FtpFileStreamSession *fs);
 
-        virtual void on_start(FtpFileStream *fs);
+        virtual void on_start(FtpFileStreamSession *fs);
 
-        virtual void on_error(FtpFileStream *fs);
+        virtual void on_error(FtpFileStreamSession *fs);
 
-        virtual void on_completed(FtpFileStream *fs);
+        virtual void on_completed(FtpFileStreamSession *fs);
 
-        virtual void on_closed(FtpFileStream *fs);
+        virtual void on_closed(FtpFileStreamSession *fs);
 
-        virtual void on_idle_timeout(FtpFileStream *fs);
+        virtual void on_idle_timeout(FtpFileStreamSession *fs);
     
     public:
         void quit();
@@ -130,7 +120,11 @@ namespace net::ftp
             return context_.app_;
         }
 
-        bool on_login(const std::string &username, std::string &passwd);
+        bool login();
+
+        void set_username(const std::string &username);
+
+        void set_password(const std::string &passwd);
 
         bool start_file_stream(const InetAddress &addr, StreamMode mode);
 
@@ -139,10 +133,25 @@ namespace net::ftp
             return context_.login_success();
         }
 
-        void add_command(const std::string &cmd);
+        bool send_command(const std::string &cmd);
 
-        void check_file_stream(FtpFileStream *fs);
+        void change_cwd(const std::string &filepath);
 
+        void check_file_stream(FtpFileStreamSession *fs);
+
+        void set_keep_util_sent_flag(bool flag)
+        {
+            keep_util_sent_ = flag;
+        }
+
+        bool get_keep_util_sent_flag(bool flag)
+        {
+            return keep_util_sent_;
+        }
+
+        void on_error(int errcode);
+
+    public:
         template<typename T>
         void set_item_value(const std::string &key, T && val)
         {
@@ -166,51 +175,53 @@ namespace net::ftp
             context_.values[key] = itemVal;
         }
 
+        template<typename T>
+        T get_item_value(const std::string &key)
+        {
+            auto it = context_.values.find(key);
+            if constexpr (std::is_same<int32_t, T>::value) {
+                if (it == context_.values.end()) {
+                    return 0;
+                }
+                return it->second.type == FtpSessionValueType::int32_val ? it->second.item.ival : 0;
+            } else if constexpr (std::is_same<void *, T>::value) {
+                if (it == context_.values.end()) {
+                    return nullptr;
+                }
+                return it->second.type == FtpSessionValueType::ptr_val ? it->second.item.ptr : nullptr;
+            } else if constexpr (std::is_same<double, T>::value) {
+                if (it == context_.values.end()) {
+                    return 0;
+                }
+                return it->second.type == FtpSessionValueType::double_val ? it->second.item.dval : 0;
+            } else if constexpr (std::is_same<std::string *, T>::value) {
+                if (it == context_.values.end()) {
+                    return nullptr;
+                }
+                return it->second.type == FtpSessionValueType::string_val ? it->second.item.sval : nullptr;
+            } else {
+                static_assert("invalid type found");
+            }
+
+            return {};
+        }
+
         void remove_item(const std::string &key)
         {
             context_.values.erase(key);
         }
 
-        int32_t get_i_value(const std::string &key)
+        FileManager * get_file_manager()
         {
-            auto it = context_.values.find(key);
-            if (it == context_.values.end()) {
-                return 0;
-            }
-            return it->second.type == FtpSessionValueType::int32_val ? it->second.item.ival : 0;
+            return &context_.file_manager_;
         }
 
-        double get_d_value(const std::string &key)
-        {
-            auto it = context_.values.find(key);
-            if (it == context_.values.end()) {
-                return 0;
-            }
-            return it->second.type == FtpSessionValueType::double_val ? it->second.item.dval : 0;
-        }
-
-        void * get_ptr_value(const std::string &key)
-        {
-            auto it = context_.values.find(key);
-            if (it == context_.values.end()) {
-                return nullptr;
-            }
-            return it->second.type == FtpSessionValueType::ptr_val ? it->second.item.ptr : 0;
-        }
-
-        const std::string * get_str_value(const std::string &key)
-        {
-            auto it = context_.values.find(key);
-            if (it == context_.values.end()) {
-                return nullptr;
-            }
-            return it->second.type == FtpSessionValueType::string_val ? it->second.item.sval : 0;
-        }
+        bool set_work_file(FtpFileInfo *info);
 
     private:
+        WorkMode work_mode_;
         bool keep_util_sent_;
         bool close_;
-        FtpSessionWorkMode work_mode_;
         FtpSessionContext context_;
     };
 }

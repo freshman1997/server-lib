@@ -3,9 +3,10 @@
 #include "net/base/acceptor/tcp_acceptor.h"
 #include "net/base/connection/connection.h"
 #include "net/base/event/event_loop.h"
+#include "net/base/handler/event_handler.h"
 #include "net/base/poller/select_poller.h"
 #include "net/base/socket/socket.h"
-#include "net/ftp/common/session.h"
+#include "net/ftp/server/server_session.h"
 #include "timer/wheel_timer_manager.h"
 
 #include <iostream>
@@ -59,6 +60,8 @@ namespace net::ftp
 
         ev_loop_->loop();
 
+        delete acceptor;
+
         return true;
     }
 
@@ -68,10 +71,11 @@ namespace net::ftp
         if (session) {
             std::cout << "internal error occured!!!\n";
             conn->close();
-            return;
+        } else {
+            auto newSessoion = new ServerFtpSession(conn, this);
+            session_manager_.add_session(conn, newSessoion);
+            newSessoion->on_connected(conn);
         }
-        auto newSession = new FtpSession(conn, this);
-        session_manager_.add_session(conn, newSession);
     }
 
     void FtpServer::on_error(Connection *conn)
@@ -104,7 +108,7 @@ namespace net::ftp
         return timer_manager_;
     }
 
-    EventLoop * FtpServer::get_event_loop()
+    EventHandler * FtpServer::get_event_handler()
     {
         return ev_loop_;
     }

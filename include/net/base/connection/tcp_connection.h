@@ -1,12 +1,11 @@
 #ifndef __TCP_CONNECTION_H__
 #define __TCP_CONNECTION_H__
 
-#include "buffer/linked_buffer.h"
+#include "../../../buffer/linked_buffer.h"
 #include "connection.h"
 #include "../channel/channel.h"
 #include "../handler/select_handler.h"
 #include "../socket/inet_address.h"
-#include "buffer/buffer.h"
 
 namespace net
 {
@@ -62,7 +61,7 @@ namespace net
         void init();
 
     protected:
-        Channel channel_;
+        Channel *channel_;
         Socket *socket_;
         ConnectionHandler *connectionHandler_;
         EventHandler *eventHandler_;

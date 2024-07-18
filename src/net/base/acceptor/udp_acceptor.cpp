@@ -1,3 +1,4 @@
+#include "net/base/channel/channel.h"
 #include "net/base/connection/connection.h"
 #include "net/base/connection/udp_connection.h"
 #include "net/base/socket/inet_address.h"
@@ -26,10 +27,20 @@ namespace net
     UdpAcceptor::UdpAcceptor(Socket *socket, timer::TimerManager *timerManager) : sock_(socket), timer_manager_(timerManager)
     {
         instance_.set_acceptor(this);
+        channel_ = nullptr;
     }
 
     UdpAcceptor::~UdpAcceptor()
     {
+        if (channel_) {
+            channel_->disable_all();
+            if (handler_) {
+                handler_->close_channel(channel_);
+            }
+            channel_->set_handler(nullptr);
+            channel_ = nullptr;
+        }
+
         delete sock_;
         std::cout << "udp acceptor close\n";
     }
@@ -40,10 +51,11 @@ namespace net
             return false;
         }
 
-        channel_.enable_read();
-        channel_.enable_write();
-        channel_.set_handler(this);
-        channel_.set_fd(sock_->get_fd());
+        channel_ = new Channel;
+        channel_->enable_read();
+        channel_->enable_write();
+        channel_->set_handler(this);
+        channel_->set_fd(sock_->get_fd());
 
         return true;
     }
@@ -55,12 +67,12 @@ namespace net
 
     Channel * UdpAcceptor::get_channel()
     {
-        return &channel_;
+        return channel_;
     }
 
     void UdpAcceptor::on_read_event()
     {
-        assert(sock_);
+        assert(sock_ && handler_);
 
         sockaddr_storage peer_addr;
     #ifdef _WIN32
@@ -153,7 +165,8 @@ namespace net
     void UdpAcceptor::set_event_handler(EventHandler *handler)
     {
         handler_ = handler;
-        handler_->update_event(&channel_);
+        assert(channel_);
+        handler_->update_channel(channel_);
     }
 
     void UdpAcceptor::set_connection_handler(ConnectionHandler *connHandler)

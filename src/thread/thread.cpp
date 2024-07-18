@@ -1,13 +1,12 @@
 #include <atomic>
 #include <cassert>
-#include <functional>
 #include <thread>
 
 #include "thread/thread.h"
 
 namespace thread
 {
-    Thread::Thread(const int id) : Task(true), join_(false), tid_(id), th(nullptr)
+    Thread::Thread(const int id) : Runnable(true), join_(false), tid_(id), th(nullptr)
     {
         stop_.store(false);
     }
@@ -15,6 +14,9 @@ namespace thread
     Thread::~Thread()
     {
         if (th) {
+            if (!join_) {
+                join();
+            }
             delete th;
         }
     }

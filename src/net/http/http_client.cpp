@@ -8,7 +8,6 @@
 #include "net/base/socket/socket.h"
 #include "net/http/ops/option.h"
 #include "net/http/session.h"
-#include "singleton/singleton.h"
 #include "timer/wheel_timer_manager.h"
 
 namespace net::http 
@@ -124,10 +123,11 @@ namespace net::http
         timer::WheelTimerManager manager;
         conn_timer_ = manager.timeout(config::connection_idle_timeout, this);
 
-        net::EventLoop loop(&singleton::Singleton<net::SelectPoller>(), &manager);
+        SelectPoller poller;
+        net::EventLoop loop(&poller, &manager);
 
         conn->set_connection_handler(this);
-        loop.update_event(conn->get_channel());
+        loop.update_channel(conn->get_channel());
         conn->set_event_handler(&loop);
 
         rcb_ = rcb;

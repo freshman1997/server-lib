@@ -1,11 +1,13 @@
 #include "net/base/connection/tcp_connection.h"
 #include "buffer/buffer.h"
+#include "net/base/channel/channel.h"
 #include "net/base/connection/connection.h"
 #include "net/base/handler/connection_handler.h"
 #include "net/base/socket/socket_ops.h"
 #include "net/base/handler/event_handler.h"
 #include "net/base/socket/socket.h"
 
+#include <cassert>
 #include <iostream>
 #ifdef _WIN32
 #include <winsock2.h>
@@ -34,10 +36,10 @@ namespace net
         socket::set_keep_alive(socket_->get_fd(), true);
         socket::set_no_delay(socket_->get_fd(), true);
 
-        channel_.set_fd(socket_->get_fd());
-        channel_.set_handler(this);
-        channel_.enable_read();
-        channel_.enable_write();
+        channel_ = new Channel(socket_->get_fd());
+        channel_->set_handler(this);
+        channel_->enable_read();
+        channel_->enable_write();
 
         closed_ = false;
         state_ = ConnectionState::connecting;
@@ -46,12 +48,12 @@ namespace net
     TcpConnection::~TcpConnection()
     {
         state_ = ConnectionState::closed;
-        channel_.disable_all();
-        channel_.set_handler(nullptr);
+        assert(channel_);
+        channel_->disable_all();
+        channel_->set_handler(nullptr);
 
         if (eventHandler_) {
-            eventHandler_->update_event(&channel_);
-            eventHandler_->on_close(this);
+            eventHandler_->close_channel(channel_);
             eventHandler_ = nullptr;
         }
 
@@ -59,13 +61,16 @@ namespace net
             connectionHandler_->on_close(this);
             connectionHandler_ = nullptr;
         }
-        
+
         if (socket_) {
             std::cout << "connection closed, ip: " << socket_->get_address()->get_ip() << ", port: " << socket_->get_address()->get_port() 
-                    << ", fd: " << channel_.get_fd() << "\n";
+                    << ", fd: " << channel_->get_fd() << "\n";
             
             delete socket_;
+            socket_ = nullptr;
         }
+
+        channel_ = nullptr;
     }
 
     ConnectionState TcpConnection::get_connection_state()
@@ -123,11 +128,11 @@ namespace net
         }
 
         std::size_t sz = output_buffer_.get_size();
-        for (int i = 0; i < sz; ++i) {
+        for (int i = 0; i < sz;) {
         #ifdef _WIN32
-            int ret = ::send(channel_.get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), 0);
+            int ret = ::send(channel_->get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), 0);
         #else
-            int ret = ::send(channel_.get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), MSG_NOSIGNAL);
+            int ret = ::send(channel_->get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), MSG_NOSIGNAL);
         #endif
             if (ret > 0) {
                 if (ret >= output_buffer_.get_current_buffer()->readable_bytes()) {
@@ -138,7 +143,8 @@ namespace net
                     std::cout << "still remains data: " << output_buffer_.get_current_buffer()->readable_bytes() << " bytes.\n";
                     return;
                 }
-            } else if (ret < 0) {
+                ++i;
+            } else if (ret < 0 && EAGAIN != errno) {
                 connectionHandler_->on_error(this);
                 abort();
                 break;
@@ -160,8 +166,8 @@ namespace net
         state_ = ConnectionState::closing;
         closed_ = true;
         if (lastState == ConnectionState::connecting || output_buffer_.get_current_buffer()->readable_bytes() > 0) {
-            channel_.disable_read();
-            eventHandler_->update_event(&channel_);
+            channel_->disable_read();
+            eventHandler_->update_channel(channel_);
             return;
         }
 
@@ -175,7 +181,7 @@ namespace net
 
     Channel * TcpConnection::get_channel()
     {
-        return &channel_;
+        return channel_;
     }
 
     void TcpConnection::set_connection_handler(ConnectionHandler *handler)
@@ -189,9 +195,9 @@ namespace net
 
         bool read = false;
     #ifndef _WIN32
-        int bytes = ::read(channel_.get_fd(), input_buffer_.get_current_buffer()->buffer_begin(), input_buffer_.get_current_buffer()->writable_size());
+        int bytes = ::read(channel_->get_fd(), input_buffer_.get_current_buffer()->buffer_begin(), input_buffer_.get_current_buffer()->writable_size());
     #else
-        int bytes = recv(channel_.get_fd(), input_buffer_.get_current_buffer()->buffer_begin(), input_buffer_.get_current_buffer()->writable_size(), 0);
+        int bytes = ::recv(channel_->get_fd(), input_buffer_.get_current_buffer()->buffer_begin(), input_buffer_.get_current_buffer()->writable_size(), 0);
     #endif
         if (bytes <= 0) {
             if (bytes == 0) {
@@ -211,32 +217,36 @@ namespace net
             abort();
         } else if (read) {
             // 第一次可读可写表示连接已经建立
-            if (state_ == ConnectionState::connecting) {
+            if (state_ == ConnectionState::connecting && connectionHandler_) {
                 state_ = ConnectionState::connected;
                 connectionHandler_->on_connected(this);
             }
-            connectionHandler_->on_read(this);
+
+            if (state_ == ConnectionState::connected && connectionHandler_) {
+                connectionHandler_->on_read(this);
+            }
         }
     }
 
     void TcpConnection::on_write_event()
     {
         // 第一次可读可写表示连接已经建立
-        if (state_ == ConnectionState::connecting) {
+        if (state_ == ConnectionState::connecting && connectionHandler_) {
             state_ = ConnectionState::connected;
             connectionHandler_->on_connected(this);
         }
 
-        connectionHandler_->on_write(this);
-        if (output_buffer_.get_current_buffer()->readable_bytes() > 0) {
-            send();
+        if (state_ == ConnectionState::connected && connectionHandler_ && !closed_) {
+            connectionHandler_->on_write(this);
+            if (output_buffer_.get_current_buffer()->readable_bytes() > 0) {
+                send();
+            }
         }
     }
 
     void TcpConnection::set_event_handler(EventHandler *eventHandler)
     {
         eventHandler_ = eventHandler;
-        eventHandler_->update_event(&channel_);
     }
 
     void TcpConnection::do_close()

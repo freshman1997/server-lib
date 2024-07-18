@@ -26,18 +26,13 @@ namespace net
     public:
         void loop();
 
-        void quit()
-        {
-            quit_ = true;
-        }
-
         virtual void on_new_connection(Connection *conn);
 
-        virtual void on_quit();
+        virtual void close_channel(Channel *channel);
 
-        virtual void on_close(Connection *conn);
+        virtual void update_channel(Channel *channel);
 
-        virtual void update_event(Channel *channel);
+        virtual void quit();
 
     public:
         void wakeup();

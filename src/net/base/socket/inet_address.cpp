@@ -50,7 +50,7 @@ namespace net
     struct sockaddr_in InetAddress::to_ipv4_address() const
     {
         struct sockaddr_in addr;
-        ::memset(&addr, 0, sizeof(struct sockaddr_in));
+        ::memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port_);
         addr.sin_addr.s_addr = ip_.empty() ? htonl(INADDR_ANY) : inet_addr(ip_.c_str());
