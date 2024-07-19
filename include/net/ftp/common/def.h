@@ -131,7 +131,7 @@ namespace net::ftp
     enum class FileSystemType
     {
         ms_dos = 0,             // MS-DOS文件列表格式
-        unix,                   // UNIX文件列表格式
+        unix_like,              // UNIX文件列表格式
     };
 
     // list 命令返回的数据格式

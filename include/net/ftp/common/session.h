@@ -44,7 +44,6 @@ namespace net::ftp
     
     class FtpSessionContext
     {
-        friend class FtpSession;
     public:
         FtpSessionContext();
         ~FtpSessionContext();
@@ -60,7 +59,7 @@ namespace net::ftp
 
         bool start_file_stream_transe();
 
-    private:
+    public:
         FtpSession *instance_;
         FtpFileStream *file_stream_;
         FtpApp *app_;
@@ -218,7 +217,7 @@ namespace net::ftp
 
         bool set_work_file(FtpFileInfo *info);
 
-    private:
+    protected:
         WorkMode work_mode_;
         bool keep_util_sent_;
         bool close_;

@@ -128,7 +128,7 @@ namespace net
     void PollPoller::remove_channel(Channel *channel)
     {
         data_->removed_fds_.push_back(channel->get_fd());
-        channels_[channel->get_fd()] = nullptr;
+        data_->channels_[channel->get_fd()] = nullptr;
     }
 }
 #endif

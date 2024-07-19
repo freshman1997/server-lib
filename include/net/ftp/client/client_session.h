@@ -13,7 +13,11 @@ namespace net::ftp
         ~ClientFtpSession();
 
     public:
-        void on_read(Connection *conn);
+        virtual void on_opened(FtpFileStreamSession *fs);
+
+        virtual void on_read(Connection *conn);
+
+        FtpFileInfo *info;
     };
 }
 

@@ -170,7 +170,6 @@ namespace net
             eventHandler_->update_channel(channel_);
             return;
         }
-
         do_close();
     }
 
@@ -246,7 +245,9 @@ namespace net
 
     void TcpConnection::set_event_handler(EventHandler *eventHandler)
     {
+        assert(channel_);
         eventHandler_ = eventHandler;
+        eventHandler_->update_channel(channel_);
     }
 
     void TcpConnection::do_close()

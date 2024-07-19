@@ -11,6 +11,16 @@ namespace timer
         virtual ~TimerTask() {}
         
         virtual void on_timer(Timer *timer) = 0;
+
+        virtual void on_finished(Timer *timer)
+        {
+            
+        }
+
+        virtual bool need_free()
+        {
+            return false;
+        }
     };
 }
 

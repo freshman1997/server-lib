@@ -4,9 +4,7 @@
 #include <string>
 #include <thread>
 
-#ifndef _WIN32
-#include <signal.h>
-#else
+#ifdef _WIN32
 #include <winsock2.h>
 #include <WS2tcpip.h>
 #include <windows.h>

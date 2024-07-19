@@ -25,7 +25,7 @@ namespace helper
 
 namespace net 
 {
-    EventLoop::EventLoop(Poller *_poller, timer::TimerManager *timer_manager) : poller_(_poller), timer_manager_(timer_manager), quit_(false), is_waiting_(false)
+    EventLoop::EventLoop(Poller *poller, timer::TimerManager *timer_manager) : poller_(poller), timer_manager_(timer_manager), quit_(false), is_waiting_(false)
     {
     }
 
@@ -98,8 +98,8 @@ namespace net
     void EventLoop::update_channel(Channel *channel)
     {
         if (channel) {
-            poller_->update_channel(channel);
             channels_[channel->get_fd()] = channel;
+            poller_->update_channel(channel);
         }
     }
 

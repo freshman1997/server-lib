@@ -56,7 +56,12 @@ namespace net::ftp
 
     void FtpFileStream::quit(const InetAddress &addr)
     {
-        file_stream_sessions_.erase(addr);
+        auto it = file_stream_sessions_.find(addr);
+        if (it != file_stream_sessions_.end()) {
+            it->second->quit();
+            file_stream_sessions_.erase(it);
+        }
+
         if (file_stream_sessions_.empty()) {
             delete this;
         }
@@ -64,7 +69,7 @@ namespace net::ftp
 
     bool FtpFileStream::set_work_file(FtpFileInfo *file, const std::string &ip)
     {
-        if (!last_sessions_.empty() || file_stream_sessions_.empty()) {
+        if (last_sessions_.empty() || file_stream_sessions_.empty()) {
             return false;
         }
 

@@ -82,7 +82,6 @@ namespace net::ftp
 
         TcpConnection *conn = new TcpConnection(sock);
         session_ = new ClientFtpSession(conn, this);
-        loop.update_channel(conn->get_channel());
         conn->set_event_handler(&loop);
         loop.loop();
         

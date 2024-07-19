@@ -20,8 +20,8 @@ namespace timer
     Wheel::~Wheel()
     {
         uint32_t size = items_.size();
-        for (uint32_t i = 0; i < size; ++i) {
-            delete items_[i];
+        for (auto &item : items_) {
+            delete item;
         }
 
         items_.clear();
@@ -162,7 +162,11 @@ namespace timer
 
     WheelTimer::~WheelTimer()
     {
-        task_ = nullptr;
+        if (task_) {
+            task_->on_finished(this);
+            task_ = nullptr;
+        }
+
         if (item_) {
             item_->on_delete(this);
             item_ = nullptr;
@@ -177,6 +181,9 @@ namespace timer
     void WheelTimer::cancel()
     {
         state_ = TimerState::cancal;
+        if (task_ && task_->need_free()) {
+            return;
+        }
         task_ = nullptr;
     }
 
@@ -256,7 +263,6 @@ namespace timer
                     if (period_counter_ == period_) {
                         return;
                     }
-
                     state_ = TimerState::init;
                 } else {
                     reset();

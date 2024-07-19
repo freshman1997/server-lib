@@ -1,0 +1,537 @@
+diff --git a/include/net/base/poller/select_poller.h b/include/net/base/poller/select_poller.h
+index 0a5a5a7..c4760b1 100644
+--- a/include/net/base/poller/select_poller.h
++++ b/include/net/base/poller/select_poller.h
+@@ -1,10 +1,21 @@
+ #ifndef __NET_BASE_POLLER_SELECT_POLLER_H__
+ #define __NET_BASE_POLLER_SELECT_POLLER_H__
+ #include "../poller/poller.h"
++#ifdef _WIN32
++#include <winsock2.h>
++#else
++#include <arpa/inet.h>
++#include <sys/socket.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <unistd.h>
++#endif
++
++#include <map>
++#include <vector>
++
+ namespace net 
+ {
+-    struct HelperData;
+-
+     class SelectPoller : public Poller
+     {
+     public:
+@@ -17,8 +28,13 @@ namespace net
+         virtual void update_channel(Channel *channel);
+ 
+         virtual void remove_channel(Channel *channel);
++
+     private:
+-        HelperData *data_;
++        fd_set reads_;
++        fd_set writes_;
++		fd_set excepts_;
++        std::map<int, net::Channel *> sockets_;
++        std::vector<int> removed_fds_;
+     };
+ }
+ 
+diff --git a/include/net/ftp/client/client_session.h b/include/net/ftp/client/client_session.h
+index 043920e..332a22a 100644
+--- a/include/net/ftp/client/client_session.h
++++ b/include/net/ftp/client/client_session.h
+@@ -13,7 +13,11 @@ namespace net::ftp
+         ~ClientFtpSession();
+ 
+     public:
+-        void on_read(Connection *conn);
++        virtual void on_opened(FtpFileStreamSession *fs);
++
++        virtual void on_read(Connection *conn);
++
++        FtpFileInfo *info;
+     };
+ }
+ 
+diff --git a/include/net/ftp/common/def.h b/include/net/ftp/common/def.h
+index 8079fb3..59790f1 100644
+--- a/include/net/ftp/common/def.h
++++ b/include/net/ftp/common/def.h
+@@ -131,7 +131,7 @@ namespace net::ftp
+     enum class FileSystemType
+     {
+         ms_dos = 0,             // MS-DOS文件列表格式
+-        unix,                   // UNIX文件列表格式
++        unix_like,              // UNIX文件列表格式
+     };
+ 
+     // list 命令返回的数据格式
+diff --git a/include/net/ftp/common/session.h b/include/net/ftp/common/session.h
+index 1004ee1..a4a6119 100644
+--- a/include/net/ftp/common/session.h
++++ b/include/net/ftp/common/session.h
+@@ -44,7 +44,6 @@ namespace net::ftp
+     
+     class FtpSessionContext
+     {
+-        friend class FtpSession;
+     public:
+         FtpSessionContext();
+         ~FtpSessionContext();
+@@ -60,7 +59,7 @@ namespace net::ftp
+ 
+         bool start_file_stream_transe();
+ 
+-    private:
++    public:
+         FtpSession *instance_;
+         FtpFileStream *file_stream_;
+         FtpApp *app_;
+@@ -218,7 +217,7 @@ namespace net::ftp
+ 
+         bool set_work_file(FtpFileInfo *info);
+ 
+-    private:
++    protected:
+         WorkMode work_mode_;
+         bool keep_util_sent_;
+         bool close_;
+diff --git a/include/timer/timer_task.h b/include/timer/timer_task.h
+index bab9455..6ebe959 100644
+--- a/include/timer/timer_task.h
++++ b/include/timer/timer_task.h
+@@ -11,6 +11,16 @@ namespace timer
+         virtual ~TimerTask() {}
+         
+         virtual void on_timer(Timer *timer) = 0;
++
++        virtual void on_finished(Timer *timer)
++        {
++            
++        }
++
++        virtual bool need_free()
++        {
++            return false;
++        }
+     };
+ }
+ 
+diff --git a/main.cpp b/main.cpp
+index 208ebf1..4748c06 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -31,6 +31,7 @@
+ 
+ #include "net/base/event/event_loop.h"
+ #include "net/base/connection/connection.h"
++#include "timer/timer_util.h"
+ 
+ class PrintTask : public thread::Runnable
+ {
+diff --git a/src/net/base/connection/tcp_connection.cpp b/src/net/base/connection/tcp_connection.cpp
+index 3ff1243..895c1d0 100644
+--- a/src/net/base/connection/tcp_connection.cpp
++++ b/src/net/base/connection/tcp_connection.cpp
+@@ -170,7 +170,6 @@ namespace net
+             eventHandler_->update_channel(channel_);
+             return;
+         }
+-
+         do_close();
+     }
+ 
+@@ -246,7 +245,9 @@ namespace net
+ 
+     void TcpConnection::set_event_handler(EventHandler *eventHandler)
+     {
++        assert(channel_);
+         eventHandler_ = eventHandler;
++        eventHandler_->update_channel(channel_);
+     }
+ 
+     void TcpConnection::do_close()
+diff --git a/src/net/base/event/event_loop.cpp b/src/net/base/event/event_loop.cpp
+index ed75fab..3d82a58 100644
+--- a/src/net/base/event/event_loop.cpp
++++ b/src/net/base/event/event_loop.cpp
+@@ -25,7 +25,7 @@ namespace helper
+ 
+ namespace net 
+ {
+-    EventLoop::EventLoop(Poller *_poller, timer::TimerManager *timer_manager) : poller_(_poller), timer_manager_(timer_manager), quit_(false), is_waiting_(false)
++    EventLoop::EventLoop(Poller *poller, timer::TimerManager *timer_manager) : poller_(poller), timer_manager_(timer_manager), quit_(false), is_waiting_(false)
+     {
+     }
+ 
+@@ -98,8 +98,8 @@ namespace net
+     void EventLoop::update_channel(Channel *channel)
+     {
+         if (channel) {
+-            poller_->update_channel(channel);
+             channels_[channel->get_fd()] = channel;
++            poller_->update_channel(channel);
+         }
+     }
+ 
+diff --git a/src/net/base/poller/poll_poller.cpp b/src/net/base/poller/poll_poller.cpp
+index 82b7532..68daef2 100644
+--- a/src/net/base/poller/poll_poller.cpp
++++ b/src/net/base/poller/poll_poller.cpp
+@@ -128,7 +128,7 @@ namespace net
+     void PollPoller::remove_channel(Channel *channel)
+     {
+         data_->removed_fds_.push_back(channel->get_fd());
+-        channels_[channel->get_fd()] = nullptr;
++        data_->channels_[channel->get_fd()] = nullptr;
+     }
+ }
+ #endif
+\ No newline at end of file
+diff --git a/src/net/base/poller/select_poller.cpp b/src/net/base/poller/select_poller.cpp
+index ab074ad..f6b9882 100644
+--- a/src/net/base/poller/select_poller.cpp
++++ b/src/net/base/poller/select_poller.cpp
+@@ -1,76 +1,52 @@
+-#ifdef _WIN32
+-#include <winsock2.h>
+-#else
+-#include <arpa/inet.h>
+-#include <sys/socket.h>
+-#include <sys/time.h>
+-#include <sys/types.h>
+-#include <unistd.h>
+-#endif
+-
+-#include <map>
+-#include <vector>
+-
+ #include "base/time.h"
+ #include "net/base/channel/channel.h"
+ #include "net/base/poller/select_poller.h"
+ 
+ namespace net
+ {
+-    struct HelperData 
+-    {
+-        std::map<int, net::Channel *> sockets_;
+-        std::vector<int> removed_fds_;
+-        fd_set reads_;
+-        fd_set writes_;
+-		fd_set excepts_;
+-    };
+-
+     SelectPoller::SelectPoller()
+     {
+-        data_ = new HelperData;
+-        FD_ZERO(&data_->reads_);
+-        FD_ZERO(&data_->writes_);
++        
+     }
+ 
+     SelectPoller::~SelectPoller()
+     {
+-        delete data_;
++        
+     }
+ 
+     uint64_t SelectPoller::poll(uint32_t timeout)
+     {
+         uint64_t tm = base::time::get_tick_count();
+ 
+-        if (!data_->removed_fds_.empty()) {
+-            for (auto &fd : data_->removed_fds_) {
+-                data_->sockets_.erase(fd);
++        if (!removed_fds_.empty()) {
++            for (auto &fd : removed_fds_) {
++                sockets_.erase(fd);
+             }
+-            data_->removed_fds_.clear();
++            removed_fds_.clear();
+         }
+ 
+-        FD_ZERO(&data_->reads_);
+-        FD_ZERO(&data_->writes_);
+-        FD_ZERO(&data_->excepts_);
++        FD_ZERO(&reads_);
++        FD_ZERO(&writes_);
++        FD_ZERO(&excepts_);
+ 
+         int max_fd = 0;
+-        for (auto i = data_->sockets_.begin(); i != data_->sockets_.end(); ++i) {
++        for (auto i = sockets_.begin(); i != sockets_.end(); ++i) {
+             if (i->second->get_events() & Channel::READ_EVENT) {
+-                FD_SET(i->first, &data_->reads_);
++                FD_SET(i->first, &reads_);
+                 if (i->first > max_fd) {
+                     max_fd = i->first;
+                 }
+             }
+ 
+             if (i->second->get_events() & Channel::READ_EVENT) {
+-                FD_SET(i->first, &data_->writes_);
++                FD_SET(i->first, &writes_);
+                 if (i->first > max_fd) {
+                     max_fd = i->first;
+                 }
+             }
+ 
+             if (i->second->get_events() & Channel::EXCEP_EVENT) {
+-                FD_SET(i->first, &data_->excepts_);
++                FD_SET(i->first, &excepts_);
+                 if (i->first > max_fd) {
+                     max_fd = i->first;
+                 }
+@@ -81,28 +57,28 @@ namespace net
+         tv.tv_sec = timeout / 1000;
+         tv.tv_usec = (timeout % 1000) * 1000;
+ 
+-        int ret = select(max_fd + 1, &data_->reads_, &data_->writes_, &data_->excepts_, &tv);
++        int ret = select(max_fd + 1, &reads_, &writes_, &excepts_, &tv);
+         if (ret <= 0) {
+             // TODO
+             return tm;
+         }
+ 
+-        for (auto j = data_->sockets_.begin(); j != data_->sockets_.end();) {
++        for (auto j = sockets_.begin(); j != sockets_.end();) {
+             if (!j->second) {
+-                j = data_->sockets_.erase(j);
++                j = sockets_.erase(j);
+                 continue;
+             }
+ 
+             int ev = Channel::NONE_EVENT;
+-            if (FD_ISSET(j->first, &data_->reads_)) {
++            if (FD_ISSET(j->first, &reads_)) {
+                 ev |= Channel::READ_EVENT;
+             }
+ 
+-            if (FD_ISSET(j->first, &data_->writes_)) {
++            if (FD_ISSET(j->first, &writes_)) {
+                 ev |= Channel::WRITE_EVENT;
+             }
+ 
+-            if (FD_ISSET(j->first, &data_->excepts_)) {
++            if (FD_ISSET(j->first, &excepts_)) {
+                 ev |= Channel::EXCEP_EVENT;
+             }
+ 
+@@ -119,16 +95,16 @@ namespace net
+     void SelectPoller::update_channel(Channel *channel)
+     {
+         if (!channel->has_events()) {
+-            data_->removed_fds_.push_back(channel->get_fd());
+-            data_->sockets_[channel->get_fd()] = nullptr;
++            removed_fds_.push_back(channel->get_fd());
++            sockets_[channel->get_fd()] = nullptr;
+         } else {
+-            data_->sockets_[channel->get_fd()] = channel;
++            sockets_[channel->get_fd()] = channel;
+         }
+     }
+ 
+     void SelectPoller::remove_channel(Channel *channel)
+     {
+-        data_->removed_fds_.push_back(channel->get_fd());
+-        data_->sockets_[channel->get_fd()] = nullptr;
++        removed_fds_.push_back(channel->get_fd());
++        sockets_[channel->get_fd()] = nullptr;
+     }
+ }
+\ No newline at end of file
+diff --git a/src/net/ftp/client/client_session.cpp b/src/net/ftp/client/client_session.cpp
+index 7a4b831..4125fdb 100644
+--- a/src/net/ftp/client/client_session.cpp
++++ b/src/net/ftp/client/client_session.cpp
+@@ -1,22 +1,46 @@
+ #include "net/ftp/client/client_session.h"
++#include "net/base/socket/inet_address.h"
++#include "net/ftp/common/def.h"
++#include "net/ftp/common/file_stream_session.h"
++#include "net/ftp/common/session.h"
++#include "net/ftp/common/file_stream.h"
+ #include <iostream>
+ 
+ namespace net::ftp 
+ {
+     ClientFtpSession::ClientFtpSession(Connection *conn, FtpApp *app, bool keepUtilSent) : FtpSession(conn, app, WorkMode::client, keepUtilSent)
+     {
+-
++        info = nullptr;
+     }
+ 
+     ClientFtpSession::~ClientFtpSession()
+     {
+ 
+     }
++
++    void ClientFtpSession::on_opened(FtpFileStreamSession *fs)
++    {
++        FtpSession::on_opened(fs);
++    }
+     
+     void ClientFtpSession::on_read(Connection *conn)
+     {
+         std::string str(conn->get_input_buff()->peek(), conn->get_input_buff()->peek_end());
+-        std::cout << ">>> " << str << '\n';
+-        conn->get_output_buff()->write_string("RETR");
++        std::cout << "receive: " << str << '\n';
++        if (!context_.file_stream_) {
++            start_file_stream({"192.168.96.1", 12124}, StreamMode::Sender);
++            return;
++        }
++      
++        if (str == "OK") {
++            context_.conn_->get_output_buff()->write_string("STOR cz.mp4\r\n");
++        } else {
++            context_.file_manager_.set_work_filepath("/home/yuan/test");
++            auto file = context_.file_manager_.get_next_file();
++            file->mode_ = StreamMode::Sender;
++            file->ready_ = true;
++            info = file;
++            set_work_file(file);
++        }
+     }
+ }
+\ No newline at end of file
+diff --git a/src/net/ftp/client/ftp_client.cpp b/src/net/ftp/client/ftp_client.cpp
+index 466385d..0ef9b83 100644
+--- a/src/net/ftp/client/ftp_client.cpp
++++ b/src/net/ftp/client/ftp_client.cpp
+@@ -82,7 +82,6 @@ namespace net::ftp
+ 
+         TcpConnection *conn = new TcpConnection(sock);
+         session_ = new ClientFtpSession(conn, this);
+-        loop.update_channel(conn->get_channel());
+         conn->set_event_handler(&loop);
+         loop.loop();
+         
+diff --git a/src/net/ftp/common/file_stream.cpp b/src/net/ftp/common/file_stream.cpp
+index e72369e..571b9d5 100644
+--- a/src/net/ftp/common/file_stream.cpp
++++ b/src/net/ftp/common/file_stream.cpp
+@@ -56,7 +56,12 @@ namespace net::ftp
+ 
+     void FtpFileStream::quit(const InetAddress &addr)
+     {
+-        file_stream_sessions_.erase(addr);
++        auto it = file_stream_sessions_.find(addr);
++        if (it != file_stream_sessions_.end()) {
++            it->second->quit();
++            file_stream_sessions_.erase(it);
++        }
++
+         if (file_stream_sessions_.empty()) {
+             delete this;
+         }
+@@ -64,7 +69,7 @@ namespace net::ftp
+ 
+     bool FtpFileStream::set_work_file(FtpFileInfo *file, const std::string &ip)
+     {
+-        if (!last_sessions_.empty() || file_stream_sessions_.empty()) {
++        if (last_sessions_.empty() || file_stream_sessions_.empty()) {
+             return false;
+         }
+ 
+diff --git a/src/net/ftp/common/file_stream_session.cpp b/src/net/ftp/common/file_stream_session.cpp
+index 9c40859..cebd514 100644
+--- a/src/net/ftp/common/file_stream_session.cpp
++++ b/src/net/ftp/common/file_stream_session.cpp
+@@ -33,6 +33,11 @@ namespace net::ftp
+             conn_timer_ = nullptr;
+         }
+ 
++        if (session_) {
++            session_->on_closed(this);
++            session_ = nullptr;
++        }
++
+         if (conn_) {
+             conn_->close();
+             conn_ = nullptr;
+@@ -112,14 +117,17 @@ namespace net::ftp
+ 
+             state_ = FileSteamState::processing;
+             auto buff = conn->get_output_buff();
+-            bool newBuff = buff->readable_bytes() == 0;
++            bool newBuff = false;
+             if (buff->readable_bytes() > 0) {
++                newBuff = true;
+                 buff = BufferedPool::get_instance()->allocate(write_buff_size_);
+             } else {
+                 buff->reset();
+             }
+ 
+             int ret = current_file_info_->read_file(write_buff_size_, buff);
++            float per = (current_file_info_->current_progress_ + ret) / (current_file_info_->file_size_ * 1.0);
++            std::cout << ">>> send: " << std::to_string(per * 100) << "%\n";
+             if (ret <= 0) {
+                 state_ = FileSteamState::file_error;
+                 session_->on_error(this);
+diff --git a/src/timer/wheel_timer.cpp b/src/timer/wheel_timer.cpp
+index 2502efb..7f401f6 100644
+--- a/src/timer/wheel_timer.cpp
++++ b/src/timer/wheel_timer.cpp
+@@ -20,8 +20,8 @@ namespace timer
+     Wheel::~Wheel()
+     {
+         uint32_t size = items_.size();
+-        for (uint32_t i = 0; i < size; ++i) {
+-            delete items_[i];
++        for (auto &item : items_) {
++            delete item;
+         }
+ 
+         items_.clear();
+@@ -162,7 +162,11 @@ namespace timer
+ 
+     WheelTimer::~WheelTimer()
+     {
+-        task_ = nullptr;
++        if (task_) {
++            task_->on_finished(this);
++            task_ = nullptr;
++        }
++
+         if (item_) {
+             item_->on_delete(this);
+             item_ = nullptr;
+@@ -177,6 +181,9 @@ namespace timer
+     void WheelTimer::cancel()
+     {
+         state_ = TimerState::cancal;
++        if (task_ && task_->need_free()) {
++            return;
++        }
+         task_ = nullptr;
+     }
+ 
+@@ -256,7 +263,6 @@ namespace timer
+                     if (period_counter_ == period_) {
+                         return;
+                     }
+-
+                     state_ = TimerState::init;
+                 } else {
+                     reset();
+diff --git a/test/test_ftp_client.cpp b/test/test_ftp_client.cpp
+index 17ea5dd..1148bda 100644
+--- a/test/test_ftp_client.cpp
++++ b/test/test_ftp_client.cpp
+@@ -4,9 +4,7 @@
+ #include <string>
+ #include <thread>
+ 
+-#ifndef _WIN32
+-#include <signal.h>
+-#else
++#ifdef _WIN32
+ #include <winsock2.h>
+ #include <WS2tcpip.h>
+ #include <windows.h>

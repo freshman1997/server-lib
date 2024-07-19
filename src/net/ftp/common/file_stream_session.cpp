@@ -33,6 +33,11 @@ namespace net::ftp
             conn_timer_ = nullptr;
         }
 
+        if (session_) {
+            session_->on_closed(this);
+            session_ = nullptr;
+        }
+
         if (conn_) {
             conn_->close();
             conn_ = nullptr;
@@ -112,14 +117,17 @@ namespace net::ftp
 
             state_ = FileSteamState::processing;
             auto buff = conn->get_output_buff();
-            bool newBuff = buff->readable_bytes() == 0;
+            bool newBuff = false;
             if (buff->readable_bytes() > 0) {
+                newBuff = true;
                 buff = BufferedPool::get_instance()->allocate(write_buff_size_);
             } else {
                 buff->reset();
             }
 
             int ret = current_file_info_->read_file(write_buff_size_, buff);
+            float per = (current_file_info_->current_progress_ + ret) / (current_file_info_->file_size_ * 1.0);
+            std::cout << ">>> send: " << std::to_string(per * 100) << "%\n";
             if (ret <= 0) {
                 state_ = FileSteamState::file_error;
                 session_->on_error(this);
