@@ -17,7 +17,7 @@ namespace net::ftp
 
         virtual void on_read(Connection *conn);
 
-        FtpFileInfo *info;
+        //FtpFileInfo *info;
     };
 }
 

@@ -10,7 +10,7 @@ namespace net::ftp
 {
     ClientFtpSession::ClientFtpSession(Connection *conn, FtpApp *app, bool keepUtilSent) : FtpSession(conn, app, WorkMode::client, keepUtilSent)
     {
-        info = nullptr;
+        //info = nullptr;
     }
 
     ClientFtpSession::~ClientFtpSession()
@@ -25,6 +25,9 @@ namespace net::ftp
     
     void ClientFtpSession::on_read(Connection *conn)
     {
+        // TODO 解析返回包
+        
+        /*
         std::string str(conn->get_input_buff()->peek(), conn->get_input_buff()->peek_end());
         std::cout << "receive: " << str << '\n';
         if (!context_.file_stream_) {
@@ -42,5 +45,6 @@ namespace net::ftp
             info = file;
             set_work_file(file);
         }
+        */
     }
 }

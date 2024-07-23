@@ -150,6 +150,8 @@ namespace net::ftp
 
         void on_error(int errcode);
 
+        void on_file_stream_close(FtpFileStream *ffs);
+
     public:
         template<typename T>
         void set_item_value(const std::string &key, T && val)

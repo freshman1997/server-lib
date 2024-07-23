@@ -25,6 +25,11 @@ namespace net::ftp
         }
     }
 
+    void ServerFtpFileStream::on_connected(Connection *conn)
+    {
+        FtpFileStream::on_connected(conn);
+    }
+
     bool ServerFtpFileStream::start(const InetAddress &addr)
     {
         assert(session_);

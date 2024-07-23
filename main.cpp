@@ -31,12 +31,10 @@
 
 #include "net/base/event/event_loop.h"
 #include "net/base/connection/connection.h"
-#include "timer/timer_util.h"
 
 class PrintTask : public thread::Runnable
 {
 protected:
-
     virtual void run_internal()
     {
         std::cout << "printing...\n";

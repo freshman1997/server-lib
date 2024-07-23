@@ -20,14 +20,15 @@ BufferedPool::~BufferedPool()
 Buffer * BufferedPool::allocate(const std::size_t sz)
 {
     if (free_list_.empty()) {
-        free_list_.push_front(new Buffer(sz));
-        free_list_.push_front(new Buffer(sz));
-        free_list_.push_front(new Buffer(sz));
+        free_list_.push_front(new Buffer());
+        free_list_.push_front(new Buffer());
+        free_list_.push_front(new Buffer());
     }
 
     Buffer *buf = free_list_.back();
     free_list_.pop_back();
     using_list_.insert(buf);
+    buf->resize(sz);
 
     return buf;
 }

@@ -26,7 +26,7 @@ namespace net::ftp
         if (!fstream_) {
             fstream_ = new std::fstream();
             fstream_->open(origin_name_.c_str(), std::ios_base::in | std::ios_base::binary);
-            if (fstream_->bad()) {
+            if (!fstream_->good()) {
                 delete fstream_;
                 fstream_ = nullptr;
                 return -1;
@@ -56,8 +56,8 @@ namespace net::ftp
     {
         if (!fstream_) {
             fstream_ = new std::fstream();
-            fstream_->open(dest_name_.c_str(), std::ios_base::out | std::ios_base::app | std::ios_base::binary);
-            if (fstream_->bad()) {
+            fstream_->open(dest_name_.c_str(), std::ios_base::out | std::ios_base::binary);
+            if (!fstream_->good()) {
                 delete fstream_;
                 fstream_ = nullptr;
                 return -1;
@@ -67,6 +67,7 @@ namespace net::ftp
 
         std::size_t sz = buff->readable_bytes();
         fstream_->write(buff->peek(), sz);
+        std::size_t cnt = fstream_->gcount();
         std::size_t written = sz;
         current_progress_ += written;
         if (current_progress_ >= file_size_) {

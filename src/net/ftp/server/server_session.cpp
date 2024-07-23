@@ -32,7 +32,7 @@ namespace net::ftp
             std::cout << "cmd >>> " << cmd << '\n';
             auto command = CommandFactory::get_instance()->find_command(cmd);
             if (!command) {
-                std::cout << "not support command" << cmd << '\n';
+                std::cout << "not support command: " << cmd << '\n';
                 on_error(0);
                 return;
             }
@@ -46,10 +46,10 @@ namespace net::ftp
             conn->get_output_buff()->write_string(std::to_string((int)res.code_));
             conn->get_output_buff()->write_string(" ");
             conn->get_output_buff()->write_string(res.body_);
+            conn->get_output_buff()->write_string("\r\n");
             conn->send();
 
             if (res.close_) {
-                std::cout << "session exit now!\n";
                 quit();
                 break;
             }

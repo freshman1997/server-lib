@@ -1,5 +1,6 @@
 #include "net/base/poller/epoll_poller.h"
 #include "net/base/poller/select_poller.h"
+#include <cerrno>
 #include <cstddef>
 #include <cstdio>
 #include <fstream>
@@ -304,15 +305,17 @@ namespace net::http
         }
 
         auto *session = req->get_context()->get_session();
-        const SessionItem *data = session->get_session_value(fileRelativePath);
-        std::ifstream *FtpFileStream;
+        const SessionItem *data = session->get_session_value(path);
+        std::ifstream *stream;
         if (!data) {
 #ifdef _WIN32
-            path = UTF8ToGBEx(path.c_str());
-#endif
+            const std::string &realPath = UTF8ToGBEx(path.c_str());
+            auto *file_ = new std::ifstream(realPath.c_str(), std::ios::binary);
+#else
             auto *file_ = new std::ifstream(path.c_str(), std::ios::binary);
+#endif
             if (!file_->good()) {
-                std::cout << "open file fail!\n";
+                std::cout << "open file fail! " << errno << '\n';
                 resp->process_error(ResponseCode::not_found);
                 file_->close();
                 delete file_;
@@ -320,7 +323,7 @@ namespace net::http
             }
 
             session->add_session_value(path, file_);
-            FtpFileStream = file_;
+            stream = file_;
             session->set_close_call_back([fileRelativePath](HttpSession *httpSession) {
                 const auto &items = httpSession->get_session_values();
                 for (const auto &item : items) {
@@ -332,15 +335,15 @@ namespace net::http
                 }
             });
         } else {
-            FtpFileStream = static_cast<std::ifstream *>(data->number.pval);
+            stream = static_cast<std::ifstream *>(data->number.pval);
         }
 
         const std::size_t contentSize = config::client_max_content_length;
         std::size_t length;
         const std::string lenKey = path + "_length";
         if (const SessionItem *lenItem = session->get_session_value(lenKey); !lenItem) {
-            FtpFileStream->seekg(0, std::ios_base::end);
-            length = FtpFileStream->tellg();
+            stream->seekg(0, std::ios_base::end);
+            length = stream->tellg();
             session->add_session_value(lenKey, length);
         } else {
             length = lenItem->number.sz_val;
@@ -376,16 +379,16 @@ namespace net::http
         std::size_t sz = contentSize + offset > length ? length - offset : contentSize;
         resp->add_header("Content-length", std::to_string(sz));
 
-        FtpFileStream->seekg(offset, std::ios::beg);
+        stream->seekg(offset, std::ios::beg);
         if (resp->get_buff()->writable_size() < sz) {
             resp->get_buff()->resize(sz);
         }
 
-        FtpFileStream->read(resp->get_buff()->buffer_begin(), sz);
+        stream->read(resp->get_buff()->buffer_begin(), sz);
         resp->get_buff()->fill(sz);
 
-        if (FtpFileStream->eof()) {
-            FtpFileStream->clear();
+        if (stream->eof()) {
+            stream->clear();
         }
 
         resp->add_header("Accept-Ranges", "bytes");

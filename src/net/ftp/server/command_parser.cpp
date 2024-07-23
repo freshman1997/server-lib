@@ -34,19 +34,28 @@ namespace net::ftp
             int foundIdx = find_first(begin, end, splitStr.c_str());
             bool hasArgs = true;
             if (foundIdx < 0) {
-                foundIdx = idx - delimiter.size();
+                foundIdx = idx;
                 hasArgs = false;
             }
 
-            std::string cmd = std::string(begin, begin + idx);
+            std::string cmd = std::string(begin, begin + foundIdx);
+            std::string args;
             if (hasArgs) {
                 assert(begin + foundIdx + 1 < begin + idx);
-                std::string args = std::string(begin + foundIdx + 1, idx);
+                args = std::string(begin + foundIdx + 1, begin + idx);
             }
 
-            begin += idx + 1;
+            begin += idx + endWith.size();
             idx = find_first(begin, end, endWith.c_str());
+
+            res.push_back({cmd, args});
         }
+
+        // move rest
+        std::string tmp(begin, end);
+        buff_->reset();
+        buff_->write_string(tmp);
+
         return res;
     }
 

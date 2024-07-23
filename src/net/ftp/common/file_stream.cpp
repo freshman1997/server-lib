@@ -18,6 +18,7 @@ namespace net::ftp
     FtpFileStream::~FtpFileStream()
     {
         if (session_) {
+            session_->on_file_stream_close(this);
             session_ = nullptr;
         }
     }

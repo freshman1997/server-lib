@@ -98,7 +98,7 @@ namespace net::ftp
                         << current_file_info_->file_size_ << '\n';
                 state_ = FileSteamState::idle;
                 session_->on_completed(this);
-                current_file_info_->ready_ = false;
+                current_file_info_ = nullptr;
                 last_active_time_ = base::time::now();
             }
         }

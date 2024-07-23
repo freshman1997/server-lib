@@ -95,6 +95,9 @@ namespace net::ftp
     void FtpSession::on_opened(FtpFileStreamSession *fs)
     {
         std::cout << "file stream opened!\n";
+        /*if (work_mode_ == WorkMode::server) {
+            context_.conn_->get_output_buff()->write_string("OK");
+        }*/
     }
 
     void FtpSession::on_connect_timeout(FtpFileStreamSession *fs)
@@ -114,7 +117,9 @@ namespace net::ftp
 
     void FtpSession::on_completed(FtpFileStreamSession *fs)
     {
-        
+        if (context_.file_manager_.is_completed()) {
+            context_.file_manager_.reset();
+        }
     }
 
     void FtpSession::on_closed(FtpFileStreamSession *fs)
@@ -168,7 +173,8 @@ namespace net::ftp
 
     void FtpSession::check_file_stream(FtpFileStreamSession *fs)
     {
-        if (fs && fs->get_connection()) {
+        assert(context_.file_stream_);
+        if (fs->get_connection()) {
             context_.file_stream_->quit(fs->get_connection()->get_remote_address());
         }
     }
@@ -201,5 +207,11 @@ namespace net::ftp
             return false;
         }
         return context_.file_stream_->set_work_file(info, context_.conn_->get_remote_address().get_ip());
+    }
+
+    void FtpSession::on_file_stream_close(FtpFileStream *ffs)
+    {
+        assert(context_.file_stream_ == ffs);
+        context_.file_stream_ = nullptr;
     }
 }

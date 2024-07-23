@@ -18,6 +18,8 @@ namespace net::ftp
         ~ServerFtpFileStream();
 
     public:
+        virtual void on_connected(Connection *conn);
+
         virtual bool start(const InetAddress &addr);
 
         virtual void quit(const InetAddress &addr);
