@@ -1,5 +1,7 @@
 #ifndef __NET_FTP_FTP_SERVER_H__
 #define __NET_FTP_FTP_SERVER_H__
+#include <memory>
+
 #include "../../base/handler/connection_handler.h"
 #include "../handler/ftp_app.h"
 #include "session_manager.h"
@@ -49,10 +51,8 @@ namespace net::ftp
         virtual void quit();
 
     private:
-        bool closing_;
-        EventLoop *ev_loop_;
-        timer::TimerManager *timer_manager_;
-        FtpSessionManager session_manager_;
+        class PrivateImpl;
+        std::unique_ptr<PrivateImpl> impl_;
     };
 }
 

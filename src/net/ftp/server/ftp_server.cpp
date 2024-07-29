@@ -10,10 +10,30 @@
 #include "timer/wheel_timer_manager.h"
 
 #include <iostream>
+#include <memory>
 
 namespace net::ftp 
 {
-    FtpServer::FtpServer() : closing_(false)
+    class FtpServer::PrivateImpl
+    {
+    public:
+        explicit PrivateImpl()
+        {
+            closing_ = false;
+            ev_loop_ = nullptr;
+            timer_manager_ = nullptr;
+        }
+
+        PrivateImpl(const PrivateImpl &) = delete;
+        PrivateImpl & operator=(const PrivateImpl &) = delete;
+
+        bool closing_;
+        EventLoop *ev_loop_;
+        timer::TimerManager *timer_manager_;
+        FtpSessionManager session_manager_;
+    };
+
+    FtpServer::FtpServer() : impl_(std::make_unique<PrivateImpl>())
     {
 
     }
@@ -53,27 +73,27 @@ namespace net::ftp
         SelectPoller poller;
         EventLoop evLoop(&poller, &timerManager);
 
-        ev_loop_ = &evLoop;
-        timer_manager_ = &timerManager;
-        acceptor->set_event_handler(ev_loop_);
+        impl_->ev_loop_ = &evLoop;
+        impl_->timer_manager_ = &timerManager;
+        acceptor->set_event_handler(impl_->ev_loop_);
         acceptor->set_connection_handler(this);
 
-        ev_loop_->loop();
+        impl_->ev_loop_->loop();
 
-        delete acceptor;
+        acceptor->close();
 
         return true;
     }
 
     void FtpServer::on_connected(Connection *conn)
     {
-        auto session = session_manager_.get_session(conn);
+        auto session = impl_->session_manager_.get_session(conn);
         if (session) {
             std::cout << "internal error occured!!!\n";
             conn->close();
         } else {
             auto newSessoion = new ServerFtpSession(conn, this);
-            session_manager_.add_session(conn, newSessoion);
+            impl_->session_manager_.add_session(conn, newSessoion);
             newSessoion->on_connected(conn);
         }
     }
@@ -100,45 +120,45 @@ namespace net::ftp
 
     bool FtpServer::is_ok()
     {
-        return ev_loop_ != nullptr;
+        return impl_ && impl_->ev_loop_ != nullptr;
     }
 
     timer::TimerManager * FtpServer::get_timer_manager()
     {
-        return timer_manager_;
+        return impl_->timer_manager_;
     }
 
     EventHandler * FtpServer::get_event_handler()
     {
-        return ev_loop_;
+        return impl_->ev_loop_;
     }
 
     void FtpServer::on_session_closed(FtpSession *session)
     {
-        if (!session || closing_) {
+        if (!session || impl_->closing_) {
             return;
         }
-        session_manager_.remove_session(session->get_connection());
+        impl_->session_manager_.remove_session(session->get_connection());
     }
 
     void FtpServer::quit()
     {
-        if (closing_) {
+        if (impl_->closing_) {
             return;
         }
 
-        closing_ = true;
-        auto sessions = session_manager_.get_sessions();
+        impl_->closing_ = true;
+        auto sessions = impl_->session_manager_.get_sessions();
         for (auto item : sessions) {
             item.second->quit();
         }
 
-        session_manager_.clear();
-        timer_manager_ = nullptr;
+        impl_->session_manager_.clear();
+        impl_->timer_manager_ = nullptr;
 
-        if (ev_loop_) {
-            ev_loop_->quit();
-            ev_loop_ = nullptr;
+        if (impl_->ev_loop_) {
+            impl_->ev_loop_->quit();
+            impl_->ev_loop_ = nullptr;
         }
     }
 }
