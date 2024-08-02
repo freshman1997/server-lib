@@ -18,6 +18,9 @@ namespace net
 
         virtual void remove_channel(Channel *channel);
     private:
+        void do_add_channel(Channel *channel);
+
+    private:
         class HelperData;
         std::unique_ptr<HelperData> data_;
     };

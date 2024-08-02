@@ -19,7 +19,7 @@ namespace net
         std::vector<int> removed_fds_;
     };
 
-    PollPoller::PollPoller() : data_(std::make_unique<HelperData>())
+    PollPoller::PollPoller() : data_(std::make_unique<PollPoller::HelperData>())
     {
         
     }
@@ -76,7 +76,7 @@ namespace net
         return tm;
     }
 
-    static void do_add_channel(HelperData *data_, Channel *channel)
+    void PollPoller::do_add_channel(Channel *channel)
     {
         data_->channels_[channel->get_fd()] = channel;
         struct pollfd pfd;
@@ -96,7 +96,7 @@ namespace net
     {
         auto it = data_->channels_.find(channel->get_fd());
         if (it == data_->channels_.end()) {
-            do_add_channel(data_, channel);
+            do_add_channel(channel);
         } else {
             if (!channel->has_events()) {
                 remove_channel(channel);
@@ -117,7 +117,7 @@ namespace net
                         it->events |= POLLOUT;
                     }
                 } else {
-                    do_add_channel(data_, channel);
+                    do_add_channel(channel);
                 }
             }
         }

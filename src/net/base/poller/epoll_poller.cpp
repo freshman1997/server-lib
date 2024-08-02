@@ -16,6 +16,13 @@ namespace net
     class EpollPoller::HelperData 
     {
     public:
+        HelperData() = default;
+        ~HelperData() 
+        {
+            ::close(epoll_fd_);
+        }
+        
+    public:
         int epoll_fd_;
         std::set<int> fds_;
         std::vector<struct epoll_event> epoll_events_;
@@ -25,7 +32,7 @@ namespace net
 
     EpollPoller::EpollPoller()
     {
-        data_ = std::make_unique<HelperData>();
+        data_ = std::make_unique<EpollPoller::HelperData>();
         //signal(SIGPIPE, SIG_IGN);
         data_->epoll_fd_ = ::epoll_create(65535);
         // 设置 ET 触发模式 ？
@@ -34,13 +41,13 @@ namespace net
     
     EpollPoller::~EpollPoller()
     {
-        ::close(epoll_fd_);
+        
     }
 
     uint64_t EpollPoller::poll(uint32_t timeout)
     {
         uint64_t tm = base::time::get_tick_count();
-        int nevent = ::epoll_wait(epoll_fd_, &*data_->epoll_events_.begin(), (int)data_->epoll_events_.size(), timeout);
+        int nevent = ::epoll_wait(data_->epoll_fd_, &*data_->epoll_events_.begin(), (int)data_->epoll_events_.size(), timeout);
         if (nevent < 0) {
             return tm;
         }
@@ -75,8 +82,8 @@ namespace net
 
     void EpollPoller::update_channel(Channel *channel)
     {
-        auto it = fds_.find(channel->get_fd());
-        if (it != fds_.end()) {
+        auto it = data_->fds_.find(channel->get_fd());
+        if (it != data_->fds_.end()) {
             if (!channel->has_events()) {
                 remove_channel(channel);
             } else {
@@ -90,7 +97,7 @@ namespace net
     void EpollPoller::remove_channel(Channel *channel)
     {
         update(EPOLL_CTL_DEL, channel);
-        fds_.erase(channel->get_fd());
+        data_->fds_.erase(channel->get_fd());
     }
 
     void EpollPoller::update(int op, Channel *channel)
