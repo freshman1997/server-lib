@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
+#include <set>
+#include <vector>
 
 #include "base/time.h"
 #include "net/base/poller/epoll_poller.h"
@@ -11,14 +13,23 @@
 
 namespace net 
 {
+    class EpollPoller::HelperData 
+    {
+    public:
+        int epoll_fd_;
+        std::set<int> fds_;
+        std::vector<struct epoll_event> epoll_events_;
+    };
+
     const int EpollPoller::MAX_EVENT = 4096;
 
     EpollPoller::EpollPoller()
     {
+        data_ = std::make_unique<HelperData>();
         //signal(SIGPIPE, SIG_IGN);
-        epoll_fd_ = ::epoll_create(65535);
+        data_->epoll_fd_ = ::epoll_create(65535);
         // 设置 ET 触发模式 ？
-        epoll_events_.resize(10);
+        data_->epoll_events_.resize(10);
     }
     
     EpollPoller::~EpollPoller()
@@ -29,16 +40,16 @@ namespace net
     uint64_t EpollPoller::poll(uint32_t timeout)
     {
         uint64_t tm = base::time::get_tick_count();
-        int nevent = ::epoll_wait(epoll_fd_, &*epoll_events_.begin(), (int)epoll_events_.size(), timeout);
+        int nevent = ::epoll_wait(epoll_fd_, &*data_->epoll_events_.begin(), (int)data_->epoll_events_.size(), timeout);
         if (nevent < 0) {
             return tm;
         }
 
         if (nevent > 0) {
             for (int i = 0; i < nevent; ++i) {
-                Channel *channel = static_cast<Channel *>(epoll_events_[i].data.ptr);
+                Channel *channel = static_cast<Channel *>(data_->epoll_events_[i].data.ptr);
                 int ev = Channel::NONE_EVENT;
-                int event = epoll_events_[i].events;
+                int event = data_->epoll_events_[i].events;
                 if (event & EPOLLIN || event & EPOLLERR || event & EPOLLHUP) {
                     ev |= Channel::READ_EVENT;
                 }
@@ -47,11 +58,13 @@ namespace net
                     ev |= Channel::WRITE_EVENT;
                 }
 
-                channel->on_event(ev);
+                if (ev != Channel::NONE_EVENT) {
+                    channel->on_event(ev);
+                }
             }
             
-            if (nevent == (int)epoll_events_.size() && (int)epoll_events_.size() < MAX_EVENT) {
-                epoll_events_.resize(epoll_events_.size() * 2 >= MAX_EVENT ? MAX_EVENT : epoll_events_.size() * 2);
+            if (nevent == (int)data_->epoll_events_.size() && (int)data_->epoll_events_.size() < MAX_EVENT) {
+                data_->epoll_events_.resize(data_->epoll_events_.size() * 2 >= MAX_EVENT ? MAX_EVENT : data_->epoll_events_.size() * 2);
             }
         } else {
             // TODO log
@@ -97,7 +110,7 @@ namespace net
 
         event.data.ptr = channel;
 
-        if (::epoll_ctl(epoll_fd_, op, channel->get_fd(), &event)) {
+        if (::epoll_ctl(data_->epoll_fd_, op, channel->get_fd(), &event)) {
             // log
         }
     }

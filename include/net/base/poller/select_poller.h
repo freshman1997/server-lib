@@ -11,8 +11,7 @@
 #include <unistd.h>
 #endif
 
-#include <map>
-#include <vector>
+#include <memory>
 
 namespace net 
 {
@@ -30,11 +29,8 @@ namespace net
         virtual void remove_channel(Channel *channel);
 
     private:
-        fd_set reads_;
-        fd_set writes_;
-		fd_set excepts_;
-        std::map<int, net::Channel *> sockets_;
-        std::vector<int> removed_fds_;
+        class HelperData;
+        std::unique_ptr<HelperData> data_;
     };
 }
 

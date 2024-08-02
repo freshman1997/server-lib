@@ -1,6 +1,7 @@
 #ifndef __NET_BASE_POLLER_POLL_POLLER_H__
 #define __NET_BASE_POLLER_POLL_POLLER_H__
 #include "../poller/poller.h"
+#include <memory>
 namespace net
 {
     struct HelperData;
@@ -17,7 +18,8 @@ namespace net
 
         virtual void remove_channel(Channel *channel);
     private:
-        HelperData *data_;
+        class HelperData;
+        std::unique_ptr<HelperData> data_;
     };
 }
 

@@ -11,24 +11,22 @@
 
 namespace net
 {
-    struct HelperData
+    class PollPoller::HelperData
     {
+    public:
         std::vector<struct pollfd> fds_;
         std::unordered_map<int, net::Channel *> channels_;
         std::vector<int> removed_fds_;
     };
 
-    PollPoller::PollPoller()
+    PollPoller::PollPoller() : data_(std::make_unique<HelperData>())
     {
-        data_ = new HelperData;
+        
     }
 
     PollPoller::~PollPoller()
     {
-        if (data_) {
-            delete data_;
-            data_ = nullptr;
-        }
+        
     }
 
     uint64_t PollPoller::poll(uint32_t timeout)
