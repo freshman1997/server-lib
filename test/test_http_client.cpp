@@ -16,7 +16,7 @@ int main()
 
     net::http::HttpClient *client = new net::http::HttpClient;
 
-    client->connect({"www.baidu.com", 80}, 
+    client->connect({"learn.microsoft.com", 80}, 
     [](net::http::HttpRequest *req) {
         req->add_header("Connection", "close");
         req->send();
@@ -24,8 +24,7 @@ int main()
     [](net::http::HttpRequest *req, net::http::HttpResponse *resp){
         if (resp->good()) {
             const net::http::Content *content = resp->get_body_content();
-            const char *begin = resp->body_begin();
-            std::string data(begin, resp->body_end());
+            std::string data(resp->body_begin(), resp->body_end());
             std::cout << data << std::endl;
             resp->get_context()->get_connection()->close();
         }

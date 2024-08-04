@@ -1,10 +1,10 @@
 #ifndef __NET_HTTP_PACKET_H__
 #define __NET_HTTP_PACKET_H__
 #include <string>
-#include "buffer/buffer.h"
-#include "net/http/content_type.h"
-#include "net/http/content/types.h"
-#include "net/http/response_code.h"
+#include "../../buffer/buffer.h"
+#include "content_type.h"
+#include "./content/types.h"
+#include "response_code.h"
 
 namespace net::http 
 {

@@ -11,7 +11,6 @@
 #include <sys/socket.h>
 #endif
 
-
 #include "net/base/socket/inet_address.h"
 #include "net/base/socket/socket.h"
 #include "net/base/socket/socket_ops.h"
@@ -73,6 +72,11 @@ namespace net
     {
         int res = socket::connect(fd_, *addr);
         if (res < 0) {
+        #ifdef _WIN32
+            if (WSAEWOULDBLOCK == WSAGetLastError()) {
+                return true;
+            }
+        #endif
             if (errno != EINPROGRESS) {
                 return false;
             }

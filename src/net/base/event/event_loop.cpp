@@ -2,6 +2,7 @@
 #include <condition_variable>
 #include <iostream>
 #include <mutex>
+#include <unordered_map>
 
 #include "net/base/channel/channel.h"
 #include "net/base/event/event_loop.h"
@@ -17,16 +18,33 @@
 #else
 #include <unistd.h>
 #endif
-namespace helper 
-{
-    std::mutex m;
-    std::condition_variable cond;
-}
 
 namespace net 
 {
-    EventLoop::EventLoop(Poller *poller, timer::TimerManager *timer_manager) : poller_(poller), timer_manager_(timer_manager), quit_(false), is_waiting_(false)
+    class EventLoop::HelperData
     {
+    public:
+        HelperData() = default;
+        HelperData(const HelperData &) = delete;
+        HelperData & operator=(const HelperData &) = delete;
+
+    public:
+        bool quit_ = false;
+        bool is_waiting_ = false;
+        Poller *poller_ = nullptr;
+        timer::TimerManager *timer_manager_ = nullptr;
+        std::mutex m;
+        std::condition_variable cond;
+        std::unordered_map<int, Channel *> channels_;
+    };
+
+    EventLoop::EventLoop(Poller *poller, timer::TimerManager *timer_manager)
+    {
+        data_ = std::make_unique<EventLoop::HelperData>();
+        data_->poller_ = poller;
+        data_->timer_manager_ = timer_manager;
+        data_->quit_ = false;
+        data_->is_waiting_ = false;
     }
 
     EventLoop::~EventLoop()
@@ -35,23 +53,23 @@ namespace net
 
     void EventLoop::loop()
     {
-        assert(poller_);
+        assert(data_->poller_);
 
         uint64_t from = base::time::get_tick_count();
-        while (!quit_) {
-            uint64_t to = poller_->poll(2);
-            if (to - from >= timer_manager_->get_time_unit()) {
+        while (!data_->quit_) {
+            uint64_t to = data_->poller_->poll(2);
+            if (to - from >= data_->timer_manager_->get_time_unit()) {
                 from = to;
-                timer_manager_->tick();
+                data_->timer_manager_->tick();
             }
 
-            if (to - from < timer_manager_->get_time_unit()) {
+            if (to - from < data_->timer_manager_->get_time_unit()) {
                 {
-                    std::unique_lock<std::mutex> lock(helper::m);
+                    std::unique_lock<std::mutex> lock(data_->m);
                     auto now = std::chrono::system_clock::now();
-                    is_waiting_ = true;
-                    helper::cond.wait_until(lock, now + std::chrono::milliseconds(timer_manager_->get_time_unit() - (to - from)));
-                    is_waiting_ = false;
+                    data_->is_waiting_ = true;
+                    data_->cond.wait_until(lock, now + std::chrono::milliseconds(data_->timer_manager_->get_time_unit() - (to - from)));
+                    data_->is_waiting_ = false;
                 }
             }
         }
@@ -70,16 +88,16 @@ namespace net
             }
         
             if (conn->get_conn_type() == ConnectionType::TCP) {
-                poller_->update_channel(channel);
-                channels_[channel->get_fd()] = channel;
+                data_->poller_->update_channel(channel);
+                data_->channels_[channel->get_fd()] = channel;
             }
         }
     }
 
     void EventLoop::quit()
     {
-        quit_ = true;
-        helper::cond.notify_all();
+        data_->quit_ = true;
+        data_->cond.notify_all();
     }
 
     void EventLoop::close_channel(Channel *channel)
@@ -88,23 +106,23 @@ namespace net
             return;
         }
 
-        auto it = channels_.find(channel->get_fd());
-        if (it != channels_.end()) {
-            poller_->remove_channel(channel);
-            channels_.erase(it);
+        auto it = data_->channels_.find(channel->get_fd());
+        if (it != data_->channels_.end()) {
+            data_->poller_->remove_channel(channel);
+            data_->channels_.erase(it);
         }
     }
 
     void EventLoop::update_channel(Channel *channel)
     {
         if (channel) {
-            channels_[channel->get_fd()] = channel;
-            poller_->update_channel(channel);
+            data_->channels_[channel->get_fd()] = channel;
+            data_->poller_->update_channel(channel);
         }
     }
 
     void EventLoop::wakeup()
     {
-        helper::cond.notify_all();
+        data_->cond.notify_all();
     }
 }

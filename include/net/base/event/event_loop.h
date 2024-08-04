@@ -1,6 +1,6 @@
 #ifndef __EVENT_LOOH_H__
 #define __EVENT_LOOH_H__
-#include <unordered_map>
+#include <memory>
 
 #include "../handler/event_handler.h"
 #include "../handler/connection_handler.h"
@@ -38,11 +38,8 @@ namespace net
         void wakeup();
 
     private:
-        bool quit_;
-        bool is_waiting_;
-        Poller *poller_;
-        timer::TimerManager *timer_manager_;
-        std::unordered_map<int, Channel *> channels_;
+        class HelperData;
+        std::unique_ptr<HelperData> data_;
     };
 }
 #endif

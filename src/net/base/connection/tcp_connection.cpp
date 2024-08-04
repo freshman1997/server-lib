@@ -148,6 +148,8 @@ namespace net
                 connectionHandler_->on_error(this);
                 abort();
                 break;
+            } else {
+                break;
             }
         }
     }
