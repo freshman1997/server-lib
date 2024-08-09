@@ -2,9 +2,9 @@
 #define __ENDIAN_H__
 #include <stdint.h>
 
-#ifndef _WIN32
+#ifdef __linux__
 #include <endian.h>
-#else
+#elif defined(_WIN32)
 #include <winsock2.h>
 #include <windows.h>
 #endif
@@ -15,7 +15,7 @@ namespace endian
 {
     // the inline assembler code makes type blur,
     // so we disable warnings for a while.
-#ifndef _WIN32
+#ifdef __linux__
     #pragma GCC diagnostic push
     #pragma GCC diagnostic ignored "-Wconversion"
     #pragma GCC diagnostic ignored "-Wold-style-cast"
@@ -23,6 +23,8 @@ namespace endian
     inline uint64_t hostToNetwork64(uint64_t host64)
     {
         #ifdef _WIN32
+        return htonl(host64);
+        #elif defined(__APPLE__)
         return htonl(host64);
         #else
         return htobe64(host64);
@@ -33,6 +35,8 @@ namespace endian
     {
         #ifdef _WIN32
         return htonl(host32);
+        #elif defined(__APPLE__)
+        return htonl(host32);
         #else
         return htobe32(host32);
         #endif
@@ -41,6 +45,8 @@ namespace endian
     inline uint16_t hostToNetwork16(uint16_t host16)
     {
         #ifdef _WIN32
+        return htons(host16);
+        #elif defined(__APPLE__)
         return htons(host16);
         #else
         return htobe16(host16);
@@ -51,6 +57,8 @@ namespace endian
     {
         #ifdef _WIN32
         return ntohl(net64);
+        #elif defined(__APPLE__)
+        return ntohl(net64);
         #else
         return be64toh(net64);
         #endif
@@ -59,6 +67,8 @@ namespace endian
     inline uint32_t networkToHost32(uint32_t net32)
     {
         #ifdef _WIN32
+        return ntohl(net32);
+        #elif defined(__APPLE__)
         return ntohl(net32);
         #else
         return be32toh(net32);
@@ -69,12 +79,14 @@ namespace endian
     {
         #ifdef _WIN32
         return ntohs(net16);
+        #elif defined(__APPLE__)
+        return ntohs(net16);
         #else
         return be16toh(net16);
         #endif
     }
 
-#ifndef _WIN32
+#ifdef __linux__
     #pragma GCC diagnostic pop
 #endif
 }

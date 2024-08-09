@@ -24,8 +24,14 @@ namespace net::socket
         if (!noneBlock) {
             return create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
         } else {   
-        #ifndef _WIN32
+        #ifdef _WIN32
             return create_ipv4_socket(SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
+        #elif defined(__APPLE__)
+            int fd = create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
+            if (fd > 0) {
+                set_none_block(fd, true);
+            }
+            return fd;
         #else
             int fd = create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
             if (fd != INVALID_SOCKET) {
@@ -41,8 +47,10 @@ namespace net::socket
         if (!noneBlock) {
             return create_ipv4_socket(SOCK_DGRAM, IPPROTO_UDP);
         } else {
-        #ifndef _WIN32
+        #ifdef _WIN32
             return create_ipv4_socket(SOCK_DGRAM | SOCK_NONBLOCK, IPPROTO_UDP);
+        #elif defined(__APPLE__)
+            return create_ipv4_socket(SOCK_DGRAM | MSG_DONTWAIT, IPPROTO_UDP);
         #else
             int fd = create_ipv4_socket(SOCK_DGRAM, IPPROTO_UDP);
             if (fd != INVALID_SOCKET) {

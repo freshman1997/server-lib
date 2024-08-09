@@ -87,6 +87,7 @@ namespace net
     #elif defined _WIN32
         int bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), 0, (struct sockaddr *)&peer_addr, &size);
     #elif defined __APPLE__
+        int bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
     #endif
         const struct sockaddr_in *address = (struct sockaddr_in*)(&peer_addr);
         InetAddress addr = {::inet_ntoa(address->sin_addr), ntohs(address->sin_port)};

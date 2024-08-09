@@ -4,6 +4,7 @@
 #include <sys/event.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <set>
 
 #include "base/time.h"
 #include "net/base/channel/channel.h"
@@ -16,12 +17,12 @@ namespace net
     public:
         int kqueuefd_;
         std::set<int> fds_;
-        std::vector<struct epoll_event> kqueue_events_;
+        std::vector<struct kevent> kqueue_events_;
     };
 
     const int KQueuePoller::MAX_EVENT = 4096;
     
-    KQueuePoller::KQueuePoller() : data_(std::make_unique<HelperData>())
+    KQueuePoller::KQueuePoller() : data_(std::make_unique<KQueuePoller::HelperData>())
     {
 
     }
@@ -32,7 +33,7 @@ namespace net
         timespec time;
         time.tv_sec = 0;
         time.tv_nsec = timeout * 1000 * 1000;
-        int count = kevent(kqueuefd_, NULL, 0, &*data_->kqueue_events_, data_->kqueue_events_.size(), &time);
+        int count = kevent(data_->kqueuefd_, NULL, 0, &*data_->kqueue_events_.begin(), data_->kqueue_events_.size(), &time);
         if (count > 0) {
             for (int i = 0; i < count; ++i) {
                 int ev = Channel::NONE_EVENT;
@@ -50,7 +51,7 @@ namespace net
                 }
             }
 
-            if (nevent == (int)data_->kqueue_events_.size() && (int)data_->kqueue_events_.size() < MAX_EVENT) {
+            if (count == (int)data_->kqueue_events_.size() && (int)data_->kqueue_events_.size() < MAX_EVENT) {
                 data_->kqueue_events_.resize(data_->kqueue_events_.size() * 2 >= MAX_EVENT ? MAX_EVENT : data_->kqueue_events_.size() * 2);
             }
         } else {
@@ -64,18 +65,18 @@ namespace net
     {
         struct kevent event;
         EV_SET(&event, channel->get_fd(), EVFILT_READ, EV_ADD | EV_ENABLE | EV_CLEAR, 0, 0, (void *) channel);
-        kevent(kqueuefd_, &event, 1, NULL, 0, NULL);
+        kevent(data_->kqueuefd_, &event, 1, NULL, 0, NULL);
         EV_SET(&event, channel->get_fd(), EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_CLEAR, 0, 0, (void *) channel);
-        kevent(kqueuefd_, &event, 1, NULL, 0, NULL);
+        kevent(data_->kqueuefd_, &event, 1, NULL, 0, NULL);
     }
 
     void KQueuePoller::remove_channel(Channel *channel)
     {
         struct kevent event;
         EV_SET(&event, channel->get_fd(), EVFILT_READ, EV_DELETE, 0, 0, (void *) channel);
-        kevent(kqueuefd_, &event, 1, NULL, 0, NULL);
+        kevent(data_->kqueuefd_, &event, 1, NULL, 0, NULL);
         EV_SET(&event, channel->get_fd(), EVFILT_WRITE, EV_DELETE, 0, 0, (void *) channel);
-        kevent(kqueuefd_, &event, 1, NULL, 0, NULL);
+        kevent(data_->kqueuefd_, &event, 1, NULL, 0, NULL);
     }
 }
 

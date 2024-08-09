@@ -1,7 +1,7 @@
 #ifndef __NET_BASE_POLLER_KQUEUE_POLLER_H__
 #define __NET_BASE_POLLER_KQUEUE_POLLER_H__
 #include "../poller/poller.h"
-#include <mutex>
+#include <memory>
 namespace net
 {
     class KQueuePoller : public Poller
@@ -19,7 +19,7 @@ namespace net
         
     private:
         class HelperData;
-        std::unique_lock<HelperData> data_;
+        std::unique_ptr<HelperData> data_;
     };
 }
 

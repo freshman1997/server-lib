@@ -77,6 +77,7 @@ namespace net
 
 namespace std 
 {
+#ifndef __APPLE__
     template<>
     struct hash<net::InetAddress> : public __hash_base<size_t, net::InetAddress>
     {
@@ -87,6 +88,18 @@ namespace std
             return h1 ^ (h2 << 1); // or use boost::hash_combine
         }
     };
+#else
+    template<>
+    struct hash<net::InetAddress>
+    {
+        size_t operator()(const net::InetAddress &address) const noexcept
+        {
+            std::size_t h1 = std::hash<std::string>{}(address.get_ip());
+            std::size_t h2 = std::hash<int>{}(address.get_port());
+            return h1 ^ (h2 << 1); // or use boost::hash_combine
+        }
+    };
+#endif
 }
 
 #endif

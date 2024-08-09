@@ -156,7 +156,7 @@ namespace net::http
 
         net::Socket *sock = new net::Socket("", port);
         if (!sock->valid()) {
-            std::cout << "create socket fail!!\n";
+            std::cout << "create socket fail!! " << errno << "\n";
             delete sock;
             return false;
         }
