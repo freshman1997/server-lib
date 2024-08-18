@@ -16,7 +16,7 @@ int main()
 
     net::http::HttpClient *client = new net::http::HttpClient;
 
-    client->connect({"learn.microsoft.com", 80}, 
+    client->connect({"www.baidu.com", 80}, 
     [](net::http::HttpRequest *req) {
         req->add_header("Connection", "close");
         req->send();

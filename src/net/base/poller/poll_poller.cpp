@@ -29,7 +29,7 @@ namespace net
         
     }
 
-    uint64_t PollPoller::poll(uint32_t timeout)
+    uint64_t PollPoller::poll(uint32_t timeout, std::vector<Channel *> &channels)
     {
         uint64_t tm = base::time::get_tick_count();
 
@@ -54,7 +54,12 @@ namespace net
             return tm;
         }
 
+        if (channels.size() != data_->sockets_.size()) {
+            channels.reserve(data_->sockets_.size());
+        }
+
         for (int i = 0; i < data_->fds_.size(); ++i) {
+            channels[i] = nullptr;
             int ev = Channel::NONE_EVENT;
             if (data_->fds_[i].revents & POLLRDHUP || data_->fds_[i].revents & POLLERR 
                 || data_->fds_[i].revents & POLLIN) {
@@ -65,11 +70,10 @@ namespace net
                 ev |= Channel::WRITE_EVENT;
             }
 
-            if (ev != Channel::NONE_EVENT) {
-                Channel *channel = data_->channels_[data_->fds_[i].fd];
-                if (channel) {
-                    channel->on_event(ev);
-                }
+            Channel *channel = data_->channels_[data_->fds_[i].fd];
+            if (ev != Channel::NONE_EVENT && channel) {
+                channel->set_revent(ev);
+                channels.push_back(channel);
             }
         }
 

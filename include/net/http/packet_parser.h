@@ -35,6 +35,7 @@ namespace net::http
     enum class BodyState
     {
         init = 0,
+        empty,
         partial,
         fully,
     };
@@ -88,7 +89,7 @@ namespace net::http
 
         bool is_body_done() const 
         {
-            return body_state == BodyState::fully;
+            return body_state == BodyState::fully || body_state == BodyState::empty;
         }
 
     protected:

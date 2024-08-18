@@ -3,6 +3,7 @@
 #include <iostream>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 #include "net/base/channel/channel.h"
 #include "net/base/event/event_loop.h"
@@ -56,8 +57,18 @@ namespace net
         assert(data_->poller_);
 
         uint64_t from = base::time::get_tick_count();
+        std::vector<Channel *> channels;
         while (!data_->quit_) {
-            uint64_t to = data_->poller_->poll(2);
+            channels.clear();
+            uint64_t to = data_->poller_->poll(2, channels);
+            if (!channels.empty()) {
+                for (auto &channel : channels) {
+                    if (channel) {
+                        channel->on_event();
+                    }
+                }
+            }
+
             if (to - from >= data_->timer_manager_->get_time_unit()) {
                 from = to;
                 data_->timer_manager_->tick();

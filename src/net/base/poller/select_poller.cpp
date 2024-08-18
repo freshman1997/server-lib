@@ -27,7 +27,7 @@ namespace net
         
     }
 
-    uint64_t SelectPoller::poll(uint32_t timeout)
+    uint64_t SelectPoller::poll(uint32_t timeout, std::vector<Channel *> &channels)
     {
         uint64_t tm = base::time::get_tick_count();
 
@@ -95,8 +95,9 @@ namespace net
                 ev |= Channel::EXCEP_EVENT;
             }
 
-            if (ev != Channel::NONE_EVENT) {
-                j->second->on_event(ev);
+            if (ev != Channel::NONE_EVENT && j->second) {
+                j->second->set_revent(ev);
+                channels.push_back(j->second);
             }
             
             ++j;

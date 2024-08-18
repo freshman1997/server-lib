@@ -27,7 +27,7 @@ namespace net
 
     }
 
-    uint64_t KQueuePoller::poll(uint32_t timeout)
+    uint64_t KQueuePoller::poll(uint32_t timeout, std::vector<Channel *> &channels)
     {
         uint64_t tm = base::time::get_tick_count();
         timespec time;
@@ -45,19 +45,18 @@ namespace net
                     ev |= Channel::WRITE_EVENT;
                 }
 
-                if (ev != Channel::NONE_EVENT) {
-                    Channel *channel = static_cast<Channel *>(data_->kqueue_events_[i].udata);
-                    channel->on_event(ev);
+                Channel *channel = static_cast<Channel *>(data_->kqueue_events_[i].udata);
+                if (ev != Channel::NONE_EVENT && channel) {
+                    channel->set_revent(ev);
+                    channels.push_back(channel);
                 }
             }
 
             if (count == (int)data_->kqueue_events_.size() && (int)data_->kqueue_events_.size() < MAX_EVENT) {
                 data_->kqueue_events_.resize(data_->kqueue_events_.size() * 2 >= MAX_EVENT ? MAX_EVENT : data_->kqueue_events_.size() * 2);
             }
-        } else {
-            // log
         }
-
+        
         return tm;
     }
 

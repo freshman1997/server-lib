@@ -12,7 +12,7 @@ namespace net
     {
     }
 
-    Channel::Channel(int fd) : fd_(fd), handler_(nullptr)
+    Channel::Channel(int fd) : fd_(fd), handler_(nullptr),events_(NONE_EVENT), revent_(NONE_EVENT), priority_(0)
     {
         disable_all();
     }
@@ -22,7 +22,7 @@ namespace net
         handler_ = handler;
     }
 
-    void Channel::on_event(int event)
+    void Channel::on_event()
     {
         if (!handler_) {
             // TODO
@@ -33,7 +33,7 @@ namespace net
             return;
         }
 
-        if (event & READ_EVENT && events_ & READ_EVENT) {
+        if (revent_ & READ_EVENT && events_ & READ_EVENT) {
             handler_->on_read_event();
             if (handler_ == nullptr) {
                 delete this;
@@ -41,7 +41,7 @@ namespace net
             }
         }
 
-        if (event & WRITE_EVENT && events_ & WRITE_EVENT) {
+        if (revent_ & WRITE_EVENT && events_ & WRITE_EVENT) {
             handler_->on_write_event();
             if (handler_ == nullptr) {
                 delete this;

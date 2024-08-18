@@ -1,6 +1,7 @@
 #ifndef __POLLER_H__
 #define __POLLER_H__
 #include <cstdint>
+#include <vector>
 
 namespace net 
 {
@@ -10,7 +11,7 @@ namespace net
     public:
         virtual ~Poller() {}
         
-        virtual uint64_t poll(uint32_t timeout) = 0;
+        virtual uint64_t poll(uint32_t timeout, std::vector<Channel *> &channels) = 0;
 
         virtual void update_channel(Channel *channel) = 0;
 

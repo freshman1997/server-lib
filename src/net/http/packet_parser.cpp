@@ -188,7 +188,7 @@ namespace net::http
                 }
                 return res;
             } else {
-                body_state = BodyState::fully;
+                body_state = BodyState::empty;
                 return 1;
             }
         }

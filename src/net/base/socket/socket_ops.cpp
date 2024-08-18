@@ -24,21 +24,17 @@ namespace net::socket
         if (!noneBlock) {
             return create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
         } else {   
-        #ifdef _WIN32
-            return create_ipv4_socket(SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
+        #ifdef __linux__
+            return create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
         #elif defined(__APPLE__)
             int fd = create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
+        #else
+            int fd = create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
+        #endif
             if (fd > 0) {
                 set_none_block(fd, true);
             }
             return fd;
-        #else
-            int fd = create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
-            if (fd != INVALID_SOCKET) {
-                set_none_block(fd, true);
-            }
-            return fd;
-        #endif
         }
     }
 
@@ -47,17 +43,17 @@ namespace net::socket
         if (!noneBlock) {
             return create_ipv4_socket(SOCK_DGRAM, IPPROTO_UDP);
         } else {
-        #ifdef _WIN32
-            return create_ipv4_socket(SOCK_DGRAM | SOCK_NONBLOCK, IPPROTO_UDP);
+        #ifdef __linux__
+            return create_ipv4_socket(SOCK_DGRAM, IPPROTO_UDP);
         #elif defined(__APPLE__)
-            return create_ipv4_socket(SOCK_DGRAM | MSG_DONTWAIT, IPPROTO_UDP);
+            int fd = create_ipv4_socket(SOCK_DGRAM, IPPROTO_UDP);
         #else
             int fd = create_ipv4_socket(SOCK_DGRAM, IPPROTO_UDP);
-            if (fd != INVALID_SOCKET) {
+        #endif
+            if (fd > 0) {
                 set_none_block(fd, true);
             }
             return fd;
-        #endif
         }
     }
 

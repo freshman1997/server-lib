@@ -44,7 +44,7 @@ namespace net
         
     }
 
-    uint64_t EpollPoller::poll(uint32_t timeout)
+    uint64_t EpollPoller::poll(uint32_t timeout, std::vector<Channel *> &channels)
     {
         uint64_t tm = base::time::get_tick_count();
         int nevent = ::epoll_wait(data_->epoll_fd_, &*data_->epoll_events_.begin(), (int)data_->epoll_events_.size(), timeout);
@@ -54,7 +54,6 @@ namespace net
 
         if (nevent > 0) {
             for (int i = 0; i < nevent; ++i) {
-                Channel *channel = static_cast<Channel *>(data_->epoll_events_[i].data.ptr);
                 int ev = Channel::NONE_EVENT;
                 int event = data_->epoll_events_[i].events;
                 if (event & EPOLLIN || event & EPOLLERR || event & EPOLLHUP) {
@@ -65,16 +64,16 @@ namespace net
                     ev |= Channel::WRITE_EVENT;
                 }
 
-                if (ev != Channel::NONE_EVENT) {
-                    channel->on_event(ev);
+                Channel *channel = static_cast<Channel *>(data_->epoll_events_[i].data.ptr);
+                if (ev != Channel::NONE_EVENT && channel) {
+                    channel->set_revent(ev);
+                    channels.push_back(channel);
                 }
             }
             
             if (nevent == (int)data_->epoll_events_.size() && (int)data_->epoll_events_.size() < MAX_EVENT) {
                 data_->epoll_events_.resize(data_->epoll_events_.size() * 2 >= MAX_EVENT ? MAX_EVENT : data_->epoll_events_.size() * 2);
             }
-        } else {
-            // TODO log
         }
 
         return tm;

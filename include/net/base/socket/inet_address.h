@@ -79,7 +79,7 @@ namespace std
 {
 #ifndef __APPLE__
     template<>
-    struct hash<net::InetAddress> : public __hash_base<size_t, net::InetAddress>
+    struct hash<net::InetAddress> 
     {
         size_t operator()(const net::InetAddress &address) const noexcept
         {

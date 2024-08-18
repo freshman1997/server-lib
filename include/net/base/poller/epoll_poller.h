@@ -12,7 +12,7 @@ namespace net {
         EpollPoller();
         ~EpollPoller();
 
-        virtual uint64_t poll(uint32_t timeout);
+        virtual uint64_t poll(uint32_t timeout, std::vector<Channel *> &channels);
 
         virtual void update_channel(Channel *channel);
 

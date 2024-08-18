@@ -12,7 +12,7 @@ namespace net
 
         Channel(int fd);
 
-        void on_event(int event);
+        void on_event();
 
         void set_fd(int fd)
         {
@@ -61,6 +61,21 @@ namespace net
 
         void set_handler(SelectHandler *handler);
 
+        void set_revent(int revent)
+        {
+            revent_ = revent;
+        }
+
+        void set_priority(int priority)
+        {
+            priority_ = priority;
+        }
+
+        int get_priority()
+        {
+            return priority_;
+        }
+
     public:
         static const int READ_EVENT;
         static const int WRITE_EVENT;
@@ -70,6 +85,8 @@ namespace net
     private:
         int events_;
         int fd_;
+        int revent_;
+        int priority_;
         SelectHandler *handler_;
     };
 }
