@@ -29,7 +29,7 @@ add_executable(ftp_client test/test_ftp_client.cpp)
 add_executable(test main.cpp)
 
 if(UNIX OR APPLE)
-    target_link_libraries(server PUBLIC pthread kcp)
+    target_link_libraries(base PUBLIC pthread kcp)
     
 elseif(WIN32)
     target_link_libraries(base PUBLIC wsock32 kcp)

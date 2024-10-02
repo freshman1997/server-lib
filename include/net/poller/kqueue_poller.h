@@ -13,6 +13,8 @@ namespace net
         
         ~KQueuePoller();
 
+        virtual bool init();
+
         virtual uint64_t poll(uint32_t timeout, std::vector<Channel *> &channels);
 
         virtual void update_channel(Channel *channel);

@@ -10,7 +10,10 @@ namespace net
     {
     public:
         PollPoller();
+
         ~PollPoller();
+
+        virtual bool init();
 
         virtual uint64_t poll(uint32_t timeout, std::vector<Channel *> &channels);
 
