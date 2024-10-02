@@ -29,6 +29,11 @@ namespace net::http
         resp_->process_error(ResponseCode::gateway_timeout);
     }
 
+    bool RemoteConnectTask::need_free()
+    {
+        return true;
+    }
+
     HttpProxy::HttpProxy()
     {
         server_ = nullptr;
@@ -93,7 +98,18 @@ namespace net::http
             }
             sc_connection_mapping_.erase(it);
         }
-        clear_connection_pending_request(conn);
+
+        auto taskIt = conn_tasks_.find(conn);
+        if (taskIt != conn_tasks_.end()) {
+            taskIt->second->cancel();
+            RemoteConnectTask *task = dynamic_cast<RemoteConnectTask *>(taskIt->second->get_task());
+            conn_tasks_.erase(taskIt);
+            if (task) {
+                clear_connection_pending_request(task->conn_);
+                conn_tasks_.erase(task->conn_);
+                task->resp_->process_error(ResponseCode::not_found);
+            }
+        }
     }
 
     Connection * HttpProxy::init_proxy_connection(const std::string &ip, short port)
@@ -214,7 +230,9 @@ namespace net::http
                 RemoteConnectTask *task = new RemoteConnectTask(conn, req, resp, 
                     remoteConn, this, url, conn->get_remote_address().to_address_key());
                 
-                conn_tasks_[conn] = timerManager->timeout(config::proxy_connect_timeout, task);
+                auto timer = timerManager->timeout(config::proxy_connect_timeout, task);
+                conn_tasks_[conn] = timer;
+                conn_tasks_[remoteConn] = timer;
 
                 pending_requests_[conn].push_back(conn->get_input_buff(true));
                 if (req->get_body_length() > 0) {
@@ -250,9 +268,9 @@ namespace net::http
 
     void HttpProxy::on_connection_timeout(RemoteConnectTask *task)
     {
-        pending_requests_.erase(task->conn_);
-        conn_tasks_.erase(task->conn_);
         std::cout << "connection to remote server fail ===> " << task->remote_conn_->get_remote_address().to_address_key() << '\n';
+        clear_connection_pending_request(task->conn_);
+        conn_tasks_.erase(task->conn_);
         task->remote_conn_->close();
     }
 
@@ -282,6 +300,7 @@ namespace net::http
             for (auto buf : it->second) {
                 BufferedPool::get_instance()->free(buf);
             }
+            pending_requests_.erase(it);
         }
     }
 }

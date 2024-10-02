@@ -1,7 +1,5 @@
 #ifndef __NET_HTTP_PROXY_H__
 #define __NET_HTTP_PROXY_H__
-#include <functional>
-#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -28,7 +26,9 @@ namespace net::http
         {}
 
     public:
-        virtual void on_timer(timer::Timer *timer);
+        virtual void on_timer(timer::Timer *timer) override;
+
+        virtual bool need_free() override;
 
     public:
         Connection *conn_ = nullptr;
