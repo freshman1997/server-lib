@@ -19,12 +19,12 @@
 #endif
 
 #include "buffer/buffer.h"
-#include "net/http/header_key.h"
-#include "net/http/context.h"
-#include "net/http/http_server.h"
-#include "net/http/request.h"
-#include "net/http/response.h"
-#include "net/base/connection/connection.h"
+#include "header_key.h"
+#include "context.h"
+#include "http_server.h"
+#include "request.h"
+#include "response.h"
+#include "net/connection/connection.h"
 
 class VideoTest
 {

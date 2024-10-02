@@ -1,8 +1,8 @@
-#include "net/base/connection/connection.h"
-#include "net/http/context.h"
-#include "net/http/http_client.h"
-#include "net/http/request.h"
-#include "net/http/response.h"
+#include "net/connection/connection.h"
+#include "context.h"
+#include "http_client.h"
+#include "request.h"
+#include "response.h"
 
 int main()
 {

@@ -1,7 +1,7 @@
-#include "net/base/acceptor/udp_acceptor.h"
-#include "net/base/poller/select_poller.h"
-#include "net/dns/dns_server.h"
-#include "net/ftp/server/ftp_server.h"
+#include "net/acceptor/udp_acceptor.h"
+#include "net/poller/select_poller.h"
+#include "dns_server.h"
+#include "server/ftp_server.h"
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -17,20 +17,21 @@
 #endif
 
 #include "base/utils/compressed_trie.h"
-#include "net/base/acceptor/acceptor.h"
-#include "net/base/acceptor/tcp_acceptor.h"
-#include "net/http/http_server.h"
-#include "net/base/poller/poller.h"
+#include "net/acceptor/acceptor.h"
+#include "net/acceptor/tcp_acceptor.h"
+#include "http_server.h"
+#include "net/poller/poller.h"
 #include "thread/runnable.h"
 #include "thread/thread_pool.h"
-#include "net/base/socket/socket.h"
+#include "net/socket/socket.h"
 
 #include "timer/timer_task.h"
 #include "timer/timer.h"
 #include "timer/wheel_timer_manager.h"
 
-#include "net/base/event/event_loop.h"
-#include "net/base/connection/connection.h"
+#include "net/event/event_loop.h"
+#include "net/connection/connection.h"
+#include "base/utils/string_converter.h"
 
 class PrintTask : public thread::Runnable
 {
@@ -89,7 +90,7 @@ void test_url()
 {
     base::CompressTrie trie;
     trie.insert("/.cache/clangd/");
-    trie.insert("/include/base");
+    trie.insert("/include");
 
     trie.insert("/static", true);
 
@@ -129,10 +130,6 @@ void sigpipe_handler(int signum)
 {
     std::cout << "Caught SIGPIPE signal: " << signum << '\n';
 }
-
-#ifdef _WIN32
-extern std::string UTF8ToGBEx(const char *utf8);
-#endif
 
 void test_args()
 {

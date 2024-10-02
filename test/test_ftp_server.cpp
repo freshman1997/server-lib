@@ -1,4 +1,4 @@
-#include "net/ftp/server/ftp_server.h"
+#include "server/ftp_server.h"
 
 #ifndef _WIN32
 #include <signal.h>

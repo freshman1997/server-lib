@@ -1,5 +1,5 @@
-#include "net/ftp/client/command_scanner.h"
-#include "net/ftp/client/ftp_client.h"
+#include "client/command_scanner.h"
+#include "client/ftp_client.h"
 #include <iostream>
 #include <string>
 #include <thread>
