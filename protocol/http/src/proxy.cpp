@@ -262,7 +262,6 @@ namespace net::http
                 }
                 pending_requests_.erase(rIt);
             }
-            delete task;
         }
     }
 

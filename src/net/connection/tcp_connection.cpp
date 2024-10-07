@@ -195,24 +195,32 @@ namespace net
         input_buffer_.get_current_buffer()->reset();
 
         bool read = false;
-    #ifndef _WIN32
-        int bytes = ::read(channel_->get_fd(), input_buffer_.get_current_buffer()->buffer_begin(), input_buffer_.get_current_buffer()->writable_size());
-    #else
-        int bytes = ::recv(channel_->get_fd(), input_buffer_.get_current_buffer()->buffer_begin(), input_buffer_.get_current_buffer()->writable_size(), 0);
-    #endif
-        if (bytes <= 0) {
-            if (bytes == 0) {
-                closed_ = true;
-            } else if (bytes == -1) {
-                if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
-                    connectionHandler_->on_error(this);
-                    closed_ = true;
-                }
+        int bytes = 0;
+        Buffer *buf = input_buffer_.get_current_buffer();
+        do {
+            if (read) {
+                buf = input_buffer_.allocate_buffer();
             }
-        } else {
-            read = true;
-            input_buffer_.get_current_buffer()->fill(bytes);
-        }
+        #ifndef _WIN32
+            bytes = ::read(channel_->get_fd(), buf->buffer_begin(), buf->writable_size());
+        #else
+            bytes = ::recv(channel_->get_fd(), buf->buffer_begin(), buf->writable_size(), 0);
+        #endif
+            if (bytes <= 0) {
+                if (bytes == 0) {
+                    closed_ = true;
+                } else if (bytes == -1) {
+                    if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
+                        connectionHandler_->on_error(this);
+                        closed_ = true;
+                        break;
+                    }
+                }
+            } else {
+                read = true;
+                buf->fill(bytes);
+            }
+        } while (bytes >= buf->writable_size());
 
         if (closed_) {
             abort();
@@ -260,5 +268,13 @@ namespace net
     ConnectionHandler * TcpConnection::get_connection_handler()
     {
         return connectionHandler_;
+    }
+
+    void TcpConnection::process_input_data(std::function<bool (Buffer *buff)> func, bool clear)
+    {
+        input_buffer_.foreach(func);
+        if (clear) {
+            input_buffer_.keep_one_buffer();
+        }
     }
 }

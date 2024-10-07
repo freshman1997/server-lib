@@ -159,6 +159,11 @@ namespace net::http
 
     int HttpPacketParser::parse(Buffer &buff)
     {
+        if (done()) {
+            body_state = BodyState::too_long;
+            return -2;
+        }
+
         Buffer *useBuff = &buff;
         if (packet_->get_buff()->readable_bytes() > 0) {
             packet_->get_buff()->append_buffer(buff);

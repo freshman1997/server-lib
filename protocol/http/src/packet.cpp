@@ -216,15 +216,15 @@ namespace net::http
             return true;
         }
 
-        //std::string data(buff.peek(), buff.peek() + buff.readable_bytes());
-        //std::cout << data << std::endl;
-
         int res = parser_->parse(buff);
         if (res < 0) {
             is_good_ = false;
             return false;
         } else {
-            if (res == 1) {
+            if (res == -2) {
+                is_good_ = false;
+                return false;
+            } else if (res == 1) {
                 const std::string *ctype = get_header(http_header_key::content_type);
                 is_good_ = true;
                 if (ctype) {

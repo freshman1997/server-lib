@@ -31,7 +31,6 @@
 
 #include "net/event/event_loop.h"
 #include "net/connection/connection.h"
-#include "base/utils/string_converter.h"
 
 class PrintTask : public thread::Runnable
 {

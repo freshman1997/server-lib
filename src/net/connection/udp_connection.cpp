@@ -116,15 +116,19 @@ namespace net
     void UdpConnection::send()
     {
         assert(state_ == ConnectionState::connected && connectionHandler_);
-        while (output_buffer_.get_size() > 0) {
-            auto buff = output_buffer_.get_current_buffer();
+        bool closed = false;
+        output_buffer_.foreach([this, &closed](Buffer *buff) -> bool {
             if (!buff->empty()) {
-                instance_->on_send(this, output_buffer_.take_current_buffer());
+                int sent = instance_->on_send(this, buff);
+                closed = sent > 0;
+                return sent > 0 && sent < buff->readable_bytes();
             }
+            return true;
+        });
 
-            if (output_buffer_.get_size() == 1) {
-                break;
-            }
+        if (!closed) {
+            output_buffer_.clear();
+            output_buffer_.allocate_buffer();
         }
     }
 
@@ -168,12 +172,17 @@ namespace net
     {
         assert(state_ == ConnectionState::connected && connectionHandler_);
         LinkedBuffer *list = instance_->get_input_buff_list();
-        input_buffer_.free_current_buffer(list->take_current_buffer());
-        if (adapter_) {
-            adapter_->on_recv();
+        input_buffer_ = *list;
+        list->clear();
+        list->allocate_buffer();
+
+        bool ok = adapter_ ? adapter_->on_recv() : true;
+        if (ok) {
+            active_ = true;
+            connectionHandler_->on_read(this);
+        } else {
+            abort();
         }
-        active_ = true;
-        connectionHandler_->on_read(this);
     }
 
     void UdpConnection::on_write_event()
@@ -234,6 +243,14 @@ namespace net
         // 第三次释放
         if (idle_cnt_ >= 2) {
             active_ = false;
+        }
+    }
+
+    void UdpConnection::process_input_data(std::function<bool (Buffer *buff)> func, bool clear)
+    {
+        input_buffer_.foreach(func);
+        if (clear) {
+            input_buffer_.keep_one_buffer();
         }
     }
 }

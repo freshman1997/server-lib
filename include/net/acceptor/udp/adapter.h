@@ -26,7 +26,7 @@ namespace net
         /**
          * @brief 收到原始数据包时被调用
          */
-        virtual void on_recv() = 0;
+        virtual bool on_recv() = 0;
 
         /**
          * @brief 发送原始数据包时被调用

@@ -1,3 +1,4 @@
+#include "buffer/linked_buffer.h"
 #include "net/connection/connection.h"
 #include "context.h"
 #include "packet.h"
@@ -33,11 +34,18 @@ namespace net::http
 
         if (!has_parsed_) {
             reset();
+            has_parsed_ = true;
         }
 
-        has_parsed_ = true;
+        bool res = false;
+        conn_->process_input_data([this, &res](Buffer *buff) {
+            // 暂时采用 copy 的方式
+            auto pkt = get_packet();
+            res = pkt->parse(*buff);
+            return pkt->good();
+        });
 
-        return get_packet()->parse(*conn_->get_input_buff());
+        return res;
     }
 
     bool HttpSessionContext::is_completed()

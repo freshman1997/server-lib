@@ -4,8 +4,9 @@
 #include "net/acceptor/udp_acceptor.h"
 #include "net/connection/connection.h"
 #include "net/connection/udp_connection.h"
-#include "singleton/singleton.h"
 #include "net/acceptor/udp/adapter.h"
+#include "net/handler/connection_handler.h"
+#include <cassert>
 #include <utility>
 
 namespace net 
@@ -21,11 +22,6 @@ namespace net
             it.second->abort();
         }
         conns_.clear();
-
-        for (auto it : queue_) {
-            BufferedPool::get_instance()->free(it.second);
-        }
-        queue_.clear();
     }
 
     void UdpInstance::set_acceptor(UdpAcceptor *acceptor)
@@ -42,34 +38,28 @@ namespace net
                 UdpAdapter *adapter = new KcpAdapter;
                 udpConn = new UdpConnection(address, adapter);
                 if (!adapter->init(udpConn, acceptor_->get_timer_manager())) {
-                    udpConn->abort();
-                    return {false, nullptr};
+                    return {false, udpConn};
                 }
             } else {
                 udpConn = new UdpConnection(address);
             }
-
             conns_[address] = udpConn;
-
             return {true, udpConn};
         } else {
-            return {false, it->second};
+            return {true, it->second};
         }
     }
 
-    void UdpInstance::on_send(Connection *conn, Buffer *buff)
+    int UdpInstance::on_send(Connection *conn, Buffer *buff)
     {
-        queue_.push_back({conn, buff});
+        assert(acceptor_);
+        return acceptor_->send_to(conn, buff);
     }
 
     void UdpInstance::send()
     {
-        if (!queue_.empty()) {
-            const auto &item = queue_.front();
-            int ret = acceptor_->send_to(item.first, item.second);
-            if (ret < 0 || ret >= item.second->readable_bytes()) {
-                queue_.pop_front();
-            }
+        for (auto &item : conns_) {
+            item.second->on_write_event();
         }
     }
 
@@ -78,17 +68,7 @@ namespace net
         if (is_closing_) {
             return;
         }
-
-        // TODO 有待优化
         conns_.erase(conn->get_remote_address());
-        for (auto it = queue_.begin(); it != queue_.end(); ) {
-            if (it->first == conn) {
-                BufferedPool::get_instance()->free(it->second);
-                it = queue_.erase(it);
-            } else {
-                ++it;
-            }
-        }
     }
 
     timer::TimerManager * UdpInstance::get_timer_manager()

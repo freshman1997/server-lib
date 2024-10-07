@@ -6,7 +6,7 @@ namespace net::http
 {
     class HttpPacket;
 
-    enum class HeaderState
+    enum class HeaderState : int
     {
         // request
         init = 0,
@@ -32,12 +32,13 @@ namespace net::http
 
     };
 
-    enum class BodyState
+    enum class BodyState : int
     {
         init = 0,
         empty,
         partial,
         fully,
+        too_long // 异常，超过长度
     };
 
     class HttpPacketParser

@@ -1,8 +1,10 @@
 #ifndef __LOG_H__
 #define __LOG_H__
+#include "../buffer/buffer.h"
 
-namespace log
+namespace mlog
 {
+    #define DEFAULT_BUFFER_SIZE (1 << 24)
     class Logger
     {
     public:
@@ -14,9 +16,15 @@ namespace log
             error,
             fatal,
         };
+    public:
+        Logger();
+        virtual ~Logger();
 
     public:
-        
+        virtual void log(Level level, const char *fmt, ...) = 0;
+
+    protected:
+        Buffer buff_;
     };
 }
 

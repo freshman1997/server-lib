@@ -3,7 +3,6 @@
 #include <deque>
 #include <unordered_map>
 
-#include "buffer/buffer.h"
 #include "buffer/linked_buffer.h"
 #include "net/socket/inet_address.h"
 #include "timer/timer_manager.h"
@@ -31,7 +30,7 @@ namespace net
     public:
         void send();
         std::pair<bool, Connection *> on_recv(const InetAddress &address);
-        void on_send(Connection *conn, Buffer *buff);
+        int on_send(Connection *conn, Buffer *buff);
 
         LinkedBuffer * get_input_buff_list()
         {
@@ -50,7 +49,6 @@ namespace net
         UdpAcceptor *acceptor_;
         LinkedBuffer input_buffer_;
         std::unordered_map<InetAddress, Connection *> conns_;
-        std::deque<std::pair<Connection *, Buffer *>> queue_;
     };
 }
 

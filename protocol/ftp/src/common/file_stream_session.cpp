@@ -87,20 +87,23 @@ namespace net::ftp
             }
 
             state_ = FileSteamState::processing;
-            float per = (current_file_info_->current_progress_ + conn->get_input_buff()->readable_bytes()) / (current_file_info_->file_size_ * 1.0);
+            conn->process_input_data([this](Buffer *buff) ->bool {
+                int ret = current_file_info_->write_file(buff);            
+                if (ret < 0) {
+                    state_ = FileSteamState::file_error;
+                    session_->on_error(this);
+                    return false;
+                } else if (current_file_info_->is_completed()) {
+                    state_ = FileSteamState::idle;
+                    session_->on_completed(this);
+                    current_file_info_ = nullptr;
+                    last_active_time_ = base::time::now();
+                }
+                return true;
+            });
+
+            float per = (current_file_info_->current_progress_) / (current_file_info_->file_size_ * 1.0);
             std::cout << ">>> receive: " << std::to_string(per * 100) << "%\n";
-            int ret = current_file_info_->write_file(conn->get_input_buff());            
-            if (ret < 0) {
-                state_ = FileSteamState::file_error;
-                session_->on_error(this);
-            } else if (current_file_info_->is_completed()) {
-                std::cout << "done >> " << current_file_info_->current_progress_  << ", "
-                        << current_file_info_->file_size_ << '\n';
-                state_ = FileSteamState::idle;
-                session_->on_completed(this);
-                current_file_info_ = nullptr;
-                last_active_time_ = base::time::now();
-            }
         }
     }
 

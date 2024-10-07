@@ -51,6 +51,8 @@ namespace net
 
         virtual ConnectionHandler * get_connection_handler();
 
+        virtual void process_input_data(std::function<bool (Buffer *buff)> func, bool clear = true);
+
     public: // select handler
         virtual void on_read_event();
 

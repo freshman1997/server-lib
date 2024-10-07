@@ -1,10 +1,8 @@
 #include "server/server_session.h"
 #include "common/def.h"
-#include "common/response_code.h"
 #include "server/command.h"
 
 #include <iostream>
-#include <string>
 
 namespace net::ftp 
 {
@@ -20,7 +18,11 @@ namespace net::ftp
     
     void ServerFtpSession::on_read(Connection *conn)
     {
-        command_parser_.set_buff(conn->get_input_buff(true));
+        conn->process_input_data([this](Buffer *buff) ->bool {
+            command_parser_.set_buff(buff);
+            return true;
+        });
+
         const auto &cmds = command_parser_.split_cmds(delimiter.begin(), " ");
         if (cmds.empty()) {
             std::cout << "command did not receive all!\n";

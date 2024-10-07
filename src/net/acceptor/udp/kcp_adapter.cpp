@@ -39,28 +39,27 @@ namespace net
         return true;
     }
 
-    void KcpAdapter::on_recv()
+    bool KcpAdapter::on_recv()
     {
         assert(conn_);
-        auto buff = conn_->get_input_buff();
-        int ret = ikcp_input(kcp_, buff->peek(), buff->readable_bytes());
-        if (ret < 0) {
-            if (conn_->get_connection_handler()) {
-                conn_->get_connection_handler()->on_error(conn_);
+        bool ok = false;
+        conn_->process_input_data([this, &ok](Buffer *buff) -> bool {
+            int ret = ikcp_input(kcp_, buff->peek(), buff->readable_bytes());
+            if (ret < 0) {
+                ok = false;
+                return false;
             }
-            conn_->abort();
-            return;
-        }
 
-        int n = ikcp_recv(kcp_, buff->peek_for(), buff->readable_bytes());
-        if (n <= 0) {
-            if (conn_->get_connection_handler()) {
-                conn_->get_connection_handler()->on_error(conn_);
+            buff->reset();
+            int n = ikcp_recv(kcp_, buff->begin(), buff->writable_size());
+            if (n > 0) {
+                buff->fill(n);
             }
-            conn_->abort();
-        } else {
-            buff->set_write_index(n);
-        }
+            ok = true;
+            return true;
+        }, false);
+
+        return ok;
     }
 
     int KcpAdapter::on_write()

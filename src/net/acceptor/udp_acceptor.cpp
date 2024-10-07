@@ -1,3 +1,4 @@
+#include "net/acceptor/udp/udp_instance.h"
 #include "net/channel/channel.h"
 #include "net/connection/connection.h"
 #include "net/connection/udp_connection.h"
@@ -82,39 +83,55 @@ namespace net
     #endif
         ::memset(&peer_addr, 0, sizeof(peer_addr));
         auto buff = instance_.get_input_buff_list()->get_current_buffer();
-    #ifdef __linux__
-        int bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
-    #elif defined _WIN32
-        int bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), 0, (struct sockaddr *)&peer_addr, &size);
-    #elif defined __APPLE__
-        int bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
-    #endif
-        const struct sockaddr_in *address = (struct sockaddr_in*)(&peer_addr);
-        InetAddress addr = {::inet_ntoa(address->sin_addr), ntohs(address->sin_port)};
-        if (bytes <= 0) {
-            if (bytes == 0) {
-                std::cout << "please check, ip: " << addr.get_ip() << ", no data read!!!";
-                buff->reset();
-            } else if (bytes == -1) {
-                std::cout << "please check, ip: " << addr.get_ip() << ", error occured ==> " << errno << '\n';
-            }
-            return;
-        } else {
-            buff->fill(bytes);
-            instance_.get_input_buff_list()->append_buffer(buff);
+        buff->reset();
+        if (buff->writable_size() < UDP_DATA_LIMIT) {
+            buff->resize(UDP_DATA_LIMIT);
         }
+        
+        bool read = false;
+        int bytes = 0;
+        const struct sockaddr_in *address = (struct sockaddr_in*)(&peer_addr);
+        do {
+            if (read) {
+                buff = instance_.get_input_buff_list()->allocate_buffer();
+            }
+        #ifdef __linux__
+            bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
+        #elif defined _WIN32
+            bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), 0, (struct sockaddr *)&peer_addr, &size);
+        #elif defined __APPLE__
+            bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
+        #endif
+            if (bytes <= 0) {
+                if (bytes == 0) {
+                    buff->reset();
+                }
+                return;
+            } else {
+                buff->fill(bytes);
+                read = true;
+            }
+        } while (bytes >= buff->writable_size());
 
+        InetAddress addr = {::inet_ntoa(address->sin_addr), ntohs(address->sin_port)};
         auto res = instance_.on_recv(addr);
         if (res.first && res.second) {
             UdpConnection *udpConn = static_cast<UdpConnection *>(res.second);
+            udpConn->set_connection_handler(conn_handler_);
             udpConn->set_event_handler(handler_);
             handler_->on_new_connection(udpConn);
             udpConn->set_instance_handler(&instance_);
             udpConn->set_connection_state(ConnectionState::connected);
-        }
-
-        if (res.second) {
             res.second->on_read_event();
+        } else {
+            if (!res.first && res.second) {
+                res.second->abort();
+                return;
+            }
+
+            if (res.first && res.second) {
+                res.second->on_read_event();
+            }
         }
     } 
 
@@ -129,10 +146,6 @@ namespace net
             return 0;
         }
 
-        if (conn->get_connection_handler()) {
-            conn->get_connection_handler()->on_write(conn);
-        }
-
         int ret = send_to(conn->get_remote_address(), buff);
         if (ret > 0) {
             if (ret >= buff->readable_bytes()) {
@@ -141,14 +154,7 @@ namespace net
                 buff->add_read_index(ret);
                 std::cout << "still remains data: " << buff->readable_bytes() << " bytes.\n";
             }
-        } else if (ret < 0) {
-            instance_.on_connection_close(conn);
-            if (conn->get_connection_handler()) {
-                conn->get_connection_handler()->on_error(conn);
-            }
-            conn->abort();
         }
-
         return ret;
     }
 

@@ -1,5 +1,6 @@
 #ifndef __LINKED_BUFF_H__
 #define __LINKED_BUFF_H__
+#include <functional>
 #include <list>
 
 class Buffer;
@@ -8,6 +9,9 @@ class LinkedBuffer
 public:
     LinkedBuffer();
     ~LinkedBuffer();
+
+public:
+    LinkedBuffer & operator=(LinkedBuffer &);
 
 public:
     Buffer * get_current_buffer();
@@ -24,6 +28,14 @@ public:
     {
         return buffers_.size();
     }
+
+    void clear();
+
+    void free_all_buffers();
+
+    void foreach(std::function<bool (Buffer *buff)> func);
+
+    void keep_one_buffer();
 
 private:
     std::list<Buffer *> buffers_;

@@ -4,7 +4,7 @@
 #include <set>
 #include <memory>
 
-#include "singleton/singleton.h"
+#include "../singleton/singleton.h"
 
 class Buffer;
 

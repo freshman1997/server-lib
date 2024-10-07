@@ -17,7 +17,7 @@ namespace net
 
     public:
         virtual bool init(Connection *conn, timer::TimerManager *timerManager);
-        virtual void on_recv();
+        virtual bool on_recv();
         virtual int on_write();
         virtual void on_release();
 

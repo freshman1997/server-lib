@@ -1,8 +1,10 @@
 #ifndef __CONNECTION_H__
 #define __CONNECTION_H__
 #include "net/handler/select_handler.h"
+#include <functional>
 
 class Buffer;
+class LinkedBuffer;
 
 namespace net
 {
@@ -58,6 +60,8 @@ namespace net
         virtual void set_connection_handler(ConnectionHandler *handler) = 0;
 
         virtual ConnectionHandler * get_connection_handler() = 0;
+
+        virtual void process_input_data(std::function<bool (Buffer *buff)>, bool clear = true) = 0;
     };
 }
 

@@ -12,6 +12,14 @@ LinkedBuffer::~LinkedBuffer()
     for (const auto &item : buffers_) {
         BufferedPool::get_instance()->free(item);
     }
+    buffers_.clear();
+}
+
+LinkedBuffer & LinkedBuffer::operator=(LinkedBuffer &linkBuff)
+{
+    free_all_buffers();
+    buffers_ = linkBuff.buffers_;
+    return *this;
 }
 
 Buffer * LinkedBuffer::get_current_buffer()
@@ -55,3 +63,33 @@ Buffer * LinkedBuffer::take_current_buffer()
     return buf;
 }
 
+void LinkedBuffer::clear()
+{
+    buffers_.clear();
+}
+
+void LinkedBuffer::free_all_buffers()
+{
+    for (const auto &item : buffers_) {
+        BufferedPool::get_instance()->free(item);
+    }
+    buffers_.clear();
+}
+
+void LinkedBuffer::foreach(std::function<bool (Buffer *buff)> func)
+{
+    for (auto it = buffers_.rbegin(); it != buffers_.rend(); ++it) {
+        if (!func(*it)) {
+            break;
+        }
+    }
+}
+
+void LinkedBuffer::keep_one_buffer()
+{
+    Buffer *buff = buffers_.back();
+    buff->reset();
+    buffers_.pop_back();
+    free_all_buffers();
+    append_buffer(buff);
+}
