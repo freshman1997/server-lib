@@ -42,8 +42,8 @@ namespace net::http
             // 暂时采用 copy 的方式
             auto pkt = get_packet();
             res = pkt->parse(*buff);
-            return pkt->good();
-        });
+            return pkt->good() ? 0 : 1;
+        }, false);
 
         return res;
     }

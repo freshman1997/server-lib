@@ -8,9 +8,9 @@
 
 namespace net::http 
 { 
-    enum class HttpMethod
+    enum class HttpMethod : char
     {
-        invalid_ = 0,
+        invalid_ = -1,
         get_,
         post_,
         put_,
@@ -32,7 +32,7 @@ namespace net::http
     public:
         virtual void reset();
 
-        virtual bool pack_header();
+        virtual bool pack_header(Connection *conn = nullptr);
 
         virtual PacketType get_packet_type()
         {

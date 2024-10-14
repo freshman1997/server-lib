@@ -62,6 +62,12 @@ namespace net
         virtual ConnectionHandler * get_connection_handler() = 0;
 
         virtual void process_input_data(std::function<bool (Buffer *buff)>, bool clear = true) = 0;
+
+        virtual LinkedBuffer * get_input_linked_buffer() = 0;
+
+        virtual LinkedBuffer * get_output_linked_buffer() = 0;
+
+        virtual void forward(Connection *conn) = 0;
     };
 }
 

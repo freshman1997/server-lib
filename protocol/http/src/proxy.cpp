@@ -79,7 +79,8 @@ namespace net::http
         }
 
         // forwarding
-        it->second->write_and_flush(conn->get_input_buff(true));
+        conn->forward(it->second);
+        it->second->send();
     }
 
     void HttpProxy::on_write(Connection *conn)
@@ -105,7 +106,6 @@ namespace net::http
             RemoteConnectTask *task = dynamic_cast<RemoteConnectTask *>(taskIt->second->get_task());
             conn_tasks_.erase(taskIt);
             if (task) {
-                clear_connection_pending_request(task->conn_);
                 conn_tasks_.erase(task->conn_);
                 task->resp_->process_error(ResponseCode::not_found);
             }
@@ -186,15 +186,16 @@ namespace net::http
             }
             cs_connection_mapping_.erase(it);
         }
-        clear_connection_pending_request(conn);
+        pending_requests_.erase(conn);
     }
 
     void HttpProxy::serve_proxy(HttpRequest *req, HttpResponse *resp)
     {
+        req->remove_header("host");
         Connection *conn = req->get_context()->get_connection();
         auto it = cs_connection_mapping_.find(conn);
         if (it != cs_connection_mapping_.end()) {
-            do_forward_packet(resp, it->second, conn->get_input_buff(true), req->get_buff(true));
+            req->pack_and_send(conn);
         } else {
             if (!server_) {
                 resp->process_error();
@@ -203,14 +204,10 @@ namespace net::http
 
             auto pIt = pending_requests_.find(conn);
             if (pIt != pending_requests_.end()) {
-                if (pIt->second.size() > config::proxy_max_pending) {
-                    clear_connection_pending_request(conn);
+                if (pIt->second > config::proxy_max_pending) {
                     resp->process_error();
                 } else {
-                    pIt->second.push_back(conn->get_input_buff(true));
-                    if (req->get_body_length() > 0) {
-                        pIt->second.push_back(req->get_buff(true));
-                    }
+                    ++pIt->second;
                 }
                 return;
             }
@@ -233,11 +230,7 @@ namespace net::http
                 auto timer = timerManager->timeout(config::proxy_connect_timeout, task);
                 conn_tasks_[conn] = timer;
                 conn_tasks_[remoteConn] = timer;
-
-                pending_requests_[conn].push_back(conn->get_input_buff(true));
-                if (req->get_body_length() > 0) {
-                    pending_requests_[conn].push_back(req->get_buff(true));
-                }
+                pending_requests_[conn] = 1;
             } else {
                 resp->process_error(ResponseCode::bad_gateway);
             }
@@ -254,52 +247,22 @@ namespace net::http
             Connection *clientConn = task->req_->get_context()->get_connection();
             cs_connection_mapping_[clientConn] = conn;
             sc_connection_mapping_[conn] = clientConn;
-
-            auto rIt = pending_requests_.find(conn);
-            if (rIt != pending_requests_.end()) {
-                for (auto buf : rIt->second) {
-                    conn->write(buf);
-                }
-                pending_requests_.erase(rIt);
-            }
+            task->req_->pack_and_send(conn);
+            conn_tasks_.erase(cIt);
+            pending_requests_.erase(clientConn);
         }
     }
 
     void HttpProxy::on_connection_timeout(RemoteConnectTask *task)
     {
         std::cout << "connection to remote server fail ===> " << task->remote_conn_->get_remote_address().to_address_key() << '\n';
-        clear_connection_pending_request(task->conn_);
         conn_tasks_.erase(task->conn_);
+        pending_requests_.erase(task->conn_);
         task->remote_conn_->close();
     }
-
-    void HttpProxy::do_forward_packet(HttpResponse *resp, Connection *conn, Buffer *buf1, Buffer *buf2)
-    {
-        if (buf1->readable_bytes() == 0) {
-            std::cout << ">>>>>>>bool>>>> !!! empty data\n";
-            BufferedPool::get_instance()->free(buf1);
-            BufferedPool::get_instance()->free(buf2);
-            resp->process_error();
-        } else {
-            // do forwarding
-            if (buf2->readable_bytes() > 0) {
-                conn->write(buf1);
-                conn->write_and_flush(buf2);
-            } else {
-                conn->write_and_flush(buf1);
-                BufferedPool::get_instance()->free(buf2);
-            }
-        }
-    }
-
-    void HttpProxy::clear_connection_pending_request(Connection *conn)
-    {
-        auto it = pending_requests_.find(conn);
-        if (it != pending_requests_.end()) {
-            for (auto buf : it->second) {
-                BufferedPool::get_instance()->free(buf);
-            }
-            pending_requests_.erase(it);
-        }
-    }
 }
+
+/*
+    1、加一个公共任务模块，监听事件增加进度，额外的配置表
+    2、
+*/

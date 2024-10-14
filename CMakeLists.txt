@@ -23,7 +23,7 @@ add_subdirectory(protocol/dns)
 add_subdirectory(protocol/bit_torrent)
 add_subdirectory(test)
 
-add_executable(test main.cpp)
+add_executable(server main.cpp)
 
 if(UNIX OR APPLE)
     target_link_libraries(base PUBLIC pthread kcp)
@@ -31,4 +31,4 @@ elseif(WIN32)
     target_link_libraries(base PUBLIC wsock32 kcp)
 endif()
 
-target_link_libraries(test PUBLIC base HttpProto DnsProto)
+target_link_libraries(server PUBLIC base HttpProto DnsProto)

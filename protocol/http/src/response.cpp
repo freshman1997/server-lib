@@ -36,7 +36,7 @@ namespace net::http
         buffer_->reset();
     }
 
-    bool HttpResponse::pack_header()
+    bool HttpResponse::pack_header(Connection *conn)
     {
         auto descIt = responseCodeDescs.find(respCode_);
         if (descIt == responseCodeDescs.end() || respCode_ == ResponseCode::internal_server_error) {
@@ -44,7 +44,7 @@ namespace net::http
             return false;
         }
 
-        auto outputBuffer = context_->get_connection()->get_output_buff();
+        auto outputBuffer = conn ? conn->get_output_buff() : context_->get_connection()->get_output_buff();
         std::string header("HTTP/1.1");
         header.append(" ").append(descIt->second).append("\r\n");
 

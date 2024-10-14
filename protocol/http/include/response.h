@@ -17,7 +17,7 @@ namespace net::http
     public:
         virtual void reset();
 
-        virtual bool pack_header();
+        virtual bool pack_header(Connection *conn = nullptr);
 
         virtual PacketType get_packet_type()
         {

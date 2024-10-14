@@ -75,6 +75,11 @@ namespace net::http
         headers_[k] = v;
     }
 
+    void HttpPacket::remove_header(const std::string &k)
+    {
+        headers_.erase(k);
+    }
+
     void HttpPacket::set_body_length(uint32_t len)
     {
         body_length_ = len;
@@ -241,15 +246,7 @@ namespace net::http
 
     void HttpPacket::send()
     {
-        if (pack_header()) {
-            if (buffer_) {
-                context_->get_connection()->write(buffer_);
-                buffer_ = BufferedPool::get_instance()->allocate();
-            }
-        } else {
-            is_good_ = false;
-        }
-        context_->get_connection()->send();
+        pack_and_send(context_->get_connection());
     }
 
     Buffer * HttpPacket::get_buff(bool take)
@@ -263,5 +260,19 @@ namespace net::http
         buf->reset_read_index(0);
         
         return buf;
+    }
+
+    void HttpPacket::pack_and_send(Connection *conn)
+    {
+        assert(conn);
+        if (pack_header(conn)) {
+            if (!buffer_->empty()) {
+                conn->write(buffer_);
+                buffer_ = BufferedPool::get_instance()->allocate();
+            }
+        } else {
+            is_good_ = false;
+        }
+        conn->send();
     }
 }

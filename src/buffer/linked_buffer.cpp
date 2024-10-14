@@ -87,8 +87,16 @@ void LinkedBuffer::foreach(std::function<bool (Buffer *buff)> func)
 
 void LinkedBuffer::keep_one_buffer()
 {
+    if (buffers_.empty()) {
+        allocate_buffer();
+        return;
+    }
+
     Buffer *buff = buffers_.back();
     buff->reset();
+    if (buffers_.size() == 1) {
+        return;
+    }
     buffers_.pop_back();
     free_all_buffers();
     append_buffer(buff);

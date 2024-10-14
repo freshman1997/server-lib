@@ -7,6 +7,11 @@
 
 #include <string>
 
+namespace net
+{
+    class Connection;
+}
+
 namespace net::http 
 {
     enum class HttpVersion : char
@@ -34,7 +39,7 @@ namespace net::http
         virtual ~HttpPacket();
 
     public:
-        virtual bool pack_header() = 0;
+        virtual bool pack_header(Connection *conn = nullptr) = 0;
 
         virtual PacketType get_packet_type() = 0;
 
@@ -46,6 +51,8 @@ namespace net::http
         bool parse(Buffer &buff);
 
         void add_header(const std::string &k, const std::string &v);
+
+        void remove_header(const std::string &k);
 
         void set_body_length(uint32_t len);
 
@@ -120,6 +127,8 @@ namespace net::http
         bool parse_content();
 
         Buffer * get_buff(bool take = false);
+
+        void pack_and_send(Connection *conn);
 
     protected:
         HttpSessionContext *context_;

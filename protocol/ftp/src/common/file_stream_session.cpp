@@ -87,7 +87,7 @@ namespace net::ftp
             }
 
             state_ = FileSteamState::processing;
-            conn->process_input_data([this](Buffer *buff) ->bool {
+            conn->process_input_data([this](Buffer *buff) ->int {
                 int ret = current_file_info_->write_file(buff);            
                 if (ret < 0) {
                     state_ = FileSteamState::file_error;

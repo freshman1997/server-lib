@@ -82,7 +82,7 @@ namespace net::http
         Connection *conn_;
         HttpRequest *request_;
         HttpResponse *response_;
-        HttpSession *session_{};
+        HttpSession *session_;
     };
 }
 

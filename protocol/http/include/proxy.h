@@ -80,11 +80,7 @@ namespace net::http
         Connection * init_proxy_connection(const std::string &ip, short port);
 
         void put_conncetion(Connection *conn);
-
-        void do_forward_packet(HttpResponse *resp, Connection *conn, Buffer *buf1, Buffer *buf2);
-
-        void clear_connection_pending_request(Connection *conn);
-
+        
     private:
         // <url, <ip, port>>
         std::unordered_map<std::string, std::vector<InetAddress>> proxy_configs_;
@@ -105,7 +101,7 @@ namespace net::http
         std::unordered_map<Connection *, timer::Timer *> conn_tasks_;
 
         // pending requests after the connect task
-        std::unordered_map<Connection *, std::vector<Buffer *>> pending_requests_;
+        std::unordered_map<Connection *, int> pending_requests_;
     };
 }
 

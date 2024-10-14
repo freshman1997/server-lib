@@ -192,7 +192,7 @@ namespace net
 
     void TcpConnection::on_read_event()
     {
-        input_buffer_.get_current_buffer()->reset();
+        input_buffer_.keep_one_buffer();
 
         bool read = false;
         int bytes = 0;
@@ -276,5 +276,24 @@ namespace net
         if (clear) {
             input_buffer_.keep_one_buffer();
         }
+    }
+
+    LinkedBuffer * TcpConnection::get_input_linked_buffer()
+    {
+        return &input_buffer_;
+    }
+
+    LinkedBuffer * TcpConnection::get_output_linked_buffer()
+    {
+        return &output_buffer_;
+    }
+
+    void TcpConnection::forward(Connection *conn)
+    {
+        auto out = conn->get_output_linked_buffer();
+        out->free_all_buffers();
+        *out = input_buffer_;
+        input_buffer_.clear();
+        input_buffer_.allocate_buffer();
     }
 }

@@ -1,5 +1,4 @@
 #include "net/connection/connection.h"
-
 #include "context.h"
 #include "request.h"
 #include "request_parser.h"
@@ -7,15 +6,15 @@
 namespace net::http 
 {
     static const char* http_method_descs[9] = {
-        "get",
-        "post",
-        "put",
-        "delete",
-        "option",
-        "head",
-        "comment",
-        "trace",
-        "patch",
+        "GET",
+        "POST",
+        "PUT",
+        "DELETE",
+        "OPTION",
+        "HEAD",
+        "COMMENT",
+        "TRACE",
+        "PATCH",
     };
 
     HttpRequest::HttpRequest(HttpSessionContext *context) : HttpPacket(context)
@@ -50,9 +49,9 @@ namespace net::http
         method_ = HttpMethod::invalid_;
     }
 
-    bool HttpRequest::pack_header()
+    bool HttpRequest::pack_header(Connection *conn)
     {
-        auto outputBuffer = context_->get_connection()->get_output_buff();
+        auto outputBuffer = conn ? conn->get_output_buff() : context_->get_connection()->get_output_buff();
         const std::string &method = get_raw_method();
         std::string header = method.empty() ? "GET" : method;
         header.append(" ");
