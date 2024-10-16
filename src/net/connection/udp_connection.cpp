@@ -116,19 +116,27 @@ namespace net
     void UdpConnection::send()
     {
         assert(state_ == ConnectionState::connected && connectionHandler_);
-        bool closed = false;
-        output_buffer_.foreach([this, &closed](Buffer *buff) -> bool {
-            if (!buff->empty()) {
-                int sent = instance_->on_send(this, buff);
-                closed = sent > 0;
-                return sent > 0 && sent < buff->readable_bytes();
-            }
-            return true;
-        });
+        if (output_buffer_.get_current_buffer()->empty()) {
+            return;
+        }
 
-        if (!closed) {
-            output_buffer_.clear();
-            output_buffer_.allocate_buffer();
+        std::size_t sz = output_buffer_.get_size();
+        for (int i = 0; i < sz;) {
+            auto buff = output_buffer_.get_current_buffer();
+            int sent = instance_->on_send(this, buff);
+            if (sent > 0) {
+                if (buff->empty()) {
+                    output_buffer_.free_current_buffer();
+                } else {
+                    return;
+                }
+                ++i;
+            } else if (sent < 0 && EAGAIN != errno) {
+                abort();
+                return;
+            } else {
+                break;
+            }
         }
     }
 
@@ -187,8 +195,8 @@ namespace net
 
     void UdpConnection::on_write_event()
     {
-        connectionHandler_->on_write(this);
-        if (output_buffer_.get_current_buffer()->readable_bytes() > 0) {
+        if (!output_buffer_.get_current_buffer()->empty()) {
+            connectionHandler_->on_write(this);
             send();
         }
     }

@@ -38,11 +38,11 @@ namespace net::http
         }
 
         bool res = false;
-        conn_->process_input_data([this, &res](Buffer *buff) {
+        conn_->process_input_data([this, &res](Buffer *buff) -> bool {
             // 暂时采用 copy 的方式
             auto pkt = get_packet();
             res = pkt->parse(*buff);
-            return pkt->good() ? 0 : 1;
+            return pkt->good();
         }, false);
 
         return res;

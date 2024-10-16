@@ -31,10 +31,12 @@ namespace net::dns
 
     void DnsServer::on_read(Connection *conn)
     {
-        auto buff = conn->get_input_buff();
-        std::string str(buff->peek(), buff->peek() + buff->readable_bytes());
-        std::cout << "xxxxxxx: " << str << '\n';
-        conn->write_and_flush(conn->get_input_buff(true));
+        conn->process_input_data([this](Buffer *buff) -> bool {
+            std::string str(buff->peek(), buff->peek() + buff->readable_bytes());
+            std::cout << "xxxxxxx: " << str << '\n';
+            return true;
+        }, false);
+        conn->forward(conn);
     }
 
     void DnsServer::on_write(Connection *conn)

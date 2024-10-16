@@ -246,8 +246,8 @@ namespace net
         }
 
         if (state_ == ConnectionState::connected && connectionHandler_ && !closed_) {
-            connectionHandler_->on_write(this);
-            if (output_buffer_.get_current_buffer()->readable_bytes() > 0) {
+            if (!output_buffer_.get_current_buffer()->empty()) {
+                connectionHandler_->on_write(this);
                 send();
             }
         }
