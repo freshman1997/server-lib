@@ -54,7 +54,6 @@ namespace net::ftp
 
         state_ = FileSteamState::connected;
         conn_ = conn;
-        conn_->get_input_buff()->reset();
         if (conn_->get_input_buff()->writable_size() < default_write_buff_size) {
             conn_->get_input_buff()->resize(default_write_buff_size);
         }

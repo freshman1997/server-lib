@@ -21,6 +21,7 @@ add_subdirectory(protocol/http)
 add_subdirectory(protocol/ftp)
 add_subdirectory(protocol/dns)
 add_subdirectory(protocol/bit_torrent)
+add_subdirectory(protocol/websocket)
 add_subdirectory(test)
 
 add_executable(server main.cpp)

@@ -3,6 +3,7 @@
 namespace net::http 
 {
     std::unordered_map<ResponseCode, std::string> responseCodeDescs = {
+        {ResponseCode::switch_protocol, "101 Switching Protocols"},
         {ResponseCode::ok_, "200 OK"},
         {ResponseCode::bad_request, "400 Bad Request"},
         {ResponseCode::partial_content, "206 Partial Content"},

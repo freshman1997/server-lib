@@ -78,7 +78,7 @@ namespace net::http
         }
 
     public:
-        void on_timer(timer::Timer *timer);
+        void on_timer(timer::Timer *timer) override;
 
     public:
         void reset_timer();
