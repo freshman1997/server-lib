@@ -45,14 +45,8 @@ namespace net::websocket
                     chunk->body_->write_string(buff->peek(), chunk->head_.extend_pay_load_len_);
                     buff->add_read_index(chunk->head_.extend_pay_load_len_);
                 }
-            }
-        }
-
-        if (!chunk->head_.is_fin()) {
-            if (chunk->body_ == nullptr) {
-                chunk->body_ = buff;
             } else {
-                chunk->body_->append_buffer(*buff);
+                return false;
             }
         }
 
@@ -61,11 +55,6 @@ namespace net::websocket
 
     bool WebSocketPacketParser::unpack(WebSocketConnection *conn)
     {
-        /*
-            解析步骤：
-                1、根据头部是否为最终帧
-                2、合并数据
-        */
         ProtoHead head;
         conn->get_native_connection()->process_input_data([conn, &head](Buffer *buff) -> bool 
         {

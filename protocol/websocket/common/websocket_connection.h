@@ -28,16 +28,14 @@ namespace net::websocket
     public:
         void send(Buffer *buf);
 
-        const net::InetAddress * get_remote_address();
-
         void close();
 
         void set_handler(WebSocketHandler *handler);
 
+        net::Connection * get_native_connection();
+
     private:
         void free_self();
-
-        net::Connection * get_native_connection();
 
         std::vector<Buffer *> * get_output_buffers();
 

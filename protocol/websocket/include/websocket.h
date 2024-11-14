@@ -3,5 +3,8 @@
 
 #include "../common/handler.h"
 #include "../common/websocket_connection.h"
+#include "../entry/data_handler.h"
+#include "../entry/server.h"
+#include "../entry/client.h"
 
 #endif

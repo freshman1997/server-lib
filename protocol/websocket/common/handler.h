@@ -11,7 +11,7 @@ namespace net::websocket
     public:
         virtual void on_connected(WebSocketConnection *conn) = 0;
 
-        virtual void on_receive_packet(const Buffer *buff) = 0;
+        virtual void on_receive_packet(WebSocketConnection *conn, const Buffer *buff) = 0;
 
         virtual void on_close(WebSocketConnection *conn) = 0;
     };

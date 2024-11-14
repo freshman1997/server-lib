@@ -1,8 +1,12 @@
 #include "handshake.h"
 #include "base/utils/base64.h"
+#include "packet.h"
 #include "request.h"
 #include "response_code.h"
 #include "websocket_connection.h"
+
+#include <openssl/sha.h>
+#include <openssl/ssl.h>
 
 namespace net::websocket 
 {
@@ -48,7 +52,7 @@ namespace net::websocket
         }
 
         auto key = req->get_header("sec-websocket-key");
-        if (!version)
+        if (!key)
         {
             return false;
         }
@@ -70,13 +74,49 @@ namespace net::websocket
 
     bool WebSocketHandshaker::do_handshake_client(http::HttpRequest * req, http::HttpResponse *resp, bool isResp)
     {
-        return false;
+        if (!isResp) {
+            req->set_method(http::HttpMethod::get_);
+            req->set_version(http::HttpVersion::v_1_1);
+            req->set_raw_url(url_);
+            req->add_header("Upgrade", "websocket");
+            req->add_header("Connection", "Upgrade");
+            req->add_header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==");
+            req->add_header("Sec-WebSocket-Version", "13");
+            req->send();
+            return true;
+        } else {
+            if (!resp->is_ok()) {
+                return false;
+            }
+
+            auto conn = req->get_header("connection");
+            if (!conn || (*conn != "Upgrade" && *conn != "upgrade"))
+            {
+                return false;
+            }
+
+            auto upgrade = req->get_header("upgrade");
+            if (!upgrade || (*upgrade != "websocket" && *upgrade != "Websocket"))
+            {
+                return false;
+            }
+
+            auto key = req->get_header("sec-websocket-accept");
+            if (!key)
+            {
+                return false;
+            }
+
+            server_key_ = *key;
+            ok_ = true;
+            return true;
+        }
     }
 
     std::string WebSocketHandshaker::generate_server_key()
     {
-        std::string magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-        std::string hash = "sha1" + client_key_;
-        return base::util::base64_encode(magic + hash);
+        std::string magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" + client_key_;
+        unsigned char *hash = SHA1((unsigned char *)magic.c_str(), magic.size(), nullptr);
+        return base::util::base64_encode((const char *)hash);
     }
 }

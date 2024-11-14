@@ -10,6 +10,7 @@ include_directories(
     protocol/ftp/include
     protocol/dns/include
     protocol/bit_torrent/include
+    protocol/websocket/include
 )
 
 FILE(GLOB_RECURSE SERVER_SRC "./src/*.cpp")

@@ -29,8 +29,7 @@ namespace net::websocket
     public:
         virtual void on_connected(Connection *conn)
         {
-            if (conn_)
-            {
+            if (conn_) {
                 std::cout << "repeat handshaking!!!\n";
                 conn->close();
                 return;
@@ -65,7 +64,7 @@ namespace net::websocket
                     int i = 0;
                     for (; i < input_chunks_.size(); ++i) {
                         if (input_chunks_[i].is_completed()) {
-                            handler_->on_receive_packet(input_chunks_[i].body_);
+                            handler_->on_receive_packet(self_, input_chunks_[i].body_);
                         } else if (input_chunks_[i].body_ && input_chunks_[i].body_->readable_bytes() > PACKET_MAX_BYTE){
                             std::cout << "too long body!!\n";
                             conn->close();
@@ -109,7 +108,9 @@ namespace net::websocket
                         if (!handshaker_.is_handshake_done()) {
                             std::cout << "cant handshake!!!\n";
                             context->process_error(http::ResponseCode::forbidden);
+                            return;
                         }
+                        handler_->on_connected(self_);
                     }
                 }
             }
@@ -157,14 +158,13 @@ namespace net::websocket
 
     WebSocketConnection::WebSocketConnection(Connection *conn) : data_(std::make_unique<WebSocketConnection::ConnData>(this))
     {
-
+        conn->set_connection_handler(data_.get());
     }
 
     WebSocketConnection::~WebSocketConnection()
     {
-        if (!data_->conn_) {
-            data_->conn_->close();
-            data_->conn_ = nullptr;
+        if (data_->handler_) {
+            data_->handler_->on_close(this);
         }
     }
 
@@ -172,12 +172,6 @@ namespace net::websocket
     {
         assert(data_->conn_ && buf);
         data_->send(buf);
-    }
-
-    const InetAddress * WebSocketConnection::get_remote_address()
-    {
-        assert(data_->conn_);
-        return &data_->conn_->get_remote_address();
     }
 
     void WebSocketConnection::close()

@@ -7,4 +7,4 @@ include_directories(
 FILE(GLOB_RECURSE WEB_SOCKET_SRC "./*.cpp")
 
 add_library(WebSocketProto ${WEB_SOCKET_SRC})
-target_link_libraries(WebSocketProto PUBLIC base HttpProto)
+target_link_libraries(WebSocketProto PUBLIC base HttpProto ssl crypto)
