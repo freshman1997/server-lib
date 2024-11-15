@@ -13,6 +13,12 @@ include_directories(
     protocol/websocket/include
 )
 
+# 查找 OpenSSL 库
+find_package(OpenSSL REQUIRED)
+
+# 添加 OpenSSL 头文件目录
+include_directories(${OPENSSL_INCLUDE_DIR})
+
 FILE(GLOB_RECURSE SERVER_SRC "./src/*.cpp")
 
 add_subdirectory(third_party/kcp)

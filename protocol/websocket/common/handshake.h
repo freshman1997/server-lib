@@ -24,11 +24,6 @@ namespace net::websocket
             return ok_;
         }
 
-        void set_url(const std::string &url)
-        {
-            url_ = url;
-        }
-
         const std::string & get_client_key() const
         {
             return client_key_;
@@ -48,7 +43,6 @@ namespace net::websocket
 
     private:
         bool ok_;
-        std::string url_;
         std::string client_key_;
         std::string server_key_;
     };

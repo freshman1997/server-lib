@@ -3,8 +3,9 @@
 #include "buffer/linked_buffer.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
-#include "net/socket/inet_address.h"
+
 #include <memory>
+#include <string>
 
 namespace net::websocket 
 {
@@ -21,18 +22,34 @@ namespace net::websocket
             server_
         };
 
+        enum class State
+        {
+            connecting_,
+            connected,
+            closing,
+            closed
+        };
+
     public:
-        WebSocketConnection(Connection *conn);
+        WebSocketConnection();
         ~WebSocketConnection();
 
     public:
-        void send(Buffer *buf);
+        void on_created(Connection *conn);
+        
+        bool send(Buffer *buf);
 
         void close();
 
         void set_handler(WebSocketHandler *handler);
 
         net::Connection * get_native_connection();
+
+        const std::string & get_url() const;
+
+        void set_url(const std::string &url);
+
+        State get_state() const;
 
     private:
         void free_self();
@@ -45,8 +62,6 @@ namespace net::websocket
         class ConnData;
         std::unique_ptr<ConnData> data_;
     };
-
-
 }
 
 #endif

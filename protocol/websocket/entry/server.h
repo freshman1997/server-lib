@@ -44,6 +44,7 @@ namespace net::websocket
 
     private:
         WebSocketDataHandler *data_handler_;
+        Poller *poller_;
         EventLoop *loop_;
         timer::TimerManager *timer_manager_;
         std::unordered_map<Connection *, WebSocketConnection *> connections_;

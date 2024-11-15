@@ -17,11 +17,8 @@ namespace net::websocket
 
             void set_ctrl(unsigned char ch)
             {
-                fin_ = ch & (7 << 1);
-                rev_1_ = ch & (6 << 1);
-                rev_2_ = ch & (5 << 1);
-                rev_3_ = ch & (4 << 1);
-                opcode_ = (4 << ch) >> 4;
+                fin_ = (ch >> 7) & 0x01;
+                opcode_ = ch & 0x0f;
             }
 
         } ctrl_code_;
@@ -30,14 +27,19 @@ namespace net::websocket
         
         char pay_load_len_ : 7;
 
-        uint32_t masking_key_;
+        uint8_t masking_key_[4];
 
         uint64_t extend_pay_load_len_;
 
         void set_2nd_byte(unsigned char byte)
         {
-            mask_ = byte >> 7;
-            pay_load_len_ = (1 << byte) >> 1;
+            mask_ = (byte >> 7) & 0x01;
+            pay_load_len_ = byte & 0x7f;
+        }
+
+        uint8_t get_pay_load_len()
+        {
+            return pay_load_len_ & 0x7f;
         }
 
         bool is_fin()
@@ -89,7 +91,7 @@ namespace net::websocket
                 return body_ ? body_->readable_bytes() >= head_.extend_pay_load_len_ : false;
             }
 
-            return true;
+            return head_.is_close_frame() || head_.is_ping_frame() || head_.is_pong_frame();
         }
     };
 }

@@ -57,16 +57,20 @@ namespace net::websocket
             return false;
         }
 
-        resp->set_response_code(http::ResponseCode::switch_protocol);
-        resp->add_header("Connection", "Upgrade");
-        resp->add_header("Upgrade", "websocket");
-        resp->add_header("Sec-WebSocket-Accept", "websocket");
+        auto subProtocol = req->get_header("sec-websocket-protocol");
+        if (subProtocol) {
+
+        }
         
         client_key_ = *key;
         server_key_ = generate_server_key();
 
         ok_ = true;
 
+        resp->set_response_code(http::ResponseCode::switch_protocol);
+        resp->add_header("Connection", "Upgrade");
+        resp->add_header("Upgrade", "websocket");
+        resp->add_header("Sec-WebSocket-Accept", server_key_);
         resp->send();
 
         return true;
@@ -77,7 +81,6 @@ namespace net::websocket
         if (!isResp) {
             req->set_method(http::HttpMethod::get_);
             req->set_version(http::HttpVersion::v_1_1);
-            req->set_raw_url(url_);
             req->add_header("Upgrade", "websocket");
             req->add_header("Connection", "Upgrade");
             req->add_header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==");
@@ -115,7 +118,7 @@ namespace net::websocket
 
     std::string WebSocketHandshaker::generate_server_key()
     {
-        std::string magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" + client_key_;
+        std::string magic = client_key_ + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         unsigned char *hash = SHA1((unsigned char *)magic.c_str(), magic.size(), nullptr);
         return base::util::base64_encode((const char *)hash);
     }

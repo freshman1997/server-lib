@@ -11,6 +11,8 @@ namespace timer
     class TimerManager
     {
     public:
+        virtual ~TimerManager() {}
+        
         virtual Timer * timeout(uint32_t milliseconds, TimerTask *task) = 0;
 
         virtual Timer * interval(uint32_t timeout, uint32_t interval, TimerTask *task, int32_t period = 0) = 0;
