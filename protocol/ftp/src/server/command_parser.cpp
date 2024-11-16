@@ -1,6 +1,6 @@
 #include "server/command_parser.h"
 #include "buffer/pool.h"
-#include "common/string_util.h"
+#include "base/utils/string_util.h"
 #include "common/def.h"
 
 #include <cassert>
@@ -24,14 +24,14 @@ namespace net::ftp
     {
         const char *begin = buff_->peek();
         const char *end = buff_->peek_end();
-        int idx = find_first(begin, end, endWith.c_str());
+        int idx = base::util::find_first(begin, end, endWith.c_str());
         if (idx < 0) {
             return {};
         }
 
         std::vector<FtpCommand> res;
         for ( ; idx > 0 && begin <= end; ) {
-            int foundIdx = find_first(begin, end, splitStr.c_str());
+            int foundIdx = base::util::find_first(begin, end, splitStr.c_str());
             bool hasArgs = true;
             if (foundIdx < 0) {
                 foundIdx = idx;
@@ -46,7 +46,7 @@ namespace net::ftp
             }
 
             begin += idx + endWith.size();
-            idx = find_first(begin, end, endWith.c_str());
+            idx = base::util::find_first(begin, end, endWith.c_str());
 
             res.push_back({cmd, args});
         }

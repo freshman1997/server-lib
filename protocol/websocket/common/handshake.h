@@ -5,6 +5,7 @@
 #include "response.h"
 #include "websocket_connection.h"
 
+#include <set>
 #include <string>
 
 namespace net::websocket 
@@ -34,17 +35,27 @@ namespace net::websocket
             return server_key_;
         }
 
+        const std::string & get_working_subproto() const
+        {
+            return working_subproto_;
+        }
+
     private:
         bool do_handshake_server(http::HttpRequest * req, http::HttpResponse *resp);
 
         bool do_handshake_client(http::HttpRequest * req, http::HttpResponse *resp, bool isResp);
-        
-        std::string generate_server_key();
+
+        void decode_into_set(const std::string &raw, std::set<std::string> &protos, char delimiter);
+
+        std::string encode_sub_proto(const std::set<std::string> &protos);
 
     private:
         bool ok_;
         std::string client_key_;
         std::string server_key_;
+        std::string working_subproto_;
+        std::set<std::string> client_sub_protos_;
+        std::set<std::string> server_sub_protos_;
     };
 }
 

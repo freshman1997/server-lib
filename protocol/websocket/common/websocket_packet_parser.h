@@ -10,23 +10,36 @@ namespace net::websocket
     class WebSocketPacketParser
     {
     public:
+        WebSocketPacketParser();
+
         bool unpack(WebSocketConnection *conn);
 
-        bool pack(WebSocketConnection *conn, Buffer *buff);
+        bool pack(WebSocketConnection *conn, Buffer *buff, uint8_t type);
+
+        void update_mask();
+
+        void use_mask(bool use)
+        {
+            use_mask_ = use;
+        }
 
     private:
-    bool read_chunk(ProtoChunk *chunk, Buffer *buff);
+        bool read_chunk(ProtoChunk *chunk, Buffer *buff);
 
         bool merge_frame(std::vector<ProtoChunk> *chunks);
 
-        void frame_decode(Buffer *buff, uint8_t *mask, uint32_t len);
+        void apply_mask(Buffer *buff, uint32_t buffSize, uint8_t *mask, uint32_t len);
 
-        Buffer * pack_header(WebSocketConnection *conn, Buffer *buff);
+        void apply_mask(Buffer *data, Buffer *buff, uint32_t buffSize);
 
-        bool pack_frame(WebSocketConnection *conn, Buffer *buff);
+        bool pack_header(Buffer *buff, uint8_t type, uint32_t buffSize, bool isEnd);
+
+        bool pack_frame(Buffer *data, Buffer *buff, uint32_t size);
 
     private:
-        Buffer *frameBuffer_ = nullptr;
+        bool use_mask_;
+        uint8_t mask_[4];
+        Buffer frame_buffer_;
     };
 }
 

@@ -102,7 +102,7 @@ namespace net::http
 
             const nlohmann::json &jval = nlohmann::json::parse(input);
             if (jval.is_discarded()) {
-                std::cout << config::config_file_name << " not a json config file!\n";
+                std::cout << config::config_file_name << " is not json config file!\n";
                 return false;
             }
 

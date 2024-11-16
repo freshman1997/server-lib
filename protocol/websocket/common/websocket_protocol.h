@@ -2,9 +2,22 @@
 #define __NET_WEBSOCKET_COMMON_WEBSOCKET_PROTOCOL_H__
 #include "buffer/buffer.h"
 #include <cstdint>
+#include <limits>
 
 namespace net::websocket 
 {
+    constexpr uint32_t PACKET_MAX_BYTE = 1024 * 1024;
+
+    enum class OpCodeType : uint8_t
+    {
+        type_continue_frame = 0x00,
+        type_text_frame = 0x01,
+        type_binary_frame = 0x02,
+        type_close_frame = 0x08,
+        type_ping_frame = 0x09,
+        type_pong_frame = 0x0a,
+    };
+
     struct ProtoHead
     {
         struct ControlCode
@@ -49,32 +62,32 @@ namespace net::websocket
 
         bool is_continue_frame()
         {
-            return ctrl_code_.opcode_ == 0x00;
+            return (ctrl_code_.opcode_ & 0x0f) == (uint8_t)OpCodeType::type_continue_frame;
         }
 
         bool is_text_frame()
         {
-            return ctrl_code_.opcode_ == 0x01;
+            return (ctrl_code_.opcode_ & 0x0f) == (uint8_t)OpCodeType::type_text_frame;
         }
 
         bool is_binary_frame()
         {
-            return ctrl_code_.opcode_ == 0x02;
+            return (ctrl_code_.opcode_ & 0x0f) == (uint8_t)OpCodeType::type_binary_frame;
         }
 
         bool is_close_frame()
         {
-            return ctrl_code_.opcode_ == 0x08;
+            return (ctrl_code_.opcode_ & 0x0f) == (uint8_t)OpCodeType::type_close_frame;
         }
 
         bool is_ping_frame()
         {
-            return ctrl_code_.opcode_ == 0x09;
+            return (ctrl_code_.opcode_ & 0x0f) == (uint8_t)OpCodeType::type_ping_frame;
         }
 
         bool is_pong_frame()
         {
-            return ctrl_code_.opcode_ == 0x0a;
+            return (ctrl_code_.opcode_ & 0x0f) == (uint8_t)OpCodeType::type_pong_frame;
         }
     };
 
@@ -92,6 +105,24 @@ namespace net::websocket
             }
 
             return head_.is_close_frame() || head_.is_ping_frame() || head_.is_pong_frame();
+        }
+
+        static int calc_head_size(uint32_t dataSize, bool setMask = true)
+        {
+            int res = 2;
+            if (dataSize <= std::numeric_limits<short>::max()) {
+                res += 2;
+            } else if (dataSize <= PACKET_MAX_BYTE) {
+                res += 8;
+            } else {
+                return -1;
+            }
+
+            if (setMask) {
+                res += 4;
+            }
+            
+            return res;
         }
     };
 }

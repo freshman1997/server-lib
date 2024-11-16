@@ -13,6 +13,18 @@ include_directories(
     protocol/websocket/include
 )
 
+if (MINGW)
+    add_compile_options("-static")
+endif()
+
+if (MSVC)
+
+elseif(UNIX)
+    add_compile_options(-static)
+elseif(APPLE)
+    add_compile_options(-static)
+endif()
+
 # 查找 OpenSSL 库
 find_package(OpenSSL REQUIRED)
 

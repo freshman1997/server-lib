@@ -3,12 +3,13 @@
 #include "net/acceptor/tcp_acceptor.h"
 #include "net/event/event_loop.h"
 #include "net/poller/epoll_poller.h"
+#include "net/poller/select_poller.h"
 #include "net/socket/socket.h"
 #include "timer/wheel_timer_manager.h"
 #include "net/connection/connection.h"
 #include "../common/websocket_connection.h"
 #include "data_handler.h"
-#include <iostream>
+#include "../common/websocket_config.h"
 
 namespace net::websocket
 {
@@ -60,7 +61,12 @@ namespace net::websocket
             return false;
         }
 
+        #ifdef unix
         poller_ = new EpollPoller;
+    #else
+        poller_ = new SelectPoller;
+    #endif
+
         if (!poller_->init()) {
             delete poller_;
             return false;
@@ -72,7 +78,7 @@ namespace net::websocket
         acceptor->set_connection_handler(this);
         acceptor->set_event_handler(loop_);
 
-        return true;
+        return WebSocketConfigManager::get_instance()->init(true);
     }
 
     void WebSocketServer::serve()
@@ -108,10 +114,13 @@ namespace net::websocket
 
     void WebSocketServer::on_connected(WebSocketConnection *wsConn)
     {
-        // handshake done
+        wsConn->try_set_heartbeat_timer(timer_manager_);
+        if (data_handler_) {
+            data_handler_->on_connected(wsConn);
+        }
     }
 
-    void WebSocketServer::on_receive_packet(WebSocketConnection *wsConn, const Buffer *buff)
+    void WebSocketServer::on_receive_packet(WebSocketConnection *wsConn, Buffer *buff)
     {
         if (data_handler_) {
             data_handler_->on_data(wsConn, buff);
@@ -120,6 +129,9 @@ namespace net::websocket
 
     void WebSocketServer::on_close(WebSocketConnection *wsConn)
     {
+        if (data_handler_) {
+            data_handler_->on_close(wsConn);
+        }
         connections_.erase(wsConn->get_native_connection());
     }
 }

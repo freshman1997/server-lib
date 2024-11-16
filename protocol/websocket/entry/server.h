@@ -16,7 +16,7 @@ namespace net::websocket
 
         bool init();
 
-    public:
+    protected:
         virtual void on_connected(Connection *conn);
 
         virtual void on_error(Connection *conn);
@@ -27,10 +27,10 @@ namespace net::websocket
 
         virtual void on_close(Connection *conn);
 
-    public:
+    protected:
         void on_connected(WebSocketConnection *wsConn);
 
-        void on_receive_packet(WebSocketConnection *wsConn, const Buffer *buff);
+        void on_receive_packet(WebSocketConnection *wsConn, Buffer *buff);
 
         void on_close(WebSocketConnection *wsConn);
 

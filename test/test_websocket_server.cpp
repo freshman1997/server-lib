@@ -5,10 +5,21 @@
 class TestServer : public net::websocket::WebSocketDataHandler
 {
 public:
-    virtual void on_data(net::websocket::WebSocketConnection *wsConn, const Buffer *buff)
+    virtual void on_connected(net::websocket::WebSocketConnection *wsConn)
+    {
+
+    }
+
+    virtual void on_data(net::websocket::WebSocketConnection *wsConn, Buffer *buff)
     {
         std::string str(buff->peek(), buff->peek_end());
         std::cout << "recv: " << str << '\n';
+        wsConn->send(buff);
+    }
+
+    virtual void on_close(net::websocket::WebSocketConnection *wsConn)
+    {
+
     }
 };
 

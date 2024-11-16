@@ -3,6 +3,8 @@
 #include "buffer/linked_buffer.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
+#include "timer/timer_manager.h"
+#include "websocket_protocol.h"
 
 #include <memory>
 #include <string>
@@ -30,6 +32,15 @@ namespace net::websocket
             closed
         };
 
+        enum class PacketType : uint8_t
+        {
+            text_ = (uint8_t)OpCodeType::type_text_frame,
+            binary_ = (uint8_t)OpCodeType::type_binary_frame,
+            close_ = (uint8_t)OpCodeType::type_close_frame,
+            ping_ = (uint8_t)OpCodeType::type_ping_frame,
+            pong_ = (uint8_t)OpCodeType::type_pong_frame,
+        };
+
     public:
         WebSocketConnection();
         ~WebSocketConnection();
@@ -37,7 +48,7 @@ namespace net::websocket
     public:
         void on_created(Connection *conn);
         
-        bool send(Buffer *buf);
+        bool send(Buffer *buf, PacketType pktType = WebSocketConnection::PacketType::text_);
 
         void close();
 
@@ -50,6 +61,13 @@ namespace net::websocket
         void set_url(const std::string &url);
 
         State get_state() const;
+
+        bool connected() const
+        {
+            return get_state() == State::connected;
+        }
+
+        void try_set_heartbeat_timer(timer::TimerManager *timerManager);
 
     private:
         void free_self();

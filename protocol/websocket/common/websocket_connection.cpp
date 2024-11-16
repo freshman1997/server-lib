@@ -1,12 +1,16 @@
 #include "websocket_connection.h"
+#include "buffer/pool.h"
 #include "context.h"
 #include "handshake.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
+#include "timer/timer.h"
+#include "websocket_config.h"
 #include "websocket_packet_parser.h"
 #include "response_code.h"
 #include "session.h"
 #include "websocket_protocol.h"
+#include "timer/timer_util.hpp"
 #include "handler.h"
 
 #include <cassert>
@@ -16,14 +20,25 @@
 
 namespace net::websocket
 {
-    constexpr uint32_t PACKET_MAX_BYTE = 1024 * 1024;
-
     class WebSocketConnection::ConnData : public ConnectionHandler
     {
         friend class WebSocketPacketParser;
     public:
-        ConnData(WebSocketConnection *this_) : mode_(WorkMode::server_), state_(State::connecting_), self_(this_), conn_(nullptr), session_(nullptr), handler_(nullptr)
+        ConnData(WebSocketConnection *this_) : mode_(WorkMode::server_), state_(State::connecting_), self_(this_), conn_(nullptr), session_(nullptr), handler_(nullptr), heartbeat_timer_(nullptr)
         {
+        }
+
+        ~ConnData()
+        {
+            if (heartbeat_timer_) {
+                heartbeat_timer_->cancel();
+                heartbeat_timer_ = nullptr;
+            }
+
+            if (session_) {
+                delete session_;
+                session_ = nullptr;
+            }
         }
 
     public:
@@ -34,6 +49,8 @@ namespace net::websocket
                 conn->close();
                 return;
             }
+
+            assert(state_ == State::connecting_);
 
             conn_ = conn;
             conn_->set_connection_handler(this);
@@ -83,8 +100,10 @@ namespace net::websocket
                             conn->close();
                         }
                     }
+                    input_chunks_.clear();
                 }
             } else {
+                assert(state_ == State::connecting_);
                 if (mode_ == WorkMode::client_) {
                     assert(session_ && handler_);
                     auto context = session_->get_context();
@@ -145,13 +164,19 @@ namespace net::websocket
         }
 
     public:
-        bool send(Buffer *buff)
+        bool send(Buffer *buff, PacketType pktType)
         {
+            if (state_ != State::connected) {
+                return false;
+            }
+
+            if (pktType == PacketType::close_ || pktType == PacketType::ping_ || pktType == PacketType::pong_) {
+                output_chunks_.push_back(buff);
+                return true;
+            }
+
             assert(handler_ && conn_);
-            if (buff->readable_bytes() > PACKET_MAX_BYTE){
-                std::cout << "too long body!!\n";
-                conn_->close();
-            } else if (pktParser_.pack(self_, buff)) {
+            if (pktParser_.pack(self_, buff, (uint8_t)pktType)) {
                 for (auto &chunk : output_chunks_) {
                     conn_->write(chunk);
                 }
@@ -165,17 +190,47 @@ namespace net::websocket
                 std::cerr << "cant pack ws frame!!\n";
                 conn_->close();
             }
+
             return false;
+        }
+
+        void hear_beat(timer::Timer *timer)
+        {
+            send_ping_frame();
         }
 
         void send_ping_frame()
         {
-            
+            Buffer *buf = BufferedPool::get_instance()->allocate(5);
+            buf->write_uint8(0x89);
+            buf->write_uint8(0x03);
+            buf->write_uint8(0x00);
+            buf->write_uint8(0x01);
+            buf->write_uint8(0x02);
+            send(buf, PacketType::ping_);
         }
 
         void send_pong_frame()
         {
+            Buffer *buf = BufferedPool::get_instance()->allocate(5);
+            buf->write_uint8(0x8a);
+            buf->write_uint8(0x03);
+            buf->write_uint8(0x00);
+            buf->write_uint8(0x01);
+            buf->write_uint8(0x02);
+            send(buf, PacketType::pong_);
+        }
 
+        void send_close_frame()
+        {
+            Buffer *buf = BufferedPool::get_instance()->allocate(4);
+            buf->write_uint8(0x88);
+            buf->write_uint8(0x02);
+
+            // 这里表示关闭连接的原因码为 1000
+            buf->write_uint8(0x03);
+            buf->write_uint8(0xE8);
+            send(buf, PacketType::close_);
         }
 
     public:
@@ -186,6 +241,7 @@ namespace net::websocket
         WebSocketHandler *handler_;
         Connection *conn_;
         http::HttpSession *session_;
+        timer::Timer *heartbeat_timer_;
         WebSocketHandshaker handshaker_;
         WebSocketPacketParser pktParser_;
         std::vector<ProtoChunk> input_chunks_;
@@ -201,6 +257,7 @@ namespace net::websocket
     {
         if (data_->handler_) {
             data_->handler_->on_close(this);
+            data_->handler_ = nullptr;
         }
     }
 
@@ -209,16 +266,17 @@ namespace net::websocket
         data_->on_connected(conn);
     }
 
-    bool WebSocketConnection::send(Buffer *buf)
+    bool WebSocketConnection::send(Buffer *buf, PacketType pktType)
     {
         assert(data_->conn_ && buf);
-        return data_->send(buf);
+        return data_->send(buf, pktType);
     }
 
     void WebSocketConnection::close()
     {
         assert(data_->conn_);
         data_->state_ = State::closing;
+        data_->send_close_frame();
         data_->conn_->close();
     }
 
@@ -260,5 +318,13 @@ namespace net::websocket
     WebSocketConnection::State WebSocketConnection::get_state() const
     {
         return data_->state_;
+    }
+
+    void WebSocketConnection::try_set_heartbeat_timer(timer::TimerManager *timerManager)
+    {
+        uint32_t interval = WebSocketConfigManager::get_instance()->get_heart_beat_interval();
+        if (interval > 0) {
+            data_->heartbeat_timer_ = timer::TimerUtil::build_period_timer(timerManager, interval, interval, this->data_.get(), &WebSocketConnection::ConnData::hear_beat);
+        }
     }
 }
