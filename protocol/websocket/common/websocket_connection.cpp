@@ -39,6 +39,19 @@ namespace net::websocket
                 delete session_;
                 session_ = nullptr;
             }
+
+            for (auto &item : input_chunks_) {
+                if (item.body_) {
+                    BufferedPool::get_instance()->free(item.body_);
+                    item.body_ = nullptr;
+                }
+            }
+            input_chunks_.clear();
+
+            for (const auto &item : output_chunks_) {
+                BufferedPool::get_instance()->free(item);
+            }
+            output_chunks_.clear();
         }
 
     public:

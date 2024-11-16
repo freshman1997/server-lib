@@ -1,6 +1,7 @@
 #ifndef __NET_WEBSOCKET_COMMON_WEBSOCKET_PROTOCOL_H__
 #define __NET_WEBSOCKET_COMMON_WEBSOCKET_PROTOCOL_H__
 #include "buffer/buffer.h"
+#include "buffer/pool.h"
 #include <cstdint>
 #include <limits>
 

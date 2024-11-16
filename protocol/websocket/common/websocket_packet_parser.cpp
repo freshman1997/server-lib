@@ -37,7 +37,7 @@ namespace net::websocket
             chunk->head_.ctrl_code_.set_ctrl(buff->read_uint8());
             chunk->head_.set_2nd_byte(buff->read_uint8());
 
-            uint8_t payloadLen = chunk->head_.get_pay_load_len();
+            uint32_t payloadLen = chunk->head_.get_pay_load_len();
             if (payloadLen <= 125) {
                 if (buff->readable_bytes() < sizeof(uint32_t)) {
                     buff->reset_read_index(from);
