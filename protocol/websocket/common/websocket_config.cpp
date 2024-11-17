@@ -14,6 +14,8 @@ namespace net::websocket
     std::string_view client_key_string_key = "client_key_string";
     std::string_view server_support_protos_key = "server_support_protos";
     std::string_view client_support_protos_key = "client_support_protos";
+    std::string_view server_use_mask_key = "server_use_mask";
+    std::string_view client_use_mask_key = "client_use_mask";
 
     class WebSocketConfigManager::ConfigData
     {
@@ -113,5 +115,15 @@ namespace net::websocket
             }
         }
         return nullptr;
+    }
+
+    bool WebSocketConfigManager::is_server_use_mask()
+    {
+        return data_->config_json_.value(server_use_mask_key, 0);
+    }
+
+    bool WebSocketConfigManager::is_client_use_mask()
+    {
+        return data_->config_json_.value(client_use_mask_key, 0);
     }
 }

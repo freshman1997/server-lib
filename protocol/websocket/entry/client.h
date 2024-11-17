@@ -27,7 +27,7 @@ namespace net::websocket
         WebSocketClient();
         ~WebSocketClient();
 
-        bool create(const InetAddress &addr);
+        bool create(const InetAddress &addr, const std::string &url = "/");
 
         void on_connect_timeout(timer::Timer *timer);
 
@@ -63,6 +63,7 @@ namespace net::websocket
         Poller *poller_;
         EventLoop *loop_;
         timer::Timer *conn_timer_;
+        std::string url_;
     };
 }
 

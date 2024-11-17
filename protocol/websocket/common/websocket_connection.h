@@ -42,7 +42,7 @@ namespace net::websocket
         };
 
     public:
-        WebSocketConnection();
+        WebSocketConnection(WorkMode mode = WebSocketConnection::WorkMode::server_);
         ~WebSocketConnection();
 
     public:
@@ -68,6 +68,8 @@ namespace net::websocket
         }
 
         void try_set_heartbeat_timer(timer::TimerManager *timerManager);
+
+        void use_mask(bool on);
 
     private:
         void free_self();

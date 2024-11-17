@@ -11,6 +11,8 @@ namespace net::websocket
     extern std::string_view client_key_string_key;
     extern std::string_view server_support_protos_key;
     extern std::string_view client_support_protos_key;
+    extern std::string_view server_use_mask_key;
+    extern std::string_view client_use_mask_key;
 
     class WebSocketConfigManager : public singleton::Singleton<WebSocketConfigManager>
     {
@@ -32,6 +34,10 @@ namespace net::websocket
         const std::set<std::string> & get_server_support_subprotos();
 
         const std::string * find_server_support_sub_protocol(const std::set<std::string> &clientProtos);
+
+        bool is_server_use_mask();
+
+        bool is_client_use_mask();
         
     private:
         class ConfigData;

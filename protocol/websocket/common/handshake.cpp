@@ -137,8 +137,7 @@ namespace net::websocket
                 return false;
             }
 
-            const std::string &decodeStr = base::util::base64_decode(*key);
-            if (!base::util::start_with(decodeStr.c_str(), decodeStr.c_str() + decodeStr.size(), client_key_.c_str())) {
+            if (client_key_.empty() || WebSocketUtils::generate_server_key(client_key_) != *key) {
                 return false;
             }
 

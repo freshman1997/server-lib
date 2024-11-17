@@ -11,7 +11,7 @@ namespace net::websocket
     public:
         virtual void on_connected(WebSocketConnection *wsConn) = 0;
 
-        virtual void on_data(WebSocketConnection *wsConn, Buffer *buff) = 0;
+        virtual void on_data(WebSocketConnection *wsConn, const Buffer *buff) = 0;
 
         virtual void on_close(WebSocketConnection *wsConn) = 0;
     };

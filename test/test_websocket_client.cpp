@@ -13,7 +13,7 @@ public:
         wsConn->send(buf);
     }
 
-    virtual void on_data(net::websocket::WebSocketConnection *wsConn, Buffer *buff)
+    virtual void on_data(net::websocket::WebSocketConnection *wsConn, const Buffer *buff)
     {
         std::string str(buff->peek(), buff->peek_end());
         std::cout << "recv: " << str << '\n';
@@ -29,7 +29,7 @@ int main()
 {
     TestClient tc;
     net::websocket::WebSocketClient client;
-    if (!client.create({"", 12211})) {
+    if (!client.create({"192.168.96.128", 12211})) {
         return -1;
     }
 

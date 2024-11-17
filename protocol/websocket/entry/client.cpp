@@ -21,7 +21,7 @@ namespace net::websocket
         exit();
     }
 
-    bool WebSocketClient::create(const InetAddress &addr)
+    bool WebSocketClient::create(const InetAddress &addr, const std::string &url)
     {
         Socket *sock = new Socket(addr.get_ip().c_str(), addr.get_port());
         sock->set_none_block(true);
@@ -55,6 +55,7 @@ namespace net::websocket
         conn->set_event_handler(loop_);
 
         conn_timer_ = timer::TimerUtil::build_timeout_timer(timer_manager_, 10 * 1000, this, &WebSocketClient::on_connect_timeout);
+        url_ = url;
 
         return WebSocketConfigManager::get_instance()->init(false);
     }
@@ -76,10 +77,10 @@ namespace net::websocket
             return;
         }
 
-        WebSocketConnection *wsConn = new WebSocketConnection();
+        WebSocketConnection *wsConn = new WebSocketConnection(WebSocketConnection::WorkMode::client_);
         wsConn->set_handler(this);
+        wsConn->set_url(url_);
         wsConn->on_created(conn);
-        conn_ = wsConn;
         state_ = State::connected_;
     }
 
@@ -89,7 +90,10 @@ namespace net::websocket
 
     void WebSocketClient::on_write(Connection *conn) {}
 
-    void WebSocketClient::on_close(Connection *conn) {}
+    void WebSocketClient::on_close(Connection *conn) 
+    {
+        on_close(conn_);
+    }
 
     void WebSocketClient::on_connected(WebSocketConnection *conn)
     {
@@ -119,7 +123,7 @@ namespace net::websocket
     void WebSocketClient::on_close(WebSocketConnection *conn)
     {
         state_ = State::closed_;
-        if (data_handler_) {
+        if (data_handler_ && conn) {
             data_handler_->on_close(conn);
         }
         conn_ = nullptr;
@@ -127,6 +131,10 @@ namespace net::websocket
         if (conn_timer_) {
             conn_timer_->cancel();
             conn_timer_ = nullptr;
+        }
+
+        if (loop_) {
+            loop_->quit();
         }
     }
 

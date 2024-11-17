@@ -41,6 +41,7 @@ void BufferedPool::free(Buffer *buf)
         return;
     }
 
+    buf->reset();
     buf->resize(8192);
     free_list_.push_front(buf);
 }

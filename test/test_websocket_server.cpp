@@ -11,13 +11,13 @@ public:
 
     }
 
-    virtual void on_data(net::websocket::WebSocketConnection *wsConn, Buffer *buff)
+    virtual void on_data(net::websocket::WebSocketConnection *wsConn, const Buffer *buff)
     {
         std::string str(buff->peek(), buff->peek_end());
         std::cout << "recv: " << str << '\n';
-        Buffer *data = BufferedPool::get_instance()->allocate(buff->readable_bytes());
-        data->append_buffer(*buff);
-        wsConn->send(buff);
+        //Buffer *data = BufferedPool::get_instance()->allocate(buff->readable_bytes());
+        //data->append_buffer(*buff);
+        //wsConn->send(data);
     }
 
     virtual void on_close(net::websocket::WebSocketConnection *wsConn)

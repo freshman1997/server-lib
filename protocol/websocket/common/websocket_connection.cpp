@@ -1,4 +1,5 @@
 #include "websocket_connection.h"
+#include "base/time.h"
 #include "buffer/pool.h"
 #include "context.h"
 #include "handshake.h"
@@ -24,7 +25,7 @@ namespace net::websocket
     {
         friend class WebSocketPacketParser;
     public:
-        ConnData(WebSocketConnection *this_) : mode_(WorkMode::server_), state_(State::connecting_), self_(this_), conn_(nullptr), session_(nullptr), handler_(nullptr), heartbeat_timer_(nullptr)
+        ConnData(WebSocketConnection *this_, WorkMode mode) : mode_(mode), state_(State::connecting_), self_(this_), conn_(nullptr), session_(nullptr), handler_(nullptr), heartbeat_timer_(nullptr)
         {
         }
 
@@ -77,6 +78,7 @@ namespace net::websocket
 
                 if (!session_) {
                     http::HttpSessionContext *ctx = new http::HttpSessionContext(conn);
+                    ctx->set_mode(http::Mode::client);
                     session_= new http::HttpSession((uint64_t)conn, ctx, nullptr);
                 }
 
@@ -95,71 +97,79 @@ namespace net::websocket
         {
             if (handshaker_.is_handshake_done()) {
                 assert(handler_);
-                if (pktParser_.unpack(self_)) {
-                    int i = 0;
-                    for (; i < input_chunks_.size(); ++i) {
+                if (pkt_parser_.unpack(self_)) {
+                    for (int i = 0; i < input_chunks_.size(); ++i) {
                         auto *chunk = &input_chunks_[i];
                         if (chunk->is_completed()) {
                             if (chunk->head_.is_close_frame()) {
                                 conn->close();
-                                return;
+                                break;
                             } else if (chunk->head_.is_ping_frame()) {
                                 send_pong_frame();
+                            } else if (chunk->head_.is_pong_frame()) {
+                                on_pong_frame();
                             } else {
-                                handler_->on_receive_packet(self_, input_chunks_[i].body_);
+                                handler_->on_receive_packet(self_, chunk->body_);
                             }
+                            BufferedPool::get_instance()->free(chunk->body_);
                         } else if (input_chunks_[i].body_ && input_chunks_[i].body_->readable_bytes() > PACKET_MAX_BYTE){
                             std::cout << "too long body!!\n";
                             conn->close();
+                            break;
                         }
                     }
                     input_chunks_.clear();
+                } else {
+                    send_close_frame();
+                    conn->close();
                 }
             } else {
                 assert(state_ == State::connecting_);
-                if (mode_ == WorkMode::client_) {
-                    assert(session_ && handler_);
-                    auto context = session_->get_context();
-                    handshaker_.on_handshake(context->get_request(), context->get_response(), WorkMode::client_, true);
-                    if (!handshaker_.is_handshake_done()) {
-                        std::cout << "cant handshake!!!\n";
-                        conn->close();
-                        return;
-                    }
-                    state_ = State::connected;
-                    handler_->on_connected(self_);
-                } else {
-                    if (!session_) {
-                        http::HttpSessionContext *ctx = new http::HttpSessionContext(conn);
-                        session_= new http::HttpSession((uint64_t)conn, ctx, nullptr);
-                    }
+                if (!session_ && mode_ == WorkMode::server_) {
+                    http::HttpSessionContext *ctx = new http::HttpSessionContext(conn);
+                    ctx->set_mode(http::Mode::server);
+                    session_= new http::HttpSession((uint64_t)conn, ctx, nullptr);
+                }
 
-                    auto context = session_->get_context();
-                    assert(!context->is_completed());
+                auto context = session_->get_context();
+                assert(!context->is_completed());
 
-                    if (!context->parse()) {
+                if (!context->parse()) {
+                    if (mode_ == WorkMode::server_) {
                         if (context->has_error()) {
                             context->process_error(context->get_error_code());
                         }
-                        return;
+                    } else {
+                        conn->close();
                     }
+                    return;
+                }
 
-                    if (context->has_error()) {
-                        context->process_error(context->get_error_code());
-                        return;
-                    }
+                if (context->has_error()) {
+                    context->process_error(context->get_error_code());
+                    return;
+                }
 
-                    if (context->is_completed()) {
+                if (context->is_completed()) {
+                    if (mode_ == WorkMode::client_) {
+                        handshaker_.on_handshake(context->get_request(), context->get_response(), WorkMode::client_, true);
+                        if (!handshaker_.is_handshake_done()) {
+                            std::cout << "cant handshake!!!\n";
+                            conn->close();
+                            return;
+                        }
+                    } else {
                         handshaker_.on_handshake(context->get_request(), context->get_response(), WorkMode::server_);
                         if (!handshaker_.is_handshake_done()) {
                             std::cout << "cant handshake!!!\n";
                             context->process_error(http::ResponseCode::forbidden);
                             return;
                         }
-                        state_ = State::connected;
                         url_ = context->get_request()->get_raw_url();
-                        handler_->on_connected(self_);
                     }
+                    
+                    state_ = State::connected;
+                    handler_->on_connected(self_);
                 }
             }
         }
@@ -184,12 +194,12 @@ namespace net::websocket
             }
 
             if (pktType == PacketType::close_ || pktType == PacketType::ping_ || pktType == PacketType::pong_) {
-                output_chunks_.push_back(buff);
+                conn_->write_and_flush(buff);
                 return true;
             }
 
             assert(handler_ && conn_);
-            if (pktParser_.pack(self_, buff, (uint8_t)pktType)) {
+            if (pkt_parser_.pack(self_, buff, (uint8_t)pktType)) {
                 for (auto &chunk : output_chunks_) {
                     conn_->write(chunk);
                 }
@@ -246,6 +256,12 @@ namespace net::websocket
             send(buf, PacketType::close_);
         }
 
+        void on_pong_frame()
+        {
+            last_active_time_ = base::time::now();
+            // TODO
+        }
+
     public:
         WorkMode mode_;
         State state_;
@@ -256,14 +272,19 @@ namespace net::websocket
         http::HttpSession *session_;
         timer::Timer *heartbeat_timer_;
         WebSocketHandshaker handshaker_;
-        WebSocketPacketParser pktParser_;
+        WebSocketPacketParser pkt_parser_;
         std::vector<ProtoChunk> input_chunks_;
         std::vector<Buffer *> output_chunks_;
+        uint32_t last_active_time_;
     };
 
-    WebSocketConnection::WebSocketConnection() : data_(std::make_unique<WebSocketConnection::ConnData>(this))
+    WebSocketConnection::WebSocketConnection(WorkMode mode) : data_(std::make_unique<WebSocketConnection::ConnData>(this, mode))
     {
-        
+        if (mode == WorkMode::client_) {
+            use_mask(WebSocketConfigManager::get_instance()->is_client_use_mask());
+        } else {
+            use_mask(WebSocketConfigManager::get_instance()->is_server_use_mask());
+        }
     }
 
     WebSocketConnection::~WebSocketConnection()
@@ -339,5 +360,10 @@ namespace net::websocket
         if (interval > 0) {
             data_->heartbeat_timer_ = timer::TimerUtil::build_period_timer(timerManager, interval, interval, this->data_.get(), &WebSocketConnection::ConnData::hear_beat);
         }
+    }
+
+    void WebSocketConnection::use_mask(bool on)
+    {
+        data_->pkt_parser_.use_mask(on);
     }
 }

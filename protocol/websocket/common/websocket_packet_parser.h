@@ -18,11 +18,8 @@ namespace net::websocket
 
         void update_mask();
 
-        void use_mask(bool use)
-        {
-            use_mask_ = use;
-        }
-
+        void use_mask(bool use);
+        
     private:
         bool read_chunk(ProtoChunk *chunk, Buffer *buff);
 

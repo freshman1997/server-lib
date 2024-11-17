@@ -24,6 +24,7 @@ namespace net::websocket
     {
         if (!frame_buffer_.empty()) {
             frame_buffer_.append_buffer(*inputBuff);
+            inputBuff->add_read_index(inputBuff->readable_bytes());
         }
 
 
@@ -31,6 +32,9 @@ namespace net::websocket
         std::size_t from = buff->get_read_index(), fromSize = frame_buffer_.readable_bytes();
         if (!chunk->has_set_head_) {
             if (buff->readable_bytes() < 2) {
+                if (fromSize == 0) {
+                    frame_buffer_.append_buffer(*inputBuff);
+                }
                 return true;
             }
 
@@ -39,16 +43,9 @@ namespace net::websocket
 
             uint32_t payloadLen = chunk->head_.get_pay_load_len();
             if (payloadLen <= 125) {
-                if (buff->readable_bytes() < sizeof(uint32_t)) {
-                    buff->reset_read_index(from);
-                    if (fromSize == 0) {
-                        frame_buffer_.append_buffer(*inputBuff);
-                    }
-                    return true;
-                }
                 chunk->head_.extend_pay_load_len_ = payloadLen;
             } else if (payloadLen <= 126) {
-                if (buff->readable_bytes() < sizeof(uint16_t) + sizeof(uint32_t)) {
+                if (buff->readable_bytes() < sizeof(uint16_t)) {
                     buff->reset_read_index(from);
                     if (fromSize == 0) {
                         frame_buffer_.append_buffer(*inputBuff);
@@ -57,18 +54,32 @@ namespace net::websocket
                 }
                 chunk->head_.extend_pay_load_len_ = buff->read_uint16();
             } else {
-                if (buff->readable_bytes() < sizeof(uint64_t) + sizeof(uint32_t)) {
+                if (buff->readable_bytes() < sizeof(uint64_t)) {
+                    buff->reset_read_index(from);
+                    frame_buffer_.append_buffer(*inputBuff);
+                    return true;
+                }
+                chunk->head_.extend_pay_load_len_ = buff->read_uint64();
+            }
+
+            if (buff->readable_bytes() < chunk->head_.extend_pay_load_len_) {
+                buff->reset_read_index(from);
+                if (fromSize == 0) {
+                    frame_buffer_.append_buffer(*inputBuff);
+                }
+                return true;
+            }
+
+            // set mask key
+            if (chunk->head_.mask_ & 0x01) {
+                if (buff->readable_bytes() < 4) {
                     buff->reset_read_index(from);
                     if (fromSize == 0) {
                         frame_buffer_.append_buffer(*inputBuff);
                     }
                     return true;
                 }
-                chunk->head_.extend_pay_load_len_ = buff->read_uint64();
-            }
 
-            // set mask key
-            if (chunk->head_.mask_ & 0x01) {
                 for (int i = 0; i < 4; ++i) {
                     chunk->head_.masking_key_[i] = buff->read_uint8();
                 }
@@ -97,7 +108,7 @@ namespace net::websocket
                     buff->add_read_index(chunk->head_.extend_pay_load_len_);
                 }
             } else {
-                return false;
+                return chunk->head_.extend_pay_load_len_ == 0;
             }
         }
 
@@ -126,8 +137,12 @@ namespace net::websocket
                 return false;
             }
 
-            lastChunk->head_.extend_pay_load_len_ += chunk->head_.extend_pay_load_len_;
-            lastChunk->body_->append_buffer(*chunk->body_);
+            if (chunk->head_.is_fin()) {
+                lastChunk = chunk;
+            } else {
+                lastChunk->head_.extend_pay_load_len_ += chunk->head_.extend_pay_load_len_;
+                lastChunk->body_->append_buffer(*chunk->body_);
+            }
         } else {
             lastChunk = &chunks->at(0);
         }
@@ -188,22 +203,11 @@ namespace net::websocket
                     if (chunk->head_.is_fin()) {
                         chunks->push_back(ProtoChunk());
                         chunk = &chunks->back();
-                    } else {
-                        BufferedPool::get_instance()->free(chunk->body_);
-
-                        memset(chunk, 1, sizeof(*chunk));
-                        chunk->has_set_head_ = false;
-                        chunk->body_ = nullptr;
-
-                        if (!chunks->back().head_.is_continue_frame() && chunks->back().is_completed()) {
-                            chunks->push_back(ProtoChunk());
-                            chunk = &chunks->back();
-                        }
                     }
                 }
             }
             return true;
-        }, false);
+        });
 
         return res;
     }
@@ -228,6 +232,10 @@ namespace net::websocket
         }
 
         uint8_t head2 = 0;
+        if (use_mask_) {
+            head2 = 0b10000000;
+        }
+
         if (buffSize <= 0x7f) {
             head2 |= (uint8_t)buffSize;
         } else if (buffSize <= std::numeric_limits<short>::max()) {
@@ -321,6 +329,14 @@ namespace net::websocket
     {
         for (int i = 0; i < 4; ++i) {
             mask_[i] = generateMask() % 0xff;
+        }
+    }
+
+    void WebSocketPacketParser::use_mask(bool use)
+    {
+        use_mask_ = use;
+        if (use_mask_) {
+            update_mask();
         }
     }
 }
