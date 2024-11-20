@@ -58,7 +58,12 @@ namespace net::websocket
 
         bool is_fin()
         {
-            return ctrl_code_.fin_;
+            return ctrl_code_.fin_ & 0x01;
+        }
+
+        bool need_mask()
+        {
+            return mask_ & 0x01;
         }
 
         bool is_continue_frame()

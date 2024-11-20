@@ -119,11 +119,11 @@ namespace net::websocket
 
     bool WebSocketConfigManager::is_server_use_mask()
     {
-        return data_->config_json_.value(server_use_mask_key, 0);
+        return data_->config_json_.value(server_use_mask_key, false);
     }
 
     bool WebSocketConfigManager::is_client_use_mask()
     {
-        return data_->config_json_.value(client_use_mask_key, 0);
+        return data_->config_json_.value(client_use_mask_key, false);
     }
 }

@@ -80,6 +80,11 @@ namespace net::http
         headers_.erase(k);
     }
 
+    void HttpPacket::clear_header()
+    {
+        headers_.clear();
+    }
+
     void HttpPacket::set_body_length(uint32_t len)
     {
         body_length_ = len;

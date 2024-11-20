@@ -54,6 +54,8 @@ namespace net::http
 
         void remove_header(const std::string &k);
 
+        void clear_header();
+
         void set_body_length(uint32_t len);
 
         uint32_t get_body_length()

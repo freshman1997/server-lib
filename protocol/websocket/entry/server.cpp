@@ -49,7 +49,8 @@ namespace net::websocket
         }
         
         sock->set_reuse(true);
-        sock->set_none_block(true);
+        sock->set_no_deylay(true);
+        sock->set_keep_alive(true);
         if (!sock->bind()) {
             delete sock;
             return false;

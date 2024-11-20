@@ -128,7 +128,8 @@ namespace net
         }
 
         std::size_t sz = output_buffer_.get_size();
-        for (int i = 0; i < sz;) {
+        int againCount = 0;
+        for (int i = 0; i < sz && againCount < 10;) {
         #ifdef _WIN32
             int ret = ::send(channel_->get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), 0);
         #else
@@ -144,10 +145,13 @@ namespace net
                     return;
                 }
                 ++i;
-            } else if (ret < 0 && EAGAIN != errno) {
-                connectionHandler_->on_error(this);
-                abort();
-                break;
+            } else if (ret < 0) {
+                if (EAGAIN != errno) {
+                    connectionHandler_->on_error(this);
+                    abort();
+                    break;
+                }
+                ++againCount;
             } else {
                 break;
             }
@@ -197,6 +201,7 @@ namespace net
         bool read = false;
         int bytes = 0;
         Buffer *buf = input_buffer_.get_current_buffer();
+        int againCount = 0;
         do {
             if (read) {
                 buf = input_buffer_.allocate_buffer();
@@ -215,12 +220,18 @@ namespace net
                         closed_ = true;
                         break;
                     }
+                    ++againCount;
+                    read = false;
                 }
             } else {
                 read = true;
                 buf->fill(bytes);
             }
-        } while (bytes >= buf->writable_size());
+        } while (bytes >= buf->writable_size() && againCount < 10);
+
+        if (againCount > 0 && input_buffer_.get_size() > 1) {
+            read = true;
+        }
 
         if (closed_) {
             abort();

@@ -89,7 +89,7 @@ namespace net
         }
         
         bool read = false;
-        int bytes = 0;
+        int bytes = 0, againCount = 0;
         const struct sockaddr_in *address = (struct sockaddr_in*)(&peer_addr);
         do {
             if (read) {
@@ -104,33 +104,45 @@ namespace net
         #endif
             if (bytes <= 0) {
                 if (bytes == 0) {
-                    buff->reset();
+                    break;
                 }
-                return;
+
+                if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
+                    break;
+                }
+
+                read = false;
+                ++againCount;
             } else {
                 buff->fill(bytes);
                 read = true;
             }
         } while (bytes >= buff->writable_size());
 
-        InetAddress addr = {::inet_ntoa(address->sin_addr), ntohs(address->sin_port)};
-        auto res = instance_.on_recv(addr);
-        if (res.first && res.second) {
-            UdpConnection *udpConn = static_cast<UdpConnection *>(res.second);
-            udpConn->set_connection_handler(conn_handler_);
-            udpConn->set_event_handler(handler_);
-            handler_->on_new_connection(udpConn);
-            udpConn->set_instance_handler(&instance_);
-            udpConn->set_connection_state(ConnectionState::connected);
-            res.second->on_read_event();
-        } else {
-            if (!res.first && res.second) {
-                res.second->abort();
-                return;
-            }
+        if (againCount > 0 && instance_.get_input_buff_list()->get_size() > 1) {
+            read = true;
+        }
 
+        if (read) {
+            InetAddress addr = {::inet_ntoa(address->sin_addr), ntohs(address->sin_port)};
+            auto res = instance_.on_recv(addr);
             if (res.first && res.second) {
+                UdpConnection *udpConn = static_cast<UdpConnection *>(res.second);
+                udpConn->set_connection_handler(conn_handler_);
+                udpConn->set_event_handler(handler_);
+                handler_->on_new_connection(udpConn);
+                udpConn->set_instance_handler(&instance_);
+                udpConn->set_connection_state(ConnectionState::connected);
                 res.second->on_read_event();
+            } else {
+                if (!res.first && res.second) {
+                    res.second->abort();
+                    return;
+                }
+
+                if (res.first && res.second) {
+                    res.second->on_read_event();
+                }
             }
         }
     } 

@@ -164,11 +164,8 @@ namespace net::http
             return -2;
         }
 
-        Buffer *useBuff = &buff;
-        if (packet_->get_buff()->readable_bytes() > 0) {
-            packet_->get_buff()->append_buffer(buff);
-            useBuff = packet_->get_buff();
-        }
+        Buffer *useBuff = packet_->get_buff();
+        useBuff->append_buffer(buff);
         
         if (!is_header_done()) {
             parse_header(*useBuff);
@@ -185,10 +182,6 @@ namespace net::http
                 if (res > 0) {
                     body_state = BodyState::fully;
                 } else if (res == 0) {
-                    if (packet_->get_buff()->readable_bytes() == 0) {
-                        packet_->get_buff()->resize(length);
-                        packet_->get_buff()->append_buffer(*useBuff);
-                    }
                     body_state = BodyState::partial;
                 }
                 return res;

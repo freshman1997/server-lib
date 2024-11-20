@@ -11,6 +11,7 @@ namespace net::websocket
     {
     public:
         WebSocketPacketParser();
+        ~WebSocketPacketParser();
 
         bool unpack(WebSocketConnection *conn);
 
@@ -23,7 +24,7 @@ namespace net::websocket
     private:
         bool read_chunk(ProtoChunk *chunk, Buffer *buff);
 
-        bool merge_frame(std::vector<ProtoChunk> *chunks);
+        bool try_merge_chunk(std::vector<ProtoChunk> *chunks, ProtoChunk **chunk);
 
         void apply_mask(Buffer *buff, uint32_t buffSize, uint8_t *mask, uint32_t len);
 
@@ -36,7 +37,7 @@ namespace net::websocket
     private:
         bool use_mask_;
         uint8_t mask_[4];
-        Buffer frame_buffer_;
+        Buffer *frame_buffer_;
     };
 }
 

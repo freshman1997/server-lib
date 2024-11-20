@@ -22,6 +22,8 @@ public:
 
     void free(Buffer *buf);
 
+    void buffer_append_size(Buffer *buf, size_t size = 0);
+
     BufferedPool();
     ~BufferedPool();
 

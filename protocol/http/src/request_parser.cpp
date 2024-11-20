@@ -167,8 +167,6 @@ namespace net::http
         return true;
     }
 
-    
-
     bool HttpRequestParser::parse_header(Buffer &buff)
     {
         int from = buff.get_read_index();
@@ -209,6 +207,7 @@ namespace net::http
             if (!parse_header_keys(buff)) {
                 buff.reset_read_index(from);
                 header_state = HeaderState::version_newline;
+                packet_->clear_header();
                 return false;
             }
 

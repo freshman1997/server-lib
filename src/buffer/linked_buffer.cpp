@@ -79,6 +79,10 @@ void LinkedBuffer::free_all_buffers()
 void LinkedBuffer::foreach(std::function<bool (Buffer *buff)> func)
 {
     for (auto it = buffers_.rbegin(); it != buffers_.rend(); ++it) {
+        if ((*it)->empty()) {
+            continue;
+        }
+
         if (!func(*it)) {
             break;
         }

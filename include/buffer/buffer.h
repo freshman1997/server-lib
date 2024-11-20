@@ -242,7 +242,9 @@ public:
     {
         if (buff.readable_bytes() > writable_size()) {
             std::vector<char> newBuffs(get_buff_size() - writable_size() + buff.readable_bytes());
-            std::memcpy(&*newBuffs.begin(), begin(), readable_bytes());
+            std::memcpy(&*newBuffs.begin(), peek(), readable_bytes());
+            write_index = readable_bytes();
+            read_index = 0;
             buffs.swap(newBuffs);
         }
 
@@ -255,6 +257,48 @@ public:
         return readable_bytes() == 0;
     }
 
+    void shink_to_fit()
+    {
+        if (buffs.size() > 8192) {
+            resize();
+        }
+
+        if (read_index == 0) {
+            return;
+        }
+
+        memmove(begin(), peek(), write_index - read_index);
+        write_index -= read_index;
+        read_index = 0;
+    }
+
+    void append_size(size_t size = 0)
+    {
+        size_t readable = readable_bytes();
+        if (size == 0) {
+            size = buffs.size() * 1.5;
+        }
+
+        std::vector<char> newBuffs(size);
+        std::memcpy(&*newBuffs.begin(), peek(), readable_bytes());
+        buffs.swap(newBuffs);
+        reset();
+        fill(readable);
+    }
+
+    void resize_copy(size_t size)
+    {
+        if (buffs.size() > size) {
+            return;
+        }
+
+        std::vector<char> newBuffs(size);
+        std::memcpy(&*newBuffs.begin(), peek(), readable_bytes());
+        write_index = readable_bytes();
+        read_index = 0;
+        buffs.swap(newBuffs);
+    }
+
 private:
     void write(const void * data, const size_t len)
     {
@@ -265,8 +309,8 @@ private:
 
     void write(const char * data, size_t len)
     {
-        if (buffs.size() < len) {
-            buffs.reserve(len);
+        if (writable_size() < len) {
+            resize_copy(readable_bytes() + len);
         }
 
         std::copy(data, data + len, begin() + write_index);

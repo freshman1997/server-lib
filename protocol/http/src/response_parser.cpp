@@ -43,6 +43,7 @@ namespace net::http
             if (!parse_header_keys(buff)) {
                 buff.reset_read_index(from);
                 header_state = HeaderState::header_status_desc_gap;
+                packet_->clear_header();
                 return false;
             }
 

@@ -3,6 +3,7 @@
 #include "singleton/singleton.h"
 #include <memory>
 #include <set>
+#include <string_view>
 
 namespace net::websocket 
 {
