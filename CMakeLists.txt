@@ -6,11 +6,6 @@ include_directories(
     include/
     third_party/json/include/
     third_party/kcp/
-    protocol/http/include
-    protocol/ftp/include
-    protocol/dns/include
-    protocol/bit_torrent/include
-    protocol/websocket/include
 )
 
 if (MINGW)
@@ -51,4 +46,4 @@ elseif(WIN32)
     target_link_libraries(base PUBLIC wsock32 kcp)
 endif()
 
-target_link_libraries(server PUBLIC base HttpProto DnsProto)
+target_link_libraries(server PUBLIC base HttpProto DnsProto FtpProto)
