@@ -195,8 +195,11 @@ namespace net::websocket
                         url_ = context->get_request()->get_raw_url();
                     }
                     
-                    state_ = State::connected;
+                    state_ = State::connected_;
                     handler_->on_connected(self_);
+
+                    delete session_;
+                    session_ = nullptr;
                 }
             }
         }
@@ -205,7 +208,7 @@ namespace net::websocket
 
         virtual void on_close(Connection *conn)
         {
-            state_ = State::closed;
+            state_ = State::closed_;
             if (session_) {
                 delete session_;
                 session_ = nullptr;
@@ -216,7 +219,7 @@ namespace net::websocket
     public:
         bool send(Buffer *buff, PacketType pktType)
         {
-            if (state_ != State::connected) {
+            if (state_ != State::connected_) {
                 return false;
             }
 
@@ -270,6 +273,7 @@ namespace net::websocket
             buf->write_uint8(0x01);
             buf->write_uint8(0x02);
             send(buf, PacketType::pong_);
+            state_ = State::closing_;
         }
 
         void send_close_frame()
@@ -335,10 +339,27 @@ namespace net::websocket
         return data_->send(buf, pktType);
     }
 
+    bool WebSocketConnection::send(const char *data, size_t len, PacketType pktType)
+    {
+        if (data_->state_ != State::connected_) {
+            return false;
+        }
+        
+        Buffer *buff = BufferedPool::get_instance()->allocate(len);
+        buff->write_string(data, len);
+
+        bool res = send(buff, pktType);
+        if (!res) {
+            BufferedPool::get_instance()->free(buff);
+        }
+
+        return res;
+    }
+
     void WebSocketConnection::close()
     {
         assert(data_->conn_);
-        data_->state_ = State::closing;
+        data_->state_ = State::closing_;
         data_->send_close_frame();
         data_->conn_->close();
     }

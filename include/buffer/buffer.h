@@ -259,8 +259,10 @@ public:
 
     void shink_to_fit()
     {
-        if (buffs.size() > 8192) {
+        if (empty() && buffs.size() > 8192) {
             resize();
+            reset();
+            return;
         }
 
         if (read_index == 0) {

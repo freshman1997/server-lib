@@ -32,8 +32,8 @@ Buffer * BufferedPool::allocate(const std::size_t sz)
     free_list_.pop_back();
     buf->resize(sz);
     using_list_.insert(buf);
-    check_size();
 
+    //check_size();
 
     return buf;
 }
@@ -80,6 +80,6 @@ void BufferedPool::buffer_append_size(Buffer *buf, size_t size)
 {
     if (buf) {
         buf->append_size(size);
-        check_size();
+        //check_size();
     }
 }

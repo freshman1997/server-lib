@@ -27,9 +27,9 @@ namespace net::websocket
         enum class State
         {
             connecting_,
-            connected,
-            closing,
-            closed
+            connected_,
+            closing_,
+            closed_
         };
 
         enum class PacketType : uint8_t
@@ -50,6 +50,8 @@ namespace net::websocket
         
         bool send(Buffer *buf, PacketType pktType = WebSocketConnection::PacketType::text_);
 
+        bool send(const char *data, size_t len, PacketType pktType = WebSocketConnection::PacketType::text_);
+
         void close();
 
         void set_handler(WebSocketHandler *handler);
@@ -64,7 +66,7 @@ namespace net::websocket
 
         bool connected() const
         {
-            return get_state() == State::connected;
+            return get_state() == State::connected_;
         }
 
         void try_set_heartbeat_timer(timer::TimerManager *timerManager);

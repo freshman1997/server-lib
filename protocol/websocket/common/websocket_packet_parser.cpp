@@ -12,26 +12,27 @@
 
 namespace net::websocket
 {
-    WebSocketPacketParser::WebSocketPacketParser() : use_mask_(false)
+    WebSocketPacketParser::WebSocketPacketParser() : use_mask_(false), frame_buffer_(nullptr)
     {
         if (use_mask_) {
             update_mask();
         }
-        frame_buffer_ = BufferedPool::get_instance()->allocate();
     }
 
     WebSocketPacketParser::~WebSocketPacketParser()
     {
-        BufferedPool::get_instance()->free(frame_buffer_);
-        frame_buffer_ = nullptr;
+        if (frame_buffer_) {
+            BufferedPool::get_instance()->free(frame_buffer_);
+            frame_buffer_ = nullptr;
+        }
     }
 
     bool WebSocketPacketParser::read_chunk(ProtoChunk *chunk, Buffer *inputBuff)
     {
-        frame_buffer_->append_buffer(*inputBuff);
+        Buffer *buff = get_frame_buffer();
+        buff->append_buffer(*inputBuff);
         inputBuff->add_read_index(inputBuff->readable_bytes());
 
-        Buffer *buff = frame_buffer_;
         std::size_t from = buff->get_read_index();
         if (!chunk->has_set_head_) {
             if (buff->readable_bytes() < 2) {
@@ -345,5 +346,13 @@ namespace net::websocket
         if (use_mask_) {
             update_mask();
         }
+    }
+
+    Buffer * WebSocketPacketParser::get_frame_buffer()
+    {
+        if (!frame_buffer_) {
+            frame_buffer_ = BufferedPool::get_instance()->allocate();
+        }
+        return frame_buffer_;
     }
 }

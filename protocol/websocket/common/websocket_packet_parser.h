@@ -34,6 +34,8 @@ namespace net::websocket
 
         bool pack_frame(Buffer *data, Buffer *buff, uint32_t size);
 
+        Buffer * get_frame_buffer();
+
     private:
         bool use_mask_;
         uint8_t mask_[4];
