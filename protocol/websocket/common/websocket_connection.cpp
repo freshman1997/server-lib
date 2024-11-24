@@ -147,8 +147,7 @@ namespace net::websocket
                         return;
                     }
                 } else {
-                    send_close_frame();
-                    conn->close();
+                    self_->close(WebSocketCloseCode::invalid_palyload_);
                 }
             } else {
                 assert(state_ == State::connecting_);
@@ -276,22 +275,28 @@ namespace net::websocket
             state_ = State::closing_;
         }
 
-        void send_close_frame()
+        void send_close_frame(uint16_t code)
         {
             Buffer *buf = BufferedPool::get_instance()->allocate(4);
             buf->write_uint8(0x88);
             buf->write_uint8(0x02);
 
             // 这里表示关闭连接的原因码为 1000
-            buf->write_uint8(0x03);
-            buf->write_uint8(0xE8);
+            buf->write_uint8(uint8_t((code >> 8) & 0xff));
+            buf->write_uint8(uint8_t(code & 0xff));
             send(buf, PacketType::close_);
         }
 
         void on_pong_frame()
         {
+            uint32_t timeout = WebSocketConfigManager::get_instance()->get_heat_beat_timeout();
+            if (timeout > 0) {
+                if (base::time::now() > last_active_time_ + timeout) {
+                    self_->close();
+                    return;
+                }
+            }
             last_active_time_ = base::time::now();
-            // TODO
         }
 
     public:
@@ -356,11 +361,11 @@ namespace net::websocket
         return res;
     }
 
-    void WebSocketConnection::close()
+    void WebSocketConnection::close(WebSocketCloseCode code)
     {
         assert(data_->conn_);
         data_->state_ = State::closing_;
-        data_->send_close_frame();
+        data_->send_close_frame((uint16_t)code);
         data_->conn_->close();
     }
 

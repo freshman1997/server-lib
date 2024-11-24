@@ -55,6 +55,8 @@ namespace net
         virtual LinkedBuffer * get_output_linked_buffer();
 
         virtual void forward(Connection *conn);
+
+        virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler);
         
     public: // select handler
         virtual void on_read_event();
@@ -69,14 +71,15 @@ namespace net
         void init();
 
     protected:
+        bool closed_;
+        ConnectionState state_;
         Channel *channel_;
         Socket *socket_;
         ConnectionHandler *connectionHandler_;
         EventHandler *eventHandler_;
+        std::shared_ptr<SSLHandler> ssl_handler_;
         LinkedBuffer input_buffer_;
         LinkedBuffer output_buffer_;
-        bool closed_;
-        ConnectionState state_;
     };
 }
 

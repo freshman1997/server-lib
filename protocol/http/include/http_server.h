@@ -1,5 +1,6 @@
 #ifndef __HTTP_SERVER_H__
 #define __HTTP_SERVER_H__
+#include <memory>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -7,6 +8,7 @@
 #include "net/handler/connection_handler.h"
 #include "common.h"
 #include "context.h"
+#include "net/secuity/ssl_module.h"
 #include "request_dispatcher.h"
 #include "timer/timer_manager.h"
 
@@ -84,7 +86,8 @@ namespace net::http
         Poller *poller_;
         Acceptor *acceptor_;
         EventLoop *event_loop_;
-        timer::TimerManager *timer_manager_{};
+        timer::TimerManager *timer_manager_;
+        std::shared_ptr<SSLModule> ssl_module_;
         std::unordered_map<uint64_t, HttpSession *> sessions_;
         HttpRequestDispatcher dispatcher_;
         std::unordered_map<std::string, std::string> static_paths_;

@@ -43,6 +43,7 @@ namespace net
 
         closed_ = false;
         state_ = ConnectionState::connecting;
+        ssl_handler_ = nullptr;
     }
 
     TcpConnection::~TcpConnection()
@@ -130,11 +131,17 @@ namespace net
         std::size_t sz = output_buffer_.get_size();
         int againCount = 0;
         for (int i = 0; i < sz && againCount < 10;) {
-        #ifdef _WIN32
-            int ret = ::send(channel_->get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), 0);
-        #else
-            int ret = ::send(channel_->get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), MSG_NOSIGNAL);
-        #endif
+            int ret;
+            if (ssl_handler_) {
+                ret = ssl_handler_->ssl_write(output_buffer_.get_current_buffer());
+            } else {
+                #ifdef _WIN32
+                ret = ::send(channel_->get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), 0);
+            #else
+                ret = ::send(channel_->get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), MSG_NOSIGNAL);
+            #endif
+            }
+        
             if (ret > 0) {
                 if (ret >= output_buffer_.get_current_buffer()->readable_bytes()) {
                     output_buffer_.get_current_buffer()->reset();
@@ -206,11 +213,17 @@ namespace net
             if (read) {
                 buf = input_buffer_.allocate_buffer();
             }
-        #ifndef _WIN32
-            bytes = ::read(channel_->get_fd(), buf->buffer_begin(), buf->writable_size());
-        #else
-            bytes = ::recv(channel_->get_fd(), buf->buffer_begin(), buf->writable_size(), 0);
-        #endif
+
+            if (ssl_handler_) {
+                bytes = ssl_handler_->ssl_read(buf);
+            } else {
+                #ifndef _WIN32
+                    bytes = ::read(channel_->get_fd(), buf->buffer_begin(), buf->writable_size());
+                #else
+                    bytes = ::recv(channel_->get_fd(), buf->buffer_begin(), buf->writable_size(), 0);
+                #endif
+            }
+        
             if (bytes <= 0) {
                 if (bytes == 0) {
                     closed_ = true;
@@ -306,5 +319,10 @@ namespace net
         *out = input_buffer_;
         input_buffer_.clear();
         input_buffer_.allocate_buffer();
+    }
+
+    void TcpConnection::set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler)
+    {
+        ssl_handler_ = sslHandler;
     }
 }

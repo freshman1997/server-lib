@@ -34,11 +34,14 @@ namespace net
 
         virtual void set_connection_handler(ConnectionHandler *connHandler);
 
+        virtual void set_ssl_module(std::shared_ptr<SSLModule> module);
+
     protected:
         Channel *channel_;
         Socket *socket_;
         EventHandler *handler_;
         ConnectionHandler *conn_handler_;
+        std::shared_ptr<SSLModule> ssl_module_;
     };
 }
 

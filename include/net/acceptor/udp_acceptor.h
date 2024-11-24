@@ -37,6 +37,8 @@ namespace net
 
         virtual void set_connection_handler(ConnectionHandler *connHandler);
 
+        virtual void set_ssl_module(std::shared_ptr<SSLModule> module) {}
+
     public:
         int send_to(Connection *conn, Buffer *buff);
 

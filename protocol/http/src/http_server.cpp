@@ -1,13 +1,13 @@
 #include "net/poller/epoll_poller.h"
 #include "net/poller/select_poller.h"
 #include "net/poller/kqueue_poller.h"
+#include "net/secuity/openssl.h"
 #include <cerrno>
 #include <cstddef>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <string>
-#include <sstream>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -37,7 +37,7 @@
 
 namespace net::http
 {
-    HttpServer::HttpServer() : quit_(false), state_(State::invalid), acceptor_(nullptr), event_loop_(nullptr), timer_manager_(nullptr), proxy_(nullptr), poller_(nullptr)
+    HttpServer::HttpServer() : quit_(false), state_(State::invalid), acceptor_(nullptr), event_loop_(nullptr), timer_manager_(nullptr), proxy_(nullptr), poller_(nullptr), ssl_module_(nullptr)
     {
         
     }
@@ -165,19 +165,28 @@ namespace net::http
 
         if (!poller_->init()) {
             std::cerr << " poller init failed!!! " << std::endl;
-            delete poller_;
-            poller_ = nullptr;
+            delete sock;
+            sock = nullptr;
             return false;
         }
 
         acceptor_ = new TcpAcceptor(sock);
         if (!acceptor_->listen()) {
             std::cerr << " listen failed!!! " << std::endl;
-            delete acceptor_;
-            acceptor_ = nullptr;
             return false;
         }
 
+    #ifdef USE_SSL
+        ssl_module_ = std::make_shared<OpenSSLModule>();
+        if (!ssl_module_->init("ca-cert.pem", "ca-key.pem")) {
+            if (auto msg = ssl_module_->get_error_message()) {
+                std::cerr << msg->c_str() << '\n';
+            }
+            return false;
+        }
+
+        acceptor_->set_ssl_module(ssl_module_);
+    #endif
         config::load_config();
         load_static_paths();
 

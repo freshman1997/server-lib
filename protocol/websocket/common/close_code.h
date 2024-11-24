@@ -1,5 +1,6 @@
 #ifndef __NET_WEBSOCKET_COMMON_CLOSE_CODE_H__
 #define __NET_WEBSOCKET_COMMON_CLOSE_CODE_H__
+#include <cstdint>
 
 namespace net::websocket 
 {
@@ -9,7 +10,7 @@ namespace net::websocket
     // | 49152-65535 | 为扩展保留 |
     // 扩展原因码（后 8 位）
     // 扩展原因码是由 WebSocket 应用程序或框架自定义的，用于提供更详细的关闭连接原因。标准原因码的后 8 位为 0，而扩展原因码的后 8 位不为 0。
-    enum class WebSocketCloseCode
+    enum class WebSocketCloseCode : uint16_t
     {
         normal_close_               = 1000, // 正常关闭
         going_away_                 = 1001, // 终端离开

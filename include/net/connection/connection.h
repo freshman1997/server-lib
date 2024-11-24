@@ -1,7 +1,9 @@
 #ifndef __CONNECTION_H__
 #define __CONNECTION_H__
 #include "net/handler/select_handler.h"
+#include "net/secuity/ssl_handler.h"
 #include <functional>
+#include <memory>
 
 class Buffer;
 class LinkedBuffer;
@@ -68,6 +70,8 @@ namespace net
         virtual LinkedBuffer * get_output_linked_buffer() = 0;
 
         virtual void forward(Connection *conn) = 0;
+
+        virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler) = 0;
     };
 }
 

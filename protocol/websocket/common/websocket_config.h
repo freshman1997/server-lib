@@ -14,6 +14,7 @@ namespace net::websocket
     extern std::string_view client_support_protos_key;
     extern std::string_view server_use_mask_key;
     extern std::string_view client_use_mask_key;
+    extern std::string_view heat_beat_timeout_key;
 
     class WebSocketConfigManager : public singleton::Singleton<WebSocketConfigManager>
     {
@@ -39,6 +40,8 @@ namespace net::websocket
         bool is_server_use_mask();
 
         bool is_client_use_mask();
+
+        uint32_t get_heat_beat_timeout();
         
     private:
         class ConfigData;

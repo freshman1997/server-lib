@@ -42,19 +42,8 @@ namespace net
             return addr;
         }
 
-        void set_id(int id)
-        {
-            id_= id;
-        }
-
-        int get_id() const
-        {
-            return id_;
-        }
-
     private:
         int fd_;
-        int id_;
         InetAddress *addr;
     };
 }

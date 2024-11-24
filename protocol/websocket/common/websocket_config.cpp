@@ -16,6 +16,7 @@ namespace net::websocket
     std::string_view client_support_protos_key = "client_support_protos";
     std::string_view server_use_mask_key = "server_use_mask";
     std::string_view client_use_mask_key = "client_use_mask";
+    std::string_view heat_beat_timeout_key = "heat_beat_timeout";
 
     class WebSocketConfigManager::ConfigData
     {
@@ -119,11 +120,16 @@ namespace net::websocket
 
     bool WebSocketConfigManager::is_server_use_mask()
     {
-        return data_->config_json_.value(server_use_mask_key, false);
+        return data_->config_json_.value(server_use_mask_key, 0);
     }
 
     bool WebSocketConfigManager::is_client_use_mask()
     {
-        return data_->config_json_.value(client_use_mask_key, false);
+        return data_->config_json_.value(client_use_mask_key, 0);
+    }
+
+    uint32_t WebSocketConfigManager::get_heat_beat_timeout()
+    {
+        return data_->config_json_.value(heat_beat_timeout_key, 0);
     }
 }

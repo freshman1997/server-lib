@@ -21,7 +21,6 @@ namespace net
     {
         fd_ = fd;
         addr = nullptr;
-        id_ = -1;
         
         const std::string &realIp = !*ip ? "" : InetAddress::get_address_by_host(ip);
         addr = new InetAddress(realIp.c_str(), port);

@@ -59,6 +59,8 @@ namespace net
         
         virtual void forward(Connection *conn);
 
+        virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler);
+
     public: // select handler
         virtual void on_read_event();
 

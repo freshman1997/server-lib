@@ -5,6 +5,7 @@
 #include "net/handler/connection_handler.h"
 #include "timer/timer_manager.h"
 #include "websocket_protocol.h"
+#include "close_code.h"
 
 #include <memory>
 #include <string>
@@ -52,7 +53,7 @@ namespace net::websocket
 
         bool send(const char *data, size_t len, PacketType pktType = WebSocketConnection::PacketType::text_);
 
-        void close();
+        void close(WebSocketCloseCode code = WebSocketCloseCode::normal_close_);
 
         void set_handler(WebSocketHandler *handler);
 

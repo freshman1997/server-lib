@@ -280,4 +280,9 @@ namespace net
         input_buffer_.clear();
         input_buffer_.allocate_buffer();
     }
+
+    void UdpConnection::set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler)
+    {
+        assert(false);
+    }
 }
