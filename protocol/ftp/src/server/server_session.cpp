@@ -23,7 +23,7 @@ namespace net::ftp
             return true;
         });
 
-        const auto &cmds = command_parser_.split_cmds(delimiter.begin(), " ");
+        const auto &cmds = command_parser_.split_cmds(delimiter.data(), " ");
         if (cmds.empty()) {
             std::cout << "command did not receive all!\n";
             return;

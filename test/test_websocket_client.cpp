@@ -3,6 +3,10 @@
 #include "websocket.h"
 #include <iostream>
 
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
 class TestClient : public net::websocket::WebSocketDataHandler
 {
 public:
@@ -27,6 +31,14 @@ public:
 
 int main()
 {
+#ifdef _WIN32
+    WSADATA wsa;
+    if (const int iResult = WSAStartup(MAKEWORD(2, 2), &wsa);iResult != NO_ERROR) {
+        wprintf(L"WSAStartup failed with error: %d\n", iResult);
+        return 1;
+    }
+#endif
+
     TestClient tc;
     net::websocket::WebSocketClient client;
     if (!client.create({"192.168.96.128", 12211})) {
@@ -36,5 +48,8 @@ int main()
     client.set_data_handler(&tc);
     client.run();
 
+#ifdef _WIN32
+    WSACleanup();
+#endif
     return 0;
 }

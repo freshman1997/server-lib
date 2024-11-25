@@ -116,7 +116,7 @@ namespace net::websocket
         static int calc_head_size(uint32_t dataSize, bool setMask = true)
         {
             int res = 2;
-            if (dataSize <= std::numeric_limits<short>::max()) {
+            if (dataSize <= 0xffff) {
                 res += 2;
             } else if (dataSize <= PACKET_MAX_BYTE) {
                 res += 8;

@@ -32,7 +32,7 @@ namespace net::websocket
             try {
                 if (!input.good()) {
                     std::cout << "not found config file: " << config_file_path_ << "\n";
-                    return false;
+                    return true;
                 }
 
                 const nlohmann::json &jval = nlohmann::json::parse(input);

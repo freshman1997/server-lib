@@ -11,6 +11,9 @@
 #include "data_handler.h"
 #include "../common/websocket_config.h"
 
+#include <iostream>
+#include <winsock2.h>
+
 namespace net::websocket
 {
     WebSocketServer::WebSocketServer()

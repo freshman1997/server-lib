@@ -20,11 +20,11 @@ namespace net::ftp
         }
     }
 
-    std::vector<FtpCommand> FtpCommandParser::split_cmds(const std::string &endWith, const std::string &splitStr)
+    std::vector<FtpCommand> FtpCommandParser::split_cmds(const std::string_view &endWith, const std::string &splitStr)
     {
         const char *begin = buff_->peek();
         const char *end = buff_->peek_end();
-        int idx = base::util::find_first(begin, end, endWith.c_str());
+        int idx = base::util::find_first(begin, end, endWith.data());
         if (idx < 0) {
             return {};
         }
@@ -46,7 +46,7 @@ namespace net::ftp
             }
 
             begin += idx + endWith.size();
-            idx = base::util::find_first(begin, end, endWith.c_str());
+            idx = base::util::find_first(begin, end, endWith.data());
 
             res.push_back({cmd, args});
         }

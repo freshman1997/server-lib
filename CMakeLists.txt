@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.12)
 project(server-lib)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static")
 
 include_directories(
     third_party/json/include/
     third_party/kcp/
-    third_party/openssl/include/
+    third_party/openssl-3.4.0/include/
 )
 
 set(HTTP_USE_SSL ON)
@@ -30,8 +30,10 @@ target_link_directories(base PUBLIC third_party/openssl-3.4.0)
 
 if(UNIX OR APPLE)
     target_link_libraries(base PUBLIC pthread kcp ssl crypto)
+elseif(MINGW)
+    target_link_libraries(base PUBLIC kcp ssl crypto wsock32 ws2_32 crypt32)
 elseif(WIN32)
-    target_link_libraries(base PUBLIC wsock32 kcp)
+    target_link_libraries(base PUBLIC kcp libssl libcrypto wsock32 ws2_32 crypt32)
 endif()
 
 target_link_libraries(server PUBLIC base HttpProto DnsProto FtpProto)

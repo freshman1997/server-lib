@@ -15,7 +15,7 @@ namespace net::ftp
         ~FtpCommandParser();
 
     public:
-        std::vector<FtpCommand> split_cmds(const std::string &endWith, const std::string &splitStr);
+        std::vector<FtpCommand> split_cmds(const std::string_view &endWith, const std::string &splitStr);
 
         void set_buff(Buffer *buff);
 
