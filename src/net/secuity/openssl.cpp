@@ -15,10 +15,26 @@ namespace net
         return 0;
     }
 
-    class OpenSSLModule::AcceptorData
+    int my_verify_callback(int preverify_ok, X509_STORE_CTX *ctx) 
+    {
+        // 获取服务器的证书
+        X509 *server_cert = X509_STORE_CTX_get_current_cert(ctx);
+        if (!server_cert) {
+            // 错误处理
+            return 0;
+        }
+
+        // 在这里实现自定义的证书验证逻辑
+        // 例如，可以检查证书的颁发机构、有效期等
+        // 如果验证通过，返回 1；否则返回 0
+        // 注意：这里只是一个示例，实际应用中需要更严格的验证逻辑
+        return preverify_ok;
+    }
+
+    class OpenSSLModule::ModuleData
     {
     public:
-        ~AcceptorData()
+        ~ModuleData()
         {
             if (ctx_) {
                 SSL_CTX_free(ctx_);
@@ -35,11 +51,12 @@ namespace net
         }
 
     public:
+        bool believe_self_sign_ = false;
         std::string *errmsg_ = nullptr;
         SSL_CTX *ctx_ = nullptr;
     };
 
-    OpenSSLModule::OpenSSLModule() : data_(std::make_unique<OpenSSLModule::AcceptorData>()) {}
+    OpenSSLModule::OpenSSLModule() : data_(std::make_unique<OpenSSLModule::ModuleData>()) {}
 
     OpenSSLModule::~OpenSSLModule()
     {
@@ -81,6 +98,8 @@ namespace net
         }
 
         data_->ctx_ = ctx;
+
+        set_believe_self_sign_ca(data_->believe_self_sign_);
         
         return true;
     }
@@ -108,6 +127,16 @@ namespace net
         handler->set_user_data(this, ssl, mode);
 
         return handler;
+    }
+
+    void OpenSSLModule::set_believe_self_sign_ca(bool on)
+    {
+        data_->believe_self_sign_ = on;
+        if (data_->ctx_) {
+            if (on) {
+                SSL_CTX_set_verify(data_->ctx_, SSL_VERIFY_PEER, my_verify_callback);
+            }
+        }
     }
 
     void OpenSSLModule::set_error_msg(const char *msg, size_t len)
