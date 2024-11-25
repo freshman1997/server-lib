@@ -8,3 +8,9 @@ cmake-build-release
 GPATH
 GRTAGS
 GTAGS
+*.o
+*.a
+*.d
+*.s
+*.pc
+*.cmake

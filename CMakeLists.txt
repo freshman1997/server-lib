@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.12)
 project(server-lib)
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static")
 
 include_directories(
     third_party/json/include/
@@ -8,21 +9,7 @@ include_directories(
     third_party/openssl/include/
 )
 
-if (MINGW)
-    add_compile_options("-static")
-endif()
-
-if (MSVC)
-
-elseif(UNIX)
-    add_compile_options(-static)
-elseif(APPLE)
-    add_compile_options(-static)
-endif()
-
-
-set(ENABLE_SSL OFF)
-add_compile_definitions(HTTP_USE_SSL)
+set(HTTP_USE_SSL ON)
 
 FILE(GLOB_RECURSE SERVER_SRC "./src/*.cpp")
 
