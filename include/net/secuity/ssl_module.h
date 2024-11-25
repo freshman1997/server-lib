@@ -17,6 +17,8 @@ namespace net
         virtual const std::string * get_error_message() = 0;
 
         virtual std::shared_ptr<SSLHandler> create_handler(int fd, SSLHandler::SSLMode mode) = 0;
+
+        virtual void set_believe_self_sign_ca(bool on) = 0;
     };
 }
 

@@ -19,12 +19,14 @@ namespace net
 
         virtual std::shared_ptr<SSLHandler> create_handler(int fd, SSLHandler::SSLMode mode);
 
+        virtual void set_believe_self_sign_ca(bool on);
+
     public:
         void set_error_msg(const char *msg, size_t len);
 
     private:
-        class AcceptorData;
-        std::unique_ptr<AcceptorData> data_;
+        class ModuleData;
+        std::unique_ptr<ModuleData> data_;
     };
 
     class OpenSSLHandler : public SSLHandler
