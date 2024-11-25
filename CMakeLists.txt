@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 include_directories(
     third_party/json/include/
     third_party/kcp/
+    third_party/openssl/include/
 )
 
 if (MINGW)
@@ -19,11 +20,9 @@ elseif(APPLE)
     add_compile_options(-static)
 endif()
 
-# 查找 OpenSSL 库
-find_package(OpenSSL REQUIRED)
 
-# 添加 OpenSSL 头文件目录
-include_directories(${OPENSSL_INCLUDE_DIR})
+set(ENABLE_SSL OFF)
+add_compile_definitions(HTTP_USE_SSL)
 
 FILE(GLOB_RECURSE SERVER_SRC "./src/*.cpp")
 
@@ -40,8 +39,10 @@ add_subdirectory(test)
 
 add_executable(server main.cpp)
 
+target_link_directories(base PUBLIC third_party/openssl-3.4.0)
+
 if(UNIX OR APPLE)
-    target_link_libraries(base PUBLIC pthread kcp ${OPENSSL_LIBRARIES})
+    target_link_libraries(base PUBLIC pthread kcp ssl crypto)
 elseif(WIN32)
     target_link_libraries(base PUBLIC wsock32 kcp)
 endif()

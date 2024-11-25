@@ -9,12 +9,10 @@ namespace net
     class SSLModule
     {
     public:
-        
-
         virtual ~SSLModule() {}
 
     public:
-        virtual bool init(const std::string &cert, const std::string &privateKey) = 0;
+        virtual bool init(const std::string &cert, const std::string &privateKey, SSLHandler::SSLMode mode) = 0;
 
         virtual const std::string * get_error_message() = 0;
 

@@ -2,12 +2,14 @@
 #define __NET_HTTP_CLIETNT_H__
 #include "net/event/event_loop.h"
 #include "net/handler/connection_handler.h"
+#include "net/secuity/ssl_module.h"
 #include "net/socket/inet_address.h"
 #include "timer/timer.h"
 #include "timer/timer_task.h"
 #include "common.h"
 
 #include <functional>
+#include <memory>
 
 namespace net::http 
 {
@@ -49,6 +51,7 @@ namespace net::http
         connected_callback ccb_;
         timer::TimerManager *timer_manager_;
         timer::Timer *conn_timer_;
+        std::shared_ptr<SSLModule> ssl_module_;
     };
 }
 

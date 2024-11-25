@@ -3,8 +3,8 @@
 
 #include <cstring>
 #include <memory>
-#include <openssl/ssl.h>
-#include <openssl/err.h>
+#include "openssl/ssl.h"
+#include "openssl/err.h"
 
 namespace net 
 {
@@ -46,14 +46,20 @@ namespace net
         
     }
 
-    bool OpenSSLModule::init(const std::string &cert, const std::string &privateKey)
+    bool OpenSSLModule::init(const std::string &cert, const std::string &privateKey, SSLHandler::SSLMode mode)
     {
         SSL_library_init();
         SSL_load_error_strings();
         ERR_load_crypto_strings();
         OpenSSL_add_all_algorithms();
 
-        SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+        SSL_CTX *ctx = nullptr;
+        if (mode == SSLHandler::SSLMode::acceptor_) {
+            ctx = SSL_CTX_new(TLS_server_method());
+        } else {
+            ctx = SSL_CTX_new(TLS_client_method());
+        }
+
         if (!ctx) {
             ERR_print_errors_cb(set_err_msg, this);
             return false;

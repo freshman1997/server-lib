@@ -181,7 +181,7 @@ namespace net::ftp
 
     bool FtpSession::send_command(const std::string &cmd)
     {
-        if (!context_.conn_ && !context_.conn_->is_connected()) {
+        if (!context_.conn_ || !context_.conn_->is_connected()) {
             return false;
         }
 

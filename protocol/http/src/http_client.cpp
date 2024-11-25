@@ -9,6 +9,7 @@
 #include "ops/option.h"
 #include "session.h"
 #include "timer/wheel_timer_manager.h"
+#include "net/secuity/openssl.h"
 
 namespace net::http 
 {
@@ -18,6 +19,7 @@ namespace net::http
         ccb_ = nullptr;
         rcb_ = nullptr;
         conn_timer_ = nullptr;
+        ssl_module_ = nullptr;
     }
 
     HttpClient::~HttpClient()
@@ -120,6 +122,20 @@ namespace net::http
         config::load_config();
 
         Connection *conn = new TcpConnection(sock);
+
+    #ifdef HTTP_USE_SSL
+        ssl_module_ = std::make_shared<OpenSSLModule>();
+        if (!ssl_module_->init("ca-cert.pem", "ca-key.pem", SSLHandler::SSLMode::connector_)) {
+            if (auto msg = ssl_module_->get_error_message()) {
+                std::cerr << msg->c_str() << '\n';
+            }
+            conn->abort();
+            return false;
+        }
+
+        conn->set_ssl_handler(ssl_module_->create_handler(sock->get_fd(), SSLHandler::SSLMode::connector_));
+    #endif
+
         timer::WheelTimerManager manager;
         conn_timer_ = manager.timeout(config::connection_idle_timeout, this);
 

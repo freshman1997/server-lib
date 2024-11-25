@@ -176,9 +176,9 @@ namespace net::http
             return false;
         }
 
-    #ifdef USE_SSL
+    #ifdef HTTP_USE_SSL
         ssl_module_ = std::make_shared<OpenSSLModule>();
-        if (!ssl_module_->init("ca-cert.pem", "ca-key.pem")) {
+        if (!ssl_module_->init("ca-cert.pem", "ca-key.pem", SSLHandler::SSLMode::acceptor_)) {
             if (auto msg = ssl_module_->get_error_message()) {
                 std::cerr << msg->c_str() << '\n';
             }
