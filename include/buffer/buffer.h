@@ -241,7 +241,7 @@ public:
     void append_buffer(const Buffer &buff)
     {
         if (buff.readable_bytes() > writable_size()) {
-            std::vector<char> newBuffs(get_buff_size() - writable_size() + buff.readable_bytes());
+            std::vector<char> newBuffs(readable_bytes() + buff.readable_bytes());
             std::memcpy(&*newBuffs.begin(), peek(), readable_bytes());
             write_index = readable_bytes();
             read_index = 0;

@@ -188,12 +188,9 @@ namespace net::websocket
                         return false;
                     }
 
-                    if(!chunk->head_.is_fin()) {
-                        return true;
-                    }
-
                     if (chunk->body_) {
                         assert(chunk->head_.extend_pay_load_len_ == chunk->body_->readable_bytes());
+                        chunk->head_.ctrl_code_.fin_ |= 1;
                     }
 
                     if (chunk->head_.need_mask()) {

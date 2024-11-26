@@ -1,7 +1,11 @@
+#include "base/time.h"
+#include "base/utils/base64.h"
 #include "buffer/pool.h"
 #include "websocket.h"
 #include "buffer/buffer.h"
+#include <fstream>
 #include <iostream>
+#include <string>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -17,8 +21,12 @@ public:
 
     virtual void on_data(net::websocket::WebSocketConnection *wsConn, const Buffer *buff)
     {
-        std::string str(buff->peek(), buff->peek_end());
-        std::cout << "recv: " << str << '\n';
+        std::ofstream file(std::to_string(base::time::now()));
+        if (file.good()) {
+            file.write(buff->peek(), buff->readable_bytes());
+            file.close();
+        }
+
         Buffer *data = BufferedPool::get_instance()->allocate(buff->readable_bytes());
         data->append_buffer(*buff);
         wsConn->send(data);

@@ -111,6 +111,7 @@ namespace net::websocket
                                 on_pong_frame();
                             } else {
                                 if (chunk->body_) {
+                                    assert(chunk->head_.extend_pay_load_len_ == chunk->body_->readable_bytes());
                                     handler_->on_receive_packet(self_, chunk->body_);
                                 } else {
                                     std::cout << "internal error occured !!\n";
