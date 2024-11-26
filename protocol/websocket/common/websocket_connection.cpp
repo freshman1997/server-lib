@@ -255,23 +255,17 @@ namespace net::websocket
 
         void send_ping_frame()
         {
-            Buffer *buf = BufferedPool::get_instance()->allocate(5);
+            Buffer *buf = BufferedPool::get_instance()->allocate(2);
             buf->write_uint8(0x89);
-            buf->write_uint8(0x03);
             buf->write_uint8(0x00);
-            buf->write_uint8(0x01);
-            buf->write_uint8(0x02);
             send(buf, PacketType::ping_);
         }
 
         void send_pong_frame()
         {
-            Buffer *buf = BufferedPool::get_instance()->allocate(5);
+            Buffer *buf = BufferedPool::get_instance()->allocate(2);
             buf->write_uint8(0x8a);
-            buf->write_uint8(0x03);
             buf->write_uint8(0x00);
-            buf->write_uint8(0x01);
-            buf->write_uint8(0x02);
             send(buf, PacketType::pong_);
             state_ = State::closing_;
         }

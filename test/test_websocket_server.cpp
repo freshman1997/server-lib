@@ -21,7 +21,7 @@ public:
 
     virtual void on_data(net::websocket::WebSocketConnection *wsConn, const Buffer *buff)
     {
-        std::ofstream file(std::to_string(base::time::now()));
+        std::ofstream file("data.txt");
         if (file.good()) {
             file.write(buff->peek(), buff->readable_bytes());
             file.close();

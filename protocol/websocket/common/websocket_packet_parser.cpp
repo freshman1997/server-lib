@@ -27,17 +27,13 @@ namespace net::websocket
         }
     }
 
-    bool WebSocketPacketParser::read_chunk(ProtoChunk *chunk, Buffer *inputBuff)
+    int WebSocketPacketParser::read_chunk(ProtoChunk *chunk, Buffer *buff)
     {
-        Buffer *buff = get_frame_buffer();
-        buff->append_buffer(*inputBuff);
-        inputBuff->add_read_index(inputBuff->readable_bytes());
-
         std::size_t from = buff->get_read_index();
         if (!chunk->has_set_head_) {
             if (buff->readable_bytes() < 2) {
                 buff->reset_read_index(from);
-                return true;
+                return 1;
             }
 
             chunk->head_.ctrl_code_.set_ctrl(buff->read_uint8());
@@ -49,34 +45,31 @@ namespace net::websocket
             } else if (payloadLen <= 126) {
                 if (buff->readable_bytes() < 2) {
                     buff->reset_read_index(from);
-                    return true;
+                    return 1;
                 }
                 chunk->head_.extend_pay_load_len_ = buff->read_uint16() & 0xffff;
             } else {
                 if (buff->readable_bytes() < 8) {
                     buff->reset_read_index(from);
-                    return true;
+                    return 1;
                 }
                 chunk->head_.extend_pay_load_len_ = buff->read_uint64();
             }
 
             if (chunk->head_.extend_pay_load_len_ > PACKET_MAX_BYTE) {
-                return false;
+                return -1;
             }
 
             if (buff->readable_bytes() < chunk->head_.extend_pay_load_len_) {
                 buff->reset_read_index(from);
-                if (buff->writable_size() < chunk->head_.extend_pay_load_len_) {
-                    buff->resize_copy(chunk->head_.extend_pay_load_len_);
-                }
-                return true;
+                return 1;
             }
 
             // set mask key
             if (chunk->head_.need_mask()) {
                 if (buff->readable_bytes() < 4) {
                     buff->reset_read_index(from);
-                    return true;
+                    return 1;
                 }
 
                 for (int i = 0; i < 4; ++i) {
@@ -108,15 +101,9 @@ namespace net::websocket
                 chunk->body_->write_string(buff->peek(), chunk->head_.extend_pay_load_len_);
                 buff->add_read_index(chunk->head_.extend_pay_load_len_);
             }
-
-            frame_buffer_->shink_to_fit();
         }
 
-        if (frame_buffer_->empty()) {
-            frame_buffer_->reset();
-        }
-
-        return true;
+        return 0;
     }
 
     void WebSocketPacketParser::apply_mask(Buffer *buff, uint32_t buffSize, uint8_t *mask, uint32_t len)
@@ -137,74 +124,93 @@ namespace net::websocket
         }
     }
 
-    bool WebSocketPacketParser::try_merge_chunk(std::vector<ProtoChunk> *chunks, ProtoChunk **chunk)
-    {
-        if (chunks->size() < 2) {
-            return true;
-        }
-
-        // 当前chunk的前一个
-        if (chunks->at(chunks->size() - 2).head_.is_fin()) {
-            return true;
-        }
-
-        // 当前chunk没有包体或上一chunk
-        if (!chunks->at(chunks->size() - 1).body_ || chunks->at(chunks->size() - 2).body_) {
-            return false;
-        }
-
-        chunks->at(chunks->size() - 2).body_->append_buffer(*(*chunk)->body_);
-        bool isFin = (*chunk)->head_.is_fin();
-        chunks->pop_back();
-        *chunk = &chunks->back();
-        
-        if (isFin) {
-            (*chunk)->head_.ctrl_code_.fin_ |= 1;
-        }
-
-        return true;
-    }
-
     bool WebSocketPacketParser::unpack(WebSocketConnection *conn)
     {
         bool res = true;
         conn->get_native_connection()->process_input_data([conn, this, &res](Buffer *buff) -> bool 
         {
+            frame_buffer_ = get_frame_buffer();
             auto chunks = conn->get_input_chunks();
-            if (chunks->empty()) {
+            if (chunks->empty() || chunks->back().head_.is_fin()) {
                 chunks->push_back(ProtoChunk());
             }
 
-            auto *chunk = &chunks->back();
+            auto pc = &chunks->back();
             while (!buff->empty()) {
-                if (!read_chunk(chunk, buff)) {
+                int unpackRes = -1;
+                ProtoChunk chunk;
+                if (frame_buffer_->empty()) {
+                    unpackRes = read_chunk(&chunk, buff);
+                } else {
+                    frame_buffer_->append_buffer(*buff);
+                    buff->set_read_index(buff->readable_bytes());
+                    unpackRes = read_chunk(&chunk, frame_buffer_);
+                }
+
+                if (unpackRes < 0) {
                     res = false;
-                    return false;
+                    return res;
                 }
 
-                if (chunk->is_completed()) {
-                    if (!try_merge_chunk(chunks, &chunk)) {
-                        res = false;
-                        return false;
+                if (unpackRes == 1) {
+                    if (!buff->empty()) {
+                        frame_buffer_->append_buffer(*buff);
                     }
+                    return true;
+                }
 
-                    if (chunk->body_) {
-                        assert(chunk->head_.extend_pay_load_len_ == chunk->body_->readable_bytes());
-                        chunk->head_.ctrl_code_.fin_ |= 1;
-                    }
-
-                    if (chunk->head_.need_mask()) {
-                        if (!chunk->body_) {
-                            return false;
+                bool merge = false;
+                if (pc->has_set_head_) {
+                    if (!pc->head_.is_fin()) {
+                        if (!chunk.head_.is_fin() && (!chunk.head_.is_continue_frame() || !pc->body_ || !chunk.body_)) {
+                            BufferedPool::get_instance()->free(chunk.body_);
+                            res = false;
+                            return res;
                         }
-                        apply_mask(chunk->body_, chunk->body_->readable_bytes(), chunk->head_.masking_key_, 4);
+                    } else {
+                        BufferedPool::get_instance()->free(chunk.body_);
+                        res = false;
+                        return res;
                     }
-
-                    frame_buffer_->shink_to_fit();
-
-                    chunks->push_back(ProtoChunk());
-                    chunk = &chunks->back();
+                    merge = true;
+                } else {
+                    *pc = chunk;
+                    if (!pc->head_.is_fin()) {
+                        if (!pc->head_.is_text_frame() && !pc->head_.is_binary_frame()) {
+                            BufferedPool::get_instance()->free(chunk.body_);
+                            res = false;
+                            return res;
+                        }
+                    }
                 }
+
+                // 到这里应该是已经读完包体的
+                if (chunk.body_) {
+                    assert(chunk.head_.extend_pay_load_len_ == chunk.body_->readable_bytes());
+                    if (chunk.head_.need_mask()) {
+                        apply_mask(chunk.body_, chunk.body_->readable_bytes(), chunk.head_.masking_key_, 4);
+                    }
+                }
+
+                if (merge) {
+                    // 合并
+                    pc->head_.extend_pay_load_len_ += chunk.head_.extend_pay_load_len_;
+                    // TODO 包体优化，减少拷贝
+                    pc->body_->append_buffer(*chunk.body_);
+                    BufferedPool::get_instance()->free(chunk.body_);
+                }
+
+                if (pc->head_.extend_pay_load_len_ > PACKET_MAX_BYTE) {
+                    res = false;
+                    return res;
+                }
+
+                if (chunk.head_.is_fin()) {
+                    chunks->push_back(ProtoChunk());
+                    pc = &chunks->back();
+                }
+
+                frame_buffer_->shink_to_fit();
             }
             return true;
         });
@@ -214,26 +220,31 @@ namespace net::websocket
             chunks->pop_back();
         }
 
+        frame_buffer_->shink_to_fit();
+
         return res;
     }
 
-    bool WebSocketPacketParser::pack_header(Buffer *buff, uint8_t type, uint32_t buffSize, bool isEnd)
+    bool WebSocketPacketParser::pack_header(Buffer *buff, uint8_t type, uint32_t buffSize, bool isEnd, bool isContinueFrame)
     {
         if (buff->writable_size() < 2) {
             return false;
         }
 
-        uint8_t head1 = 0;
+        uint8_t head1 = 0x00;
         if (isEnd) {
             head1 = 0b10000000;
         }
 
-        if (type == (uint8_t)OpCodeType::type_text_frame) {
-            head1 |= (uint8_t)OpCodeType::type_text_frame;
-        } else if (type == (uint8_t)OpCodeType::type_binary_frame) {
-            head1 |= (uint8_t)OpCodeType::type_binary_frame;
-        } else {
-            return false;
+        // 第一帧才设置，延续帧 opcode 都是0x00
+        if (!isContinueFrame) {
+            if (type == (uint8_t)OpCodeType::type_text_frame) {
+                head1 |= (uint8_t)OpCodeType::type_text_frame & 0xff;
+            } else if (type == (uint8_t)OpCodeType::type_binary_frame) {
+                head1 |= (uint8_t)OpCodeType::type_binary_frame & 0xff;
+            } else {
+                return false;
+            }
         }
 
         uint8_t head2 = 0;
@@ -302,13 +313,13 @@ namespace net::websocket
         uint32_t sz = data->readable_bytes() / PACKET_MAX_BYTE + 1, buffSize = 0;
         for (int i = 0; i < sz; ++i) {
             buffSize = data->readable_bytes() > PACKET_MAX_BYTE ? PACKET_MAX_BYTE : data->readable_bytes();
-            int headSize = ProtoChunk::calc_head_size(buffSize);
+            int headSize = ProtoChunk::calc_head_size(buffSize, use_mask_);
             if (headSize < 0) {
                 return false;
             }
 
             Buffer *buff = BufferedPool::get_instance()->allocate(buffSize + headSize);
-            if (!pack_header(buff, type, buffSize, i + 1 >= sz)) {
+            if (!pack_header(buff, type, buffSize, i + 1 >= sz, i > 0)) {
                 BufferedPool::get_instance()->free(buff);
                 return false;
             }

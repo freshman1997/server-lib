@@ -22,15 +22,13 @@ namespace net::websocket
         void use_mask(bool use);
         
     private:
-        bool read_chunk(ProtoChunk *chunk, Buffer *buff);
-
-        bool try_merge_chunk(std::vector<ProtoChunk> *chunks, ProtoChunk **chunk);
+        int read_chunk(ProtoChunk *chunk, Buffer *buff);
 
         void apply_mask(Buffer *buff, uint32_t buffSize, uint8_t *mask, uint32_t len);
 
         void apply_mask(Buffer *data, Buffer *buff, uint32_t buffSize);
 
-        bool pack_header(Buffer *buff, uint8_t type, uint32_t buffSize, bool isEnd);
+        bool pack_header(Buffer *buff, uint8_t type, uint32_t buffSize, bool isEnd, bool isContinueFrame);
 
         bool pack_frame(Buffer *data, Buffer *buff, uint32_t size);
 
