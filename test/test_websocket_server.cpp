@@ -49,7 +49,7 @@ int main()
 #endif
 
     net::websocket::WebSocketServer wsSvr;
-    if (!wsSvr.init()) {
+    if (!wsSvr.init(12211)) {
         return -1;
     }
 

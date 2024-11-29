@@ -39,9 +39,9 @@ namespace net::websocket
         }
     }
 
-    bool WebSocketServer::init()
+    bool WebSocketServer::init(int port)
     {
-        Socket *sock = new Socket("", 12211);
+        Socket *sock = new Socket("", port);
         sock->set_none_block(true);
         if (!sock->valid()) {
             delete sock;
@@ -115,6 +115,12 @@ namespace net::websocket
 
     void WebSocketServer::on_connected(WebSocketConnection *wsConn)
     {
+        if (connected_urls_.find(wsConn->get_url()) != connected_urls_.end()) {
+            wsConn->close();
+            return;
+        }
+
+        connected_urls_.insert(wsConn->get_url());
         wsConn->try_set_heartbeat_timer(timer_manager_);
         if (data_handler_) {
             data_handler_->on_connected(wsConn);

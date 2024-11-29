@@ -3,6 +3,6 @@
 
 int main()
 {
-    std::cout << "Hello World!!\n";
+    std::cout << "\033[32mHello \033[0mWorld!!\n";
     return 0;
 }

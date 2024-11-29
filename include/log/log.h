@@ -24,7 +24,7 @@ namespace mlog
         virtual void log(Level level, const char *fmt, ...) = 0;
 
     protected:
-        Buffer buff_;
+        Buffer *buff_;
     };
 }
 

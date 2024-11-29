@@ -3,7 +3,9 @@
 #include "../common/handler.h"
 #include "net/event/event_loop.h"
 #include "timer/timer_manager.h"
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace net::websocket 
 {
@@ -14,7 +16,7 @@ namespace net::websocket
         WebSocketServer();
         ~WebSocketServer();
 
-        bool init();
+        bool init(int port);
 
     protected:
         virtual void on_connected(Connection *conn);
@@ -48,6 +50,7 @@ namespace net::websocket
         EventLoop *loop_;
         timer::TimerManager *timer_manager_;
         std::unordered_map<Connection *, WebSocketConnection *> connections_;
+        std::unordered_set<std::string> connected_urls_;
     };
 }
 
