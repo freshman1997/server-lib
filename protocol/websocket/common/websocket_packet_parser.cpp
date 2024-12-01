@@ -8,8 +8,6 @@
 #include <cstring>
 #include <random>
 
-// https://cloud.tencent.com/developer/article/1887095
-
 namespace net::websocket
 {
     WebSocketPacketParser::WebSocketPacketParser() : use_mask_(false), frame_buffer_(nullptr)
@@ -163,12 +161,10 @@ namespace net::websocket
                 if (pc->has_set_head_) {
                     if (!pc->head_.is_fin()) {
                         if (!chunk.head_.is_fin() && (!chunk.head_.is_continue_frame() || !pc->body_ || !chunk.body_)) {
-                            BufferedPool::get_instance()->free(chunk.body_);
                             res = false;
                             return res;
                         }
                     } else {
-                        BufferedPool::get_instance()->free(chunk.body_);
                         res = false;
                         return res;
                     }
@@ -176,8 +172,7 @@ namespace net::websocket
                 } else {
                     *pc = chunk;
                     if (!pc->head_.is_fin()) {
-                        if (!pc->head_.is_text_frame() && !pc->head_.is_binary_frame()) {
-                            BufferedPool::get_instance()->free(chunk.body_);
+                        if (!pc->head_.is_continue_frame() && !pc->head_.is_text_frame() && !pc->head_.is_binary_frame()) {
                             res = false;
                             return res;
                         }
@@ -188,7 +183,7 @@ namespace net::websocket
                 if (chunk.body_) {
                     assert(chunk.head_.extend_pay_load_len_ == chunk.body_->readable_bytes());
                     if (chunk.head_.need_mask()) {
-                        apply_mask(chunk.body_, chunk.body_->readable_bytes(), chunk.head_.masking_key_, 4);
+                        apply_mask(chunk.body_, (uint32_t)chunk.body_->readable_bytes(), chunk.head_.masking_key_, 4);
                     }
                 }
 

@@ -139,6 +139,7 @@ namespace net::websocket
         if (data_handler_) {
             data_handler_->on_close(wsConn);
         }
+        connected_urls_.erase(wsConn->get_url());
         connections_.erase(wsConn->get_native_connection());
     }
 }

@@ -10,7 +10,6 @@
 
 #include "../endian/endian.hpp"
 
-// TODO fix 复用
 class Buffer
 {
 public:
@@ -290,10 +289,6 @@ public:
 
     void resize_copy(size_t size)
     {
-        if (buffs.size() > size) {
-            return;
-        }
-
         std::vector<char> newBuffs(size);
         std::memcpy(&*newBuffs.begin(), peek(), readable_bytes());
         write_index = readable_bytes();

@@ -1,5 +1,4 @@
 #include "buffer/buffer.h"
-#include <iostream>
 #include "buffer/pool.h"
 
 constexpr size_t MAX_FREE_LIST = 3;
@@ -29,10 +28,9 @@ Buffer * BufferedPool::allocate(const std::size_t sz)
     }
 
     Buffer *buf = free_list_.back();
-    free_list_.pop_back();
     buf->resize(sz);
     using_list_.insert(buf);
-
+    free_list_.pop_back();
     //check_size();
 
     return buf;

@@ -24,7 +24,7 @@ namespace net::websocket
         ConfigData()
         {
             config_file_path_ = "ws_cfg.json";
-            config_json_ = {};
+            config_json_ = nlohmann::json::object();
         }
 
         bool load_config(bool isServer)

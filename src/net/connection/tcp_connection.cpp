@@ -107,7 +107,6 @@ namespace net
 
         output_buffer_.append_buffer(buff);
         if (output_buffer_.get_current_buffer()->empty()) {
-            output_buffer_.get_current_buffer()->reset();
             output_buffer_.free_current_buffer();
         }
     }
@@ -144,7 +143,6 @@ namespace net
         
             if (ret > 0) {
                 if (ret >= output_buffer_.get_current_buffer()->readable_bytes()) {
-                    output_buffer_.get_current_buffer()->reset();
                     output_buffer_.free_current_buffer();
                 } else {
                     output_buffer_.get_current_buffer()->add_read_index(ret);
@@ -229,10 +227,16 @@ namespace net
                     closed_ = true;
                 } else if (bytes == -1) {
                     if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
+                    #ifdef _WIN32
+                        if (errno == ENOENT && WSAGetLastError() == WSAEWOULDBLOCK) {
+                            goto again;
+                        }
+                    #endif
                         connectionHandler_->on_error(this);
                         closed_ = true;
-                        break;
+                        break; 
                     }
+                again:
                     ++againCount;
                     read = false;
                 }

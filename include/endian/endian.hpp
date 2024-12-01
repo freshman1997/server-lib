@@ -58,7 +58,7 @@ namespace endian
     inline uint64_t hostToNetwork64(uint64_t host64)
     {
     #if defined(_WIN32) || defined(__APPLE__)
-        eturn htonll(host64);
+        return htonll(host64);
     #else
         return htobe64(host64);
     #endif

@@ -24,6 +24,7 @@ namespace net
         alive_timer_ = nullptr;
         adapter_ = nullptr;
         idle_cnt_ = 0;
+        input_buffer_.allocate_buffer();
     }
 
     UdpConnection::UdpConnection(const InetAddress &addr, UdpAdapter *adapter) : UdpConnection(addr)

@@ -9,10 +9,7 @@ LinkedBuffer::LinkedBuffer()
 
 LinkedBuffer::~LinkedBuffer()
 {
-    for (const auto &item : buffers_) {
-        BufferedPool::get_instance()->free(item);
-    }
-    buffers_.clear();
+    free_all_buffers();
 }
 
 LinkedBuffer & LinkedBuffer::operator=(LinkedBuffer &linkBuff)
@@ -34,16 +31,15 @@ Buffer * LinkedBuffer::allocate_buffer(std::size_t sz)
     return buf;
 }
 
-void LinkedBuffer::free_current_buffer(Buffer *replaceBuff)
+void LinkedBuffer::free_current_buffer()
 {
-    if (replaceBuff || buffers_.size() > 1) {
-        Buffer *buf = buffers_.back();
+    Buffer *buf = buffers_.back();
+    if (buffers_.size() > 1) {
         buffers_.pop_back();
         BufferedPool::get_instance()->free(buf);
-    }
-
-    if (replaceBuff) {
-        append_buffer(replaceBuff);
+    } else {
+        buf->reset();
+        buf->resize(8192);
     }
 }
 
@@ -70,7 +66,7 @@ void LinkedBuffer::clear()
 
 void LinkedBuffer::free_all_buffers()
 {
-    for (const auto &item : buffers_) {
+    for (Buffer *item : buffers_) {
         BufferedPool::get_instance()->free(item);
     }
     buffers_.clear();
