@@ -63,6 +63,7 @@ namespace net::websocket
     void WebSocketClient::on_connect_timeout(timer::Timer *timer)
     {
         state_ = State::connect_timeout_;
+        on_close((Connection *)nullptr);
     }
 
     void WebSocketClient::set_data_handler(WebSocketDataHandler *handler)
