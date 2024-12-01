@@ -1,5 +1,6 @@
 #include "buffer/buffer.h"
 #include "buffer/pool.h"
+#include <iostream>
 
 constexpr size_t MAX_FREE_LIST = 3;
 
