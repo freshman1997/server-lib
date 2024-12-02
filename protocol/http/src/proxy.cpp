@@ -80,7 +80,7 @@ namespace net::http
 
         // forwarding
         conn->forward(it->second);
-        it->second->send();
+        it->second->flush();
     }
 
     void HttpProxy::on_write(Connection *conn)

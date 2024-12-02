@@ -62,6 +62,7 @@ namespace net::http
         content_type_extra_.clear();
         error_code_ = ResponseCode::internal_server_error;
         buffer_->reset();
+        buffer_->shink_to_fit();
     }
 
     const std::string * HttpPacket::get_header(const std::string &key)
@@ -116,26 +117,16 @@ namespace net::http
 
     const char * HttpPacket::body_begin()
     {
-        return body_length_ == 0 ? nullptr : buffer_->readable_bytes() > 0 
-            ? buffer_->peek() 
-            : context_->get_connection()->get_input_buff()->peek();
+        return body_length_ == 0 ? nullptr : buffer_->peek();
     }
 
     const char * HttpPacket::body_end()
     {
         return body_length_ == 0 ? nullptr : 
             buffer_->readable_bytes() > 0 
-            ? buffer_->peek() + body_length_ 
-            : context_->get_connection()->get_input_buff()->peek() + body_length_;
+            ? buffer_->peek() + body_length_ : nullptr;
     }
     
-    void HttpPacket::read_body_done()
-    {
-        if (body_length_ > 0) {
-            context_->get_connection()->get_input_buff()->add_read_index(body_length_);
-        }
-    }
-
     std::pair<bool, uint32_t> HttpPacket::parse_content_type(const char *begin, const char *end, std::string &ctype, std::unordered_map<std::string, std::string> &extra)
     {
         const char *p = begin;
@@ -278,6 +269,6 @@ namespace net::http
         } else {
             is_good_ = false;
         }
-        conn->send();
+        conn->flush();
     }
 }

@@ -1,4 +1,4 @@
 #!/bin/sh
 
-./build_openssl.sh
-cd ./build && cmake .. && make
+mkdir -p build
+./build_openssl.sh && cd ./build && cmake .. && make

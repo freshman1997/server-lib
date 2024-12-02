@@ -71,7 +71,7 @@ namespace net::http
 
         auto buff = context_->get_connection()->get_output_buff();
         buff->write_string(response);
-        context_->get_connection()->send();
+        context_->get_connection()->flush();
         context_->get_connection()->close();
     }
 }

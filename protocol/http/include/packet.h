@@ -82,8 +82,6 @@ namespace net::http
 
         const char * body_end();
 
-        void read_body_done();
-
         ContentType get_content_type() const
         {
             return content_type_;

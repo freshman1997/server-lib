@@ -236,7 +236,7 @@ namespace net::websocket
                 output_chunks_.clear();
 
                 // flush
-                conn_->send();
+                conn_->flush();
                 BufferedPool::get_instance()->free(buff);
 
                 return true;

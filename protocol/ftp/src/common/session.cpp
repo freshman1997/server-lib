@@ -63,7 +63,6 @@ namespace net::ftp
 
     void FtpSession::on_connected(Connection *conn)
     {
-        conn->get_input_buff()->resize(1024 * 1024 * 2);
     }
 
     void FtpSession::on_error(Connection *conn)
@@ -186,7 +185,7 @@ namespace net::ftp
         }
 
         context_.conn_->get_output_buff()->write_string(cmd);
-        context_.conn_->send();
+        context_.conn_->flush();
         
         return true;
     }

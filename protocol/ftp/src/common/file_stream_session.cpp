@@ -54,15 +54,7 @@ namespace net::ftp
 
         state_ = FileSteamState::connected;
         conn_ = conn;
-        if (conn_->get_input_buff()->writable_size() < default_write_buff_size) {
-            conn_->get_input_buff()->resize(default_write_buff_size);
-        }
-
-        conn_->get_output_buff()->reset();
-        if (conn_->get_output_buff()->writable_size() < default_write_buff_size) {
-            conn_->get_output_buff()->resize(default_write_buff_size);
-        }
-
+        
         session_->on_opened(this);
         last_active_time_ = base::time::now();
     }
@@ -140,7 +132,7 @@ namespace net::ftp
                 if (newBuff) {
                     conn->write(buff);
                 }
-                conn->send();
+                conn->flush();
                 if (session_ && current_file_info_->is_completed()) {
                     state_ = FileSteamState::idle;
                     session_->on_completed(this);

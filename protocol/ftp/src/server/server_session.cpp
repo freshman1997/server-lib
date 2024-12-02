@@ -49,7 +49,7 @@ namespace net::ftp
             conn->get_output_buff()->write_string(" ");
             conn->get_output_buff()->write_string(res.body_);
             conn->get_output_buff()->write_string("\r\n");
-            conn->send();
+            conn->flush();
 
             if (res.close_) {
                 quit();

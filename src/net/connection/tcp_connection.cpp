@@ -41,7 +41,6 @@ namespace net
         channel_->enable_read();
         channel_->enable_write();
 
-        closed_ = false;
         state_ = ConnectionState::connecting;
         ssl_handler_ = nullptr;
     }
@@ -101,7 +100,7 @@ namespace net
 
     void TcpConnection::write(Buffer * buff)
     {
-        if (!buff || closed_) {
+        if (!buff || state_ != ConnectionState::connected) {
             return;
         }
 
@@ -113,16 +112,18 @@ namespace net
 
     void TcpConnection::write_and_flush(Buffer *buff)
     {
-        if (!buff || closed_) {
+        if (!buff || state_ != ConnectionState::connected) {
             return;
         }
 
         write(buff);
-        send();
+        flush();
     }
 
-    void TcpConnection::send()
+    void TcpConnection::flush()
     {
+        assert(state_ == ConnectionState::connected || state_ == ConnectionState::closing);
+
         if (output_buffer_.get_current_buffer()->empty()) {
             return;
         }
@@ -134,7 +135,7 @@ namespace net
             if (ssl_handler_) {
                 ret = ssl_handler_->ssl_write(output_buffer_.get_current_buffer());
             } else {
-                #ifdef _WIN32
+            #ifdef _WIN32
                 ret = ::send(channel_->get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), 0);
             #else
                 ret = ::send(channel_->get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), MSG_NOSIGNAL);
@@ -161,12 +162,15 @@ namespace net
                 break;
             }
         }
+
+        if (output_buffer_.get_size() == 0 && state_ == ConnectionState::closing) {
+            do_close();
+        }
     }
 
     // 丢弃所有未发送的数据
     void TcpConnection::abort()
     {
-        closed_ = true;
         do_close();
     }
 
@@ -175,7 +179,6 @@ namespace net
     {
         ConnectionState lastState = state_;
         state_ = ConnectionState::closing;
-        closed_ = true;
         if (lastState == ConnectionState::connecting || output_buffer_.get_current_buffer()->readable_bytes() > 0) {
             channel_->disable_read();
             eventHandler_->update_channel(channel_);
@@ -203,7 +206,7 @@ namespace net
     {
         input_buffer_.keep_one_buffer();
 
-        bool read = false;
+        bool read = false, close = false;
         int bytes = 0;
         Buffer *buf = input_buffer_.get_current_buffer();
         int againCount = 0;
@@ -224,7 +227,7 @@ namespace net
         
             if (bytes <= 0) {
                 if (bytes == 0) {
-                    closed_ = true;
+                    close = true;
                 } else if (bytes == -1) {
                     if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
                     #ifdef _WIN32
@@ -233,7 +236,7 @@ namespace net
                         }
                     #endif
                         connectionHandler_->on_error(this);
-                        closed_ = true;
+                        close = true;
                         break; 
                     }
                 again:
@@ -250,7 +253,7 @@ namespace net
             read = true;
         }
 
-        if (closed_) {
+        if (close) {
             abort();
         } else if (read) {
             // 第一次可读可写表示连接已经建立
@@ -273,11 +276,9 @@ namespace net
             connectionHandler_->on_connected(this);
         }
 
-        if (state_ == ConnectionState::connected && connectionHandler_ && !closed_) {
-            if (!output_buffer_.get_current_buffer()->empty()) {
-                connectionHandler_->on_write(this);
-                send();
-            }
+        if ((state_ == ConnectionState::connected || state_ == ConnectionState::closing) && connectionHandler_ && !output_buffer_.get_current_buffer()->empty()) {
+            connectionHandler_->on_write(this);
+            flush();
         }
     }
 

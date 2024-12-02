@@ -62,7 +62,7 @@ namespace net::websocket
             return false;
         }
 
-        #ifdef unix
+    #ifdef unix
         poller_ = new EpollPoller;
     #else
         poller_ = new SelectPoller;
@@ -70,6 +70,7 @@ namespace net::websocket
 
         if (!poller_->init()) {
             delete poller_;
+            delete acceptor;
             return false;
         }
 

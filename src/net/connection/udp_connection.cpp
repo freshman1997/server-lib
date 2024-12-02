@@ -111,10 +111,10 @@ namespace net
         }
 
         write(buff);
-        send();
+        flush();
     }
 
-    void UdpConnection::send()
+    void UdpConnection::flush()
     {
         assert(state_ == ConnectionState::connected && connectionHandler_);
         if (output_buffer_.get_current_buffer()->empty()) {
@@ -139,6 +139,10 @@ namespace net
                 break;
             }
         }
+
+        if (output_buffer_.get_size() == 0 && closed_) {
+            do_close();
+        }
     }
 
     // 丢弃所有未发送的数据
@@ -156,7 +160,7 @@ namespace net
         state_ = ConnectionState::closing;
         closed_ = true;
         if (lastState == ConnectionState::connecting || output_buffer_.get_current_buffer()->readable_bytes() > 0) {
-            send();
+            flush();
             return;
         }
         do_close();
@@ -198,7 +202,7 @@ namespace net
     {
         if (!output_buffer_.get_current_buffer()->empty()) {
             connectionHandler_->on_write(this);
-            send();
+            flush();
         }
     }
 

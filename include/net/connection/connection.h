@@ -47,7 +47,7 @@ namespace net
 
         virtual void write_and_flush(Buffer *buff) = 0;
 
-        virtual void send() = 0;
+        virtual void flush() = 0;
 
         // 丢弃所有未发送的数据
         virtual void abort() = 0;

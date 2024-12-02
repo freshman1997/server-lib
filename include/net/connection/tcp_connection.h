@@ -32,7 +32,7 @@ namespace net
 
         virtual void write_and_flush(Buffer *buff);
 
-        virtual void send();
+        virtual void flush();
 
         // 丢弃所有未发送的数据
         virtual void abort();
@@ -71,7 +71,6 @@ namespace net
         void init();
 
     protected:
-        bool closed_;
         ConnectionState state_;
         Channel *channel_;
         Socket *socket_;
