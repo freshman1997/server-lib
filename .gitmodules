@@ -4,3 +4,6 @@
 [submodule "third_party/kcp"]
 	path = third_party/kcp
 	url = https://github.com/skywind3000/kcp
+[submodule "third_party/openssl-3.4.0"]
+	path = third_party/openssl-3.4.0
+	url = https://github.com/openssl/openssl
