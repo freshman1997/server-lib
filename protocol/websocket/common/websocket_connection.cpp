@@ -120,28 +120,18 @@ namespace net::websocket
                                 }
                             }
                         } else {
-                            if (chunk->body_) {
-                                if (!chunk->head_.is_fin()) {
-                                    reserve_list_.push_back(*chunk);
-                                    continue;
-                                }
-                                std::cout << "internal error occured !!\n";
-                                close = true;
-                            }
+                            std::cout << "internal error occured !!\n";
+                            close = true;
                             break;
                         }
                     }
 
                     for (int i = 0; i < input_chunks_.size(); ++i) {
                         BufferedPool::get_instance()->free(input_chunks_[i].body_);
+                        input_chunks_[i].body_ = nullptr;
                     }
 
                     input_chunks_.clear();
-
-                    if (!reserve_list_.empty()) {
-                        input_chunks_ = reserve_list_;
-                        reserve_list_.clear();
-                    }
 
                     if (close) {
                         conn->close();
@@ -307,7 +297,6 @@ namespace net::websocket
         WebSocketPacketParser pkt_parser_;
         std::vector<ProtoChunk> input_chunks_;
         std::vector<Buffer *> output_chunks_;
-        std::vector<ProtoChunk> reserve_list_;;
         uint32_t last_active_time_;
     };
 
