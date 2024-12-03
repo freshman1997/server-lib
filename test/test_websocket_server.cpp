@@ -9,6 +9,8 @@
 
 #ifdef _WIN32
 #include <Windows.h>
+#else
+#include <signal.h>
 #endif
 
 class TestServer : public net::websocket::WebSocketDataHandler
@@ -46,6 +48,8 @@ int main()
         wprintf(L"WSAStartup failed with error: %d\n", iResult);
         return 1;
     }
+#else
+    signal(SIGPIPE, SIG_IGN);
 #endif
 
     net::websocket::WebSocketServer wsSvr;

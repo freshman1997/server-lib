@@ -9,7 +9,11 @@ include_directories(
     third_party/openssl-3.4.0/include/
 )
 
-set(HTTP_USE_SSL ON)
+# 修改 http 可启用ssl ssl/ca.crt ssl/ca.key
+set(HTTP_USE_SSL OFF)
+
+# 修改 websocket 可启用ssl ssl/ca.crt ssl/ca.key
+set(WS_USE_SSL OFF)
 
 FILE(GLOB_RECURSE SERVER_SRC "./src/*.cpp")
 

@@ -5,6 +5,8 @@
 
 #ifdef _WIN32
 #include <Windows.h>
+#else
+#include <signal.h>
 #endif
 
 class TestClient : public net::websocket::WebSocketDataHandler
@@ -37,11 +39,13 @@ int main()
         wprintf(L"WSAStartup failed with error: %d\n", iResult);
         return 1;
     }
+#else
+    signal(SIGPIPE, SIG_IGN);
 #endif
 
     TestClient tc;
     net::websocket::WebSocketClient client;
-    if (!client.create({"192.168.96.128", 12211})) {
+    if (!client.init() || !client.connect({"localhost", 12211})) {
         return -1;
     }
 

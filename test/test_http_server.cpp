@@ -1,3 +1,4 @@
+#include "response_code.h"
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -135,7 +136,7 @@ public:
         std::fstream file;
         file.open("/home/yuan/Desktop/icon.ico");
         if (!file.good()) {
-            resp->get_context()->process_error();
+            resp->get_context()->process_error(net::http::ResponseCode::not_found);
             return;
         }
 

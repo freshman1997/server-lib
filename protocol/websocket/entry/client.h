@@ -2,16 +2,17 @@
 #define __NET_WEBSOCKET_ENTRY_CLIENT_H__
 #include "data_handler.h"
 #include "../common/handler.h"
+#include "net/connector/connector.h"
 #include "net/event/event_loop.h"
 #include "net/handler/connection_handler.h"
+#include "net/handler/connector_handler.h"
 #include "net/poller/poller.h"
 #include "net/socket/inet_address.h"
-#include "timer/timer.h"
 #include "timer/timer_manager.h"
 
 namespace net::websocket 
 {
-    class WebSocketClient : public WebSocketHandler, public ConnectionHandler
+    class WebSocketClient : public WebSocketHandler, public ConnectorHandler
     {
     public:
         enum class State
@@ -27,9 +28,9 @@ namespace net::websocket
         WebSocketClient();
         ~WebSocketClient();
 
-        bool create(const InetAddress &addr, const std::string &url = "/");
+        bool init();
 
-        void on_connect_timeout(timer::Timer *timer);
+        bool connect(const InetAddress &addr, const std::string &url = "/");
 
         void set_data_handler(WebSocketDataHandler *handler);
 
@@ -45,15 +46,11 @@ namespace net::websocket
         void on_close(WebSocketConnection *conn);
 
     protected:
-        virtual void on_connected(Connection *conn);
+        virtual void on_connect_failed(Connection *conn);
 
-        virtual void on_error(Connection *conn);
+        virtual void on_connect_timeout(Connection *conn);
 
-        virtual void on_read(Connection *conn);
-
-        virtual void on_write(Connection *conn);
-
-        virtual void on_close(Connection *conn);
+        virtual void on_connected_success(Connection *conn);
 
     private:
         State state_;
@@ -62,8 +59,9 @@ namespace net::websocket
         timer::TimerManager *timer_manager_;
         Poller *poller_;
         EventLoop *loop_;
-        timer::Timer *conn_timer_;
         std::string url_;
+        std::shared_ptr<Connector> connector_;
+        std::shared_ptr<SSLModule> ssl_module_;
     };
 }
 

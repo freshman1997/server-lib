@@ -1,3 +1,4 @@
+#include "net/secuity/ssl_handler.h"
 #ifdef _WIN32
 #include <io.h>
 #include <winsock2.h>
@@ -67,9 +68,14 @@ namespace net
         return conn_fd;
     }
 
-    bool Socket::connect()
+    bool Socket::connect(std::shared_ptr<SSLHandler> sslHandler)
     {
-        int res = socket::connect(fd_, *addr);
+        int res = -1;
+        if (sslHandler) {
+            res = sslHandler->ssl_init_action();
+        } else {
+            res = socket::connect(fd_, *addr);
+        }
         if (res < 0) {
         #ifdef _WIN32
             if (WSAEWOULDBLOCK == WSAGetLastError()) {

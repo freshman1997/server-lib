@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.12)
 project(WebSocketProto)
 
+if(WS_USE_SSL)
+    add_compile_definitions(WS_USE_SSL)
+endif()
+
 FILE(GLOB_RECURSE WEB_SOCKET_SRC "./*.cpp")
 
 add_library(WebSocketProto ${WEB_SOCKET_SRC})

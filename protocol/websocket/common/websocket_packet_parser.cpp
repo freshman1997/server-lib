@@ -134,14 +134,16 @@ namespace net::websocket
             }
 
             auto pc = &chunks->back();
-            while (!buff->empty()) {
+            while (true) {
                 int unpackRes = -1;
                 ProtoChunk chunk;
                 if (frame_buffer_->empty()) {
                     unpackRes = read_chunk(&chunk, buff);
                 } else {
-                    frame_buffer_->append_buffer(*buff);
-                    buff->set_read_index(buff->readable_bytes());
+                    if (!buff->empty()) {
+                        frame_buffer_->append_buffer(*buff);
+                        buff->set_read_index(buff->readable_bytes());
+                    }
                     unpackRes = read_chunk(&chunk, frame_buffer_);
                 }
 
@@ -206,12 +208,16 @@ namespace net::websocket
                 }
 
                 frame_buffer_->shink_to_fit();
+
+                if (frame_buffer_->empty() && buff->empty()) {
+                    break;
+                }
             }
             return true;
         });
 
         auto chunks = conn->get_input_chunks();
-        if (chunks->size() > 1 && !chunks->back().has_set_head_ && chunks->back().body_ == nullptr) {
+        if (chunks->size() >= 1 && !chunks->back().has_set_head_ && chunks->back().body_ == nullptr) {
             chunks->pop_back();
         }
 

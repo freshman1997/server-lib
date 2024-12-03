@@ -2,18 +2,25 @@
 #include "net/connection/connection.h"
 #include "../common/websocket_connection.h"
 #include "../common/websocket_config.h"
-#include "net/connection/tcp_connection.h"
+#include "net/connector/tcp_connector.h"
 #include "net/poller/epoll_poller.h"
 #include "net/poller/select_poller.h"
 #include "net/socket/socket.h"
 #include "timer/wheel_timer_manager.h"
 #include "timer/timer_util.hpp"
+
+#if defined (WS_USE_SSL)
+#include "net/secuity/openssl.h"
+#endif
+
 #include <cassert>
+#include <iostream>
 
 namespace net::websocket
 {
-    WebSocketClient::WebSocketClient() : state_(State::connecting_), data_handler_(nullptr), conn_(nullptr), timer_manager_(nullptr), poller_(nullptr), loop_(nullptr), conn_timer_(nullptr)
+    WebSocketClient::WebSocketClient() : state_(State::connecting_), data_handler_(nullptr), conn_(nullptr), timer_manager_(nullptr), poller_(nullptr), loop_(nullptr)
     {
+    
     }
 
     WebSocketClient::~WebSocketClient()
@@ -21,49 +28,50 @@ namespace net::websocket
         exit();
     }
 
-    bool WebSocketClient::create(const InetAddress &addr, const std::string &url)
+    bool WebSocketClient::init()
     {
-        Socket *sock = new Socket(addr.get_ip().c_str(), addr.get_port());
-        sock->set_none_block(true);
-        if (!sock->valid()) {
-            delete sock;
+        if (!WebSocketConfigManager::get_instance()->init(false)) {
             return false;
         }
-        
-        sock->set_none_block(true);
-        if (!sock->connect()) {
-            delete sock;
+
+    #if defined (WS_USE_SSL)
+        ssl_module_ = std::make_shared<OpenSSLModule>();
+        if (!ssl_module_->init("./ssl/ca.crt", "./ssl/ca.key", SSLHandler::SSLMode::connector_)) {
+            if (auto msg = ssl_module_->get_error_message()) {
+                std::cerr << msg->c_str() << '\n';
+            }
             return false;
         }
+    #endif
+
     #ifdef unix
         poller_ = new EpollPoller;
     #else
         poller_ = new SelectPoller;
     #endif
         if (!poller_->init()) {
-            delete sock;
             delete poller_;
             return false;
         }
 
-        Connection *conn = new TcpConnection(sock);
         timer_manager_ = new timer::WheelTimerManager;
         loop_ = new EventLoop(poller_, timer_manager_);
 
-        conn->set_connection_handler(this);
-        loop_->update_channel(conn->get_channel());
-        conn->set_event_handler(loop_);
-
-        conn_timer_ = timer::TimerUtil::build_timeout_timer(timer_manager_, 10 * 1000, this, &WebSocketClient::on_connect_timeout);
-        url_ = url;
-
-        return WebSocketConfigManager::get_instance()->init(false);
+        return true;
     }
 
-    void WebSocketClient::on_connect_timeout(timer::Timer *timer)
+    bool WebSocketClient::connect(const InetAddress &addr, const std::string &url)
     {
-        state_ = State::connect_timeout_;
-        on_close((Connection *)nullptr);
+        url_ = url;
+
+        connector_ = std::make_shared<TcpConnector>();
+        connector_->set_data(timer_manager_, this, loop_);
+        
+        if (ssl_module_) {
+            connector_->set_ssl_module(ssl_module_);
+        }
+
+        return connector_->connect(addr);
     }
 
     void WebSocketClient::set_data_handler(WebSocketDataHandler *handler)
@@ -71,7 +79,17 @@ namespace net::websocket
         data_handler_ = handler;
     }
 
-    void WebSocketClient::on_connected(Connection *conn) 
+    void WebSocketClient::on_connect_failed(Connection *conn)
+    {
+        on_close(conn_);
+    }
+
+    void WebSocketClient::on_connect_timeout(Connection *conn)
+    {
+        on_close(conn_);
+    }
+
+    void WebSocketClient::on_connected_success(Connection *conn)
     {
         if (conn_) {
             conn->close();
@@ -85,25 +103,9 @@ namespace net::websocket
         state_ = State::connected_;
     }
 
-    void WebSocketClient::on_error(Connection *conn) {}
-
-    void WebSocketClient::on_read(Connection *conn) {}
-
-    void WebSocketClient::on_write(Connection *conn) {}
-
-    void WebSocketClient::on_close(Connection *conn) 
-    {
-        on_close(conn_);
-    }
-
     void WebSocketClient::on_connected(WebSocketConnection *conn)
     {
         conn_ = conn;
-        if (conn_timer_) {
-            conn_timer_->cancel();
-            conn_timer_ = nullptr;
-        }
-
         if (timer_manager_) {
             conn_->try_set_heartbeat_timer(timer_manager_);
         }
@@ -129,11 +131,6 @@ namespace net::websocket
         }
         conn_ = nullptr;
 
-        if (conn_timer_) {
-            conn_timer_->cancel();
-            conn_timer_ = nullptr;
-        }
-
         if (loop_) {
             loop_->quit();
         }
@@ -156,11 +153,6 @@ namespace net::websocket
         if (conn_) {
             conn_->close();
             conn_ = nullptr;
-        }
-
-        if (conn_timer_) {
-            conn_timer_->cancel();
-            conn_timer_ = nullptr;
         }
 
         if (loop_) {

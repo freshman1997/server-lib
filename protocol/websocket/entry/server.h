@@ -2,6 +2,7 @@
 #define __NET_WEBSOCKET_ENTRY_SERVER_H__
 #include "../common/handler.h"
 #include "net/event/event_loop.h"
+#include "net/secuity/ssl_module.h"
 #include "timer/timer_manager.h"
 #include <string>
 #include <unordered_map>
@@ -51,6 +52,7 @@ namespace net::websocket
         timer::TimerManager *timer_manager_;
         std::unordered_map<Connection *, WebSocketConnection *> connections_;
         std::unordered_set<std::string> connected_urls_;
+        std::shared_ptr<SSLModule> ssl_module_;
     };
 }
 

@@ -13,8 +13,6 @@
 namespace net::websocket 
 {
     class WebSocketHandler;
-    class ProtoChunk;
-
     class WebSocketConnection
     {
         friend class WebSocketPacketParser;

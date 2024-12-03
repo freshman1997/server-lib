@@ -1,5 +1,7 @@
 #ifndef __SOCKET_H__
 #define __SOCKET_H__
+#include "net/secuity/ssl_handler.h"
+#include <memory>
 
 namespace net
 {
@@ -17,7 +19,7 @@ namespace net
 
         int accept(struct sockaddr_in &peer_addr);
 
-        bool connect();
+        bool connect(std::shared_ptr<SSLHandler> sslModule = nullptr);
 
         void set_no_deylay(bool on);
 

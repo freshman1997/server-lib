@@ -11,6 +11,12 @@
 #include "data_handler.h"
 #include "../common/websocket_config.h"
 
+#if defined (WS_USE_SSL)
+#include "net/secuity/openssl.h"
+#endif
+
+#include <iostream>
+
 namespace net::websocket
 {
     WebSocketServer::WebSocketServer()
@@ -73,6 +79,17 @@ namespace net::websocket
             delete acceptor;
             return false;
         }
+
+    #if defined (WS_USE_SSL)
+        ssl_module_ = std::make_shared<OpenSSLModule>();
+        if (!ssl_module_->init("./ssl/ca.crt", "./ssl/ca.key", SSLHandler::SSLMode::acceptor_)) {
+            if (auto msg = ssl_module_->get_error_message()) {
+                std::cerr << msg->c_str() << '\n';
+            }
+            return false;
+        }
+        acceptor->set_ssl_module(ssl_module_);
+    #endif
 
         timer_manager_ = new timer::WheelTimerManager;
         loop_ = new EventLoop(poller_, timer_manager_);
