@@ -1,18 +1,12 @@
 #ifndef __NET_WEBSOCKET_ENTRY_CLIENT_H__
 #define __NET_WEBSOCKET_ENTRY_CLIENT_H__
 #include "data_handler.h"
-#include "../common/handler.h"
-#include "net/connector/connector.h"
-#include "net/event/event_loop.h"
-#include "net/handler/connection_handler.h"
-#include "net/handler/connector_handler.h"
-#include "net/poller/poller.h"
 #include "net/socket/inet_address.h"
-#include "timer/timer_manager.h"
+#include <memory>
 
 namespace net::websocket 
 {
-    class WebSocketClient : public WebSocketHandler, public ConnectorHandler
+    class WebSocketClient
     {
     public:
         enum class State
@@ -38,30 +32,9 @@ namespace net::websocket
 
         void exit();
 
-    protected:
-        void on_connected(WebSocketConnection *conn);
-
-        void on_receive_packet(WebSocketConnection *conn, Buffer *buff);
-
-        void on_close(WebSocketConnection *conn);
-
-    protected:
-        virtual void on_connect_failed(Connection *conn);
-
-        virtual void on_connect_timeout(Connection *conn);
-
-        virtual void on_connected_success(Connection *conn);
-
     private:
-        State state_;
-        WebSocketDataHandler *data_handler_;
-        WebSocketConnection *conn_;
-        timer::TimerManager *timer_manager_;
-        Poller *poller_;
-        EventLoop *loop_;
-        std::string url_;
-        std::shared_ptr<Connector> connector_;
-        std::shared_ptr<SSLModule> ssl_module_;
+        class ClientData;
+        std::unique_ptr<ClientData> data_;
     };
 }
 
