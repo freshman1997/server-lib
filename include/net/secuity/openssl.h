@@ -13,7 +13,7 @@ namespace net
         ~OpenSSLModule();
 
     public:
-        virtual bool init(const std::string &cert, const std::string &privateKey, SSLHandler::SSLMode mode);
+        virtual bool init(const std::string &cert, const std::string &privateKey = {}, SSLHandler::SSLMode mode = SSLHandler::SSLMode::connector_);
 
         virtual const std::string * get_error_message();
 

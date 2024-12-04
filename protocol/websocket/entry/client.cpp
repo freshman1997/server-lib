@@ -36,7 +36,7 @@ namespace net::websocket
 
     #if defined (WS_USE_SSL)
         ssl_module_ = std::make_shared<OpenSSLModule>();
-        if (!ssl_module_->init("./ssl/ca.crt", "./ssl/ca.key", SSLHandler::SSLMode::connector_)) {
+        if (!ssl_module_->init("./ssl/ca.crt")) {
             if (auto msg = ssl_module_->get_error_message()) {
                 std::cerr << msg->c_str() << '\n';
             }

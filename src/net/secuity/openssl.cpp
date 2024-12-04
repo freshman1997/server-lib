@@ -53,34 +53,39 @@ namespace net
         ERR_load_crypto_strings();
         OpenSSL_add_all_algorithms();
 
-        SSL_CTX *ctx = nullptr;
+        data_->ctx_ = nullptr;
         if (mode == SSLHandler::SSLMode::acceptor_) {
-            ctx = SSL_CTX_new(TLS_server_method());
+            data_->ctx_ = SSL_CTX_new(TLS_server_method());
         } else {
-            ctx = SSL_CTX_new(TLS_client_method());
+            data_->ctx_ = SSL_CTX_new(TLS_client_method());
         }
 
-        if (!ctx) {
+        if (!data_->ctx_) {
             ERR_print_errors_cb(set_err_msg, this);
             return false;
         }
 
-        if (SSL_CTX_use_certificate_file(ctx, cert.c_str(), SSL_FILETYPE_PEM) <= 0) {
-            ERR_print_errors_cb(set_err_msg, this);
-            return false;
-        }
+        if (mode == SSLHandler::SSLMode::acceptor_) {
+            if (SSL_CTX_use_certificate_file(data_->ctx_, cert.c_str(), SSL_FILETYPE_PEM) <= 0) {
+                ERR_print_errors_cb(set_err_msg, this);
+                return false;
+            }
 
-        if (SSL_CTX_use_PrivateKey_file(ctx, privateKey.c_str(), SSL_FILETYPE_PEM) <= 0) {
-            ERR_print_errors_cb(set_err_msg, this);
-            return false;
-        }
+            if (SSL_CTX_use_PrivateKey_file(data_->ctx_, privateKey.c_str(), SSL_FILETYPE_PEM) <= 0) {
+                ERR_print_errors_cb(set_err_msg, this);
+                return false;
+            }
 
-        if (!SSL_CTX_check_private_key(ctx)) {
-            ERR_print_errors_cb(set_err_msg, this);
-            return false;
+            if (!SSL_CTX_check_private_key(data_->ctx_)) {
+                ERR_print_errors_cb(set_err_msg, this);
+                return false;
+            }
+        } else {
+            if (SSL_CTX_load_verify_locations(data_->ctx_, cert.c_str(), NULL) != 1) {
+                ERR_print_errors_cb(set_err_msg, this);
+                return false;
+            }
         }
-
-        data_->ctx_ = ctx;
 
         return true;
     }
