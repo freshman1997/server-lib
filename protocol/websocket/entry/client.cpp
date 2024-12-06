@@ -23,15 +23,19 @@
 namespace net::websocket
 {
 
+    enum class State
+    {
+        connecting_,
+        connected_,
+        closing_,
+        closed_,
+        connect_timeout_,
+    };
+
     class WebSocketClient::ClientData : public WebSocketHandler, public ConnectorHandler
     {
     public:
         ClientData()  : state_(State::connecting_), data_handler_(nullptr), conn_(nullptr), timer_manager_(nullptr), poller_(nullptr), loop_(nullptr)
-        {
-
-        }
-
-        ~ClientData()
         {
 
         }
@@ -187,7 +191,7 @@ namespace net::websocket
 
     WebSocketClient::~WebSocketClient()
     {
-        data_->exit();
+        exit();
     }
 
     bool WebSocketClient::init()

@@ -9,16 +9,6 @@ namespace net::websocket
     class WebSocketClient
     {
     public:
-        enum class State
-        {
-            connecting_,
-            connected_,
-            closing_,
-            closed_,
-            connect_timeout_,
-        };
-
-    public:
         WebSocketClient();
         ~WebSocketClient();
 
