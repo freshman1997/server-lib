@@ -32,11 +32,12 @@
 TODO 协议 bit_torrent, dns  <br/><br/><br/>
 
 # 编译
+* clone 下来后，执行 ``` git submodule update  --init --progress ``` 拉子模块，完成到 ``` third_party/openssl-3.4.0 ``` 切换到 origin/openssl-3.4 分支 ``` git checkout origin/openssl-3.4 ```
 * 需要先编译 ``` third_party/openssl-3.4.0 ``` 下面的 openssl 3.4.0 <br/>
     1. windows 下使用vs编译工具，管理员模式打开编译命令行，``` perl Configure VC-WIN64A no-shared no-ASM ``` 执行看到success后 ``` nmake ```
-    2. 使用mingw编译，需要安装 ```msys2```，安装了必要的gcc，g++，make工具链后，进到``` third_party/openssl-3.4.0 ```目录下，``` ./build.sh ```没报错既可以编译完成
+    2. 使用mingw编译，需要安装 ```msys2```，安装了必要的gcc，g++，make工具链后，进到``` third_party/openssl-3.4.0 ```目录下，``` ./build.sh ```没报错即编译完成
     3. linux下编译，执行 ```./build.sh``` 编译即可
-* 回到跟目录 <br/>
+* 回到根目录 <br/>
     1. Windows 下 新建个build 文件夹，然后执行 ``` cd build ``` ``` cmake .. ``` 即可生成vs的工程文件
     2. linux 直接执行 ``` ./build.sh ``` 即可完成编译
 
