@@ -8,7 +8,7 @@
 #include <set>
 #include <string>
 
-namespace net::websocket 
+namespace yuan::net::websocket 
 {
     class WebSocketHandshaker
     {

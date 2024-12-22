@@ -2,7 +2,7 @@
 #define __NET_HTTP_MEDIA_H__
 #include <string>
 
-namespace net::http
+namespace yuan::net::http
 {
     std::string to_context_type(short type);
 }

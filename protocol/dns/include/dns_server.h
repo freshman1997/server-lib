@@ -2,7 +2,7 @@
 #define __NET_DNS_DNS_SERVER_H__
 
 #include "net/handler/connection_handler.h"
-namespace net::dns 
+namespace yuan::net::dns 
 {
     class DnsServer : public ConnectionHandler
     {

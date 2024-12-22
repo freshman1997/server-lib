@@ -4,7 +4,7 @@
 /**
  * Note. 当前处理的 header key 全部使用小写，http 规范要求大小写不敏感
  */
-namespace net::http::http_header_key 
+namespace yuan::net::http::http_header_key 
 {
     extern const char *content_type;
     extern const char *content_length;

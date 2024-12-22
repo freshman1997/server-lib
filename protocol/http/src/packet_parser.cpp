@@ -4,7 +4,7 @@
 #include "header_key.h"
 
 
-namespace net::http 
+namespace yuan::net::http 
 {
     uint32_t HttpPacketParser::get_body_length()
     {
@@ -16,7 +16,7 @@ namespace net::http
         return std::atoi(length->c_str());
     }
 
-    bool HttpPacketParser::parse_version(Buffer &buff, char ending, char next)
+    bool HttpPacketParser::parse_version(buffer::Buffer &buff, char ending, char next)
     {
         if ((header_state != HeaderState::url_gap && header_state != HeaderState::init) || buff.readable_bytes() == 0) {
             return false;
@@ -72,7 +72,7 @@ namespace net::http
         return true; 
     }
 
-    bool HttpPacketParser::parse_header_keys(Buffer &buff)
+    bool HttpPacketParser::parse_header_keys(buffer::Buffer &buff)
     {
         if (buff.readable_bytes() == 0 || (header_state != HeaderState::version_newline && header_state != HeaderState::header_status_desc_gap)) {
             return false;
@@ -125,7 +125,7 @@ namespace net::http
         return true;
     }
 
-    int HttpPacketParser::parse_body(Buffer &buff, uint32_t length)
+    int HttpPacketParser::parse_body(buffer::Buffer &buff, uint32_t length)
     {
         if (!is_header_done()) {
             return 0; 
@@ -142,7 +142,7 @@ namespace net::http
         return 1;
     }
 
-    bool HttpPacketParser::parse_new_line(Buffer &buff)
+    bool HttpPacketParser::parse_new_line(buffer::Buffer &buff)
     {
         char ch = buff.read_int8();
         if (ch != '\r') {
@@ -157,14 +157,14 @@ namespace net::http
         return true;
     }
 
-    int HttpPacketParser::parse(Buffer &buff)
+    int HttpPacketParser::parse(buffer::Buffer &buff)
     {
         if (done()) {
             body_state = BodyState::too_long;
             return -2;
         }
 
-        Buffer *useBuff = packet_->get_buff();
+        buffer::Buffer *useBuff = packet_->get_buff();
         useBuff->append_buffer(buff);
         
         if (!is_header_done()) {

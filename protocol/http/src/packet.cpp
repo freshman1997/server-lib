@@ -6,7 +6,7 @@
 #include "header_key.h"
 #include "packet_parser.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     static const char* http_version_descs[4] = {
         "1.0",
@@ -21,7 +21,7 @@ namespace net::http
         parser_ = nullptr;
         buffer_ = nullptr;
         body_length_ = 0;
-        buffer_ = BufferedPool::get_instance()->allocate();
+        buffer_ = buffer::BufferedPool::get_instance()->allocate();
     }
 
     HttpPacket::~HttpPacket()
@@ -36,7 +36,7 @@ namespace net::http
             parser_ = nullptr;
         }
 
-        BufferedPool::get_instance()->free(buffer_);
+        buffer::BufferedPool::get_instance()->free(buffer_);
         buffer_ = nullptr;
     }
 
@@ -211,7 +211,7 @@ namespace net::http
         return ContentParserFactory::get_instance()->parse_content(this);
     }
 
-    bool HttpPacket::parse(Buffer &buff)
+    bool HttpPacket::parse(buffer::Buffer &buff)
     {
         if (is_ok()) {
             return true;
@@ -245,14 +245,14 @@ namespace net::http
         pack_and_send(context_->get_connection());
     }
 
-    Buffer * HttpPacket::get_buff(bool take)
+    buffer::Buffer * HttpPacket::get_buff(bool take)
     {
         if (!take) {
             return buffer_;
         }
 
-        Buffer *buf = buffer_;
-        buffer_ = BufferedPool::get_instance()->allocate();
+        buffer::Buffer *buf = buffer_;
+        buffer_ = buffer::BufferedPool::get_instance()->allocate();
         buf->reset_read_index(0);
         
         return buf;
@@ -264,7 +264,7 @@ namespace net::http
         if (pack_header(conn)) {
             if (!buffer_->empty()) {
                 conn->write(buffer_);
-                buffer_ = BufferedPool::get_instance()->allocate();
+                buffer_ = buffer::BufferedPool::get_instance()->allocate();
             }
         } else {
             is_good_ = false;

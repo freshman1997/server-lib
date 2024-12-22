@@ -9,7 +9,7 @@
 
 #include <iostream>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     FtpClient::FtpClient()
     {

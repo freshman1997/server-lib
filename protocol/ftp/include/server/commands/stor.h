@@ -2,7 +2,7 @@
 #define __NET_FTP_SERVER_COMMAND_STOR_H__
 #include "../command.h"
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class CommandStor : public Command
     {

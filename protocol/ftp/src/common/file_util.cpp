@@ -15,7 +15,7 @@
 
 #endif
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     void FileUtil::list_files(const std::string &filepath, std::vector<FtpFileInfo> &dest, bool recurve)
     {

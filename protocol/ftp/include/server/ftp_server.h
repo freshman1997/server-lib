@@ -6,17 +6,17 @@
 #include "handler/ftp_app.h"
 #include "session_manager.h"
 
-namespace net 
+namespace yuan::net 
 {
     class EventLoop;
 }
 
-namespace timer 
+namespace yuan::timer 
 {
     class TimerManager;
 }
 
-namespace net::ftp
+namespace yuan::net::ftp
 { 
     class FtpSession;
 

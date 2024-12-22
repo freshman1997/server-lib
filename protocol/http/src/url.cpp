@@ -3,7 +3,7 @@
 
 #include "url.h"
 
-namespace url 
+namespace yuan::url 
 {
     std::string url_encode(const std::string &str)
     {

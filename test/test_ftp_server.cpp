@@ -18,7 +18,7 @@ int main()
     }
 #endif
 
-    net::ftp::FtpServer server;
+    yuan::net::ftp::FtpServer server;
     server.serve(12123);
 
 #ifdef _WIN32

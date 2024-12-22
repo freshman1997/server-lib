@@ -7,7 +7,7 @@
 #include "packet.h"
 #include "content/content_parser.h"
 
-namespace net::http
+namespace yuan::net::http
 {
     ContentParserFactory::ContentParserFactory()
     {

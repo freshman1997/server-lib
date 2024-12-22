@@ -1,6 +1,6 @@
 #include "dns_client.h"
 
-namespace net::dns 
+namespace yuan::net::dns 
 {
     DnsClient::DnsClient()
     {

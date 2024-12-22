@@ -21,7 +21,7 @@
 #include "net/secuity/openssl.h"
 #endif
 
-namespace net::websocket
+namespace yuan::net::websocket
 {
     class WebSocketServer::ServerData : public WebSocketHandler, public ConnectionHandler
     {
@@ -145,7 +145,7 @@ namespace net::websocket
             }
         }
 
-        void on_receive_packet(WebSocketConnection *wsConn, Buffer *buff)
+        void on_receive_packet(WebSocketConnection *wsConn, buffer::Buffer *buff)
         {
             if (data_handler_) {
                 data_handler_->on_data(wsConn, buff);

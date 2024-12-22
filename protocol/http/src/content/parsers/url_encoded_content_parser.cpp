@@ -3,7 +3,7 @@
 #include "url.h"
 #include "packet.h"
 
-namespace net::http
+namespace yuan::net::http
 {
     bool UrlEncodedContentParser::can_parse(ContentType contentType)
     {

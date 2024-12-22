@@ -4,7 +4,7 @@
 #include "net/socket/inet_address.h"
 #include <memory>
 
-namespace net::websocket 
+namespace yuan::net::websocket 
 {
     class WebSocketClient
     {

@@ -4,12 +4,12 @@
 #include "timer/timer_task.h"
 #include "def.h"
 
-namespace net 
+namespace yuan::net 
 {
     class Connection;
 }
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpSession;
 

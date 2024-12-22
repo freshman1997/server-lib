@@ -11,7 +11,7 @@
 #include "timer/wheel_timer_manager.h"
 #include "net/secuity/openssl.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     HttpClient::HttpClient()
     {

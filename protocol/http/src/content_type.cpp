@@ -2,7 +2,7 @@
 #include <utility>
 #include "content_type.h"
 
-namespace net::http
+namespace yuan::net::http
 {
     static const char * ContentType_names[] = 
     {

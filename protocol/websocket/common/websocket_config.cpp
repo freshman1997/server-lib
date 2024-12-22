@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-namespace net::websocket 
+namespace yuan::net::websocket 
 {
     std::string_view heart_beat_interval_key = "heart_beat_interval";
     std::string_view client_key_string_key = "client_key_string";

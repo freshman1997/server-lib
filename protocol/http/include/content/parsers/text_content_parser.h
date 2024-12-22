@@ -2,7 +2,7 @@
 #define __NET_HTTP_PARSERS_TEXT_PARSER_H__
 #include "../content_parser.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     class TextContentParser final : public ContentParser
     {

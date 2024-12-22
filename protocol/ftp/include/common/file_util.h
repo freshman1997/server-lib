@@ -4,7 +4,7 @@
 
 #include "def.h"
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FileUtil
     {

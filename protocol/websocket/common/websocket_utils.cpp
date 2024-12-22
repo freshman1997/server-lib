@@ -5,7 +5,7 @@
 #include "openssl/sha.h"
 #include <string>
 
-namespace net::websocket 
+namespace yuan::net::websocket 
 {
     std::vector<uint8_t> WebSocketUtils::gen_mask_keys()
     {

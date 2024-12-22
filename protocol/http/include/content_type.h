@@ -2,7 +2,7 @@
 #define __NET__HTTP_CONTENT_TYPE__
 #include <string>
 
-namespace net::http
+namespace yuan::net::http
 {
     enum class ContentType : char
     {

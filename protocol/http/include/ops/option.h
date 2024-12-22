@@ -2,7 +2,7 @@
 #define __HTTP_SERVER_OPTION_H__
 #include <cstdint>
 
-namespace net::http::config
+namespace yuan::net::http::config
 {  
     // 配置文件路径
     extern const char * config_file_name;

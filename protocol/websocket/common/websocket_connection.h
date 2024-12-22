@@ -10,7 +10,7 @@
 #include <memory>
 #include <string>
 
-namespace net::websocket 
+namespace yuan::net::websocket 
 {
     class WebSocketHandler;
     class WebSocketConnection
@@ -47,7 +47,7 @@ namespace net::websocket
     public:
         void on_created(Connection *conn);
         
-        bool send(Buffer *buf, PacketType pktType = WebSocketConnection::PacketType::text_);
+        bool send(buffer::Buffer *buf, PacketType pktType = WebSocketConnection::PacketType::text_);
 
         bool send(const char *data, size_t len, PacketType pktType = WebSocketConnection::PacketType::text_);
 
@@ -75,7 +75,7 @@ namespace net::websocket
     private:
         void free_self();
 
-        std::vector<Buffer *> * get_output_buffers();
+        std::vector<buffer::Buffer *> * get_output_buffers();
 
         std::vector<ProtoChunk> * get_input_chunks();
         

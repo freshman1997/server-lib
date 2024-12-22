@@ -4,7 +4,7 @@
 
 #include "nlohmann/json.hpp"
 
-namespace net::ftp
+namespace yuan::net::ftp
 {
     extern std::string_view ss;
 

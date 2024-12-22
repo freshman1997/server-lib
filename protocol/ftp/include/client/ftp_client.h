@@ -6,7 +6,7 @@
 #include "net/event/event_loop.h"
 #include "net/socket/inet_address.h"
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpClient : public FtpApp
     {

@@ -4,7 +4,7 @@
 
 #include <iostream>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     ServerFtpSession::ServerFtpSession(Connection *conn, FtpApp *app, bool keepUtilSent) : FtpSession(conn, app, WorkMode::server, keepUtilSent)
     {
@@ -18,7 +18,7 @@ namespace net::ftp
     
     void ServerFtpSession::on_read(Connection *conn)
     {
-        conn->process_input_data([this](Buffer *buff) ->bool {
+        conn->process_input_data([this](buffer::Buffer *buff) ->bool {
             command_parser_.set_buff(buff);
             return true;
         });

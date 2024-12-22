@@ -19,7 +19,7 @@
 #include <memory>
 #include <vector>
 
-namespace net::websocket
+namespace yuan::net::websocket
 {
     class WebSocketConnection::ConnData : public ConnectionHandler
     {
@@ -43,14 +43,14 @@ namespace net::websocket
 
             for (auto &item : input_chunks_) {
                 if (item.body_) {
-                    BufferedPool::get_instance()->free(item.body_);
+                    buffer::BufferedPool::get_instance()->free(item.body_);
                     item.body_ = nullptr;
                 }
             }
             input_chunks_.clear();
 
             for (const auto &item : output_chunks_) {
-                BufferedPool::get_instance()->free(item);
+                buffer::BufferedPool::get_instance()->free(item);
             }
             output_chunks_.clear();
         }
@@ -127,7 +127,7 @@ namespace net::websocket
                     }
 
                     for (int i = 0; i < input_chunks_.size(); ++i) {
-                        BufferedPool::get_instance()->free(input_chunks_[i].body_);
+                        buffer::BufferedPool::get_instance()->free(input_chunks_[i].body_);
                         input_chunks_[i].body_ = nullptr;
                     }
 
@@ -207,7 +207,7 @@ namespace net::websocket
         }
 
     public:
-        bool send(Buffer *buff, PacketType pktType)
+        bool send(buffer::Buffer *buff, PacketType pktType)
         {
             if (state_ != State::connected_) {
                 return false;
@@ -227,11 +227,11 @@ namespace net::websocket
 
                 // flush
                 conn_->flush();
-                BufferedPool::get_instance()->free(buff);
+                buffer::BufferedPool::get_instance()->free(buff);
 
                 return true;
             } else {
-                BufferedPool::get_instance()->free(buff);
+                buffer::BufferedPool::get_instance()->free(buff);
                 std::cerr << "cant pack ws frame!!\n";
                 conn_->close();
                 return false;
@@ -245,7 +245,7 @@ namespace net::websocket
 
         void send_ping_frame()
         {
-            Buffer *buf = BufferedPool::get_instance()->allocate(2);
+            buffer::Buffer *buf = buffer::BufferedPool::get_instance()->allocate(2);
             buf->write_uint8(0x89);
             buf->write_uint8(0x00);
             send(buf, PacketType::ping_);
@@ -253,7 +253,7 @@ namespace net::websocket
 
         void send_pong_frame()
         {
-            Buffer *buf = BufferedPool::get_instance()->allocate(2);
+            buffer::Buffer *buf = buffer::BufferedPool::get_instance()->allocate(2);
             buf->write_uint8(0x8a);
             buf->write_uint8(0x00);
             send(buf, PacketType::pong_);
@@ -262,7 +262,7 @@ namespace net::websocket
 
         void send_close_frame(uint16_t code)
         {
-            Buffer *buf = BufferedPool::get_instance()->allocate(4);
+            buffer::Buffer *buf = buffer::BufferedPool::get_instance()->allocate(4);
             buf->write_uint8(0x88);
             buf->write_uint8(0x02);
 
@@ -296,7 +296,7 @@ namespace net::websocket
         WebSocketHandshaker handshaker_;
         WebSocketPacketParser pkt_parser_;
         std::vector<ProtoChunk> input_chunks_;
-        std::vector<Buffer *> output_chunks_;
+        std::vector<buffer::Buffer *> output_chunks_;
         uint32_t last_active_time_;
     };
 
@@ -322,7 +322,7 @@ namespace net::websocket
         data_->on_connected(conn);
     }
 
-    bool WebSocketConnection::send(Buffer *buf, PacketType pktType)
+    bool WebSocketConnection::send(buffer::Buffer *buf, PacketType pktType)
     {
         assert(data_->conn_ && buf);
         return data_->send(buf, pktType);
@@ -334,12 +334,12 @@ namespace net::websocket
             return false;
         }
         
-        Buffer *buff = BufferedPool::get_instance()->allocate(len);
+        buffer::Buffer *buff = buffer::BufferedPool::get_instance()->allocate(len);
         buff->write_string(data, len);
 
         bool res = send(buff, pktType);
         if (!res) {
-            BufferedPool::get_instance()->free(buff);
+            buffer::BufferedPool::get_instance()->free(buff);
         }
 
         return res;
@@ -368,7 +368,7 @@ namespace net::websocket
         return data_->conn_;
     }
 
-    std::vector<Buffer *> * WebSocketConnection::get_output_buffers()
+    std::vector<buffer::Buffer *> * WebSocketConnection::get_output_buffers()
     {
         return &data_->output_chunks_;
     }

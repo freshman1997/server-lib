@@ -8,7 +8,7 @@
 #include <cstring>
 #include <random>
 
-namespace net::websocket
+namespace yuan::net::websocket
 {
     WebSocketPacketParser::WebSocketPacketParser() : use_mask_(false), frame_buffer_(nullptr)
     {
@@ -20,12 +20,12 @@ namespace net::websocket
     WebSocketPacketParser::~WebSocketPacketParser()
     {
         if (frame_buffer_) {
-            BufferedPool::get_instance()->free(frame_buffer_);
+            buffer::BufferedPool::get_instance()->free(frame_buffer_);
             frame_buffer_ = nullptr;
         }
     }
 
-    int WebSocketPacketParser::read_chunk(ProtoChunk *chunk, Buffer *buff)
+    int WebSocketPacketParser::read_chunk(ProtoChunk *chunk, buffer::Buffer *buff)
     {
         std::size_t from = buff->get_read_index();
         if (!chunk->has_set_head_) {
@@ -89,7 +89,7 @@ namespace net::websocket
             }
         } else if (chunk->head_.extend_pay_load_len_ > 0) {
             if (!chunk->body_) {
-                chunk->body_ = BufferedPool::get_instance()->allocate(chunk->head_.extend_pay_load_len_);
+                chunk->body_ = buffer::BufferedPool::get_instance()->allocate(chunk->head_.extend_pay_load_len_);
             }
 
             if (chunk->head_.extend_pay_load_len_ >= buff->readable_bytes()) {
@@ -104,7 +104,7 @@ namespace net::websocket
         return 0;
     }
 
-    void WebSocketPacketParser::apply_mask(Buffer *buff, uint32_t buffSize, uint8_t *mask, uint32_t len)
+    void WebSocketPacketParser::apply_mask(buffer::Buffer *buff, uint32_t buffSize, uint8_t *mask, uint32_t len)
     {
         char *p = buff->peek_for();
         char *end = p + buffSize;
@@ -113,7 +113,7 @@ namespace net::websocket
         }
     }
 
-    void WebSocketPacketParser::apply_mask(Buffer *data, Buffer *buff, uint32_t buffSize)
+    void WebSocketPacketParser::apply_mask(buffer::Buffer *data, buffer::Buffer *buff, uint32_t buffSize)
     {
         const char *p = data->peek();
         const char *end = p + buffSize;
@@ -125,7 +125,7 @@ namespace net::websocket
     bool WebSocketPacketParser::unpack(WebSocketConnection *conn)
     {
         bool res = true;
-        conn->get_native_connection()->process_input_data([conn, this, &res](Buffer *buff) -> bool 
+        conn->get_native_connection()->process_input_data([conn, this, &res](buffer::Buffer *buff) -> bool 
         {
             frame_buffer_ = get_frame_buffer();
             auto chunks = conn->get_input_chunks();
@@ -194,7 +194,7 @@ namespace net::websocket
                     pc->head_.extend_pay_load_len_ += chunk.head_.extend_pay_load_len_;
                     // TODO 包体优化，减少拷贝
                     pc->body_->append_buffer(*chunk.body_);
-                    BufferedPool::get_instance()->free(chunk.body_);
+                    buffer::BufferedPool::get_instance()->free(chunk.body_);
                 }
 
                 if (pc->head_.extend_pay_load_len_ > PACKET_MAX_BYTE) {
@@ -226,7 +226,7 @@ namespace net::websocket
         return res;
     }
 
-    bool WebSocketPacketParser::pack_header(Buffer *buff, uint8_t type, uint32_t buffSize, bool isEnd, bool isContinueFrame)
+    bool WebSocketPacketParser::pack_header(buffer::Buffer *buff, uint8_t type, uint32_t buffSize, bool isEnd, bool isContinueFrame)
     {
         if (buff->writable_size() < 2) {
             return false;
@@ -291,7 +291,7 @@ namespace net::websocket
         return true;
     }
 
-    bool WebSocketPacketParser::pack_frame(Buffer *data, Buffer *buff, uint32_t size)
+    bool WebSocketPacketParser::pack_frame(buffer::Buffer *data, buffer::Buffer *buff, uint32_t size)
     {
         if (buff->writable_size() < size) {
             return false;
@@ -308,7 +308,7 @@ namespace net::websocket
         return true;
     }
 
-    bool WebSocketPacketParser::pack(WebSocketConnection *conn, Buffer *data, uint8_t type)
+    bool WebSocketPacketParser::pack(WebSocketConnection *conn, buffer::Buffer *data, uint8_t type)
     {
         auto buffers = conn->get_output_buffers();
         uint32_t sz = data->readable_bytes() / PACKET_MAX_BYTE + 1, buffSize = 0;
@@ -319,14 +319,14 @@ namespace net::websocket
                 return false;
             }
 
-            Buffer *buff = BufferedPool::get_instance()->allocate(buffSize + headSize);
+            buffer::Buffer *buff = buffer::BufferedPool::get_instance()->allocate(buffSize + headSize);
             if (!pack_header(buff, type, buffSize, i + 1 >= sz, i > 0)) {
-                BufferedPool::get_instance()->free(buff);
+                buffer::BufferedPool::get_instance()->free(buff);
                 return false;
             }
 
             if (!pack_frame(data, buff, buffSize)) {
-                BufferedPool::get_instance()->free(buff);
+                buffer::BufferedPool::get_instance()->free(buff);
                 return false;
             }
 
@@ -357,10 +357,10 @@ namespace net::websocket
         }
     }
 
-    Buffer * WebSocketPacketParser::get_frame_buffer()
+    buffer::Buffer * WebSocketPacketParser::get_frame_buffer()
     {
         if (!frame_buffer_) {
-            frame_buffer_ = BufferedPool::get_instance()->allocate();
+            frame_buffer_ = buffer::BufferedPool::get_instance()->allocate();
         }
         return frame_buffer_;
     }

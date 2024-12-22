@@ -6,7 +6,7 @@
 #include "common/file_stream.h"
 #include <iostream>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     ClientFtpSession::ClientFtpSession(Connection *conn, FtpApp *app, bool keepUtilSent) : FtpSession(conn, app, WorkMode::client, keepUtilSent)
     {

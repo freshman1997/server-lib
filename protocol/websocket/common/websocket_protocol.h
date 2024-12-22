@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <limits>
 
-namespace net::websocket 
+namespace yuan::net::websocket 
 {
     constexpr uint32_t PACKET_MAX_BYTE = 1024 * 1024;
 
@@ -101,7 +101,7 @@ namespace net::websocket
     {
         ProtoHead head_;
         bool has_set_head_ = false;
-        Buffer * body_ = nullptr;
+        buffer::Buffer * body_ = nullptr;
 
         bool is_completed()
         {

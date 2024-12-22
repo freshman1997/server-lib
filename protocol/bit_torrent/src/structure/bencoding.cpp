@@ -1,9 +1,9 @@
 #include <sstream>
 #include "structure/bencoding.h"
 
-namespace net::bit_torrent 
+namespace yuan::net::bit_torrent 
 {
-    std::string ListData::to_string()
+    std::string Listdata::to_string()
     {
         std::stringstream ss;
         ss << "[";
@@ -114,7 +114,7 @@ namespace net::bit_torrent
     static std::pair<int, BaseData *> parse_list(const char *begin, const char *end)
     {
         const char * p = begin;
-        ListData *list = new ListData;
+        Listdata *list = new Listdata;
         for (; p <= end; ) {
             char ch = *p;
             if (ch == 'e') {

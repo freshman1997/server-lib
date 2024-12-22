@@ -2,12 +2,12 @@
 #define __NET_FTP_SERVER_SERVER_FILE_STREAM_H__
 #include "common/file_stream.h"
 
-namespace net 
+namespace yuan::net 
 {
     class Acceptor;
 }
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpApp;
 

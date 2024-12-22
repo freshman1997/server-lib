@@ -1,6 +1,6 @@
 #include "content/content_parser.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     bool ContentParser::can_parse(const std::string &contentType)
     {

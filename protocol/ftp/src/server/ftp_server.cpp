@@ -12,7 +12,7 @@
 #include <iostream>
 #include <memory>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpServer::PrivateImpl
     {

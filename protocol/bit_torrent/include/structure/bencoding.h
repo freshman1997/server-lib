@@ -5,7 +5,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace net::bit_torrent 
+namespace yuan::net::bit_torrent 
 {
     enum class DataType
     {
@@ -88,15 +88,15 @@ namespace net::bit_torrent
         std::string data_;
     };
 
-    class ListData : public BaseData
+    class Listdata : public BaseData
     {
     public:
-        ListData()
+        Listdata()
         {
             type_ = DataType::list_;
         }
 
-        ~ListData()
+        ~Listdata()
         {
             for (const auto &it : datas_) {
                 delete it;

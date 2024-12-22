@@ -19,13 +19,13 @@ int main()
         return 1;
     }
 #endif
-    net::ftp::FtpClient client;
+    yuan::net::ftp::FtpClient client;
     std::thread runner([&client]() {
         client.connect("192.168.96.1", 12123);
     });
 
     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-    net::ftp::CommandScanner scanner;
+    yuan::net::ftp::CommandScanner scanner;
     while (true) {
         if (client.is_ok()) {
             client.send_command(scanner.simpleCommand());

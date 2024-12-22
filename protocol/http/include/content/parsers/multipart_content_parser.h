@@ -5,7 +5,7 @@
 #include <utility>
 #include "content/content_parser.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     typedef std::pair<uint32_t, std::pair<std::string, std::unordered_map<std::string, std::string>>> ContentDisposition;
 

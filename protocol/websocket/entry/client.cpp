@@ -20,7 +20,7 @@
 #include <cassert>
 #include <iostream>
 
-namespace net::websocket
+namespace yuan::net::websocket
 {
 
     enum class State
@@ -129,7 +129,7 @@ namespace net::websocket
             }
         }
 
-        void on_receive_packet(WebSocketConnection *conn, Buffer *buff)
+        void on_receive_packet(WebSocketConnection *conn, buffer::Buffer *buff)
         {
             if (data_handler_) {
                 data_handler_->on_data(conn, buff);

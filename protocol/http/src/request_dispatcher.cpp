@@ -1,6 +1,6 @@
 #include "request_dispatcher.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     void HttpRequestDispatcher::register_handler(const std::string &url, request_function func, bool is_prefix)
     {

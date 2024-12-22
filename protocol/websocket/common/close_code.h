@@ -2,7 +2,7 @@
 #define __NET_WEBSOCKET_COMMON_CLOSE_CODE_H__
 #include <cstdint>
 
-namespace net::websocket 
+namespace yuan::net::websocket 
 {
     // | 1012-1016 | 保留字段，未定义具体含义 |
     // | 1017-1023 | 未分配 |

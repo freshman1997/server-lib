@@ -5,7 +5,7 @@
 
 #include <iostream>
 
-namespace net::http 
+namespace yuan::net::http 
 {
     HttpSession::HttpSession(uint64_t id, HttpSessionContext *context, timer::TimerManager *timer_manager) : session_id_(id), context_(context), timer_manager_(timer_manager)
     {

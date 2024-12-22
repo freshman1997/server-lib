@@ -35,7 +35,7 @@
 #include "proxy.h"
 #include "base/utils/string_converter.h"
 
-namespace net::http
+namespace yuan::net::http
 {
     HttpServer::HttpServer() : quit_(false), state_(State::invalid), acceptor_(nullptr), event_loop_(nullptr), timer_manager_(nullptr), proxy_(nullptr), poller_(nullptr), ssl_module_(nullptr)
     {

@@ -3,7 +3,7 @@
 #include "packet.h"
 #include "response_code.h"
 
-namespace net::http
+namespace yuan::net::http
 {
     class HttpSessionContext;
     class HttpResponseParser;

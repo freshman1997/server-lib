@@ -8,7 +8,7 @@
 #include <cassert>
 #include <iostream>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     FtpFileStream::FtpFileStream(FtpSession *session) : session_(session)
     {

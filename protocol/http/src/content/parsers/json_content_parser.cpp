@@ -4,7 +4,7 @@
 #include "packet.h"
 #include "nlohmann/json.hpp"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     bool JsonContentParser::can_parse(const ContentType contentType)
     {

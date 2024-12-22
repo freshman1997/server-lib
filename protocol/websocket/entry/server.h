@@ -2,7 +2,7 @@
 #define __NET_WEBSOCKET_ENTRY_SERVER_H__
 #include <memory>
 
-namespace net::websocket 
+namespace yuan::net::websocket 
 {
     class WebSocketDataHandler;
     class WebSocketServer

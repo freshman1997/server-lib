@@ -8,7 +8,7 @@
 #include "singleton/singleton.h"
 #include "nlohmann/json.hpp"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     class HttpConfigManager : public singleton::Singleton<HttpConfigManager>, public std::enable_shared_from_this<HttpConfigManager>
     {

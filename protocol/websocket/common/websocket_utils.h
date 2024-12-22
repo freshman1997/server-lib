@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace net::websocket 
+namespace yuan::net::websocket 
 {
     class WebSocketUtils
     {

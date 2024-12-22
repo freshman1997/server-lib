@@ -5,7 +5,7 @@
 
 #include <cassert>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     FtpCommandParser::FtpCommandParser() : buff_(nullptr)
     {
@@ -15,7 +15,7 @@ namespace net::ftp
     FtpCommandParser::~FtpCommandParser()
     {
         if (buff_) {
-            BufferedPool::get_instance()->free(buff_);
+            buffer::BufferedPool::get_instance()->free(buff_);
             buff_ = nullptr;
         }
     }
@@ -59,17 +59,17 @@ namespace net::ftp
         return res;
     }
 
-    void FtpCommandParser::set_buff(Buffer *buff)
+    void FtpCommandParser::set_buff(buffer::Buffer *buff)
     {
         if (buff_) {
             buff_->append_buffer(*buff);
-            BufferedPool::get_instance()->free(buff);
+            buffer::BufferedPool::get_instance()->free(buff);
         } else {
             buff_ = buff;
         }
     }
 
-    Buffer * FtpCommandParser::get_buff()
+    buffer::Buffer * FtpCommandParser::get_buff()
     {
         return buff_;
     }

@@ -2,12 +2,12 @@
 #define __NET_FTP_SERVER_SESSION_MANAGER_H__
 #include <unordered_map>
 
-namespace net 
+namespace yuan::net 
 {
     class Connection;
 }
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpSession;
 

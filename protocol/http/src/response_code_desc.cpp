@@ -1,6 +1,6 @@
 #include "response_code_desc.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     std::unordered_map<ResponseCode, std::string> responseCodeDescs = {
         {ResponseCode::switch_protocol, "101 Switching Protocols"},

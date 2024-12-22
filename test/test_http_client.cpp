@@ -14,6 +14,7 @@ int main()
     }
 #endif
 
+    using namespace yuan;
     net::http::HttpClient *client = new net::http::HttpClient;
 
     client->connect({"www.baidu.com", 80}, 

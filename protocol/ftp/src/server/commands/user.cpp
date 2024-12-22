@@ -4,7 +4,7 @@
 
 #include <string>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     REGISTER_COMMAND_IMPL(CommandUser);
 

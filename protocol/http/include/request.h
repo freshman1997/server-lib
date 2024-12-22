@@ -6,7 +6,7 @@
 
 #include "packet.h"
 
-namespace net::http 
+namespace yuan::net::http 
 { 
     enum class HttpMethod : char
     {

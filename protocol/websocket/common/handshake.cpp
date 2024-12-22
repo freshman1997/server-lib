@@ -13,7 +13,7 @@
 #include <openssl/ssl.h>
 #include <sstream>
 
-namespace net::websocket 
+namespace yuan::net::websocket 
 {
     WebSocketHandshaker::WebSocketHandshaker() : ok_(false)
     {

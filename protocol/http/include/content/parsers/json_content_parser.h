@@ -2,7 +2,7 @@
 #define NET_HTTP_JSON_CONTENT_PARSER_H_
 #include "content/content_parser.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     class JsonContentParser final : public ContentParser
     {

@@ -6,7 +6,7 @@
 
 #include "singleton/singleton.h"
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class ServerContext : public singleton::Singleton<ServerContext>, public std::enable_shared_from_this<ServerContext>
     {

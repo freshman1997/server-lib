@@ -27,6 +27,8 @@
 #include "response.h"
 #include "net/connection/connection.h"
 
+using namespace yuan;
+
 class VideoTest
 {
 public:

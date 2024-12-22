@@ -32,6 +32,8 @@
 #include "net/event/event_loop.h"
 #include "net/connection/connection.h"
 
+using namespace yuan;
+
 class PrintTask : public thread::Runnable
 {
 protected:
@@ -42,12 +44,11 @@ protected:
 };
 
 using namespace std;
-using namespace timer;
-class PrintTask1 : public TimerTask
+class PrintTask1 : public timer::TimerTask
 {
     int idx = 0;
 public:
-    virtual void on_timer(Timer *timer)
+    virtual void on_timer(timer::Timer *timer)
     {
         std::cout << " timer task printing ==> " << idx <<  std::endl;
         ++idx;
@@ -77,8 +78,8 @@ void test_evloop()
 
     net::Poller *poller = new net::SelectPoller;
     timer::WheelTimerManager *manager = new timer::WheelTimerManager;
-    TimerTask *t = new PrintTask1;
-    Timer *timer = manager->interval(2000, 2000, t, 100);
+    timer::TimerTask *t = new PrintTask1;
+    timer::Timer *timer = manager->interval(2000, 2000, t, 100);
 
     net::EventLoop loop(poller, manager);
     acceptor->set_event_handler(&loop);

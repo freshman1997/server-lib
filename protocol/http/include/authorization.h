@@ -3,7 +3,7 @@
 
 #include <string>
 #include <utility>
-namespace net::http 
+namespace yuan::net::http 
 {
     enum class authorization_type
     {

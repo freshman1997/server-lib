@@ -2,7 +2,7 @@
 #define __NET_HTTP_PACKET_PARSER_H__
 #include "buffer/buffer.h"
 
-namespace net::http
+namespace yuan::net::http
 {
     class HttpPacket;
 
@@ -51,7 +51,7 @@ namespace net::http
         virtual ~HttpPacketParser() {}
 
     public:
-        virtual bool parse_header(Buffer &buff) = 0;
+        virtual bool parse_header(buffer::Buffer &buff) = 0;
 
     public:
         void set_ptr(HttpPacket *packet)
@@ -65,7 +65,7 @@ namespace net::http
             body_state = BodyState::init;
         }
 
-        int parse(Buffer &buff);
+        int parse(buffer::Buffer &buff);
 
         bool done() const
         {
@@ -75,13 +75,13 @@ namespace net::http
         uint32_t get_body_length();
 
     protected:
-        bool parse_version(Buffer &buff, char ending = '\r', char next = '\n');
+        bool parse_version(buffer::Buffer &buff, char ending = '\r', char next = '\n');
 
-        bool parse_header_keys(Buffer &buff);
+        bool parse_header_keys(buffer::Buffer &buff);
 
-        bool parse_new_line(Buffer &buff);
+        bool parse_new_line(buffer::Buffer &buff);
 
-        int  parse_body(Buffer &buff, uint32_t length);
+        int  parse_body(buffer::Buffer &buff, uint32_t length);
 
         bool is_header_done() const 
         {

@@ -9,7 +9,7 @@
 #include <cassert>
 #include <iostream>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     FtpFileStreamSession::FtpFileStreamSession(FtpSession *session)
     {
@@ -78,7 +78,7 @@ namespace net::ftp
             }
 
             state_ = FileSteamState::processing;
-            conn->process_input_data([this](Buffer *buff) ->int {
+            conn->process_input_data([this](buffer::Buffer *buff) ->int {
                 int ret = current_file_info_->write_file(buff);            
                 if (ret < 0) {
                     state_ = FileSteamState::file_error;
@@ -114,7 +114,7 @@ namespace net::ftp
             bool newBuff = false;
             if (buff->readable_bytes() > 0) {
                 newBuff = true;
-                buff = BufferedPool::get_instance()->allocate(write_buff_size_);
+                buff = buffer::BufferedPool::get_instance()->allocate(write_buff_size_);
             } else {
                 buff->reset();
             }
@@ -126,7 +126,7 @@ namespace net::ftp
                 state_ = FileSteamState::file_error;
                 session_->on_error(this);
                 if (newBuff) {
-                    BufferedPool::get_instance()->free(buff);
+                    buffer::BufferedPool::get_instance()->free(buff);
                 }
             } else {
                 if (newBuff) {

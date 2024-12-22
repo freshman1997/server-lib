@@ -2,7 +2,7 @@
 #define __NET_DNS_DNS_CLIENT_H__
 #include "net/connection/connection.h"
 
-namespace net::dns 
+namespace yuan::net::dns 
 {
     class DnsClient
     {

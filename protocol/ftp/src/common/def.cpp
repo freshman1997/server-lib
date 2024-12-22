@@ -5,7 +5,7 @@
 #include <iostream>
 #include <string>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
 
     std::string_view delimiter = "\r\n";
@@ -21,7 +21,7 @@ namespace net::ftp
         }
     }
 
-    int FtpFileInfo::read_file(std::size_t size, Buffer *buff)
+    int FtpFileInfo::read_file(std::size_t size, buffer::Buffer *buff)
     {
         if (!fstream_) {
             fstream_ = new std::fstream();
@@ -52,7 +52,7 @@ namespace net::ftp
         return read;
     }
 
-    int FtpFileInfo::write_file(Buffer *buff)
+    int FtpFileInfo::write_file(buffer::Buffer *buff)
     {
         if (!fstream_) {
             fstream_ = new std::fstream();

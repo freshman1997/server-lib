@@ -2,7 +2,7 @@
 #define __NET_FTP_CLIENT_CLIENT_FILE_STREAM_H__
 #include "common/file_stream.h"
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpApp;
 

@@ -3,7 +3,7 @@
 #include <fstream>
 #include <iostream>
 
-namespace net::http 
+namespace yuan::net::http 
 {
     HttpConfigManager::HttpConfigManager()
     {

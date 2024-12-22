@@ -4,7 +4,7 @@
 #include <unordered_map>
 #include "response_code.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     extern std::unordered_map<ResponseCode, std::string> responseCodeDescs;
 }

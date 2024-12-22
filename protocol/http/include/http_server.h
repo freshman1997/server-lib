@@ -12,7 +12,7 @@
 #include "request_dispatcher.h"
 #include "timer/timer_manager.h"
 
-namespace net
+namespace yuan::net
 {
     class Socket;
     class Poller;
@@ -20,7 +20,7 @@ namespace net
     class Acceptor;
 }
 
-namespace net::http 
+namespace yuan::net::http 
 {
     class HttpProxy;
 

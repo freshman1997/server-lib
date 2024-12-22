@@ -6,7 +6,7 @@
 #include "context.h"
 #include "response_code_desc.h"
 
-namespace net::http
+namespace yuan::net::http
 {
     HttpResponse::HttpResponse(HttpSessionContext *context) : HttpPacket(context)
     {

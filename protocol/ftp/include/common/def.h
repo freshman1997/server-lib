@@ -7,7 +7,7 @@
 #include "buffer/buffer.h"
 #include "response_code.h"
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     extern std::string_view delimiter;
     extern std::size_t default_write_buff_size;
@@ -73,7 +73,7 @@ namespace net::ftp
          * @param buff 缓冲区
          * @return int 成功则返回读取数量，失败返回 -1
          */
-        int read_file(std::size_t size, Buffer *buff);
+        int read_file(std::size_t size, buffer::Buffer *buff);
 
         /**
          * @brief 把缓冲区的数据写入目的地
@@ -81,7 +81,7 @@ namespace net::ftp
          * @param buff 
          * @return int 成功则返回读取数量，失败返回 -1, 成功会修改 current_progress_ 的值
          */
-        int write_file(Buffer *buff);
+        int write_file(buffer::Buffer *buff);
 
         bool is_completed()
         {

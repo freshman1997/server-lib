@@ -3,7 +3,7 @@
 
 #define KEY_TO_STRING(key) (#key)
 
-namespace net::http::config
+namespace yuan::net::http::config
 {
     int connection_idle_timeout = 30 * 1000;
     

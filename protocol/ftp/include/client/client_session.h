@@ -2,7 +2,7 @@
 #define __NET_FTP_CLIENT_CLIENT_SESSION_H__
 #include "common/session.h"
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpApp;
 

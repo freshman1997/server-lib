@@ -1,6 +1,6 @@
 #include "client/config.h"
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     std::string_view config_file_path_ = "./ftp_cli.json";
     std::string_view config_key_read_amount_ = "read_amount";

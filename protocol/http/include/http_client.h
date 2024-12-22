@@ -11,7 +11,7 @@
 #include <functional>
 #include <memory>
 
-namespace net::http 
+namespace yuan::net::http 
 {
     typedef std::function<void (HttpRequest *req)> connected_callback;
 

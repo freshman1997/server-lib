@@ -6,7 +6,7 @@
 #include "common/def.h"
 #include "buffer/buffer.h"
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpCommandParser
     {
@@ -17,12 +17,12 @@ namespace net::ftp
     public:
         std::vector<FtpCommand> split_cmds(const std::string_view &endWith, const std::string &splitStr);
 
-        void set_buff(Buffer *buff);
+        void set_buff(buffer::Buffer *buff);
 
-        Buffer * get_buff();
+        buffer::Buffer * get_buff();
 
     private:
-        Buffer *buff_;
+        buffer::Buffer *buff_;
     };
 }
 

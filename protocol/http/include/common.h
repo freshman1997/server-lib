@@ -2,7 +2,7 @@
 #define __HTTP_COMMON_H__
 #include <functional>
 
-namespace net::http 
+namespace yuan::net::http 
 {
     class HttpRequest;
     class HttpResponse;

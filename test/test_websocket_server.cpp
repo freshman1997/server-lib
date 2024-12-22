@@ -13,6 +13,8 @@
 #include <signal.h>
 #endif
 
+using namespace yuan;
+
 class TestServer : public net::websocket::WebSocketDataHandler
 {
 public:
@@ -21,7 +23,7 @@ public:
 
     }
 
-    virtual void on_data(net::websocket::WebSocketConnection *wsConn, const Buffer *buff)
+    virtual void on_data(net::websocket::WebSocketConnection *wsConn, const buffer::Buffer *buff)
     {
         std::ofstream file("data.txt");
         if (file.good()) {
@@ -29,7 +31,7 @@ public:
             file.close();
         }
 
-        Buffer *data = BufferedPool::get_instance()->allocate(buff->readable_bytes());
+        buffer::Buffer *data = buffer::BufferedPool::get_instance()->allocate(buff->readable_bytes());
         data->append_buffer(*buff);
         wsConn->send(data);
     }

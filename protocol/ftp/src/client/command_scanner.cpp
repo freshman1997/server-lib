@@ -2,7 +2,7 @@
 #include <iostream>
 #include <string>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     std::string CommandScanner::simpleCommand()
     {

@@ -2,12 +2,12 @@
 #define __HTTP_REQUEST_CONTEXT_H__
 #include "response_code.h"
 
-namespace net 
+namespace yuan::net 
 {
     class Connection;
 }
 
-namespace net::http 
+namespace yuan::net::http 
 {
     class HttpRequest;
     class HttpResponse;

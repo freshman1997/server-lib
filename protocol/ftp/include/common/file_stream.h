@@ -6,7 +6,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpApp;
     class FtpSession;

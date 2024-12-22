@@ -7,7 +7,7 @@
 #include "content_type.h"
 #include "singleton/singleton.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     class HttpPacket;
     class ContentParser;

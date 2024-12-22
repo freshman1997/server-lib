@@ -11,7 +11,7 @@
 #include "common.h"
 #include "timer/timer_task.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     class HttpServer;
     class RemoteConnectTask;

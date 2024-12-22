@@ -2,7 +2,7 @@
 #define __NET_HTTP_RESPONSE_PARSER_H__
 #include "packet_parser.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     class HttpResponseParser : public HttpPacketParser
     {
@@ -11,11 +11,11 @@ namespace net::http
         HttpResponseParser(HttpPacket *packet) : HttpPacketParser(packet)
         {}
 
-        virtual bool parse_header(Buffer &buff);
+        virtual bool parse_header(buffer::Buffer &buff);
 
     private:
-        bool parse_status(Buffer &buff);
-        bool parse_status_desc(Buffer &buff);
+        bool parse_status(buffer::Buffer &buff);
+        bool parse_status_desc(buffer::Buffer &buff);
     };
 }
 

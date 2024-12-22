@@ -7,7 +7,7 @@
 #include "common/def.h"
 #include "singleton/singleton.h"
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpSession;
 

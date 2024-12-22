@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace net::http::helper
+namespace yuan::net::http::helper
 {
     enum class ContentDispositionType
     {

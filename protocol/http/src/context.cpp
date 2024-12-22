@@ -6,7 +6,7 @@
 #include "response.h"
 #include "response_code.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     HttpSessionContext::HttpSessionContext(Connection *conn) : mode_(Mode::server), has_parsed_(false), conn_(conn)
     {
@@ -38,7 +38,7 @@ namespace net::http
         }
 
         bool res = false;
-        conn_->process_input_data([this, &res](Buffer *buff) -> bool {
+        conn_->process_input_data([this, &res](buffer::Buffer *buff) -> bool {
             // 暂时采用 copy 的方式
             auto pkt = get_packet();
             res = pkt->parse(*buff);

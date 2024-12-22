@@ -1,7 +1,7 @@
 #ifndef __NET_FTP_HANDLER_FILE_STREAM_H__
 #define __NET_FTP_HANDLER_FILE_STREAM_H__
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpFileStreamSession;
 

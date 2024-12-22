@@ -1,16 +1,16 @@
 #ifndef __NET_FTP_HANDLER_ENTRY_H__
 #define __NET_FTP_HANDLER_ENTRY_H__
-namespace net 
+namespace yuan::net 
 {
     class EventHandler;
 }
 
-namespace timer 
+namespace yuan::timer 
 {
     class TimerManager;
 }
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpSession;
 

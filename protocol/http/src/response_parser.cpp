@@ -1,9 +1,9 @@
 #include "response_parser.h"
 #include "response.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
-    bool HttpResponseParser::parse_header(Buffer &buff)
+    bool HttpResponseParser::parse_header(buffer::Buffer &buff)
     {
         int from = buff.get_read_index();
         if (header_state == HeaderState::init) {
@@ -59,7 +59,7 @@ namespace net::http
             return false; \
         }
     
-    bool HttpResponseParser::parse_status(Buffer &buff)
+    bool HttpResponseParser::parse_status(buffer::Buffer &buff)
     {
         PRE_CHECK(HeaderState::version_gap)
 
@@ -77,7 +77,7 @@ namespace net::http
         return true;
     }
 
-    bool HttpResponseParser::parse_status_desc(Buffer &buff)
+    bool HttpResponseParser::parse_status_desc(buffer::Buffer &buff)
     {
         PRE_CHECK(HeaderState::header_status_gap)
 

@@ -7,12 +7,12 @@
 
 #include <string>
 
-namespace net
+namespace yuan::net
 {
     class Connection;
 }
 
-namespace net::http 
+namespace yuan::net::http 
 {
     enum class HttpVersion : char
     {
@@ -48,7 +48,7 @@ namespace net::http
     public:
         void send();
 
-        bool parse(Buffer &buff);
+        bool parse(buffer::Buffer &buff);
 
         void add_header(const std::string &k, const std::string &v);
 
@@ -126,7 +126,7 @@ namespace net::http
 
         bool parse_content();
 
-        Buffer * get_buff(bool take = false);
+        buffer::Buffer * get_buff(bool take = false);
 
         void pack_and_send(Connection *conn);
 
@@ -143,7 +143,7 @@ namespace net::http
         std::string content_type_text_;
         std::unordered_map<std::string, std::string> content_type_extra_;
         const Content *body_content_;
-        Buffer * buffer_;
+        buffer::Buffer * buffer_;
     };
 }
 

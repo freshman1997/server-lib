@@ -2,7 +2,7 @@
 #include "content/types.h"
 #include "packet.h"
 
-namespace net::http
+namespace yuan::net::http
 {
     bool TextContentParser::can_parse(ContentType contentType)
     {

@@ -3,7 +3,7 @@
 #include "common/session.h"
 #include "command_parser.h"
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FtpApp;
 

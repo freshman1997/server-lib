@@ -5,7 +5,7 @@
 #include <set>
 #include <string_view>
 
-namespace net::websocket 
+namespace yuan::net::websocket 
 {
     // config keys
     extern std::string_view heart_beat_interval_key;

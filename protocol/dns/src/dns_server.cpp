@@ -7,7 +7,7 @@
 #include "net/connection/connection.h"
 #include <iostream>
 
-namespace net::dns 
+namespace yuan::net::dns 
 {
     DnsServer::DnsServer()
     {
@@ -31,7 +31,7 @@ namespace net::dns
 
     void DnsServer::on_read(Connection *conn)
     {
-        conn->process_input_data([this](Buffer *buff) -> bool {
+        conn->process_input_data([this](buffer::Buffer *buff) -> bool {
             std::string str(buff->peek(), buff->peek() + buff->readable_bytes());
             std::cout << "xxxxxxx: " << str << '\n';
             return true;

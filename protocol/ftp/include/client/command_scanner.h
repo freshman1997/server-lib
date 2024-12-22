@@ -2,7 +2,7 @@
 #define _NET_FTP_CLIENT_COMMAND_SCANNER_H__
 #include <string>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class CommandScanner
     {

@@ -10,7 +10,7 @@
 #include <cassert>
 #include <iostream>
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     ServerFtpFileStream::ServerFtpFileStream(FtpSession *session) : FtpFileStream(session)
     {

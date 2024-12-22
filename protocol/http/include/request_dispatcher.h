@@ -6,7 +6,7 @@
 #include "common.h"
 #include "base/utils/compressed_trie.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
     class HttpRequestDispatcher
     {

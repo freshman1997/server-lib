@@ -1,7 +1,7 @@
 #include "header_util.h"
 #include <unordered_map>
 
-namespace net::http::helper
+namespace yuan::net::http::helper
 {
     std::unordered_map<std::string, ContentDispositionType> dispistion_type_mapping_ = {
         {"inline", ContentDispositionType::inline_},

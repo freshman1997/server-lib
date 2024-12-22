@@ -9,17 +9,19 @@
 #include <signal.h>
 #endif
 
+using namespace yuan;
+
 class TestClient : public net::websocket::WebSocketDataHandler
 {
 public:
     virtual void on_connected(net::websocket::WebSocketConnection *wsConn)
     {
-        Buffer *buf = BufferedPool::get_instance()->allocate();
+        buffer::Buffer *buf = buffer::BufferedPool::get_instance()->allocate();
         buf->write_string("hello world!!!");
         wsConn->send(buf);
     }
 
-    virtual void on_data(net::websocket::WebSocketConnection *wsConn, const Buffer *buff)
+    virtual void on_data(net::websocket::WebSocketConnection *wsConn, const buffer::Buffer *buff)
     {
         std::string str(buff->peek(), buff->peek_end());
         std::cout << "recv: " << str << '\n';

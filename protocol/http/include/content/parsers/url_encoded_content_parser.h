@@ -2,7 +2,7 @@
 #define __NET_HTTP_URL_ENCODED_CONTENT_PARSER_H__
 #include "content/content_parser.h"
 
-namespace net::http
+namespace yuan::net::http
 {
     class UrlEncodedContentParser final : public ContentParser
     {

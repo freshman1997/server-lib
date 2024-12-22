@@ -2,9 +2,9 @@
 #include "request_parser.h"
 #include "url.h"
 
-namespace net::http 
+namespace yuan::net::http 
 {
-    bool HttpRequestParser::parse_method(Buffer &buff)
+    bool HttpRequestParser::parse_method(buffer::Buffer &buff)
     {
         if (buff.readable_bytes() == 0) {
             return false;
@@ -131,7 +131,7 @@ namespace net::http
         return true;
     }
 
-    bool HttpRequestParser::parse_url(Buffer &buff)
+    bool HttpRequestParser::parse_url(buffer::Buffer &buff)
     {
         HttpRequest * req = dynamic_cast<HttpRequest *>(packet_);
         if (!req) {
@@ -167,7 +167,7 @@ namespace net::http
         return true;
     }
 
-    bool HttpRequestParser::parse_header(Buffer &buff)
+    bool HttpRequestParser::parse_header(buffer::Buffer &buff)
     {
         int from = buff.get_read_index();
         if (header_state == HeaderState::init) {

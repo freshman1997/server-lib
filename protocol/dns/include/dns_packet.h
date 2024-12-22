@@ -5,7 +5,7 @@
 #include <vector>
 #include "buffer/linked_buffer.h"
 
-namespace net::dns 
+namespace yuan::net::dns 
 {
     class DnsPacket
     {

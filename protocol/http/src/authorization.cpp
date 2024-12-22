@@ -2,7 +2,7 @@
 #include "base/utils/base64.h"
 #include "header_util.h"
 
-namespace net::http
+namespace yuan::net::http
 {
     std::pair<authorization_type, std::pair<std::string, std::string>> 
         HttpAuthorization::decode_authorization_value(const std::string &val)

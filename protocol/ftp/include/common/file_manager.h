@@ -3,7 +3,7 @@
 #include <vector>
 #include "common/def.h"
 
-namespace net::ftp 
+namespace yuan::net::ftp 
 {
     class FileManager
     {
