@@ -7,7 +7,7 @@ FILE(GLOB_RECURSE CORE_SRC "./*.cpp")
 add_library(Core ${CORE_SRC})
 target_link_libraries(Core)
 
-target_link_directories(Core PUBLIC third_party/openssl-3.4.0)
+target_link_directories(Core PUBLIC ../third_party/openssl-3.4.0)
 
 if(UNIX OR APPLE)
     target_link_libraries(Core PUBLIC kcp ssl crypto pthread dl)
