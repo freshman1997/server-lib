@@ -30,6 +30,14 @@ namespace yuan::singleton
 
     template <typename T>
     std::shared_ptr<T> Singleton<T>::_instance = nullptr;
+
+
+    template<typename T>
+    static T * get_instance()
+    {
+        static T instance;
+        return &instance;
+    }
 }
 
 #endif

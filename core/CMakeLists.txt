@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.12)
 project(Core)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static -fPIC")
 
 FILE(GLOB_RECURSE CORE_SRC "./*.cpp")
 

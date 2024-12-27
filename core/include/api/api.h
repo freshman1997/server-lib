@@ -17,6 +17,6 @@
     #define YUAN_API_EXPORT extern
 #endif
 
-
+YUAN_API_C_EXPORT void * get_plugin_manager();
 
 #endif // __YUAN_API_H__

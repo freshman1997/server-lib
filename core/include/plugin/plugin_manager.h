@@ -1,19 +1,27 @@
 #ifndef __PLUGIN_MANAGER_H__
 #define __PLUGIN_MANAGER_H__
 #include "plugin/plugin.h"
-#include "singleton/singleton.h"
+#include <memory>
 #include <string>
 
 namespace yuan::plugin 
 {
-    class PluginManager : singleton::Singleton<PluginManager>
+    class PluginManager
     {
     public:
-        void * load(const std::string &pluginPath);
+        PluginManager();
+        ~PluginManager();
 
-        void add_plugin(Plugin *plugin);
+    public:
+        bool load(const std::string &pluginName);
 
-        void release_plugin(Plugin *plugin);
+        void add_plugin(const std::string &name, Plugin *plugin);
+
+        void release_plugin(const std::string &pluginName);
+
+    private:
+        class PluginData;
+        std::unique_ptr<PluginData> data_;
     };
 }
 
