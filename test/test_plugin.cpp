@@ -10,5 +10,9 @@ int main()
         return -1;
     }
 
+    if (auto plugin = pluginManager->get_plugin("HelloWorld")) {
+        plugin->on_message("test message");
+    }
+
     return 0;
 }

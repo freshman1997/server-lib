@@ -1,10 +1,10 @@
 #include "helloworld.h"
 #include "api/api.h"
-#include "plugin/plugin_manager.h"
 #include "singleton/singleton.h"
+
 #include <iostream>
 
-HelloWorldPlugin::HelloWorldPlugin() : plugin_manager_(nullptr)
+HelloWorldPlugin::HelloWorldPlugin()
 {
 
 }
@@ -16,20 +16,19 @@ HelloWorldPlugin::~HelloWorldPlugin()
 
 void HelloWorldPlugin::on_loaded()
 {
-    void * pluginManager = get_plugin_manager();
-    if (!pluginManager)
-    {
-        std::cout << "invalid state, plugin manager is null !!!\n";
-        return;
-    }
-
-    plugin_manager_ = static_cast<yuan::plugin::PluginManager *>(pluginManager);
+    std::cout << "hello world on_loaded !!\n";
 }
 
 bool HelloWorldPlugin::on_init()
 {
     std::cout << "hello world init success !!\n";
     return true;
+}
+
+int HelloWorldPlugin::on_message(const std::string &message)
+{
+    std::cout << "hello world on_message: " << message << "\n";
+    return 0;
 }
 
 void HelloWorldPlugin::on_release()

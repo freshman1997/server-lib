@@ -2,11 +2,6 @@
 #define __HELLOWORLD_H__
 #include "plugin/plugin.h"
 
-namespace yuan::plugin
-{
-    class PluginManager;
-}
-
 class HelloWorldPlugin : public yuan::plugin::Plugin
 {
 public:
@@ -18,10 +13,9 @@ public:
 
     virtual bool on_init();
 
-    virtual void on_release();
+    virtual int on_message(const std::string &message);
 
-private:
-    yuan::plugin::PluginManager *plugin_manager_;
+    virtual void on_release();
 };
 
 #endif // __HELLOWORLD_H__

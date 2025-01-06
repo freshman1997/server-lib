@@ -17,6 +17,8 @@ namespace yuan::plugin
 
         void add_plugin(const std::string &name, Plugin *plugin);
 
+        Plugin * get_plugin(const std::string &name);
+
         void release_plugin(const std::string &pluginName);
 
     private:

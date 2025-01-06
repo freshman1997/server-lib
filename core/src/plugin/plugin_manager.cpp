@@ -33,7 +33,7 @@ namespace yuan::plugin
 
     bool PluginManager::load(const std::string &pluginName)
     {
-        std::string realName = "/home/yuan/codes/test/server-lib/build/plugins/" + pluginName + ".so";
+        std::string realName = "/home/yuan/codes/test/webserver/build/plugins/" + pluginName + ".plugin";
         void *handle = PluginSymbolSolver::load_native_lib(realName);
         if (!handle) {
             return false;
@@ -74,6 +74,12 @@ namespace yuan::plugin
             release_plugin(name);
         }
         data_->plugins_[name] = plugin;
+    }
+
+    Plugin * PluginManager::get_plugin(const std::string &name)
+    {
+        auto it = data_->plugins_.find(name);
+        return it == data_->plugins_.end() ? nullptr : it->second;
     }
 
     void PluginManager::release_plugin(const std::string &pluginName)
