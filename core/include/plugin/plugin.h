@@ -1,19 +1,24 @@
 #ifndef __PLUGIN_H__
 #define __PLUGIN_H__
-#include <string>
+#include "message/message.h"
+
+namespace yuan::message
+{
+    class MessageDispatcher;
+}
 
 namespace yuan::plugin 
 {
-    class Plugin
+    class Plugin : public message::MessageConsumer
     {
     public:
         virtual void on_loaded() = 0;
 
-        virtual bool on_init() = 0;
-
-        virtual int on_message(const std::string &message) = 0;
+        virtual bool on_init(message::MessageDispatcher *dispatcher) = 0;
 
         virtual void on_release() = 0;
+
+        virtual void on_message(const message::Message *msg) {}
     };
 }
 

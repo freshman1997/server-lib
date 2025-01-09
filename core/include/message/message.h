@@ -7,28 +7,44 @@ namespace yuan::message
 {
     enum MessageType : char
     {
-        system_message_,
-        net_message_,
-        user_message_,
+        null_message_   = 0,
+        system_message_ = 1,
+        net_message_    = 1 << 1,
+        user_message_   = 1 << 2,
+    };
+
+    class MessageDestructor
+    {
+    public:
+        virtual ~MessageDestructor() {}
+        virtual void free() = 0;
     };
 
     struct Message
     {
         struct
         {
-            MessageType     type_;
-            unsigned char   ext1_;
-            unsigned char   ext2_;
-            unsigned char   ext3_;
-        }                   head_;
+            MessageType     type_ = null_message_;
+            unsigned char   ext1_ = 0;
+            unsigned char   ext2_ = 0;
+            unsigned char   ext3_ = 0;
+        };
         
-        unsigned int        event_;
-        void *              data_;
+        unsigned int        event_ = 0;
+        void *              data_  = nullptr;
+
+        virtual ~Message()
+        {
+            if (data_) {
+                MessageDestructor *destructor = static_cast<MessageDestructor *>(data_);
+                destructor->free();
+            }
+        }
     };
 
-    struct SystemMessage
+    struct SystemMessage : public MessageDestructor
     {
-        enum class SystemMessageType : char
+        enum SystemMessageType : char
         {
             start_,
             stop_,
@@ -38,16 +54,18 @@ namespace yuan::message
             release_plugin_,
         };
 
-        union SystemMessageData
+        unsigned int    timer_id_;
+        std::string     plugin_name_;
+
+        virtual void free() 
         {
-            unsigned int    timer_id_;
-            std::string     plugin_name_;
-        };
+            delete this;
+        }
     };
 
-    struct NetMessage
+    struct NetMessage : public MessageDestructor
     {
-        enum class NetMessageType : char
+        enum NetMessageType : char
         {
             listen_,
             connect_,
@@ -57,13 +75,19 @@ namespace yuan::message
             send_,
         };
 
-        union NetMessageData
-        {
-            yuan::net::InetAddress    addr_;
-            yuan::net::Connection *   conn_;
-        };
+        yuan::net::InetAddress    addr_;
+        yuan::net::Connection *   conn_;
 
-        NetMessageData data_ = {};
+        virtual void free() 
+        {
+            delete this;
+        }
+    };
+
+    class MessageConsumer
+    {
+    public:
+        virtual void on_message(const Message *msg) = 0;
     };
 }
 

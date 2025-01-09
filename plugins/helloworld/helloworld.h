@@ -1,6 +1,7 @@
 #ifndef __HELLOWORLD_H__
 #define __HELLOWORLD_H__
 #include "plugin/plugin.h"
+#include "message/message_dispacher.h"
 
 class HelloWorldPlugin : public yuan::plugin::Plugin
 {
@@ -11,11 +12,15 @@ public:
 public:
     virtual void on_loaded();
 
-    virtual bool on_init();
-
-    virtual int on_message(const std::string &message);
+    virtual bool on_init(yuan::message::MessageDispatcher *dispatcher);
 
     virtual void on_release();
+
+public:
+    virtual void on_message(const yuan::message::Message *msg);
+
+private:
+    yuan::message::MessageDispatcher *dispatcher_;
 };
 
 #endif // __HELLOWORLD_H__

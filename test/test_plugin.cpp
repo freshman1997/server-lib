@@ -1,18 +1,17 @@
+#include "message/message_dispacher.h"
 #include "plugin/plugin_manager.h"
-#include "singleton/singleton.h"
-#include <iostream>
 
 int main()
 {
-    std::cout << "hello world!!!\n";
-    auto pluginManager = yuan::singleton::get_instance<yuan::plugin::PluginManager>();
+    auto pluginManager = yuan::plugin::PluginManager::get_instance();
+    pluginManager->set_plugin_path("/home/yuan/code/test/server-lib/build/plugins");
+
     if (!pluginManager->load("HelloWorld")) {
         return -1;
     }
 
-    if (auto plugin = pluginManager->get_plugin("HelloWorld")) {
-        plugin->on_message("test message");
-    }
+    auto dispatcher = yuan::message::MessageDispatcher::get_instance();
+    dispatcher->dispatch();
 
     return 0;
 }

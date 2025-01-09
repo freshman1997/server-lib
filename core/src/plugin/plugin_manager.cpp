@@ -1,6 +1,8 @@
 #include "plugin/plugin_manager.h"
+#include "message/message.h"
 #include "plugin/plugin.h"
 #include "plugin/plugin_symbol_solver.h"
+#include "message/message_dispacher.h"
 
 #include <iostream>
 #include <unordered_map>
@@ -12,6 +14,7 @@ namespace yuan::plugin
     class PluginManager::PluginData
     {
     public:
+        PluginData() = default;
         ~PluginData()
         {
             for (auto &item : plugins_) {
@@ -19,21 +22,33 @@ namespace yuan::plugin
             }
             plugins_.clear();
         }
+
     public:
+        std::string plugin_path_;
         std::unordered_map<std::string, Plugin *> plugins_;
     };
 
     PluginManager::PluginManager() : data_(std::make_unique<PluginManager::PluginData>())
     {
+        message::MessageDispatcher::get_instance()->register_consumer(message::system_message_, this);
     }
 
     PluginManager::~PluginManager()
     {
     }
 
+    void PluginManager::set_plugin_path(const std::string &path)
+    {
+        data_->plugin_path_ = path;
+        if (!path.empty() && !path.ends_with('/'))
+        {
+            data_->plugin_path_.push_back('/');
+        }
+    }
+
     bool PluginManager::load(const std::string &pluginName)
     {
-        std::string realName = "/home/yuan/codes/test/webserver/build/plugins/" + pluginName + ".plugin";
+        std::string realName = data_->plugin_path_ + pluginName + ".plugin";
         void *handle = PluginSymbolSolver::load_native_lib(realName);
         if (!handle) {
             return false;
@@ -57,12 +72,13 @@ namespace yuan::plugin
         Plugin *plugin = static_cast<Plugin *>(pluginInstance);
         plugin->on_loaded();
 
-        if (!plugin->on_init()) {
+        add_plugin(pluginName, plugin);
+
+        if (!plugin->on_init(yuan::message::MessageDispatcher::get_instance())) {
             std::cout << "plugin " << pluginName << " init failed!!!\n";
+            release_plugin(pluginName);
             return false;
         }
-
-        add_plugin(pluginName, plugin);
 
         return true;
     }
@@ -96,5 +112,30 @@ namespace yuan::plugin
         }
 
         data_->plugins_.erase(it);
+    }
+
+    void PluginManager::on_message(const message::Message *msg)
+    {
+        if (msg->type_ == message::system_message_ && msg->data_) {
+            const message::SystemMessage *sysmsg = static_cast<const message::SystemMessage *>(msg->data_);
+            if (!sysmsg->plugin_name_.empty()) {
+                switch (msg->event_) {
+                case message::SystemMessage::SystemMessageType::load_plugin_:
+                {
+                    load(sysmsg->plugin_name_);
+                    break;
+                }
+                case message::SystemMessage::SystemMessageType::release_plugin_:
+                {
+                    release_plugin(sysmsg->plugin_name_);
+                    break;
+                }
+                default: {
+                    std::cerr << "cant handle plugin message: " << msg->event_ << " !!\n";
+                    break;
+                }
+                }
+            }
+        }
     }
 }

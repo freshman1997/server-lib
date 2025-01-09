@@ -1,10 +1,9 @@
 #ifndef __MESSAGE_QUEUE_H__
 #define __MESSAGE_QUEUE_H__
-#include "singleton/singleton.h"
 
 namespace yuan::message
 {
-    class MPMCMessageQueue : public singleton::Singleton<MPMCMessageQueue>
+    class MPMCMessageQueue
     {
     public:
         void send_message();

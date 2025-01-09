@@ -15,8 +15,7 @@
     #endif
     #define YUAN_API_IMPORT extern
     #define YUAN_API_EXPORT extern
+    #define YUAN_API __attribute__((visibility("default")))
 #endif
-
-YUAN_API_C_EXPORT int send_message();
 
 #endif // __YUAN_API_H__
