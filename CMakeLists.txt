@@ -17,6 +17,8 @@ set(WS_USE_SSL OFF)
 
 add_subdirectory(third_party/kcp)
 add_subdirectory(core)
+add_subdirectory(logger)
+add_subdirectory(app)
 add_subdirectory(protocol/http)
 add_subdirectory(protocol/ftp)
 add_subdirectory(protocol/dns)

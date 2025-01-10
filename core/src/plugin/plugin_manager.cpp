@@ -18,14 +18,15 @@ namespace yuan::plugin
         ~PluginData()
         {
             for (auto &item : plugins_) {
-                item.second->on_release();
+                item.second.second->on_release();
+                PluginSymbolSolver::release_native_lib(item.second.first);
             }
             plugins_.clear();
         }
 
     public:
         std::string plugin_path_;
-        std::unordered_map<std::string, Plugin *> plugins_;
+        std::unordered_map<std::string, std::pair<void *, Plugin *>> plugins_;
     };
 
     PluginManager::PluginManager() : data_(std::make_unique<PluginManager::PluginData>())
@@ -83,19 +84,19 @@ namespace yuan::plugin
         return true;
     }
 
-    void PluginManager::add_plugin(const std::string &name, Plugin *plugin)
+    void PluginManager::add_plugin(const std::string &name, Plugin *plugin, void *handle /*= nullptr*/)
     {
         auto it = data_->plugins_.find(name);
         if (it != data_->plugins_.end()) {
             release_plugin(name);
         }
-        data_->plugins_[name] = plugin;
+        data_->plugins_[name] = {handle, plugin};
     }
 
     Plugin * PluginManager::get_plugin(const std::string &name)
     {
         auto it = data_->plugins_.find(name);
-        return it == data_->plugins_.end() ? nullptr : it->second;
+        return it == data_->plugins_.end() ? nullptr : it->second.second;
     }
 
     void PluginManager::release_plugin(const std::string &pluginName)
@@ -105,11 +106,13 @@ namespace yuan::plugin
             return;
         }
 
-        auto plugin = it->second;
+        auto plugin = it->second.second;
         if (plugin)
         {
             plugin->on_release();
         }
+
+        PluginSymbolSolver::release_native_lib(it->second.first);
 
         data_->plugins_.erase(it);
     }

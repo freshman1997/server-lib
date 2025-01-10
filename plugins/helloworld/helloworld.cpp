@@ -17,6 +17,7 @@ public:
     virtual void free()
     {
         std::cout << "HelloWorldMessage free !!\n";
+        delete this;
     }
 };
 

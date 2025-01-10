@@ -20,7 +20,7 @@ namespace yuan::plugin
 
         bool load(const std::string &pluginName);
 
-        void add_plugin(const std::string &name, Plugin *plugin);
+        void add_plugin(const std::string &name, Plugin *plugin, void *handle = nullptr);
 
         Plugin * get_plugin(const std::string &name);
 

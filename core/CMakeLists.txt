@@ -5,7 +5,6 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static -fPIC")
 FILE(GLOB_RECURSE CORE_SRC "./*.cpp")
 
 add_library(Core ${CORE_SRC})
-target_link_libraries(Core)
 
 target_link_directories(Core PUBLIC ../third_party/openssl-3.4.0)
 

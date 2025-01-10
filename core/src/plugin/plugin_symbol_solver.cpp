@@ -21,7 +21,10 @@ namespace yuan::plugin
 
     void PluginSymbolSolver::release_native_lib(void *handle)
     {
-        assert(handle);
+        if (!handle) {
+            return;
+        }
+        
     #ifdef unix
         dlclose(handle);
     #else
