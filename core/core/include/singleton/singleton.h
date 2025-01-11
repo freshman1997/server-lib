@@ -3,10 +3,14 @@
 #include <memory>
 #include <mutex>
 
+#ifdef __unix__
+#include <pthread.h>
+#endif
+
 namespace yuan::singleton 
 {
     using namespace std;
-    template <typename T>
+    template <typename T, typename ...Args>
     class Singleton {
     protected:
         Singleton() = default;
@@ -16,11 +20,17 @@ namespace yuan::singleton
         static std::shared_ptr<T> _instance;
 
     public:
-        static std::shared_ptr<T> get_instance() {
+        static std::shared_ptr<T> get_instance(Args ...args) {
             static std::once_flag s_flag;
             std::call_once(s_flag, [&]() {
-                _instance = shared_ptr<T>(new T);
-            });
+            
+            // 强制引用符号，防止被编译器优化掉
+            #ifdef __unix__
+                void *pc = (void *) &pthread_create;
+            #endif
+
+                _instance = shared_ptr<T>(new T(args...));
+            }, args...);
             return _instance;
         }
 
@@ -28,8 +38,8 @@ namespace yuan::singleton
         ~Singleton() = default;
     };
 
-    template <typename T>
-    std::shared_ptr<T> Singleton<T>::_instance = nullptr;
+    template <typename T, typename ...Args>
+    std::shared_ptr<T> Singleton<T, Args...>::_instance = nullptr;
 }
 
 #endif
