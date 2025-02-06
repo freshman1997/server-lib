@@ -30,6 +30,10 @@ namespace yuan::net::http::config
 
     /* default config value start */
 
+
+    // 最大头部长度
+    extern uint32_t max_header_length;
+
     // 默认最大包体长度
     extern uint32_t client_max_content_length;
 

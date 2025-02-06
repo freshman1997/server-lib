@@ -9,6 +9,8 @@ namespace yuan::net::http
     enum class HeaderState : int
     {
         // request
+        too_long = -1,                      // 异常，超过长度
+
         init = 0,
         metohd,                             // 方法
         method_gap,                         // 方法接下来的空格

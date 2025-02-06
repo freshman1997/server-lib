@@ -2,6 +2,7 @@
     "server_name": "Jackey Web Server",
     "connection_idle_timeout": 30000,
     "close_idle_connection": false,
+    "max_header_length": 1048576,
     "max_content_length": 2097152,
     "form_data_upload_save": false,
     "parse_form_data_content_types": ["application/json"],

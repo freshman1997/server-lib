@@ -13,12 +13,6 @@ public:
 
 public:
     std::string msg_;
-
-    virtual void free()
-    {
-        std::cout << "HelloWorldMessage free !!\n";
-        delete this;
-    }
 };
 
 HelloWorldPlugin::HelloWorldPlugin()

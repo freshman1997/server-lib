@@ -91,6 +91,11 @@ namespace yuan::net::http
                 if (ch != ':') {
                     ch = buff.read_int8();
                 }
+
+                if (buff.get_read_index() > config::max_header_length) {
+                    header_state = HeaderState::too_long;
+                    return false;
+                }
             }
 
             if (key.empty()) {
@@ -108,6 +113,11 @@ namespace yuan::net::http
                 ch = buff.read_int8();
                 if (ch != '\r') {
                     val.push_back(ch);
+                }
+
+                if (buff.get_read_index() > config::max_header_length) {
+                    header_state = HeaderState::too_long;
+                    return false;
                 }
             }
 
@@ -169,6 +179,10 @@ namespace yuan::net::http
         
         if (!is_header_done()) {
             parse_header(*useBuff);
+        }
+
+        if (header_state == HeaderState::too_long) {
+            return -2;
         }
 
         if (is_header_done()) {

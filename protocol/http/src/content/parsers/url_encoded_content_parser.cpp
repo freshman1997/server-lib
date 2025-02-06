@@ -13,7 +13,6 @@ namespace yuan::net::http
     bool UrlEncodedContentParser::parse(HttpPacket *packet)
     {
         const std::string &data = url::url_decode(packet->body_begin(), packet->body_end());
-        url::decode_parameters(data, packet->get_request_params(), true);
-        return true;
+        return url::decode_parameters(data, packet->get_request_params(), true);
     }
 }

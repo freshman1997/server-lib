@@ -4,7 +4,7 @@
 int main()
 {
     auto pluginManager = yuan::plugin::PluginManager::get_instance();
-    pluginManager->set_plugin_path("/home/yuan/code/test/server-lib/build/plugins");
+    pluginManager->set_plugin_path("/home/yuan/codes/test/server-lib/build/plugins");
 
     if (!pluginManager->load("HelloWorld")) {
         return -1;

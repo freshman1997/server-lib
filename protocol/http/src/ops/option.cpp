@@ -20,6 +20,8 @@ namespace yuan::net::http::config
     const char * playable_types = KEY_TO_STRING(playable_types);
 
     // 最大包体长度默认 2 m
+    uint32_t max_header_length = 1024 * 1024;
+
     uint32_t client_max_content_length = 1024 * 1024 * 2;
 
     bool close_idle_connection = false;
@@ -42,6 +44,7 @@ namespace yuan::net::http::config
 
         connection_idle_timeout = cfgManager->get_uint_property(KEY_TO_STRING(connection_idle_timeout), connection_idle_timeout);
         client_max_content_length = cfgManager->get_uint_property(KEY_TO_STRING(max_content_length), client_max_content_length);
+        max_header_length = cfgManager->get_uint_property(KEY_TO_STRING(max_header_length), max_header_length);
         close_idle_connection = cfgManager->get_uint_property(KEY_TO_STRING(close_idle_connection), close_idle_connection);
         form_data_upload_save = cfgManager->get_bool_property(KEY_TO_STRING(form_data_upload_save), form_data_upload_save);
     }

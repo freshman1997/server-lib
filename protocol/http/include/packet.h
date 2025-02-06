@@ -6,6 +6,7 @@
 #include "response_code.h"
 
 #include <string>
+#include <vector>
 
 namespace yuan::net
 {
@@ -71,7 +72,7 @@ namespace yuan::net::http
 
         std::string get_raw_version() const;
 
-        std::unordered_map<std::string, std::string> & get_request_params()
+        std::unordered_map<std::string, std::vector<std::string>> & get_request_params()
         {
             return params_;
         }
@@ -138,7 +139,7 @@ namespace yuan::net::http
         ResponseCode error_code_;
         uint32_t body_length_;
         ContentType content_type_;
-        std::unordered_map<std::string, std::string> params_;
+        std::unordered_map<std::string, std::vector<std::string>> params_;
         std::unordered_map<std::string, std::string> headers_;
         std::string content_type_text_;
         std::unordered_map<std::string, std::string> content_type_extra_;

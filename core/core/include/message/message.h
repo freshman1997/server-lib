@@ -17,7 +17,6 @@ namespace yuan::message
     {
     public:
         virtual ~MessageDestructor() {}
-        virtual void free() = 0;
     };
 
     struct Message
@@ -36,8 +35,7 @@ namespace yuan::message
         virtual ~Message()
         {
             if (data_) {
-                MessageDestructor *destructor = static_cast<MessageDestructor *>(data_);
-                destructor->free();
+                delete static_cast<MessageDestructor *>(data_);
             }
         }
     };
@@ -56,11 +54,6 @@ namespace yuan::message
 
         unsigned int    timer_id_;
         std::string     plugin_name_;
-
-        virtual void free() 
-        {
-            delete this;
-        }
     };
 
     struct NetMessage : public MessageDestructor
@@ -77,11 +70,6 @@ namespace yuan::message
 
         yuan::net::InetAddress    addr_;
         yuan::net::Connection *   conn_;
-
-        virtual void free() 
-        {
-            delete this;
-        }
     };
 
     class MessageConsumer

@@ -1,3 +1,5 @@
+#include "ops/option.h"
+#include "packet_parser.h"
 #include "request.h"
 #include "request_parser.h"
 #include "url.h"
@@ -151,6 +153,11 @@ namespace yuan::net::http
             if (ch != ' ') {
                 url.push_back(ch);
             }
+
+            if (buff.get_read_index() > config::client_max_content_length) {
+                header_state = HeaderState::too_long;
+                return false;
+            }
         }
 
         url = url::url_decode(url);
@@ -180,6 +187,11 @@ namespace yuan::net::http
             header_state = HeaderState::method_gap;
         }
 
+        if (buff.get_read_index() > config::max_header_length) {
+            header_state = HeaderState::too_long;
+            return false;
+        }
+
         from = buff.get_read_index();
         if (header_state == HeaderState::method_gap) {
             if (!parse_url(buff)) {
@@ -189,6 +201,11 @@ namespace yuan::net::http
             }
 
             header_state = HeaderState::url_gap;
+        }
+
+        if (buff.get_read_index() > config::max_header_length) {
+            header_state = HeaderState::too_long;
+            return false;
         }
 
         from = buff.get_read_index();
@@ -202,6 +219,11 @@ namespace yuan::net::http
             header_state = HeaderState::version_newline;
         }
 
+        if (buff.get_read_index() > config::max_header_length) {
+            header_state = HeaderState::too_long;
+            return false;
+        }
+
         from = buff.get_read_index();
         if (header_state == HeaderState::version_newline) {
             if (!parse_header_keys(buff)) {
@@ -212,6 +234,11 @@ namespace yuan::net::http
             }
 
             header_state = HeaderState::header_end_lines;
+        }
+
+        if (buff.get_read_index() > config::max_header_length) {
+            header_state = HeaderState::too_long;
+            return false;
         }
     
         return true;
