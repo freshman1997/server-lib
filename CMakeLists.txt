@@ -24,6 +24,7 @@ add_subdirectory(protocol/bit_torrent)
 add_subdirectory(protocol/websocket)
 add_subdirectory(test)
 add_subdirectory(plugins)
+add_subdirectory(logger)
 
 add_executable(Test main.cpp)
 target_link_libraries(Test PUBLIC Core HttpProto DnsProto FtpProto)

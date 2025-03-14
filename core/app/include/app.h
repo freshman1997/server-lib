@@ -15,12 +15,7 @@ namespace yuan::app
         void launch();
 
         void exit();
-
-        void set_ssl_module();
         
-    public:
-        void process_data();
-
     private:
         class AppData;
         std::unique_ptr<AppData> data_;

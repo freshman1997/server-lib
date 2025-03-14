@@ -1,6 +1,7 @@
 #include "app.h"
 #include "event/event_loop.h"
 #include "timer/wheel_timer_manager.h"
+#include "net/poller/epoll_poller.h"
 
 #include <atomic>
 #include <cassert>
@@ -15,6 +16,8 @@ namespace yuan::app
         AppData()
         {
             timer_manager_ = new timer::WheelTimerManager;
+            poller_ = new net::EpollPoller;
+            loop_ = new net::EventLoop(poller_, timer_manager_);
         }
 
         ~AppData()
@@ -22,6 +25,16 @@ namespace yuan::app
             if (timer_manager_) {
                 delete timer_manager_;
                 timer_manager_ = nullptr;
+            }
+
+            if (poller_) {
+                delete poller_;
+                poller_ = nullptr;
+            }
+
+            if (loop_) {
+                delete poller_;
+                loop_ = nullptr;
             }
         }
         

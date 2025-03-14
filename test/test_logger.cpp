@@ -8,7 +8,7 @@ int main()
     using namespace yuan::log;
 
     auto logger = LoggerFactory::get_instance()->get_logger(yuan::log::LoggerType::console_);
-    logger->log(yuan::log::Logger::Level::debug, "%s test...", __func__);
+    logger->log(yuan::log::Logger::Level::fatal, "%s:%d(%s) test...", __FILE__, __LINE__, __func__);
 
     return 0;
 }

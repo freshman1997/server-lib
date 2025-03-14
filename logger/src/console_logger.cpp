@@ -20,7 +20,7 @@ namespace yuan::log
         // 获取当前时间
         time_t now = time(NULL);
         struct tm *tm_info = localtime(&now);
-        char time_buffer[20];
+        char time_buffer[50];
         strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", tm_info);
 
         auto buf = buffer::BufferedPool::get_instance()->allocate(1024);
@@ -42,12 +42,12 @@ namespace yuan::log
             color = CLR_PURPLE;
         }
 
-        color.append("[%s] %s\n");
+        color.append("[%s (%ld)] %s\n");
 
         if (written >= 0 && written < size) {
-            printf(color.c_str(), time_buffer, buf->peek());
+            printf(color.c_str(), time_buffer, now, buf->peek());
         } else {
-            printf("[%s] Log message too long or error occurred.\n", time_buffer);
+            printf("[%s(%ld)] Log message too long or error occurred.\n", time_buffer, now);
         }
 
         buf->reset();
