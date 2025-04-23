@@ -66,6 +66,11 @@ namespace yuan::net::http
     void HttpServer::on_connected(Connection *conn)
     {
         uint64_t sessionId = (uint64_t)conn;
+        if (sessions_.count(sessionId)) {
+            std::cerr << "session already exists!!!\n";
+            return;
+        }
+
         sessions_[sessionId] = new HttpSession(sessionId, new HttpSessionContext(conn), timer_manager_);
     }
 
@@ -129,7 +134,6 @@ namespace yuan::net::http
     void HttpServer::on_close(Connection *conn)
     {
         free_session(conn);
-        event_loop_->close_channel(conn->get_channel());
     }
 
     bool HttpServer::init(int port)
@@ -160,7 +164,7 @@ namespace yuan::net::http
     #elif defined _WIN32
         poller_ = new net::SelectPoller;
     #elif defined __APPLE__
-        poller_ = new net::KQueuePoller poller;
+        poller_ = new net::KQueuePoller;
     #endif
 
         if (!poller_->init()) {

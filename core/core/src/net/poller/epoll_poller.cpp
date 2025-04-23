@@ -1,3 +1,4 @@
+#include <iostream>
 #ifdef __linux__
 #include <cstring>
 #include <set>
@@ -63,7 +64,7 @@ namespace yuan::net
             for (int i = 0; i < nevent; ++i) {
                 int ev = Channel::NONE_EVENT;
                 int event = data_->epoll_events_[i].events;
-                if (event & EPOLLIN || event & EPOLLERR || event & EPOLLHUP) {
+                if (event & EPOLLIN || event & EPOLLERR || event & EPOLLHUP || event & EPOLLRDHUP) {
                     ev |= Channel::READ_EVENT;
                 }
 
@@ -111,7 +112,7 @@ namespace yuan::net
         struct epoll_event event;
         memset(&event, 0, sizeof(struct epoll_event));
 
-        event.events |= EPOLLET;
+        event.events |= EPOLLET | EPOLLRDHUP;
         int ev = channel->get_events();
         if (ev & Channel::READ_EVENT) {
             event.events |= EPOLLIN | EPOLLERR | EPOLLHUP;
