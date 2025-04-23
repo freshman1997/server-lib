@@ -71,6 +71,14 @@ namespace yuan::net
         return channel_;
     }
 
+    void UdpAcceptor::update_channel()
+    {
+        assert(channel_);
+        if (handler_) {
+            handler_->update_channel(channel_);
+        }
+    }
+
     void UdpAcceptor::on_read_event()
     {
         assert(sock_ && handler_);
@@ -89,7 +97,7 @@ namespace yuan::net
         }
         
         bool read = false;
-        int bytes = 0, againCount = 0;
+        int bytes = 0;
         const struct sockaddr_in *address = (struct sockaddr_in*)(&peer_addr);
         do {
             if (read) {
@@ -110,18 +118,16 @@ namespace yuan::net
                 if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
                     break;
                 }
-
-                read = false;
-                ++againCount;
+                
+                channel_->enable_read();
+                channel_->enable_write();
+                handler_->update_channel(channel_);
+                return;
             } else {
                 buff->fill(bytes);
                 read = true;
             }
         } while (bytes >= buff->writable_size());
-
-        if (againCount > 0 && instance_.get_input_buff_list()->get_size() > 1) {
-            read = true;
-        }
 
         if (read) {
             InetAddress addr = {::inet_ntoa(address->sin_addr), ntohs(address->sin_port)};

@@ -136,6 +136,7 @@ namespace yuan::net
                 abort();
                 return;
             } else {
+                instance_->enable_rw_events();
                 break;
             }
         }

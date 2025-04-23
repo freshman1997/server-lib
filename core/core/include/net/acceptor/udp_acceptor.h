@@ -28,6 +28,8 @@ namespace yuan::net
 
         virtual Channel * get_channel();
 
+        virtual void update_channel();
+
     public: // select handler
         virtual void on_read_event();
 

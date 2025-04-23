@@ -75,4 +75,13 @@ namespace yuan::net
     {
         return acceptor_->get_timer_manager();
     }
+
+    void UdpInstance::enable_rw_events()
+    {
+        if (acceptor_) {
+            acceptor_->get_channel()->enable_read();
+            acceptor_->get_channel()->enable_write();
+            acceptor_->update_channel();
+        }
+    }
 }

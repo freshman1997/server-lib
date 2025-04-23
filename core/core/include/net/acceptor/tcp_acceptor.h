@@ -25,13 +25,14 @@ namespace yuan::net
             return channel_;
         }
 
+        virtual void update_channel();
+
     public: // select handler
         virtual void on_read_event();
 
         virtual void on_write_event();
 
         virtual void set_event_handler(EventHandler *eventHandler);
-
         virtual void set_connection_handler(ConnectionHandler *connHandler);
 
         virtual void set_ssl_module(std::shared_ptr<SSLModule> module);

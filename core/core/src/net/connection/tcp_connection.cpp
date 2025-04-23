@@ -129,8 +129,7 @@ namespace yuan::net
         }
 
         std::size_t sz = output_buffer_.get_size();
-        int againCount = 0;
-        for (int i = 0; i < sz && againCount < 10;) {
+        for (int i = 0; i < sz;) {
             int ret;
             if (ssl_handler_) {
                 ret = ssl_handler_->ssl_write(output_buffer_.get_current_buffer());
@@ -157,7 +156,10 @@ namespace yuan::net
                     abort();
                     break;
                 }
-                ++againCount;
+
+                channel_->enable_write();
+                eventHandler_->update_channel(channel_);
+                return;
             } else {
                 break;
             }
@@ -209,7 +211,6 @@ namespace yuan::net
         bool read = false, close = false;
         int bytes = 0;
         buffer::Buffer *buf = input_buffer_.get_current_buffer();
-        int againCount = 0;
         do {
             if (read) {
                 buf = input_buffer_.allocate_buffer();
@@ -240,18 +241,15 @@ namespace yuan::net
                         break; 
                     }
                 again:
-                    ++againCount;
-                    read = false;
+                    channel_->enable_read();
+                    eventHandler_->update_channel(channel_);
+                    return;
                 }
             } else {
                 read = true;
                 buf->fill(bytes);
             }
-        } while (bytes >= buf->writable_size() && againCount < 10);
-
-        if (againCount > 0 && input_buffer_.get_size() > 1) {
-            read = true;
-        }
+        } while (bytes >= buf->writable_size());
 
         if (close) {
             abort();

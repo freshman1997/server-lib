@@ -66,6 +66,14 @@ namespace yuan::net
         delete this;
     }
 
+    void TcpAcceptor::update_channel()
+    {
+        assert(channel_);
+        if (handler_) {
+            handler_->update_channel(channel_);
+        }
+    }
+
     void TcpAcceptor::on_read_event()
     {
         assert(socket_);

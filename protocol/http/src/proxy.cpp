@@ -261,8 +261,3 @@ namespace yuan::net::http
         task->remote_conn_->close();
     }
 }
-
-/*
-    1、加一个公共任务模块，监听事件增加进度，额外的配置表
-    2、
-*/

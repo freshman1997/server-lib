@@ -43,6 +43,8 @@ namespace yuan::net
 
         timer::TimerManager * get_timer_manager();
 
+        void enable_rw_events();
+
     private:
         bool is_closing_;
         UdpAdapterType adapter_type_;

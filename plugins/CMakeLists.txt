@@ -10,7 +10,7 @@ set(targets HelloWorld)
 
 foreach(target ${targets})
     set_target_properties(${target} PROPERTIES 
-        OUTPUT_NAME HelloWorld 
+        OUTPUT_NAME ${target} 
         PREFIX "" 
         SUFFIX ".plugin"
     )
