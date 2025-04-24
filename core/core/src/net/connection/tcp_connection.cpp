@@ -52,6 +52,11 @@ namespace yuan::net
         channel_->disable_all();
         channel_->set_handler(nullptr);
 
+        if (eventHandler_) {
+            eventHandler_->close_channel(channel_);
+            eventHandler_ = nullptr;
+        }
+
         if (connectionHandler_) {
             connectionHandler_->on_close(this);
             connectionHandler_ = nullptr;
@@ -63,11 +68,6 @@ namespace yuan::net
             
             delete socket_;
             socket_ = nullptr;
-        }
-
-        if (eventHandler_) {
-            eventHandler_->close_channel(channel_);
-            eventHandler_ = nullptr;
         }
 
         channel_ = nullptr;
@@ -146,12 +146,11 @@ namespace yuan::net
                 eventHandler_->update_channel(channel_);
                 if (ret >= output_buffer_.get_current_buffer()->readable_bytes()) {
                     output_buffer_.free_current_buffer();
+                    ++i;
                 } else {
                     output_buffer_.get_current_buffer()->add_read_index(ret);
                     std::cout << "still remains data: " << output_buffer_.get_current_buffer()->readable_bytes() << " bytes.\n";
-                    return;
                 }
-                ++i;
             } else if (ret < 0) {
                 if (EAGAIN != errno && EWOULDBLOCK != errno) {
                     connectionHandler_->on_error(this);
@@ -161,8 +160,6 @@ namespace yuan::net
 
                 channel_->enable_write();
                 eventHandler_->update_channel(channel_);
-                return;
-            } else {
                 break;
             }
         }
@@ -245,7 +242,7 @@ namespace yuan::net
                 again:
                     channel_->enable_read();
                     eventHandler_->update_channel(channel_);
-                    return;
+                    break;
                 }
             } else {
                 read = true;

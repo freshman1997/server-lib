@@ -16,6 +16,10 @@ namespace yuan::net::http
     public:
         // 检查是否可以解析
         bool can_parse(const std::string &contentType);
+
+        virtual void reset() {}
+
+        virtual std::size_t get_content_length() { return 0; }
         
         virtual bool can_parse(ContentType contentType) = 0;
 

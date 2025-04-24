@@ -25,4 +25,6 @@ namespace yuan::net::http::http_header_key  {
     const char *server           = "server";
     const char *range            = "range";
     const char *status           = "status";                 // 状态码
+
+    const char *transfer_encoding = "transfer-encoding";
 }

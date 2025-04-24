@@ -22,6 +22,9 @@ namespace yuan::net::http
         video_mp4,
         video_flv,
         video_mkv,
+
+        chunked,
+        
         MAX
     };
 

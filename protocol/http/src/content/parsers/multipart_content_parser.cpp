@@ -257,6 +257,10 @@ namespace yuan::net::http
 
     bool MultipartByterangesParser::parse(HttpPacket *packet)
     {
+        if (packet->get_body_content()) {
+            return false;
+        }
+        
         const char *begin = packet->body_begin();
         const char *end = packet->body_end();
 

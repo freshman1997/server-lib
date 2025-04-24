@@ -72,8 +72,9 @@ namespace yuan::net::http
         }
 
         if (context->is_completed()) {
-            if (!context->try_parse_request_content()) {
-                delete this;
+            (void)context->try_parse_request_content();
+
+            if (!context->is_completed()) {
                 return;
             }
 
@@ -139,7 +140,7 @@ namespace yuan::net::http
         timer::WheelTimerManager manager;
         conn_timer_ = manager.timeout(config::connection_idle_timeout, this);
 
-        SelectPoller poller;
+        EpollPoller poller;
         net::EventLoop loop(&poller, &manager);
 
         conn->set_connection_handler(this);

@@ -30,6 +30,11 @@ namespace yuan::net::http
             respCode_ = code;
         }
 
+        ResponseCode get_response_code() const
+        {
+            return respCode_;
+        }
+
         void append_body(const char *data);
         
         void append_body(const std::string &data);

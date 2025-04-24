@@ -1,5 +1,6 @@
 #ifndef __NET_HTTP_CONTENT_TYPES_H__
 #define __NET_HTTP_CONTENT_TYPES_H__
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <unordered_map>
@@ -20,10 +21,11 @@ namespace yuan::net::http
         const char *begin   = nullptr;
         const char *end     = nullptr;
 
-        std::string get_content() 
+        std::string get_content() const
         {
             if (begin && end) {
                 return std::string(begin, end);
+            } else {
             }
             return {};
         }
@@ -68,7 +70,7 @@ namespace yuan::net::http
         ~FormDataFileItem() {
             if (!tmp_file_name_.empty()) {
                 std::remove(tmp_file_name_.c_str());
-                std::cout << "removed tmp file " << tmp_file_name_ << std::endl;
+                std::cout << "removed tmp file: " << tmp_file_name_ << std::endl;
             }
         }
     };
@@ -131,6 +133,21 @@ namespace yuan::net::http
     {
         ContentType type_ = ContentType::not_support;
         ContentData *content_data_ = nullptr;
+
+        struct FileInfo
+        {
+            std::string tmp_file_name_;
+            std::size_t file_size_ = 0;
+
+            ~FileInfo()
+            {
+                if (!tmp_file_name_.empty()) {
+                    std::remove(tmp_file_name_.c_str());
+                    std::cout << "removed tmp file: " << tmp_file_name_ << std::endl;
+                }
+            }
+
+        } file_info_;
 
         Content(ContentType type, ContentData *data) : type_(type), content_data_(data) {}
         ~Content() 

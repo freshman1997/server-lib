@@ -1,4 +1,3 @@
-#include <iostream>
 #ifdef __linux__
 #include <cstring>
 #include <set>
@@ -98,6 +97,7 @@ namespace yuan::net
             }
         } else {
             update(EPOLL_CTL_ADD, channel);
+            data_->fds_.insert(channel->get_fd());
         }
     }
 
@@ -109,22 +109,30 @@ namespace yuan::net
 
     void EpollPoller::update(int op, Channel *channel)
     {
-        struct epoll_event event;
-        memset(&event, 0, sizeof(struct epoll_event));
+        int ret = 0;
+        if (op != EPOLL_CTL_DEL) {
+            struct epoll_event event;
+            memset(&event, 0, sizeof(struct epoll_event));
 
-        event.events |= EPOLLET | EPOLLRDHUP;
-        int ev = channel->get_events();
-        if (ev & Channel::READ_EVENT) {
-            event.events |= EPOLLIN | EPOLLERR | EPOLLHUP;
+            // 暂时不能用edge模式
+            event.events |= EPOLLET | EPOLLRDHUP;
+            int ev = channel->get_events();
+            if (ev & Channel::READ_EVENT) {
+                event.events |= EPOLLIN | EPOLLERR | EPOLLHUP;
+            }
+
+            if (ev & Channel::WRITE_EVENT) {
+                event.events |= EPOLLOUT;
+            }
+
+            event.data.ptr = channel;
+
+            ret = ::epoll_ctl(data_->epoll_fd_, op, channel->get_fd(), &event);
+        } else {
+            ret = ::epoll_ctl(data_->epoll_fd_, op, channel->get_fd(), NULL);
         }
 
-        if (ev & Channel::WRITE_EVENT) {
-            event.events |= EPOLLOUT;
-        }
-
-        event.data.ptr = channel;
-
-        if (::epoll_ctl(data_->epoll_fd_, op, channel->get_fd(), &event)) {
+        if (ret == -1) {
             // log
         }
     }

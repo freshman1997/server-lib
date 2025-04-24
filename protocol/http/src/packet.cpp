@@ -5,6 +5,7 @@
 #include "context.h"
 #include "header_key.h"
 #include "packet_parser.h"
+#include "content/content_parser.h"
 
 namespace yuan::net::http 
 {
@@ -22,6 +23,7 @@ namespace yuan::net::http
         buffer_ = nullptr;
         body_length_ = 0;
         buffer_ = buffer::BufferedPool::get_instance()->allocate();
+        pre_content_parser_ = nullptr;
     }
 
     HttpPacket::~HttpPacket()
@@ -63,6 +65,12 @@ namespace yuan::net::http
         error_code_ = ResponseCode::internal_server_error;
         buffer_->reset();
         buffer_->shink_to_fit();
+
+        if (pre_content_parser_) {
+            delete pre_content_parser_;
+        }
+
+        pre_content_parser_ = nullptr;
     }
 
     const std::string * HttpPacket::get_header(const std::string &key)
@@ -208,7 +216,9 @@ namespace yuan::net::http
             return true;
         }
 
-        return ContentParserFactory::get_instance()->parse_content(this);
+        is_good_ = ContentParserFactory::get_instance()->parse_content(this);
+
+        return is_good_;
     }
 
     bool HttpPacket::parse(buffer::Buffer &buff)
@@ -245,7 +255,7 @@ namespace yuan::net::http
         pack_and_send(context_->get_connection());
     }
 
-    buffer::Buffer * HttpPacket::get_buff(bool take)
+    buffer::Buffer * HttpPacket::get_buff(bool take, bool reset)
     {
         if (!take) {
             return buffer_;
@@ -253,7 +263,10 @@ namespace yuan::net::http
 
         buffer::Buffer *buf = buffer_;
         buffer_ = buffer::BufferedPool::get_instance()->allocate();
-        buf->reset_read_index(0);
+        if (reset)
+        {
+            buf->reset_read_index(0);
+        }
         
         return buf;
     }
@@ -270,5 +283,34 @@ namespace yuan::net::http
             is_good_ = false;
         }
         conn->flush();
+    }
+
+    bool HttpPacket::is_chunked() const
+    {
+        auto it = headers_.find(http_header_key::transfer_encoding);
+        if (it != headers_.end()) {
+            return it->second == "chunked";
+        }
+
+        it = headers_.find(http_header_key::accept_encoding);
+        if (it != headers_.end()) {
+            return it->second == "chunked";
+        }
+
+        return false;
+    }
+
+    const std::string HttpPacket::get_content_charset() const
+    {
+        auto it = content_type_extra_.find("charset");
+        if (it != content_type_extra_.end()) {
+            return it->second;
+        }
+        return {};
+    }
+
+    void HttpPacket::set_body_state(BodyState state)
+    {
+        parser_->set_body_state(state);
     }
 }

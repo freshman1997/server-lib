@@ -76,6 +76,16 @@ namespace yuan::net::http
 
         uint32_t get_body_length();
 
+        void set_body_state(BodyState state)
+        {
+            body_state = state;
+        }
+
+        BodyState get_body_state() const
+        {
+            return body_state;
+        }
+
     protected:
         bool parse_version(buffer::Buffer &buff, char ending = '\r', char next = '\n');
 

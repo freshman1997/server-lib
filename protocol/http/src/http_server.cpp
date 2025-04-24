@@ -1,4 +1,5 @@
 #include "net/poller/epoll_poller.h"
+#include "net/poller/poll_poller.h"
 #include "net/poller/select_poller.h"
 #include "net/poller/kqueue_poller.h"
 #include "net/secuity/openssl.h"
@@ -108,6 +109,10 @@ namespace yuan::net::http
             } else {
                 if (!context->try_parse_request_content()) {
                     context->process_error(ResponseCode::bad_request);
+                    return;
+                }
+
+                if (!context->is_completed()) {
                     return;
                 }
 

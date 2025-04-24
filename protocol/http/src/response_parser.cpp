@@ -1,5 +1,7 @@
 #include "response_parser.h"
 #include "response.h"
+#include "response_code.h"
+#include <cstdlib>
 
 namespace yuan::net::http 
 {
@@ -54,7 +56,7 @@ namespace yuan::net::http
     }
 
     #define PRE_CHECK(state) \
-        HttpResponse *resp = dynamic_cast<HttpResponse *>(packet_); \
+        HttpResponse *resp = static_cast<HttpResponse *>(packet_); \
         if (!resp || header_state != state || buff.readable_bytes() == 0) { \
             return false; \
         }
@@ -74,6 +76,14 @@ namespace yuan::net::http
                 status.push_back(ch);
             }
         }
+
+        if (status.empty()) {
+            return false;
+        }
+
+        int code = std::atoi(status.c_str());
+        resp->set_response_code((ResponseCode)code);
+
         return true;
     }
 
