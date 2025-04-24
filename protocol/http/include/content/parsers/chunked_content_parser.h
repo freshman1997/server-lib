@@ -56,6 +56,7 @@ namespace yuan::net::http
         int cur_chunk_size_;
         std::string rand_file_name_;
         std::fstream *file_stream_;
+        buffer::Buffer *cached_buffer_;
     };
 }
 
