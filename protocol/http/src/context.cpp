@@ -32,7 +32,7 @@ namespace yuan::net::http
             return false;
         }
 
-        if (!has_parsed_) {
+        if (!is_process_large_block_ && !has_parsed_) {
             reset();
             has_parsed_ = true;
         }

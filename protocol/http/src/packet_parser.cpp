@@ -192,6 +192,23 @@ namespace yuan::net::http
                     packet_->set_body_length(length);
                 }
 
+                auto cd = packet_->get_header(http_header_key::content_disposition);
+                if (cd) {
+                    if (packet_->get_packet_type() != PacketType::response) {
+                        return -1;
+                    }
+
+                    std::string originName;
+                    if (!parse_content_disposition(cd, originName)) {
+                        return -1;
+                    }
+
+                    packet_->set_original_file_name(originName);
+                    packet_->set_process_large_block(true);
+                    
+                    return 1;
+                }
+
                 int res = parse_body(*useBuff, length);
                 if (res > 0) {
                     body_state = BodyState::fully;
@@ -206,5 +223,22 @@ namespace yuan::net::http
         }
 
         return is_body_done();
+    }
+
+    bool HttpPacketParser::done() const
+    {
+        return is_header_done() && (is_body_done() || packet_->is_process_large_block());
+    }
+
+    bool HttpPacketParser::parse_content_disposition(const std::string *val, std::string &originName)
+    {
+        if (!val || val->empty() || !val->starts_with("attachment; ")) {
+            return false;
+        }
+
+        body_state = BodyState::attachment;
+        originName = "x5-client.zip";
+
+        return true;
     }
 }

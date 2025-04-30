@@ -28,6 +28,7 @@ namespace yuan::net::http
 
     HttpPacket::~HttpPacket()
     {
+        reset();
         if (body_content_) {
             delete body_content_;
             body_content_ = nullptr;
@@ -53,7 +54,6 @@ namespace yuan::net::http
         parser_->reset();
         content_type_ = ContentType::not_support;
         error_code_ = ResponseCode::bad_request;
-        content_type_ = ContentType::not_support;
 
         if (body_content_) {
             delete body_content_;
@@ -71,6 +71,16 @@ namespace yuan::net::http
         }
 
         pre_content_parser_ = nullptr;
+        chunked_checksum_.clear();
+
+        is_process_large_block_ = false;
+        if (task_) {
+            delete task_;
+            task_ = nullptr;
+        }
+
+        original_file_name_.clear();
+        linked_buffer_.clear();
     }
 
     const std::string * HttpPacket::get_header(const std::string &key)
@@ -223,7 +233,18 @@ namespace yuan::net::http
 
     bool HttpPacket::parse(buffer::Buffer &buff)
     {
-        if (is_ok()) {
+        if (is_ok() && !is_process_large_block()) {
+            return true;
+        }
+
+        if (is_process_large_block()) {
+            if (!task_) {
+                linked_buffer_.append_buffer(&buff);
+                return true;
+            }
+
+            task_->on_data(&buff);
+
             return true;
         }
 
@@ -312,5 +333,36 @@ namespace yuan::net::http
     void HttpPacket::set_body_state(BodyState state)
     {
         parser_->set_body_state(state);
+    }
+
+    void HttpPacket::swap_buffer(buffer::Buffer *buf)
+    {
+        if (buf) {
+            buffer::BufferedPool::get_instance()->free(buffer_);
+            buffer_ = buf;
+        } else {
+            buffer_ = buffer::BufferedPool::get_instance()->allocate();
+        }
+    }
+
+    void HttpPacket::dispatch_task()
+    {
+        if (!task_) {
+            return;
+        }
+
+        if (buffer_ && buffer_->readable_bytes() > 0) {
+            task_->on_data(buffer_);
+            buffer_->reset();
+        }
+
+        if (linked_buffer_.get_size() > 0) {
+            linked_buffer_.foreach([this](buffer::Buffer *buff) -> bool {
+                return task_->on_data(buff);
+            });
+            linked_buffer_.clear();
+        }
+
+        // TODO: dispatch task
     }
 }

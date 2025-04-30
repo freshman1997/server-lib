@@ -32,6 +32,10 @@ namespace yuan::net::http::http_header_key
     extern const char *status;                 // 状态码
     
     extern const char *transfer_encoding;
+    extern const char *content_disposition;
+    extern const char *content_encoding;
+    extern const char *accept_ranges;
+    extern const char *location;
 }
 
 #endif

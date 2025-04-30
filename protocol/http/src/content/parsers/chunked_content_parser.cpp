@@ -195,12 +195,18 @@ namespace yuan::net::http
                     cached_buffer_->reset();
                     wrote = true;
                 }
+            } else {
+                if (cached_buffer_) {
+                    packet->swap_buffer(newBuffer);
+                    newBuffer = nullptr;
+                    cached_buffer_ = nullptr;
+                }
             }
 
             packet->set_chunked_checksum(checksum);
         }
 
-        if (cur_chunk_size_ >= exceed_chunk_size_save_file_ && !wrote) {
+        if (cur_chunk_size_ >= exceed_chunk_size_save_file_ && !wrote && newBuffer) {
             if (!file_stream_) {
                 rand_file_name_ = "___tmp___" + std::to_string(yuan::base::time::now());
                 file_stream_ = new std::fstream();

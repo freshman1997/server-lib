@@ -21,7 +21,6 @@ namespace yuan::net::http
         parsers[ContentType::multpart_byte_ranges] = new MultipartByterangesParser;
         parsers[ContentType::application_json] = new JsonContentParser;
         parsers[ContentType::x_www_form_urlencoded] = new UrlEncodedContentParser;
-        parsers[ContentType::chunked] = new ChunkedContentParser;
     }
 
     ContentParserFactory::~ContentParserFactory()

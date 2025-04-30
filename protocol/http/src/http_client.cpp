@@ -71,6 +71,10 @@ namespace yuan::net::http
             return;
         }
 
+        if (context->is_process_large_block()) {
+            return;
+        }
+
         if (context->is_completed()) {
             (void)context->try_parse_request_content();
 

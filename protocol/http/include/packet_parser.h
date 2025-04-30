@@ -39,6 +39,7 @@ namespace yuan::net::http
         init = 0,
         empty,
         partial,
+        attachment,
         fully,
         too_long // 异常，超过长度
     };
@@ -69,10 +70,7 @@ namespace yuan::net::http
 
         int parse(buffer::Buffer &buff);
 
-        bool done() const
-        {
-            return is_header_done() && is_body_done();
-        }
+        bool done() const;
 
         uint32_t get_body_length();
 
@@ -94,6 +92,8 @@ namespace yuan::net::http
         bool parse_new_line(buffer::Buffer &buff);
 
         int  parse_body(buffer::Buffer &buff, uint32_t length);
+
+        bool parse_content_disposition(const std::string *val, std::string &originName);
 
         bool is_header_done() const 
         {

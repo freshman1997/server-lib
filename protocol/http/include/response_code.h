@@ -3,7 +3,7 @@
 
 namespace yuan::net::http
 {
-    enum ResponseCode : int
+    enum ResponseCode : short
     {
         invalid = -1,
         

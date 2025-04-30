@@ -1,11 +1,15 @@
 #ifndef __NET_HTTP_PACKET_H__
 #define __NET_HTTP_PACKET_H__
+#include "attachment/attachment.h"
 #include "buffer/buffer.h"
+#include "buffer/linked_buffer.h"
 #include "content_type.h"
 #include "content/types.h"
 #include "packet_parser.h"
 #include "response_code.h"
+#include "task/task.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -47,6 +51,16 @@ namespace yuan::net::http
         virtual PacketType get_packet_type() = 0;
 
         virtual void reset();
+
+        virtual bool is_process_large_block()
+        {
+            return is_process_large_block_;
+        }
+
+        virtual void set_process_large_block(bool flag)
+        {
+            is_process_large_block_ = flag;
+        }
 
     public:
         void send();
@@ -110,7 +124,7 @@ namespace yuan::net::http
 
         bool good() const 
         {
-            return is_good_;
+            return is_good_ || is_process_large_block_;
         }
 
         ResponseCode get_error_code() const
@@ -166,7 +180,33 @@ namespace yuan::net::http
         {
             return pre_content_parser_;
         }
-        
+
+        void swap_buffer(buffer::Buffer *buf);
+
+    public: // task
+        void set_task(HttpTask *task)
+        {
+            task_ = task;
+        }
+
+        HttpTask * get_task()
+        {
+            return task_;
+        }
+
+        void dispatch_task();
+
+    public: // original file name
+        void set_original_file_name(const std::string &name)
+        {
+            original_file_name_ = name;
+        }
+
+        const std::string & get_original_file_name() const
+        {
+            return original_file_name_;
+        }
+
     protected:
         HttpSessionContext *context_;
         HttpPacketParser *parser_;
@@ -183,6 +223,10 @@ namespace yuan::net::http
         buffer::Buffer * buffer_;
         ContentParser *pre_content_parser_;
         std::string chunked_checksum_;
+        std::string original_file_name_;
+        bool is_process_large_block_;
+        HttpTask *task_;
+        buffer::LinkedBuffer linked_buffer_;
     };
 }
 

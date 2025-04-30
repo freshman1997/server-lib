@@ -114,8 +114,7 @@ namespace yuan::net
             struct epoll_event event;
             memset(&event, 0, sizeof(struct epoll_event));
 
-            // 暂时不能用edge模式
-            event.events |= EPOLLET | EPOLLRDHUP;
+            event.events |= /*EPOLLET |*/ EPOLLRDHUP;
             int ev = channel->get_events();
             if (ev & Channel::READ_EVENT) {
                 event.events |= EPOLLIN | EPOLLERR | EPOLLHUP;

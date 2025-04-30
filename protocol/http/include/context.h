@@ -72,6 +72,16 @@ namespace yuan::net::http
         }
         
         inline HttpPacket * get_packet() const;
+
+        void set_is_pro_large_block(bool flag)
+        {
+            is_process_large_block_ = flag;
+        }
+
+        bool is_process_large_block() const
+        {
+            return is_process_large_block_;
+        }
         
     private:
         void reset() const;
@@ -79,6 +89,7 @@ namespace yuan::net::http
     private:
         Mode mode_;
         bool has_parsed_;
+        bool is_process_large_block_;
         Connection *conn_;
         HttpRequest *request_;
         HttpResponse *response_;
