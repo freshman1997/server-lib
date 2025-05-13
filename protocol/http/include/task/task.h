@@ -15,7 +15,7 @@ namespace yuan::net::http
     {
     public:
         virtual ~HttpTask() {}
-        virtual bool on_data(buffer::Buffer *buf) = 0;
+        virtual bool on_data(buffer::Buffer *buf) { return false; }
         virtual bool init() { return true; }
         virtual void reset() {}
         virtual bool is_done() const { return false; }

@@ -24,6 +24,7 @@ namespace yuan::net::http
         body_length_ = 0;
         buffer_ = buffer::BufferedPool::get_instance()->allocate();
         pre_content_parser_ = nullptr;
+        task_ = nullptr;
     }
 
     HttpPacket::~HttpPacket()
@@ -73,7 +74,7 @@ namespace yuan::net::http
         pre_content_parser_ = nullptr;
         chunked_checksum_.clear();
 
-        is_process_large_block_ = false;
+        is_download_file_ = false;
         if (task_) {
             delete task_;
             task_ = nullptr;
@@ -233,11 +234,11 @@ namespace yuan::net::http
 
     bool HttpPacket::parse(buffer::Buffer &buff)
     {
-        if (is_ok() && !is_process_large_block()) {
+        if (is_ok() && !is_donwloading()) {
             return true;
         }
 
-        if (is_process_large_block()) {
+        if (is_donwloading()) {
             if (!task_) {
                 linked_buffer_.append_buffer(&buff);
                 return true;
@@ -269,6 +270,18 @@ namespace yuan::net::http
                 return false;
             }
         }
+    }
+
+    bool HttpPacket::write(buffer::Buffer &buff)
+    {
+        if (is_uploading()) {
+            if (task_) {
+                task_->on_data(&buff);
+            }
+            return true;
+        }
+
+        return false;
     }
 
     void HttpPacket::send()

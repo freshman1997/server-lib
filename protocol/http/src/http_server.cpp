@@ -34,7 +34,6 @@
 #include "header_key.h"
 #include "header_util.h"
 #include "proxy.h"
-#include "base/utils/string_converter.h"
 
 namespace yuan::net::http
 {
@@ -133,7 +132,15 @@ namespace yuan::net::http
 
     void HttpServer::on_write(Connection *conn)
     {
-        
+        uint64_t sessionId = (uint64_t)conn;
+        auto it = sessions_.find(sessionId);
+        if (it == sessions_.end()) {
+            std::cout << "----------------> error\n";
+            return;
+        }
+
+        auto context = it->second->get_context();
+        context->write();
     }
 
     void HttpServer::on_close(Connection *conn)

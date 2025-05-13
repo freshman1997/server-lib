@@ -52,20 +52,32 @@ namespace yuan::net::http
 
         virtual void reset();
 
-        virtual bool is_process_large_block()
+        virtual bool is_donwloading()
         {
-            return is_process_large_block_;
+            return is_download_file_;
         }
 
-        virtual void set_process_large_block(bool flag)
+        virtual bool is_uploading()
         {
-            is_process_large_block_ = flag;
+            return is_upload_file_;
+        }
+
+        virtual void set_downlload_file(bool flag)
+        {
+            is_download_file_ = flag;
+        }
+
+        virtual void set_upload_file(bool flag)
+        {
+            is_upload_file_ = flag;
         }
 
     public:
         void send();
 
         bool parse(buffer::Buffer &buff);
+
+        bool write(buffer::Buffer &buff);
 
         void add_header(const std::string &k, const std::string &v);
 
@@ -124,7 +136,7 @@ namespace yuan::net::http
 
         bool good() const 
         {
-            return is_good_ || is_process_large_block_;
+            return is_good_ || is_download_file_;
         }
 
         ResponseCode get_error_code() const
@@ -224,7 +236,8 @@ namespace yuan::net::http
         ContentParser *pre_content_parser_;
         std::string chunked_checksum_;
         std::string original_file_name_;
-        bool is_process_large_block_;
+        bool is_upload_file_;
+        bool is_download_file_;
         HttpTask *task_;
         buffer::LinkedBuffer linked_buffer_;
     };

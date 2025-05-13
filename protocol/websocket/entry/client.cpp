@@ -18,7 +18,6 @@
 #endif
 
 #include <cassert>
-#include <iostream>
 
 namespace yuan::net::websocket
 {

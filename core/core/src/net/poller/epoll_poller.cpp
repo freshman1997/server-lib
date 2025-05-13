@@ -53,8 +53,8 @@ namespace yuan::net
 
     uint64_t EpollPoller::poll(uint32_t timeout, std::vector<Channel *> &channels)
     {
-        uint64_t tm = base::time::get_tick_count();
         int nevent = ::epoll_wait(data_->epoll_fd_, &*data_->epoll_events_.begin(), (int)data_->epoll_events_.size(), timeout);
+        uint64_t tm = base::time::get_tick_count();
         if (nevent < 0) {
             return tm;
         }
@@ -114,7 +114,7 @@ namespace yuan::net
             struct epoll_event event;
             memset(&event, 0, sizeof(struct epoll_event));
 
-            event.events |= /*EPOLLET |*/ EPOLLRDHUP;
+            event.events |= EPOLLET | EPOLLRDHUP;
             int ev = channel->get_events();
             if (ev & Channel::READ_EVENT) {
                 event.events |= EPOLLIN | EPOLLERR | EPOLLHUP;

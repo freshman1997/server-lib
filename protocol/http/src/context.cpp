@@ -32,7 +32,7 @@ namespace yuan::net::http
             return false;
         }
 
-        if (!is_process_large_block_ && !has_parsed_) {
+        if (!is_donwloading() && !has_parsed_) {
             reset();
             has_parsed_ = true;
         }
@@ -46,6 +46,11 @@ namespace yuan::net::http
         }, false);
 
         return res;
+    }
+
+    bool HttpSessionContext::write()
+    {
+        return get_packet()->write(*conn_->get_output_buff());
     }
 
     bool HttpSessionContext::is_completed()
@@ -93,5 +98,10 @@ namespace yuan::net::http
     {
         return mode_ == Mode::server ? 
             static_cast<HttpPacket *>(request_) : static_cast<HttpPacket *>(response_);
+    }
+
+    bool HttpSessionContext::is_donwloading() const
+    {
+        return get_packet()->is_donwloading();
     }
 }

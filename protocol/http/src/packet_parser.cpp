@@ -204,7 +204,7 @@ namespace yuan::net::http
                     }
 
                     packet_->set_original_file_name(originName);
-                    packet_->set_process_large_block(true);
+                    packet_->set_downlload_file(true);
                     
                     return 1;
                 }
@@ -227,7 +227,7 @@ namespace yuan::net::http
 
     bool HttpPacketParser::done() const
     {
-        return is_header_done() && (is_body_done() || packet_->is_process_large_block());
+        return is_header_done() && (is_body_done() || packet_->is_donwloading());
     }
 
     bool HttpPacketParser::parse_content_disposition(const std::string *val, std::string &originName)

@@ -35,7 +35,7 @@ namespace yuan::net::http
     public:
         bool query(const std::string &url);
 
-        bool connect(const InetAddress &addr, connected_callback ccb, request_function rcb);
+        bool connect(connected_callback ccb, request_function rcb);
     
         virtual void on_timer(timer::Timer *timer);
 
@@ -45,6 +45,8 @@ namespace yuan::net::http
         }
 
     private:
+        int port_;
+        std::string host_name_;
         net::EventLoop *ev_loop_;
         HttpSession *session_;
         request_function rcb_;
