@@ -25,7 +25,13 @@ int main()
 
     using namespace yuan;
     net::http::HttpClient *client = new net::http::HttpClient;
-    client->connect({"192.168.1.71", 5244}, 
+    if (!client->query("http://192.168.1.71:5244")) {
+        std::cerr << "Failed to query\n";
+        delete client;
+        return 1;
+    }
+
+    client->connect( 
     [](net::http::HttpRequest *req) {
         req->set_raw_url("/p/CDN/x5client-trunk-pc/x5client-latest.zip");
         req->add_header("Connection", "close");
@@ -35,7 +41,7 @@ int main()
     [](net::http::HttpRequest *req, net::http::HttpResponse *resp){
         if (resp->good()) {
             if (resp->get_response_code() == net::http::ResponseCode::ok_) {
-                if (resp->is_process_large_block()) {
+                if (resp->is_donwloading()) {
                     std::cout << "File download, filename: " << resp->get_original_file_name() << "contextType: << " << (int)resp->get_content_type() << ", length: " << resp->get_body_length() << std::endl;
 
                     auto attachment = std::make_shared<yuan::net::http::AttachmentInfo>();
@@ -47,12 +53,9 @@ int main()
                     attachment->length_ = resp->get_body_length();
                     attachment->offset_ = 0;
                     
-                    resp->get_context()->set_is_pro_large_block(true);
-
                     net::http::HttpDownloadFileTask *task = new net::http::HttpDownloadFileTask([resp]() {
                         std::cout << "File download completed: " << resp->get_original_file_name() << std::endl;
-                        resp->set_process_large_block(false);
-                        resp->get_context()->set_is_pro_large_block(false);
+                        resp->set_downlload_file(false);
                     });
 
                     task->set_attachment_info(attachment);
