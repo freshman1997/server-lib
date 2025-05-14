@@ -227,7 +227,7 @@ namespace yuan::net::http
 
     bool HttpPacketParser::done() const
     {
-        return is_header_done() && (is_body_done() || packet_->is_donwloading());
+        return is_header_done() && (is_body_done() || packet_->is_pending_large_block());
     }
 
     bool HttpPacketParser::parse_content_disposition(const std::string *val, std::string &originName)

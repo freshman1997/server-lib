@@ -52,26 +52,6 @@ namespace yuan::net::http
 
         virtual void reset();
 
-        virtual bool is_donwloading()
-        {
-            return is_download_file_;
-        }
-
-        virtual bool is_uploading()
-        {
-            return is_upload_file_;
-        }
-
-        virtual void set_downlload_file(bool flag)
-        {
-            is_download_file_ = flag;
-        }
-
-        virtual void set_upload_file(bool flag)
-        {
-            is_upload_file_ = flag;
-        }
-
     public:
         void send();
 
@@ -217,6 +197,36 @@ namespace yuan::net::http
         const std::string & get_original_file_name() const
         {
             return original_file_name_;
+        }
+
+        bool is_donwloading()
+        {
+            return is_download_file_;
+        }
+
+        bool is_uploading()
+        {
+            return is_upload_file_ && task_;
+        }
+
+        void set_downlload_file(bool flag)
+        {
+            is_download_file_ = flag;
+        }
+
+        void set_upload_file(bool flag)
+        {
+            is_upload_file_ = flag;
+        }
+
+        bool is_task_prepared()
+        {
+            return task_ && (is_download_file_ ? task_->get_task_type() == HttpTaskType::download_file_ : task_->get_task_type() == HttpTaskType::upload_file_);
+        }
+
+        bool is_pending_large_block()
+        {
+            return is_download_file_ || is_upload_file_;
         }
 
     protected:
