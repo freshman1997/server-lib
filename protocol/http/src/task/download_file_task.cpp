@@ -1,4 +1,5 @@
 #include "task/download_file_task.h"
+#include <cstdio>
 #include <iostream>
 
 namespace yuan::net::http 
@@ -54,6 +55,8 @@ namespace yuan::net::http
                 if (completed_callback_) {
                     completed_callback_();
                 }
+
+                std::rename(attachment_info_->tmp_file_name_.c_str(), attachment_info_->origin_file_name_.c_str());
             }
 
             return true;
@@ -65,5 +68,17 @@ namespace yuan::net::http
     bool HttpDownloadFileTask::is_done() const
     {
         return attachment_info_ && attachment_info_->offset_ >= attachment_info_->length_;
+    }
+
+    void HttpDownloadFileTask::on_connection_close()
+    {
+        if (attachment_info_->offset_ < attachment_info_->length_) {
+            std::cerr << "Download interrupted, closing file stream." << std::endl;
+            if (file_stream_.is_open()) {
+                file_stream_.close();
+            }
+
+            std::remove(attachment_info_->tmp_file_name_.c_str());
+        }
     }
 }

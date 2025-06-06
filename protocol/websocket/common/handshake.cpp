@@ -57,7 +57,7 @@ namespace yuan::net::websocket
         }
 
         auto key = req->get_header("sec-websocket-key");
-        if (!key)
+        if (!key || key->empty())
         {
             return false;
         }

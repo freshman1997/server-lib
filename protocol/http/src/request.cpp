@@ -25,7 +25,9 @@ namespace yuan::net::http
 
     HttpRequest::~HttpRequest()
     {
-
+        if (task_) {
+            task_->on_connection_close();
+        }
     }
 
     HttpMethod HttpRequest::get_method() const

@@ -236,8 +236,39 @@ namespace yuan::net::http
             return false;
         }
 
+        // attachment; filename=\"x5client-latest.zip\"; filename*=UTF-8''x5client-latest.zip
         body_state = BodyState::attachment;
-        originName = "x5-client.zip";
+        size_t pos = val->find("filename*=");
+        if (pos != std::string::npos) {
+            pos += 10; // length of "filename*="
+            size_t encodePos = val->find_first_of("''", pos);
+            if (encodePos == std::string::npos) {
+                return false;
+            }
+
+            std::string encode = val->substr(pos, encodePos - pos);
+            if (encode.empty()) {
+                return false; // invalid encoding
+            }
+
+            pos = encodePos + 2; // skip "''"
+            size_t endPos = val->find_first_of("; ", pos);
+            if (endPos == std::string::npos) {
+                endPos = val->size();
+            }
+            originName = val->substr(pos, endPos - pos);
+        } else {
+            pos = val->find("filename=");
+            if (pos == std::string::npos) {
+                return false;
+            }
+            pos += 9; // length of "filename="
+            size_t endPos = val->find_first_of("; ", pos);
+            if (endPos == std::string::npos) {
+                endPos = val->size();
+            }
+            originName = val->substr(pos, endPos - pos);
+        }
 
         return true;
     }

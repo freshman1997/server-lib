@@ -31,6 +31,8 @@ namespace yuan::net::http
 
         virtual bool is_done() const override;
 
+        virtual void on_connection_close() override;
+
     public:
         std::shared_ptr<AttachmentInfo> get_attachemnt_info()
         {
