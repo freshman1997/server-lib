@@ -40,14 +40,14 @@ bool HelloWorldPlugin::on_init(yuan::message::MessageDispatcher *dispatcher)
 
     std::cout << "hello world init success !!\n";
 
-    dispatcher_->register_consumer(yuan::message::user_message_ , this);
+    dispatcher_->register_consumer(yuan::message::user_message_, this);
 
     yuan::message::Message *msg = new yuan::message::Message;
     msg->type_ = yuan::message::MessageType::user_message_;
 
     HelloWorldMessage *hmsg = new HelloWorldMessage("你好世界！！！");
     msg->data_ = hmsg;
-    msg->event_ = 1001;
+    msg->event_id_ = 1001;
     
     dispatcher_->send_message(msg);
 
@@ -62,11 +62,16 @@ void HelloWorldPlugin::on_release()
 
 void HelloWorldPlugin::on_message(const yuan::message::Message *msg)
 {
-    if (msg->type_ & yuan::message::MessageType::user_message_ && msg->event_ == 1001)
+    if (msg->type_ & yuan::message::MessageType::user_message_ && msg->event_id_ == 1001)
     {
         const HelloWorldMessage *hmsg = static_cast<const HelloWorldMessage *>(msg->data_);
         std::cout << "receive msg: " << hmsg->msg_ << " \n";
     }
+}
+
+std::set<uint32_t> HelloWorldPlugin::get_interest_events() const
+{
+    return {1001};
 }
 
 YUAN_API_C_EXPORT void * get_HelloWorld_plugin_instance()

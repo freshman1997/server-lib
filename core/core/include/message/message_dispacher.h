@@ -4,8 +4,10 @@
 
 namespace yuan::message 
 {
-    class MessageDispatcher
+    class MessageDispatcher : public message::MessageConsumer
     {
+        friend class PluginManager;
+
     public:
         MessageDispatcher();
         ~MessageDispatcher();
@@ -14,12 +16,20 @@ namespace yuan::message
         MessageDispatcher & operator=(const MessageDispatcher &) = delete;
 
         static MessageDispatcher * get_instance();
-        
+
+     public:
+        virtual void on_message(const Message *msg);
+
+        virtual bool need_free();
+
+        virtual std::set<uint32_t> get_interest_events() const;
+
+    public:
         bool init();
 
         int send_message(const void *msg);
 
-        void register_consumer(int msgTypes, void *consumer);
+        bool register_consumer(int msgType, void *consumer);
 
         void dispatch();
 

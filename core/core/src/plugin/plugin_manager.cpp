@@ -4,6 +4,7 @@
 #include "plugin/plugin_symbol_solver.h"
 #include "message/message_dispacher.h"
 
+#include <any>
 #include <iostream>
 #include <unordered_map>
 
@@ -73,7 +74,7 @@ namespace yuan::plugin
         Plugin *plugin = static_cast<Plugin *>(pluginInstance);
         plugin->on_loaded();
 
-        add_plugin(pluginName, plugin);
+        add_plugin(pluginName, plugin, handle);
 
         if (!plugin->on_init(yuan::message::MessageDispatcher::get_instance())) {
             std::cout << "plugin " << pluginName << " init failed!!!\n";
@@ -84,7 +85,7 @@ namespace yuan::plugin
         return true;
     }
 
-    void PluginManager::add_plugin(const std::string &name, Plugin *plugin, void *handle /*= nullptr*/)
+    void PluginManager::add_plugin(const std::string &name, Plugin *plugin, void *handle)
     {
         auto it = data_->plugins_.find(name);
         if (it != data_->plugins_.end()) {
@@ -117,28 +118,56 @@ namespace yuan::plugin
         data_->plugins_.erase(it);
     }
 
+    void PluginManager::message_load(const std::string &pluginName)
+    {
+        message::Message *msg = new message::Message;
+        msg->type_ = message::system_message_;
+        msg->event_id_ = message::SystemMessage::load_plugin_;
+        message::SystemMessage *sysMsg = new message::SystemMessage;
+        sysMsg->data_ = pluginName;
+        msg->data_ = sysMsg;
+
+        message::MessageDispatcher::get_instance()->send_message(msg);
+    }
+
     void PluginManager::on_message(const message::Message *msg)
     {
         if (msg->type_ == message::system_message_ && msg->data_) {
             const message::SystemMessage *sysmsg = static_cast<const message::SystemMessage *>(msg->data_);
-            if (!sysmsg->plugin_name_.empty()) {
-                switch (msg->event_) {
+            if (sysmsg) {
+                switch (msg->event_id_) {
                 case message::SystemMessage::SystemMessageType::load_plugin_:
                 {
-                    load(sysmsg->plugin_name_);
+                    const auto pluginName = std::any_cast<std::string>(sysmsg->data_);
+                    bool res = load(pluginName);
+
+                    message::Message *msg = new message::Message;
+                    msg->type_ = message::system_message_;
+                    msg->event_id_ = message::SystemMessage::load_plugin_result_;
+                    message::SystemMessage *sysMsg = new message::SystemMessage;
+                    sysMsg->data_ = message::SystemMessage::LoadPluginResult{pluginName, res};
+                    msg->data_ = sysMsg;
+
+                    message::MessageDispatcher::get_instance()->send_message(msg);
                     break;
                 }
                 case message::SystemMessage::SystemMessageType::release_plugin_:
                 {
-                    release_plugin(sysmsg->plugin_name_);
+                    const auto pluginName = std::any_cast<std::string>(sysmsg->data_);
+                    release_plugin(pluginName);
                     break;
                 }
                 default: {
-                    std::cerr << "cant handle plugin message: " << msg->event_ << " !!\n";
+                    std::cerr << "cant handle plugin message: " << msg->event_id_ << " !!\n";
                     break;
                 }
                 }
             }
         }
+    }
+
+    std::set<uint32_t> PluginManager::get_interest_events() const
+    {
+        return {message::SystemMessage::SystemMessageType::load_plugin_, message::SystemMessage::SystemMessageType::release_plugin_};
     }
 }

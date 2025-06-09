@@ -19,6 +19,10 @@ public:
 public:
     virtual void on_message(const yuan::message::Message *msg);
 
+    virtual bool need_free() { return true; }
+
+    std::set<uint32_t> get_interest_events() const;
+
 private:
     yuan::message::MessageDispatcher *dispatcher_;
 };

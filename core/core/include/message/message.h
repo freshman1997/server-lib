@@ -2,6 +2,8 @@
 #define __MESSAGE_H__
 #include "net/socket/inet_address.h"
 #include "net/connection/connection.h"
+#include <any>
+#include <set>
 
 namespace yuan::message 
 {
@@ -29,7 +31,7 @@ namespace yuan::message
             unsigned char   ext3_ = 0;
         };
         
-        unsigned int        event_ = 0;
+        unsigned int        event_id_ = 0;
         void *              data_  = nullptr;
 
         virtual ~Message()
@@ -49,11 +51,18 @@ namespace yuan::message
             add_timer_,
             remove_timer_,
             load_plugin_,
+            load_plugin_result_,
             release_plugin_,
+            free_msg_consumer_,
         };
 
-        unsigned int    timer_id_;
-        std::string     plugin_name_;
+        struct LoadPluginResult
+        {
+            std::string plugin_name_;
+            bool result_;
+        };
+
+        std::any data_;
     };
 
     struct NetMessage : public MessageDestructor
@@ -75,7 +84,13 @@ namespace yuan::message
     class MessageConsumer
     {
     public:
+        virtual ~MessageConsumer() = default;
+
         virtual void on_message(const Message *msg) = 0;
+
+        virtual bool need_free() = 0;
+
+        virtual std::set<uint32_t> get_interest_events() const = 0;
     };
 }
 
