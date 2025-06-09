@@ -31,6 +31,8 @@ namespace yuan::message
 
         bool register_consumer(int msgType, void *consumer);
 
+        bool register_consumer(int msgType, uint32_t eventId, void *consumer);
+
         void dispatch();
 
     private:
@@ -38,7 +40,7 @@ namespace yuan::message
 
     private:
         class InnerData;
-        InnerData *data_;
+        std::unique_ptr<InnerData> data_;
     };
 }
 

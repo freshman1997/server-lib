@@ -24,7 +24,7 @@ namespace yuan::plugin
 
         void release_plugin(const std::string &pluginName);
 
-        void message_load(const std::string &pluginName);
+        void async_load(const std::string &pluginName);
 
     public:
         virtual void on_message(const message::Message *msg);

@@ -21,6 +21,31 @@ namespace yuan::message
     {
     public:
         InnerData() = default;
+
+        ~InnerData()
+        {
+            while (!messages_queue_.empty()) {
+                delete messages_queue_.front();
+                messages_queue_.pop();
+            }
+
+            std::set<MessageConsumer *> consumersToFree;
+            for (auto &typePair : consumers_) {
+                MessageConsumer *consumer = nullptr;
+                for (auto &eventPair : typePair.second) {
+                    if (eventPair.second && eventPair.second->need_free() && consumersToFree.find(eventPair.second) == consumersToFree.end()) {
+                        consumersToFree.insert(eventPair.second);
+                    }
+                }
+            }
+
+            for (auto *consumer : consumersToFree) {
+                delete consumer;
+            }
+
+            consumersToFree.clear();
+            consumers_.clear();
+        }
         
     public:
         std::unordered_map<int, std::unordered_map<unsigned int, MessageConsumer *>> consumers_;
@@ -35,7 +60,7 @@ namespace yuan::message
 
     MessageDispatcher::~MessageDispatcher()
     {
-        delete data_;
+        
     }
 
     MessageDispatcher * MessageDispatcher::get_instance()
@@ -81,6 +106,24 @@ namespace yuan::message
         for (uint32_t event : evs) {
             data_->consumers_[msgType][event] = messageConsumer;
         }
+
+        return true;
+    }
+
+    bool MessageDispatcher::register_consumer(int msgType, uint32_t eventId, void *consumer)
+    {
+        std::lock_guard lock(data_->mutex_);
+
+        if (!consumer) {
+            return false;
+        }
+
+        auto messageConsumer = static_cast<MessageConsumer *>(consumer);
+        if (eventId == 0) {
+            return false;
+        }
+
+        data_->consumers_[msgType][eventId] = messageConsumer;
 
         return true;
     }

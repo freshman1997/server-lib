@@ -7,6 +7,11 @@
 class PluginConsumer : public yuan::message::MessageConsumer
 {
 public:
+    ~PluginConsumer()
+    {
+        std::cout << "PluginConsumer destroyed!!\n";
+    }
+
     virtual void on_message(const yuan::message::Message *msg)
     {
         if (msg->type_ == yuan::message::system_message_ && msg->data_) {
@@ -44,7 +49,7 @@ int main()
         return -1;
     }
 
-    pluginManager->message_load("HelloWorld");
+    pluginManager->async_load("HelloWorld");
     dispatcher->dispatch();
 
     return 0;

@@ -19,6 +19,9 @@ namespace yuan::plugin
         virtual void on_release() = 0;
 
         virtual void on_message(const message::Message *msg) {}
+
+    public:
+        virtual bool need_free() { return false; }
     };
 }
 

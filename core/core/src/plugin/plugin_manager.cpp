@@ -118,7 +118,7 @@ namespace yuan::plugin
         data_->plugins_.erase(it);
     }
 
-    void PluginManager::message_load(const std::string &pluginName)
+    void PluginManager::async_load(const std::string &pluginName)
     {
         message::Message *msg = new message::Message;
         msg->type_ = message::system_message_;
