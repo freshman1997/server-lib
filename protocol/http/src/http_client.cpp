@@ -191,7 +191,11 @@ namespace yuan::net::http
         timer::WheelTimerManager manager;
         conn_timer_ = manager.timeout(config::connection_idle_timeout, this);
 
+#ifdef _WIN32
+        SelectPoller poller;
+#else
         EpollPoller poller;
+#endif
         net::EventLoop loop(&poller, &manager);
 
         conn->set_connection_handler(this);

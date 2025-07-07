@@ -71,7 +71,6 @@ namespace yuan::message
 
     bool MessageDispatcher::init()
     {
-        register_consumer(system_message_, yuan::plugin::PluginManager::get_instance().get());
         register_consumer(system_message_, this);
         return true;
     }

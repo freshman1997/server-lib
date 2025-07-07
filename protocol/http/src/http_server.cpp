@@ -34,6 +34,7 @@
 #include "header_key.h"
 #include "header_util.h"
 #include "proxy.h"
+#include "base/utils/string_converter.h"
 
 namespace yuan::net::http
 {

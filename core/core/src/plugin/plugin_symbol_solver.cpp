@@ -1,9 +1,11 @@
 #include "plugin/plugin_symbol_solver.h"
 #include <cassert>
+#include "base/utils/string_converter.h"
 
 #ifdef unix
 #include <dlfcn.h>
-#elif WIN32
+#elif _WIN32
+#include <windows.h>
 #elif __APPLE__
 #endif
 
@@ -13,6 +15,10 @@ namespace yuan::plugin
     {
     #ifdef unix
         void *handle = dlopen(path.c_str(), RTLD_LAZY);
+        return handle;
+    #elif _WIN32
+        const std::string &realPath = base::encoding::UTF8ToGBK(path.c_str());
+        void *handle = LoadLibraryA(realPath.c_str());
         return handle;
     #else
         return nullptr;
@@ -27,6 +33,8 @@ namespace yuan::plugin
         
     #ifdef unix
         dlclose(handle);
+    #elif _WIN32
+        FreeLibrary((HMODULE)handle);
     #else
         assert(false);
     #endif
@@ -37,6 +45,8 @@ namespace yuan::plugin
     #ifdef unix
         void *addr = dlsym(handle, symbolName.c_str());
         return addr;
+    #elif _WIN32
+        return reinterpret_cast<void *>(GetProcAddress((HMODULE)handle, symbolName.c_str()));
     #else
         return nullptr;
     #endif
