@@ -79,7 +79,6 @@ namespace yuan::net
     {
         assert(socket_);
 
-        std::cout << "acceptor on_read_event: " << socket_->get_fd() << "\n";
         while (true) {
             sockaddr_in peer_addr{};
             memset(&peer_addr, 0, sizeof(sockaddr_in));
@@ -87,8 +86,9 @@ namespace yuan::net
             if (conn_fd < 0) {
                 if (errno != EAGAIN && errno != ECONNABORTED && errno != EPROTO && errno != EINTR) {
                     std::cerr << "error connection " << errno << std::endl;
+                    break;
                 }
-                break;
+                continue;
             }
 
             std::shared_ptr<SSLHandler> sslHandler = nullptr;
@@ -96,7 +96,7 @@ namespace yuan::net
                 sslHandler = ssl_module_->create_handler(conn_fd, SSLHandler::SSLMode::acceptor_);
                 if (!sslHandler || sslHandler->ssl_init_action() <= 0) {
                     if (auto msg = ssl_module_->get_error_message()) {
-                        std::cerr << "ssl error: " << msg->c_str();
+                        std::cerr << "ssl error: " << msg->c_str() << std::endl;
                     }
                     ::close(conn_fd);
                     return;
