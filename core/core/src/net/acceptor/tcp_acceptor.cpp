@@ -86,9 +86,8 @@ namespace yuan::net
             if (conn_fd < 0) {
                 if (errno != EAGAIN && errno != ECONNABORTED && errno != EPROTO && errno != EINTR) {
                     std::cerr << "error connection " << errno << std::endl;
-                    break;
                 }
-                continue;
+                break;
             }
 
             std::shared_ptr<SSLHandler> sslHandler = nullptr;
@@ -114,7 +113,6 @@ namespace yuan::net
             }
 
             handler_->on_new_connection(conn);
-            break;
         }
     }
 
