@@ -79,40 +79,42 @@ namespace yuan::net
     {
         assert(socket_);
 
+        std::cout << "acceptor on_read_event: " << socket_->get_fd() << "\n";
         while (true) {
-            struct sockaddr_in peer_addr;
-            memset(&peer_addr, 0, sizeof(struct sockaddr_in));
+            sockaddr_in peer_addr{};
+            memset(&peer_addr, 0, sizeof(sockaddr_in));
             int conn_fd = socket_->accept(peer_addr);
             if (conn_fd < 0) {
                 if (errno != EAGAIN && errno != ECONNABORTED && errno != EPROTO && errno != EINTR) {
-                    std::cerr << "error connection " << std::endl;
+                    std::cerr << "error connection " << errno << std::endl;
                 }
                 break;
-            } else {
-                std::shared_ptr<SSLHandler> sslHandler = nullptr;
-                if (ssl_module_) {
-                    sslHandler = ssl_module_->create_handler(conn_fd, SSLHandler::SSLMode::acceptor_);
-                    if (!sslHandler || sslHandler->ssl_init_action() <= 0) {
-                        if (auto msg = ssl_module_->get_error_message()) {
-                            std::cerr << "ssl error: " << msg->c_str();
-                        }
-                        ::close(conn_fd);
-                        return;
-                    }
-                }
-
-                Connection *conn = new TcpConnection(::inet_ntoa(peer_addr.sin_addr), 
-                            ntohs(peer_addr.sin_port), conn_fd);
-                            
-                conn->set_event_handler(handler_);
-                conn->set_connection_handler(conn_handler_);
-
-                if (sslHandler) {
-                    conn->set_ssl_handler(sslHandler);
-                }
-
-                handler_->on_new_connection(conn);
             }
+
+            std::shared_ptr<SSLHandler> sslHandler = nullptr;
+            if (ssl_module_) {
+                sslHandler = ssl_module_->create_handler(conn_fd, SSLHandler::SSLMode::acceptor_);
+                if (!sslHandler || sslHandler->ssl_init_action() <= 0) {
+                    if (auto msg = ssl_module_->get_error_message()) {
+                        std::cerr << "ssl error: " << msg->c_str();
+                    }
+                    ::close(conn_fd);
+                    return;
+                }
+            }
+
+            Connection *conn = new TcpConnection(::inet_ntoa(peer_addr.sin_addr),
+                                                 ntohs(peer_addr.sin_port), conn_fd);
+
+            conn->set_event_handler(handler_);
+            conn->set_connection_handler(conn_handler_);
+
+            if (sslHandler) {
+                conn->set_ssl_handler(sslHandler);
+            }
+
+            handler_->on_new_connection(conn);
+            break;
         }
     }
 

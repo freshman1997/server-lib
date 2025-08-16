@@ -48,8 +48,8 @@ namespace yuan::net::socket
 
     int bind(int fd, const InetAddress &addr)
     {
-        struct sockaddr_in saddr =  addr.to_ipv4_address();
-        return ::bind(fd, (const struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
+        sockaddr_in saddr =  addr.to_ipv4_address();
+        return ::bind(fd, reinterpret_cast<const sockaddr *>(&saddr), sizeof(struct sockaddr_in));
     }
 
     int listen(int fd,int backlog)
@@ -57,14 +57,14 @@ namespace yuan::net::socket
         return ::listen(fd, backlog);
     }
 
-    int accept(int fd, struct sockaddr_in &peer_addr)
+    int accept(int fd, sockaddr_in &peer_addr)
     {
         #ifndef _WIN32
         socklen_t ssz = (socklen_t)sizeof(peer_addr);
         return ::accept(fd, (struct sockaddr *)&peer_addr, &ssz);
         #else
         int len = sizeof(peer_addr);
-        return ::accept(fd, (struct sockaddr*) &peer_addr, &len);
+        return ::accept(fd, reinterpret_cast<sockaddr *>(&peer_addr), &len);
         #endif
     }
 

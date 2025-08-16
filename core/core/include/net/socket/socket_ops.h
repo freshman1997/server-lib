@@ -17,7 +17,7 @@ namespace yuan::net::socket
 
     int listen(int fd,int backlog);
 
-    int accept(int fd, struct sockaddr_in &peer_addr);
+    int accept(int fd, sockaddr_in &peer_addr);
 
     int connect(int fd, const InetAddress &addr);
 
