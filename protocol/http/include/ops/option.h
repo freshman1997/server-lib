@@ -1,6 +1,7 @@
 #ifndef __HTTP_SERVER_OPTION_H__
 #define __HTTP_SERVER_OPTION_H__
 #include <cstdint>
+#include <string_view>
 
 namespace yuan::net::http::config
 {  
@@ -52,6 +53,8 @@ namespace yuan::net::http::config
     extern int proxy_max_pending;
 
     extern int proxy_buffer_max;
+
+    extern const std::string_view file_list_html_text;
 
     void load_config();
 }

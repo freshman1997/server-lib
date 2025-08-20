@@ -84,6 +84,8 @@ namespace yuan::net::http
 
         void serve_list_files(const std::string &relPath, const std::string &filePath, HttpResponse *resp);
 
+        void reload_config(HttpRequest *req, HttpResponse *resp);
+
     private:
         bool quit_;
         State state_;

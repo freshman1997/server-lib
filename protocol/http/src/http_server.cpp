@@ -211,6 +211,9 @@ namespace yuan::net::http
         config::load_config();
         load_static_paths();
 
+        // 注册 reload_config 事件
+        on("/reload_config", std::bind(&HttpServer::reload_config, this, std::placeholders::_1, std::placeholders::_2));
+
         const auto &proxiesCfg = HttpConfigManager::get_instance()->get_type_array_properties<nlohmann::json>("proxies");
         if (!proxiesCfg.empty()) {
             proxy_ = new HttpProxy(this);
@@ -316,6 +319,16 @@ namespace yuan::net::http
         }
 
         const std::string &fileRelativePath = url.substr(prefixIdx + 1);
+        if (fileRelativePath == "filelist.html") {
+            resp->get_buff()->write_string(config::file_list_html_text.data(), config::file_list_html_text.size());
+            resp->add_header("Content-Type", "text/html; charset=utf-8");
+            resp->set_response_code(ResponseCode::ok_);
+            resp->add_header("Connection", "close");
+            resp->add_header("Content-Length", std::to_string(resp->get_buff()->readable_bytes()));
+            resp->send();
+            return;
+        }
+
         std::string path;
         if (pathPrefix[pathPrefix.size() - 1] == '/') {
             path = pathPrefix + fileRelativePath;
@@ -479,15 +492,16 @@ namespace yuan::net::http
     {
         nlohmann::json jsonResponse;
         std::vector<std::string> files;
+        std::string tmp = base::encoding::UTF8ToGBK(filePath.c_str());
         try {
-            for (const auto& entry : std::filesystem::directory_iterator(filePath)) {
+            for (const auto& entry : std::filesystem::directory_iterator(tmp)) {
                 if (entry.is_regular_file())
                 {
                     nlohmann::json item;
                     item["type"] = 1;
                     item["name"] = entry.path().filename().string();
                     item["size"] = std::filesystem::file_size(entry);
-                    auto sys_time = std::chrono::clock_cast<std::chrono::system_clock>(entry.last_write_time());
+                    auto sys_time = std::chrono::file_clock::to_sys(entry.last_write_time());
                     item["modified"] = std::chrono::system_clock::to_time_t(sys_time); // 转换为时间戳
                     item["url"] = relPath + entry.path().filename().string();
                     jsonResponse.push_back(item);
@@ -497,13 +511,14 @@ namespace yuan::net::http
                     nlohmann::json item;
                     item["name"] = entry.path().filename().string();
                     item["type"] = 2;
-                    auto sys_time = std::chrono::clock_cast<std::chrono::system_clock>(entry.last_write_time());
+                    auto sys_time =  std::chrono::file_clock::to_sys(entry.last_write_time());
                     item["modified"] = std::chrono::system_clock::to_time_t(sys_time); // 转换为时间戳
                     item["url"] = relPath + entry.path().filename().string() + "/";
                     jsonResponse.push_back(item);
                 }
             }
         } catch (const std::filesystem::filesystem_error& e) {
+            std::cerr << "Error reading directory: " << e.what() << '\n';
             resp->process_error();
             return;
         }
@@ -513,6 +528,22 @@ namespace yuan::net::http
         resp->append_body(jsonResponse.dump());
         resp->add_header("Content-Length", std::to_string(resp->get_buff()->readable_bytes()));
         resp->set_response_code(net::http::ResponseCode::ok_);
+        resp->send();
+    }
+
+    void HttpServer::reload_config(HttpRequest *req, HttpResponse *resp)
+    {
+        HttpConfigManager::get_instance()->reload_config();
+        if (HttpConfigManager::get_instance()->good()) {
+            resp->get_buff()->write_string("Configuration reloaded successfully.");
+        } else {
+            resp->get_buff()->write_string("Failed to reload configuration.");
+        }
+
+        resp->add_header("Content-Type", "text/plain; charset=utf-8");
+        resp->add_header("Connection", "close");
+        resp->set_response_code(net::http::ResponseCode::ok_);
+        resp->add_header("Content-Length", std::to_string(resp->get_buff()->readable_bytes()));
         resp->send();
     }
 }
