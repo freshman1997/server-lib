@@ -3,12 +3,16 @@
 #include "net/poller/select_poller.h"
 #include "net/poller/kqueue_poller.h"
 #include "net/secuity/openssl.h"
+#include "nlohmann/json.hpp"
+#include "task/upload_file_task.h"
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <filesystem>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -305,24 +309,35 @@ namespace yuan::net::http
             return;
         }
 
+        if (url.size() == prefixIdx + 1) {
+            // 访问的是根目录
+            serve_list_files("/static/", pathPrefix, resp);
+            return;
+        }
+
         const std::string &fileRelativePath = url.substr(prefixIdx + 1);
-        const std::size_t pos = fileRelativePath.find_last_of('.');
-        if (pos == std::string::npos) {
-            resp->process_error();
-            return;
-        }
-
-        const std::string &ext = fileRelativePath.substr(pos);
-        if (!play_types_.count(ext)) {
-            resp->process_error(ResponseCode::forbidden);
-            return;
-        }
-
         std::string path;
         if (pathPrefix[pathPrefix.size() - 1] == '/') {
             path = pathPrefix + fileRelativePath;
         } else {
             path = pathPrefix + "/" + fileRelativePath;
+        }
+
+        if (std::filesystem::is_directory(path)) {
+            serve_list_files(url, path, resp);
+            return;
+        }
+
+        const std::size_t pos = fileRelativePath.find_last_of('.');
+        if (pos == std::string::npos) {
+            serve_download(path, "", resp);
+            return;
+        }
+
+        const std::string &ext = fileRelativePath.substr(pos);
+        if (!play_types_.count(ext)) {
+            serve_download(path, ext, resp);
+            return;
         }
 
         auto *session = req->get_context()->get_session();
@@ -331,9 +346,9 @@ namespace yuan::net::http
         if (!data) {
 #ifdef _WIN32
             const std::string &realPath = base::encoding::UTF8ToGBK(path.c_str());
-            auto *file_ = new std::ifstream(realPath.c_str(), std::ios::binary);
+            auto *file_ = new std::ifstream(realPath.c_str(), std::ios::in | std::ios::binary);
 #else
-            auto *file_ = new std::ifstream(path.c_str(), std::ios::binary);
+            auto *file_ = new std::ifstream(path.c_str(), std::ios::in | std::ios::binary);
 #endif
             if (!file_->good()) {
                 std::cout << "open file fail! " << errno << '\n';
@@ -416,6 +431,88 @@ namespace yuan::net::http
         resp->add_header("X-Content-Type-Options", "nosniff");
         resp->add_header("Cache-Control", "no-cache");
         resp->set_response_code(net::http::ResponseCode::partial_content);
+        resp->send();
+    }
+
+    void HttpServer::serve_download(const std::string &filePath, const std::string &ext, HttpResponse *resp)
+    {
+        std::fstream file;
+        file.open(filePath.c_str(), std::ios::in | std::ios::binary);
+        if (!file.good()) {
+            resp->get_context()->process_error(net::http::ResponseCode::not_found);
+            return;
+        }
+
+        file.seekg(0, std::ios_base::end);
+        std::size_t sz = file.tellg();
+        file.close();
+
+        net::http::HttpUploadFileTask *task = new net::http::HttpUploadFileTask([resp, filePath]() {
+            std::cout << "Upload file task completed, file path: " << filePath << '\n';
+            resp->set_upload_file(false);
+        });
+
+        auto attachment_info = std::make_shared<net::http::AttachmentInfo>();
+        attachment_info->origin_file_name_ = filePath;
+        attachment_info->length_ = sz;
+        task->set_attachment_info(attachment_info);
+
+        if (!task->init()) {
+            resp->get_context()->process_error(net::http::ResponseCode::internal_server_error);
+            delete task;
+            return;
+        }
+
+        
+        resp->add_header("Content-Type", get_content_type(ext));
+        resp->add_header("Connection", "close");
+        //resp->add_header("Content-Disposition", "attachment; filename=\"k5game_pc.zip\"");
+        resp->set_response_code(net::http::ResponseCode::ok_);
+        resp->add_header("Content-Length", std::to_string(sz));
+
+        resp->set_task(task);
+        resp->set_upload_file(true);
+        resp->send();
+    }
+
+    void HttpServer::serve_list_files(const std::string &relPath, const std::string &filePath, HttpResponse *resp)
+    {
+        nlohmann::json jsonResponse;
+        std::vector<std::string> files;
+        try {
+            for (const auto& entry : std::filesystem::directory_iterator(filePath)) {
+                if (entry.is_regular_file())
+                {
+                    nlohmann::json item;
+                    item["type"] = 1;
+                    item["name"] = entry.path().filename().string();
+                    item["size"] = std::filesystem::file_size(entry);
+                    auto sys_time = std::chrono::clock_cast<std::chrono::system_clock>(entry.last_write_time());
+                    item["modified"] = std::chrono::system_clock::to_time_t(sys_time); // 转换为时间戳
+                    item["url"] = relPath + entry.path().filename().string();
+                    jsonResponse.push_back(item);
+                }
+                else if (entry.is_directory())
+                {
+                    nlohmann::json item;
+                    item["name"] = entry.path().filename().string();
+                    item["type"] = 2;
+                    auto sys_time = std::chrono::clock_cast<std::chrono::system_clock>(entry.last_write_time());
+                    item["modified"] = std::chrono::system_clock::to_time_t(sys_time); // 转换为时间戳
+                    item["url"] = relPath + entry.path().filename().string() + "/";
+                    jsonResponse.push_back(item);
+                }
+            }
+        } catch (const std::filesystem::filesystem_error& e) {
+            resp->process_error();
+            return;
+        }
+
+        resp->add_header("Content-Type", "application/json");
+        resp->add_header("Connection", "close");
+        resp->append_body(jsonResponse.dump());
+        resp->add_header("Content-Length", std::to_string(resp->get_buff()->readable_bytes()));
+        resp->set_response_code(net::http::ResponseCode::ok_);
         resp->send();
     }
 }

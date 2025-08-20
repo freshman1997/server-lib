@@ -276,9 +276,8 @@ namespace yuan::net::http
     {
         if (is_uploading()) {
             if (task_) {
-                task_->on_data(&buff);
+                return task_->on_data(&buff);
             }
-            return true;
         }
 
         return false;

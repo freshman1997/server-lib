@@ -50,8 +50,16 @@ namespace yuan::net::http
 
     bool HttpSessionContext::write()
     {
-        conn_->get_output_buff()->resize(1024 * 1024);
-        return get_packet()->write(*conn_->get_output_buff());
+        if (response_->is_uploading())
+        {
+            auto buff = response_->get_buff(true);
+            buff->reset();
+            buff->resize(1024 * 1024 * 2);
+            response_->write(*buff);
+            conn_->write_and_flush(buff);
+        }
+
+        return true;
     }
 
     bool HttpSessionContext::is_completed()

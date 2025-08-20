@@ -46,15 +46,13 @@ namespace yuan::net::http
             std::size_t bytes_to_write = buf->writable_size();
             file_stream_.read(buf->peek_for(), bytes_to_write);
 
-            if (!file_stream_.good()) {
-                return false;
-            }
-
-            attachment_info_->offset_ += bytes_to_write;
+            std::size_t read_bytes = std::min<std::size_t>(file_stream_.gcount(), bytes_to_write);
+            attachment_info_->offset_ += read_bytes;
+            buf->fill(read_bytes);
 
             std::cout << "Uploaded " << attachment_info_->offset_ << " bytes of " << attachment_info_->length_ << " bytes. " << ((attachment_info_->offset_ * 1.0) / (attachment_info_->length_ * 1.0) * 100) << "%" << std::endl;
 
-            if (attachment_info_->offset_ >= attachment_info_->length_) {
+            if (attachment_info_->offset_ >= attachment_info_->length_ || file_stream_.eof()) {
                 file_stream_.close();
                 if (completed_callback_) {
                     completed_callback_();

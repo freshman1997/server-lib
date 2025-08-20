@@ -142,14 +142,12 @@ namespace yuan::net
             }
         
             if (ret > 0) {
-                channel_->enable_write();
-                eventHandler_->update_channel(channel_);
                 if (ret >= output_buffer_.get_current_buffer()->readable_bytes()) {
                     output_buffer_.free_current_buffer();
                     ++i;
                 } else {
                     output_buffer_.get_current_buffer()->add_read_index(ret);
-                    std::cout << "still remains data: " << output_buffer_.get_current_buffer()->readable_bytes() << " bytes.\n";
+                    //std::cout << "still remains data: " << output_buffer_.get_current_buffer()->readable_bytes() << " bytes.\n";
                 }
             } else if (ret < 0) {
                 if (EAGAIN != errno && EWOULDBLOCK != errno) {
@@ -157,9 +155,6 @@ namespace yuan::net
                     abort();
                     return;
                 }
-
-                channel_->enable_write();
-                eventHandler_->update_channel(channel_);
                 break;
             }
         }
@@ -273,7 +268,7 @@ namespace yuan::net
             connectionHandler_->on_connected(this);
         }
 
-        if ((state_ == ConnectionState::connected || state_ == ConnectionState::closing) && connectionHandler_ && !output_buffer_.get_current_buffer()->empty()) {
+        if ((state_ == ConnectionState::connected || state_ == ConnectionState::closing) && connectionHandler_) {
             connectionHandler_->on_write(this);
             flush();
         }

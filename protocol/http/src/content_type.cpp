@@ -52,6 +52,6 @@ namespace yuan::net::http
             }
         }
 
-        return {};
+        return "application/octet-stream";
     }
 }

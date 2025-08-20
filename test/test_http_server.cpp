@@ -153,10 +153,6 @@ public:
         resp->send();
     }
 
-    void serve_static(net::http::HttpRequest *req, net::http::HttpResponse *resp)
-    {
-
-    }
 
 private:
     int content_size_;
@@ -189,7 +185,7 @@ int main()
         vt.icon(req, resp);
     });
 
-    if (!server.init(12333)) {
+    if (!server.init(45005)) {
         std::cout << " init failed " << std::endl;
         return 1;
     }

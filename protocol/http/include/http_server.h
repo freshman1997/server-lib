@@ -80,6 +80,10 @@ namespace yuan::net::http
 
         void serve_static(HttpRequest *req, HttpResponse *resp);
 
+        void serve_download(const std::string &filePath, const std::string &ext, HttpResponse *resp);
+
+        void serve_list_files(const std::string &relPath, const std::string &filePath, HttpResponse *resp);
+
     private:
         bool quit_;
         State state_;

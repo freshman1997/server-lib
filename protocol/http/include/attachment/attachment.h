@@ -46,8 +46,6 @@ namespace yuan::net::http
                 content_type_ = std::move(other.content_type_);
                 offset_ = other.offset_;
                 length_ = other.length_;
-                other.offset_ = 0;
-                other.length_ = 0;
             }
             return *this;
         }
