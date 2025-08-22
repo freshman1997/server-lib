@@ -290,6 +290,11 @@ namespace yuan::net::http
             on(root, std::bind(&HttpServer::serve_static, this, std::placeholders::_1, std::placeholders::_2), true);
         }
 
+        if (paths.empty()) {
+            static_paths_["/static"] = std::filesystem::current_path().string();
+            on("/static", std::bind(&HttpServer::serve_static, this, std::placeholders::_1, std::placeholders::_2), true);
+        }
+
         const std::vector<std::string> &types = cfgManager->get_type_array_properties<std::string>(config::playable_types);
         for (const auto &type : types) {
             play_types_.insert(type);
@@ -492,9 +497,8 @@ namespace yuan::net::http
     {
         nlohmann::json jsonResponse;
         std::vector<std::string> files;
-        std::string tmp = base::encoding::UTF8ToGBK(filePath.c_str());
         try {
-            for (const auto& entry : std::filesystem::directory_iterator(tmp)) {
+            for (const auto& entry : std::filesystem::directory_iterator(filePath)) {
                 if (entry.is_regular_file())
                 {
                     nlohmann::json item;

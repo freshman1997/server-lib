@@ -19,10 +19,6 @@ namespace yuan::net::http
             return false;
         }
 
-        if (attachment_info_->length_ <= 0) {
-            return false;
-        }
-
         file_stream_.open(attachment_info_->tmp_file_name_, std::ios::out | std::ios::binary);
         if (!file_stream_.is_open()) {
             return false;

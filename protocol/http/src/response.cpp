@@ -74,4 +74,25 @@ namespace yuan::net::http
         context_->get_connection()->flush();
         context_->get_connection()->close();
     }
+
+    void HttpResponse::dispatch_task()
+    {
+        if (!task_) {
+            return;
+        }
+
+        if (buffer_ && buffer_->readable_bytes() > 0) {
+            task_->on_data(buffer_);
+            buffer_->reset();
+        }
+
+        if (linked_buffer_.get_size() > 0) {
+            linked_buffer_.foreach([this](buffer::Buffer *buff) -> bool {
+                return task_->on_data(buff);
+            });
+            linked_buffer_.clear();
+        }
+
+        // TODO: dispatch task
+    }
 }

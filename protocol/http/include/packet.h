@@ -185,9 +185,7 @@ namespace yuan::net::http
         {
             return task_;
         }
-
-        void dispatch_task();
-
+        
     public: // original file name
         void set_original_file_name(const std::string &name)
         {

@@ -41,6 +41,8 @@ namespace yuan::net::http
 
         void process_error(ResponseCode errorCode = ResponseCode::internal_server_error);
 
+        void dispatch_task();
+
     private:
         bool pack_response();
 

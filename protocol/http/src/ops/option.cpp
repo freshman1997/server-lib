@@ -324,7 +324,7 @@ R"(
                             <span class="file-size">${size}</span>
                             <span class="file-date">${date}</span>
                         </div>
-                        <button class="download-btn" title="下载" onclick='downloadFile('${url}', '${name.replace(/'/g, "\\'")}')'>
+                        <button class="download-btn" title="下载" onclick=\"downloadFile('${url}', '${name.replace(/'/g, "\\'")}')\">
                             ↓
                         </button>
                     `;
