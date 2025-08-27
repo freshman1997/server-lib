@@ -1,5 +1,6 @@
 #include "task/upload_file_task.h"
 #include <iostream>
+#include <filesystem>
 
 namespace yuan::net::http 
 {
@@ -18,7 +19,7 @@ namespace yuan::net::http
         }
 
 
-        file_stream_.open(attachment_info_->origin_file_name_, std::ios::in | std::ios::binary);
+        file_stream_.open(std::filesystem::u8path(attachment_info_->origin_file_name_), std::ios::in | std::ios::binary);
         if (!file_stream_.is_open()) {
             return false;
         }
@@ -47,7 +48,9 @@ namespace yuan::net::http
             attachment_info_->offset_ += read_bytes;
             buf->fill(read_bytes);
 
+        #ifdef _DEBUG
             std::cout << "Uploaded " << attachment_info_->offset_ << " bytes of " << attachment_info_->length_ << " bytes. " << ((attachment_info_->offset_ * 1.0) / (attachment_info_->length_ * 1.0) * 100) << "%" << std::endl;
+        #endif
 
             if (attachment_info_->offset_ >= attachment_info_->length_ || file_stream_.eof()) {
                 file_stream_.close();

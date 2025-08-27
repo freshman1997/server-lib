@@ -1,6 +1,7 @@
 #include "task/download_file_task.h"
 #include <cstdio>
 #include <iostream>
+#include <filesystem>
 
 namespace yuan::net::http 
 {
@@ -19,7 +20,8 @@ namespace yuan::net::http
             return false;
         }
 
-        file_stream_.open(attachment_info_->tmp_file_name_, std::ios::out | std::ios::binary);
+        
+        file_stream_.open(std::filesystem::u8path(attachment_info_->tmp_file_name_), std::ios::out | std::ios::binary);
         if (!file_stream_.is_open()) {
             return false;
         }
@@ -44,8 +46,10 @@ namespace yuan::net::http
             file_stream_.flush();
             attachment_info_->offset_ += bytes_to_write;
 
+        #ifdef _DEBUG
             std::cout << "Downloaded " << attachment_info_->offset_ << " bytes of " << attachment_info_->length_ << " bytes. " << ((attachment_info_->offset_ * 1.0) / (attachment_info_->length_ * 1.0) * 100) << "%" << std::endl;
-
+        #endif
+        
             if (attachment_info_->offset_ >= attachment_info_->length_) {
                 file_stream_.close();
                 if (completed_callback_) {

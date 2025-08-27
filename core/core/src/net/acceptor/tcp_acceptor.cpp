@@ -84,9 +84,11 @@ namespace yuan::net
             memset(&peer_addr, 0, sizeof(sockaddr_in));
             int conn_fd = socket_->accept(peer_addr);
             if (conn_fd < 0) {
+            #ifdef _DEBUG
                 if (errno != EAGAIN && errno != ECONNABORTED && errno != EPROTO && errno != EINTR) {
                     std::cerr << "error connection " << errno << std::endl;
                 }
+            #endif
                 break;
             }
 

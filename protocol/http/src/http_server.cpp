@@ -363,8 +363,7 @@ namespace yuan::net::http
         std::ifstream *stream;
         if (!data) {
 #ifdef _WIN32
-            const std::string &realPath = base::encoding::UTF8ToGBK(path.c_str());
-            auto *file_ = new std::ifstream(realPath.c_str(), std::ios::in | std::ios::binary);
+            auto *file_ = new std::ifstream(std::filesystem::path(std::u8string(path.begin(), path.end())), std::ios::in | std::ios::binary);
 #else
             auto *file_ = new std::ifstream(path.c_str(), std::ios::in | std::ios::binary);
 #endif
@@ -455,7 +454,7 @@ namespace yuan::net::http
     void HttpServer::serve_download(const std::string &filePath, const std::string &ext, HttpResponse *resp)
     {
         std::fstream file;
-        file.open(filePath.c_str(), std::ios::in | std::ios::binary);
+        file.open(std::filesystem::path(std::u8string(filePath.begin(), filePath.end())), std::ios::in | std::ios::binary);
         if (!file.good()) {
             resp->get_context()->process_error(net::http::ResponseCode::not_found);
             return;
@@ -498,7 +497,7 @@ namespace yuan::net::http
         nlohmann::json jsonResponse;
         std::vector<std::string> files;
         try {
-            for (const auto& entry : std::filesystem::directory_iterator(filePath)) {
+            for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(std::u8string(filePath.begin(), filePath.end())))) {
                 if (entry.is_regular_file())
                 {
                     nlohmann::json item;
