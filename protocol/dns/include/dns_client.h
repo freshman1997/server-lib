@@ -1,10 +1,14 @@
 #ifndef __NET_DNS_DNS_CLIENT_H__
 #define __NET_DNS_DNS_CLIENT_H__
 #include "net/connection/connection.h"
+#include "net/poller/poller.h"
+#include "net/socket/inet_address.h"
+#include "timer/timer_manager.h"
+#include "event/event_loop.h"
 
 namespace yuan::net::dns 
 {
-    class DnsClient
+    class DnsClient : public ConnectionHandler
     {
     public:
         DnsClient();
@@ -20,6 +24,16 @@ namespace yuan::net::dns
         virtual void on_write(Connection *conn);
 
         virtual void on_close(Connection *conn);
+
+    public:
+        bool connect(const std::string &ip, short port);
+
+    private:
+        InetAddress addr_;
+        timer::TimerManager *timer_manager_;
+        Poller *poller_;
+        EventLoop *ev_loop_;
+        int retry_cnt_;
     };
 }
 

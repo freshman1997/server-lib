@@ -1,7 +1,7 @@
 #ifndef __NET_UDP_INSTANCE_H___
 #define __NET_UDP_INSTANCE_H___
-#include <deque>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "buffer/linked_buffer.h"
 #include "net/socket/inet_address.h"
@@ -19,6 +19,13 @@ namespace yuan::net
     {
         none    = 0,
         kcp     = 1,
+    };
+
+    enum class UdpMode
+    {
+        normal      = 0,
+        broadcast   = 1,
+        multicast   = 2,
     };
 
     class UdpInstance
@@ -46,11 +53,15 @@ namespace yuan::net
         void enable_rw_events();
 
     private:
+        void try_free_connections();
+
+    private:
         bool is_closing_;
         UdpAdapterType adapter_type_;
         UdpAcceptor *acceptor_;
         buffer::LinkedBuffer input_buffer_;
         std::unordered_map<InetAddress, Connection *> conns_;
+        std::unordered_set<InetAddress> free_addrs_;
     };
 }
 

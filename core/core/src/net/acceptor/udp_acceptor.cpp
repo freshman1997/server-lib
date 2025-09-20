@@ -27,8 +27,10 @@ namespace yuan::net
 {
     UdpAcceptor::UdpAcceptor(Socket *socket, timer::TimerManager *timerManager) : sock_(socket), timer_manager_(timerManager)
     {
-        instance_.set_acceptor(this);
         channel_ = nullptr;
+        handler_ = nullptr;
+        conn_handler_ = nullptr;
+        instance_ = nullptr;
     }
 
     UdpAcceptor::~UdpAcceptor()
@@ -43,6 +45,7 @@ namespace yuan::net
         }
 
         delete sock_;
+        delete instance_;
         std::cout << "udp acceptor close\n";
     }
 
@@ -52,6 +55,11 @@ namespace yuan::net
             return false;
         }
 
+        if (!sock_->valid()) {
+            return false;
+        }
+
+        instance_ = new UdpInstance(this);
         channel_ = new Channel;
         channel_->enable_read();
         channel_->enable_write();
@@ -90,7 +98,7 @@ namespace yuan::net
         socklen_t size = sizeof(peer_addr);
     #endif
         ::memset(&peer_addr, 0, sizeof(peer_addr));
-        auto buff = instance_.get_input_buff_list()->get_current_buffer();
+        auto buff = instance_->get_input_buff_list()->get_current_buffer();
         buff->reset();
         if (buff->writable_size() < UDP_DATA_LIMIT) {
             buff->resize(UDP_DATA_LIMIT);
@@ -101,7 +109,7 @@ namespace yuan::net
         const struct sockaddr_in *address = (struct sockaddr_in*)(&peer_addr);
         do {
             if (read) {
-                buff = instance_.get_input_buff_list()->allocate_buffer();
+                buff = instance_->get_input_buff_list()->allocate_buffer();
             }
         #ifdef __linux__
             bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
@@ -131,15 +139,18 @@ namespace yuan::net
 
         if (read) {
             InetAddress addr = {::inet_ntoa(address->sin_addr), ntohs(address->sin_port)};
-            auto res = instance_.on_recv(addr);
+            auto res = instance_->on_recv(addr);
             if (res.first && res.second) {
-                UdpConnection *udpConn = static_cast<UdpConnection *>(res.second);
-                udpConn->set_connection_handler(conn_handler_);
-                udpConn->set_event_handler(handler_);
-                handler_->on_new_connection(udpConn);
-                udpConn->set_instance_handler(&instance_);
-                udpConn->set_connection_state(ConnectionState::connected);
-                res.second->on_read_event();
+                if (res.second->is_connected()) {
+                    res.second->on_read_event();
+                } else {
+                    UdpConnection *udpConn = static_cast<UdpConnection *>(res.second);
+                    udpConn->set_connection_handler(conn_handler_);
+                    udpConn->set_event_handler(handler_);
+                    handler_->on_new_connection(udpConn);
+                    udpConn->set_instance_handler(instance_);
+                    udpConn->set_connection_state(ConnectionState::connected);
+                }
             } else {
                 if (!res.first && res.second) {
                     res.second->abort();
@@ -155,7 +166,7 @@ namespace yuan::net
 
     void UdpAcceptor::on_write_event()
     {
-        instance_.send();
+        instance_->send();
     }
 
     int UdpAcceptor::send_to(Connection *conn, buffer::Buffer *buff)

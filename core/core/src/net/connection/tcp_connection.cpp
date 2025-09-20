@@ -152,7 +152,7 @@ namespace yuan::net
             } else if (ret < 0) {
                 if (EAGAIN != errno && EWOULDBLOCK != errno) {
                     connectionHandler_->on_error(this);
-                    abort();
+                    close();
                     return;
                 }
                 break;
@@ -270,6 +270,10 @@ namespace yuan::net
 
         if ((state_ == ConnectionState::connected || state_ == ConnectionState::closing) && connectionHandler_) {
             connectionHandler_->on_write(this);
+            if (state_ == ConnectionState::closing) {
+                do_close();
+                return;
+            }
             flush();
         }
     }

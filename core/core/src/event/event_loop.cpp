@@ -59,6 +59,7 @@ namespace yuan::net
 
         uint64_t from = base::time::get_tick_count();
         std::vector<Channel *> channels;
+        channels.reserve(4096);
         while (!data_->quit_) {
             channels.clear();
             uint64_t to = data_->poller_->poll(2, channels);

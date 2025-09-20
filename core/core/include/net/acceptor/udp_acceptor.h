@@ -18,7 +18,7 @@ namespace yuan::net
     class UdpAcceptor : public Acceptor
     {
     public:
-        UdpAcceptor(Socket *socket, timer::TimerManager *timerManager);
+        explicit UdpAcceptor(Socket *socket, timer::TimerManager *timerManager);
 
         ~UdpAcceptor();
 
@@ -51,13 +51,18 @@ namespace yuan::net
             return timer_manager_;
         }
 
+        UdpInstance * get_udp_instance()
+        {
+            return instance_;
+        }
+
     private:
         Channel *channel_;
         Socket *sock_;
         EventHandler *handler_;
         ConnectionHandler *conn_handler_;
         timer::TimerManager *timer_manager_;
-        UdpInstance instance_;
+        UdpInstance *instance_;
     };
 }
 

@@ -50,6 +50,11 @@ namespace yuan::net
         if (instance_) {
             instance_->on_connection_close(this);
         }
+
+        if (connectionHandler_) {
+            connectionHandler_->on_close(this);
+            connectionHandler_ = nullptr;
+        }
     }
 
     ConnectionState UdpConnection::get_connection_state()
@@ -116,32 +121,31 @@ namespace yuan::net
 
     void UdpConnection::flush()
     {
-        assert(state_ == ConnectionState::connected && connectionHandler_);
-        if (output_buffer_.get_current_buffer()->empty()) {
-            return;
-        }
-
-        std::size_t sz = output_buffer_.get_size();
-        for (int i = 0; i < sz;) {
-            auto buff = output_buffer_.get_current_buffer();
-            int sent = instance_->on_send(this, buff);
-            if (sent > 0) {
-                if (buff->empty()) {
-                    output_buffer_.free_current_buffer();
-                } else {
+        assert(connectionHandler_);
+        if (!output_buffer_.get_current_buffer()->empty()) {
+            std::size_t sz = output_buffer_.get_size();
+            for (int i = 0; i < sz;) {
+                auto buff = output_buffer_.get_current_buffer();
+                int sent = instance_->on_send(this, buff);
+                if (sent > 0) {
+                    if (buff->empty()) {
+                        output_buffer_.free_current_buffer();
+                    } else {
+                        return;
+                    }
+                    ++i;
+                } else if (sent < 0 && EAGAIN != errno) {
+                    abort();
                     return;
+                } else {
+                    instance_->enable_rw_events();
+                    break;
                 }
-                ++i;
-            } else if (sent < 0 && EAGAIN != errno) {
-                abort();
-                return;
-            } else {
-                instance_->enable_rw_events();
-                break;
             }
         }
 
-        if (output_buffer_.get_size() == 0 && closed_) {
+        if (output_buffer_.get_current_buffer()->empty() && closed_) {
+            closed_ = false;
             do_close();
         }
     }
@@ -201,8 +205,8 @@ namespace yuan::net
 
     void UdpConnection::on_write_event()
     {
+        connectionHandler_->on_write(this);
         if (!output_buffer_.get_current_buffer()->empty()) {
-            connectionHandler_->on_write(this);
             flush();
         }
     }

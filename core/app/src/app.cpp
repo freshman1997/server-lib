@@ -2,6 +2,7 @@
 #include "event/event_loop.h"
 #include "timer/wheel_timer_manager.h"
 #include "net/poller/epoll_poller.h"
+#include "service.h"
 
 #include <atomic>
 #include <cassert>
@@ -36,6 +37,10 @@ namespace yuan::app
                 delete poller_;
                 loop_ = nullptr;
             }
+
+            for (auto &service : services_) {
+                service->stop();
+            }
         }
         
     public:
@@ -43,6 +48,8 @@ namespace yuan::app
         net::Poller *poller_;
         net::EventLoop *loop_;
         timer::TimerManager *timer_manager_;
+        // 存储所有服务
+        std::vector<std::shared_ptr<Service>> services_;
     };
 
     App::App() : data_(std::make_unique<App::AppData>())
@@ -54,6 +61,16 @@ namespace yuan::app
 
     void App::launch()
     {
+        // 初始化所有服务
+        for (auto &service : data_->services_) {
+            service->init();
+        }
+
+        // 启动所有服务
+        for (auto &service : data_->services_) {
+            service->start();
+        }
+
         assert(data_->loop_);
         while (!data_->exit_.load()) {
             data_->loop_->loop();
@@ -64,5 +81,10 @@ namespace yuan::app
     void App::exit()
     {
         data_->exit_.store(true);
+    }
+
+    void App::add_service(std::shared_ptr<Service> service)
+    {
+        data_->services_.emplace_back(service);
     }
 }
