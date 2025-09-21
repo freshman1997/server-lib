@@ -82,7 +82,7 @@ namespace yuan::net::http
 
         void serve_download(const std::string &filePath, const std::string &ext, HttpResponse *resp);
 
-        void serve_list_files(const std::string &relPath, const std::string &filePath, HttpResponse *resp);
+        static void serve_list_files(const std::string &relPath, const std::string &filePath, HttpResponse *resp);
 
         void reload_config(HttpRequest *req, HttpResponse *resp);
 

@@ -5,6 +5,7 @@
 #include "net/secuity/openssl.h"
 #include "nlohmann/json.hpp"
 #include "task/upload_file_task.h"
+#include "url.h"
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
@@ -38,31 +39,21 @@
 #include "header_key.h"
 #include "header_util.h"
 #include "proxy.h"
-#include "base/utils/string_converter.h"
 
 namespace yuan::net::http
 {
-    HttpServer::HttpServer() : quit_(false), state_(State::invalid), acceptor_(nullptr), event_loop_(nullptr), timer_manager_(nullptr), proxy_(nullptr), poller_(nullptr), ssl_module_(nullptr)
+    HttpServer::HttpServer() : quit_(false), state_(State::invalid), poller_(nullptr), acceptor_(nullptr), event_loop_(nullptr), timer_manager_(nullptr), ssl_module_(nullptr), proxy_(nullptr)
     {
         
     }
 
     HttpServer::~HttpServer()
     {
-        if (poller_) {
-            delete poller_;
-        }
-
-        if (acceptor_) {
-            delete acceptor_;
-        }
-
-        if (proxy_) {
-            delete proxy_;
-        }
-
-        for (const auto &it : sessions_) {
-            delete it.second;
+        delete poller_;
+        delete acceptor_;
+        delete proxy_;
+        for (const auto &val : sessions_ | std::views::values) {
+            delete val;
         }
 
         sessions_.clear();
@@ -299,6 +290,17 @@ namespace yuan::net::http
         for (const auto &type : types) {
             play_types_.insert(type);
         }
+
+        if (play_types_.empty()) {
+            play_types_.insert(".mp4");
+            play_types_.insert(".mp3");
+            play_types_.insert(".mov");
+            play_types_.insert(".flac");
+            play_types_.insert(".wav");
+            play_types_.insert(".avi");
+            play_types_.insert(".ogg");
+        }
+
     }
 
     void HttpServer::serve_static(HttpRequest *req, HttpResponse *resp)
@@ -341,7 +343,7 @@ namespace yuan::net::http
             path = pathPrefix + "/" + fileRelativePath;
         }
 
-        if (std::filesystem::is_directory(path)) {
+        if (std::filesystem::is_directory(std::u8string(path.begin(), path.end()))) {
             serve_list_files(url, path, resp);
             return;
         }
@@ -353,7 +355,8 @@ namespace yuan::net::http
         }
 
         const std::string &ext = fileRelativePath.substr(pos);
-        if (!play_types_.count(ext)) {
+        auto refererKey = req->get_header("referer");
+        if (!refererKey || !play_types_.count(ext)) {
             serve_download(path, ext, resp);
             return;
         }
@@ -428,7 +431,7 @@ namespace yuan::net::http
         
         resp->add_header("Content-Type", contentType);
         resp->add_header("Content-Range", bytes);
-
+        resp->add_header("Content-Dispostion", "inline; filename=\"" + url::url_encode(fileRelativePath) + "\"");
         std::size_t sz = contentSize + offset > length ? length - offset : contentSize;
         resp->add_header("Content-length", std::to_string(sz));
 
@@ -536,8 +539,8 @@ namespace yuan::net::http
 
     void HttpServer::reload_config(HttpRequest *req, HttpResponse *resp)
     {
-        HttpConfigManager::get_instance()->reload_config();
-        if (HttpConfigManager::get_instance()->good()) {
+        if (HttpConfigManager::get_instance()->reload_config()) {
+            load_static_paths();
             resp->get_buff()->write_string("Configuration reloaded successfully.");
         } else {
             resp->get_buff()->write_string("Failed to reload configuration.");

@@ -284,8 +284,15 @@ R"(
             // 创建隐藏的下载链接并触发点击
             const a = document.createElement('a');
             a.href = url;
-            a.download = filename || url.split('/').pop();
             a.style.display = 'none';
+            // 媒体文件使用新标签页打开
+            const mediaExtensions = ['mp4', 'mp3', 'wav', 'ogg', 'avi', 'mkv', 'mov'];
+            const ext = (filename || url).split('.').pop().toLowerCase();
+            if (mediaExtensions.includes(ext)) {
+                a.target = '_blank';
+            } else {
+                a.download = filename || url.split('/').pop();
+            }
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);

@@ -161,7 +161,6 @@ namespace yuan::net::http
         }
 
         url = url::url_decode(url);
-        req->url_ = url;
 
         if (!url::decode_url_domain(url, req->url_domain_)) {
             return false;
@@ -169,6 +168,13 @@ namespace yuan::net::http
 
         if (!url::decode_parameters(url, req->params_)) {
             return false;
+        }
+
+        size_t pos = url.find_first_of("?");
+        if (pos != std::string::npos) {
+            req->url_ = url.substr(0, pos);
+        } else {
+            req->url_ = url;
         }
 
         return true;

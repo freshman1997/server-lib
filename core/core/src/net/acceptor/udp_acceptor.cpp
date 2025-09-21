@@ -141,16 +141,14 @@ namespace yuan::net
             InetAddress addr = {::inet_ntoa(address->sin_addr), ntohs(address->sin_port)};
             auto res = instance_->on_recv(addr);
             if (res.first && res.second) {
-                if (res.second->is_connected()) {
-                    res.second->on_read_event();
-                } else {
+                if (!res.second->is_connected()) {
                     UdpConnection *udpConn = static_cast<UdpConnection *>(res.second);
                     udpConn->set_connection_handler(conn_handler_);
                     udpConn->set_event_handler(handler_);
                     handler_->on_new_connection(udpConn);
-                    udpConn->set_instance_handler(instance_);
                     udpConn->set_connection_state(ConnectionState::connected);
                 }
+                res.second->on_read_event();
             } else {
                 if (!res.first && res.second) {
                     res.second->abort();
@@ -181,7 +179,7 @@ namespace yuan::net
                 buff->reset();
             } else {
                 buff->add_read_index(ret);
-                std::cout << "still remains data: " << buff->readable_bytes() << " bytes.\n";
+                //std::cout << "still remains data: " << buff->readable_bytes() << " bytes.\n";
             }
         }
         return ret;
