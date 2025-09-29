@@ -54,7 +54,7 @@ namespace yuan::net::http
 
     void HttpClient::on_error(Connection *conn)
     {
-        delete this;
+        exit();
     }
 
     void HttpClient::on_read(Connection *conn)
@@ -62,14 +62,14 @@ namespace yuan::net::http
         HttpSessionContext *context = session_->get_context();
         if (!context->parse()) {
             if (context->has_error()) {
-                delete this;
+                exit();
                 return;
             }
             return;
         }
 
         if (context->has_error()) {
-            delete this;
+            exit();
             return;
         }
 
@@ -98,7 +98,7 @@ namespace yuan::net::http
 
     void HttpClient::on_close(Connection *conn)
     {
-        delete this;
+        exit();
     }
 
     bool HttpClient::query(const std::string &url)
@@ -136,7 +136,7 @@ namespace yuan::net::http
             }
         }
 
-        host_name_ = rest.substr(0, path_pos);
+        host_name_ = rest.substr(0, port_pos > 0 ? port_pos : path_pos);
 
         return true;
     }
@@ -214,6 +214,13 @@ namespace yuan::net::http
     void HttpClient::on_timer(timer::Timer *timer)
     {
         std::cout << "connect timeout, close connection now!\n";
-        delete this;
+        exit();
+    }
+
+    void HttpClient::exit()
+    {
+        if (ev_loop_) {
+            ev_loop_->quit();
+        }
     }
 }

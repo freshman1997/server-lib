@@ -1,7 +1,10 @@
 #include "packet_parser.h"
+#include "content/content_parser_factory.h"
+#include "content_type.h"
 #include "ops/option.h"
 #include "packet.h"
 #include "header_key.h"
+#include "request.h"
 
 
 namespace yuan::net::http 
@@ -207,6 +210,15 @@ namespace yuan::net::http
                     packet_->set_downlload_file(true);
                     
                     return 1;
+                } else {
+                    auto contentType = packet_->get_header(http_header_key::content_type);
+                    if (contentType && !ContentParserFactory::get_instance()->can_parse(find_content_type(*contentType))) {
+                        auto req = static_cast<HttpRequest *>(packet_);
+                        std::string originName = req->get_last_uri();
+                        packet_->set_downlload_file(true);
+                        packet_->set_original_file_name(originName);
+                        return 1;
+                    }
                 }
 
                 int res = parse_body(*useBuff, length);

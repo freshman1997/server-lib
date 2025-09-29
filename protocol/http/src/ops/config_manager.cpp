@@ -57,6 +57,10 @@ namespace yuan::net::http
             return std::atoi(sval.c_str()) == 1;
         }
 
+        if (item.is_boolean()) {
+            return item;
+        }
+
         return defVal;
     }
 

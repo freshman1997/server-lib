@@ -50,6 +50,11 @@ namespace yuan::net::http
 
         bool is_done() const override;
 
+        virtual bool is_good() const override;
+
+    private:
+        bool check_completed();
+
     private:
         std::shared_ptr<AttachmentInfo> attachment_info_;
         std::fstream file_stream_;

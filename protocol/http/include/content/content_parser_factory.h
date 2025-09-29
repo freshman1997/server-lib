@@ -20,6 +20,8 @@ namespace yuan::net::http
 
         bool parse_content(HttpPacket *packet);
 
+        bool can_parse(ContentType type);
+
     private:
         std::unordered_map<ContentType, ContentParser *> parsers;
     };

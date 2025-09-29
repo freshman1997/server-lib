@@ -45,6 +45,9 @@ namespace yuan::net::http
         }
 
     private:
+        void exit();
+
+    private:
         int port_;
         std::string host_name_;
         net::EventLoop *ev_loop_;

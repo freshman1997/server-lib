@@ -20,6 +20,7 @@ namespace yuan::net::http
         virtual void reset() {}
         virtual bool is_done() const { return false; }
         virtual void on_connection_close() {}
+        virtual bool is_good() const { return true; }
 
         virtual HttpTaskType get_task_type() const
         {

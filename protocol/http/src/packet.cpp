@@ -245,6 +245,10 @@ namespace yuan::net::http
             }
 
             task_->on_data(&buff);
+            if (!task_->is_good()) {
+                is_good_ = false;
+                return false;
+            }
 
             return true;
         }

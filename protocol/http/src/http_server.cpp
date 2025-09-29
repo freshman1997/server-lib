@@ -333,6 +333,7 @@ namespace yuan::net::http
             resp->add_header("Connection", "close");
             resp->add_header("Content-Length", std::to_string(resp->get_buff()->readable_bytes()));
             resp->send();
+            resp->get_context()->get_connection()->close();
             return;
         }
 
@@ -483,10 +484,8 @@ namespace yuan::net::http
             return;
         }
 
-        
         resp->add_header("Content-Type", get_content_type(ext));
         resp->add_header("Connection", "close");
-        //resp->add_header("Content-Disposition", "attachment; filename=\"k5game_pc.zip\"");
         resp->set_response_code(net::http::ResponseCode::ok_);
         resp->add_header("Content-Length", std::to_string(sz));
 

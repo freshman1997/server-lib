@@ -63,4 +63,10 @@ namespace yuan::net::http
 
         return it->second->parse(packet);
     }
+
+    bool ContentParserFactory::can_parse(ContentType type)
+    {
+        auto it = parsers.find(type);
+        return it != parsers.end() && it->second->can_parse(type);
+    }
 }

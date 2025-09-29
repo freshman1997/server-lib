@@ -63,6 +63,8 @@ namespace yuan::net::http
             url_ = url;
         }
 
+        std::string get_last_uri();
+
     private:
         HttpMethod method_;
         std::string url_;

@@ -1,3 +1,4 @@
+#include "base/time.h"
 #include "net/connection/connection.h"
 #include "context.h"
 #include "request.h"
@@ -69,5 +70,13 @@ namespace yuan::net::http
         outputBuffer->write_string(header);
 
         return true;
+    }
+
+    std::string HttpRequest::get_last_uri()
+    {
+        if (url_.empty()) {
+            return "tmp." + std::to_string(yuan::base::time::now());
+        }
+        return url_.substr(url_.find_last_of("/") + 1);
     }
 }

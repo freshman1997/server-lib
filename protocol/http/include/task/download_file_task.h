@@ -45,6 +45,9 @@ namespace yuan::net::http
         }
 
     private:
+        bool check_completed();
+        
+    private:
         std::shared_ptr<AttachmentInfo> attachment_info_;
         std::fstream file_stream_;
         std::function<void()> completed_callback_;
