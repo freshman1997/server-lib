@@ -78,6 +78,8 @@ namespace yuan::net::http
 
         void load_static_paths();
 
+        static void icon(net::http::HttpRequest *req, net::http::HttpResponse *resp);
+
         void serve_static(HttpRequest *req, HttpResponse *resp);
 
         static void serve_download(const std::string &filePath, const std::string &ext, HttpResponse *resp);

@@ -206,8 +206,11 @@ namespace yuan::net::http
         config::load_config();
         load_static_paths();
 
+        // icon
+        on("/favicon.ico", HttpServer::icon);
+
         // 注册 reload_config 事件
-        on("/reload_config", std::bind(&HttpServer::reload_config, this, std::placeholders::_1, std::placeholders::_2));
+        on("/reload_config", [this]<typename T0, typename T1>(T0 && req, T1 && resp) { reload_config(std::forward<T0>(req), std::forward<T1>(resp)); });
 
         const auto &proxiesCfg = HttpConfigManager::get_instance()->get_type_array_properties<nlohmann::json>("proxies");
         if (!proxiesCfg.empty()) {
@@ -304,7 +307,34 @@ namespace yuan::net::http
             play_types_.insert(".avi");
             play_types_.insert(".ogg");
         }
+    }
 
+    void HttpServer::icon(net::http::HttpRequest *req, net::http::HttpResponse *resp)
+    {
+        resp->add_header("Connection", "close");
+        resp->add_header("Content-Type", "image/x-icon");
+        resp->set_response_code(net::http::ResponseCode::ok_);
+        std::fstream file;
+        file.open("icon.ico");
+        if (!file.good()) {
+            resp->get_context()->process_error(net::http::ResponseCode::not_found);
+            return;
+        }
+
+        file.seekg(0, std::ios_base::end);
+        std::size_t sz = file.tellg();
+        if (sz == 0 || sz > config::client_max_content_length) {
+            resp->get_context()->process_error();
+            return;
+        }
+
+        resp->get_buff()->resize(sz);
+        file.seekg(0, std::ios_base::beg);
+        file.read(resp->get_buff()->buffer_begin(), sz);
+        resp->get_buff()->fill(sz);
+
+        resp->add_header("Content-length", std::to_string(sz));
+        resp->send();
     }
 
     void HttpServer::serve_static(HttpRequest *req, HttpResponse *resp)
