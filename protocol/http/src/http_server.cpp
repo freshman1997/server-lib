@@ -61,8 +61,8 @@ namespace yuan::net::http
 
     void HttpServer::on_connected(Connection *conn)
     {
-        uint64_t sessionId = (uint64_t)conn;
-        if (sessions_.count(sessionId)) {
+        const uint64_t sessionId = reinterpret_cast<uint64_t>(conn);
+        if (sessions_.contains(sessionId)) {
             std::cerr << "session already exists!!!\n";
             return;
         }
@@ -77,8 +77,8 @@ namespace yuan::net::http
 
     void HttpServer::on_read(Connection *conn)
     {
-        uint64_t sessionId = (uint64_t)conn;
-        auto it = sessions_.find(sessionId);
+        const auto sessionId = reinterpret_cast<uint64_t>(conn);
+        const auto it = sessions_.find(sessionId);
         if (it == sessions_.end()) {
             std::cout << "----------------> error\n";
             return;
@@ -158,7 +158,11 @@ namespace yuan::net::http
             return false;
         }
 
+#ifdef _WIN32
+        sock->set_reuse(true, true);
+#else
         sock->set_reuse(true);
+#endif
         sock->set_none_block(true);
         if (!sock->bind()) {
             std::cerr << " bind port " << port << " failed!!! " << std::endl;
@@ -412,11 +416,12 @@ namespace yuan::net::http
             return;
         }
 
-        std::size_t offset = 0;
+        std::uint64_t offset = 0;
 
         if (const std::string *range = req->get_header(net::http::http_header_key::range)) {
-            const auto &ranges = helper::parse_range(*range);
-            if (ranges.empty()) {
+            int ret = 0;
+            const auto &ranges = helper::parse_range(*range, ret);
+            if (ret != 0 || ranges.empty()) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
             }
@@ -434,6 +439,11 @@ namespace yuan::net::http
         resp->add_header("Content-Range", bytes);
         resp->add_header("Content-Dispostion", "inline; filename=\"" + url::url_encode(fileRelativePath) + "\"");
         std::size_t sz = contentSize + offset > length ? length - offset : contentSize;
+        if (sz > contentSize) {
+            resp->process_error(ResponseCode::bad_request);
+            return;
+        }
+
         resp->add_header("Content-length", std::to_string(sz));
 
         stream->seekg(offset, std::ios::beg);
@@ -468,12 +478,12 @@ namespace yuan::net::http
         std::size_t sz = file.tellg();
         file.close();
 
-        net::http::HttpUploadFileTask *task = new net::http::HttpUploadFileTask([resp, filePath]() {
+        const auto task = new net::http::HttpUploadFileTask([resp, filePath]() {
             std::cout << "Upload file task completed, file path: " << filePath << '\n';
             resp->set_upload_file(false);
         });
 
-        auto attachment_info = std::make_shared<net::http::AttachmentInfo>();
+        const auto attachment_info = std::make_shared<net::http::AttachmentInfo>();
         attachment_info->origin_file_name_ = filePath;
         attachment_info->length_ = sz;
         task->set_attachment_info(attachment_info);

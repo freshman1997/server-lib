@@ -74,7 +74,7 @@ namespace yuan::net::socket
         return ::connect(fd, (const struct sockaddr *)&saddr, sizeof(saddr));
     }
 
-    void set_reuse(int fd, bool on)
+    bool set_reuse(int fd, bool on, bool exclude)
     {
         #ifndef _WIN32
         int optval = on ? 1 : 0;
@@ -82,8 +82,14 @@ namespace yuan::net::socket
                &optval, static_cast<socklen_t>(sizeof optval));
         #else
         u_long optval = on ? 1 : 0;
-        ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
-               (char *)&optval, sizeof(optval));
+        if (!exclude) {
+            return ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+               reinterpret_cast<char *>(&optval), sizeof(optval)) == 0;
+        } else {
+            return ::setsockopt(fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+               reinterpret_cast<char *>(&optval), sizeof(optval)) == 0;
+        }
+
         #endif
     }
 

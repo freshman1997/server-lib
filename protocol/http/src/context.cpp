@@ -50,7 +50,7 @@ namespace yuan::net::http
 
     bool HttpSessionContext::write()
     {
-        if (response_->is_uploading())
+        if (response_->is_uploading() && conn_->is_connected())
         {
             auto buff = response_->get_buff(true);
             buff->reset();

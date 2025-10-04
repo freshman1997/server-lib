@@ -23,7 +23,7 @@ namespace yuan::net::http
         }
         
         // 验证文件路径安全性
-        std::filesystem::path tmp_path = std::filesystem::path(attachment_info_->tmp_file_name_);
+        const auto tmp_path = std::filesystem::path(std::filesystem::u8path(attachment_info_->tmp_file_name_));
         if (tmp_path.is_relative() || tmp_path.string().find("..") != std::string::npos) {
             return false;
         }

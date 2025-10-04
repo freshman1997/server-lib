@@ -64,7 +64,7 @@ namespace yuan::net
             channels.clear();
             uint64_t to = data_->poller_->poll(2, channels);
             if (!channels.empty()) {
-                for (auto &channel : channels) {
+                for (const auto &channel : channels) {
                     if (channel) {
                         channel->on_event();
                     }

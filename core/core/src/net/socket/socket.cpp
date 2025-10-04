@@ -46,21 +46,19 @@ namespace yuan::net
         }
     }
 
-    bool Socket::bind()
+    bool Socket::bind() const
     {
-        int res = socket::bind(fd_, *addr);
-        return res == 0;
+        return socket::bind(fd_, *addr) == 0;
     }
 
-    bool Socket::listen()
+    bool Socket::listen() const
     {
-        int res = socket::listen(fd_, 128);
-        return res == 0;
+        return socket::listen(fd_, 128) == 0;
     }
 
-    int Socket::accept(struct sockaddr_in &peer_addr)
+    int Socket::accept(struct sockaddr_in &peer_addr) const
     {
-        int conn_fd = socket::accept(fd_, peer_addr);
+        const int conn_fd = socket::accept(fd_, peer_addr);
         if (conn_fd < 0) {
             // log
         }
@@ -68,11 +66,11 @@ namespace yuan::net
         return conn_fd;
     }
 
-    bool Socket::connect(std::shared_ptr<SSLHandler> sslHandler)
+    bool Socket::connect(const std::shared_ptr<SSLHandler> &sslModule) const
     {
         int res = -1;
-        if (sslHandler) {
-            res = sslHandler->ssl_init_action();
+        if (sslModule) {
+            res = sslModule->ssl_init_action();
         } else {
             res = socket::connect(fd_, *addr);
         }
@@ -91,22 +89,22 @@ namespace yuan::net
         return res == 0;
     }
 
-    void Socket::set_no_deylay(bool on)
+    void Socket::set_no_delay(const bool on) const
     {
         socket::set_no_delay(fd_, on);
     }
 
-    void Socket::set_reuse(bool on)
+    bool Socket::set_reuse(const bool on, const bool exclude) const
     {
-        socket::set_reuse(fd_, on);
+        return socket::set_reuse(fd_, on, exclude);
     }
 
-    void Socket::set_keep_alive(bool on)
+    void Socket::set_keep_alive(const bool on) const
     {
         socket::set_keep_alive(fd_, on);
     }
 
-    void Socket::set_none_block(bool on)
+    void Socket::set_none_block(const bool on) const
     {
         socket::set_none_block(fd_, on);
     }

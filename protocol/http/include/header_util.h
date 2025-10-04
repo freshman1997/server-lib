@@ -35,7 +35,7 @@ namespace yuan::net::http::helper
 
     void read_next(const char *begin, const char *end, char ending, std::string &str);
     
-    std::vector<std::pair<std::size_t, std::size_t>> parse_range(const std::string &range);
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> parse_range(const std::string &range, int &ret);
 };
 
 #endif

@@ -97,7 +97,30 @@ namespace yuan::net::http::helper
         return dispistion_type_names[static_cast<std::size_t>(type)];
     }
 
-    std::vector<std::pair<std::size_t, std::size_t>> parse_range(const std::string &range)
+    static int convert_string_to_uint64(const char* str, std::uint64_t* result) {
+        char* endptr;
+        errno = 0;  // 重置错误码
+
+        *result = strtoul(str, &endptr, 10);
+
+        // 检查各种错误情况
+        if (endptr == str) {
+            return 0;  // 没有数字被转换
+        }
+        if (*endptr != '\0') {
+            return -1;  // 包含额外字符
+        }
+        if (errno == ERANGE) {
+            return -2;  // 超出范围
+        }
+        if (*result > ULONG_MAX) {
+            return -3;  // 理论上不会发生，但安全起见
+        }
+
+        return 0;  // 成功
+    }
+
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> parse_range(const std::string &range, int &ret)
     {
         std::size_t i = 0;
         if (!str_cmp(range.c_str(), range.c_str() + 6, "bytes=")) {
@@ -106,7 +129,7 @@ namespace yuan::net::http::helper
 
         i = 6;
 
-        std::vector<std::pair<std::size_t, std::size_t>> res;
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> res;
         std::string from, to;
         bool next = false;
         for (; i < range.size(); ++i) {
@@ -120,9 +143,15 @@ namespace yuan::net::http::helper
                     return {};
                 }
 
-                std::size_t beg = std::atol(from.c_str());
-                std::size_t end = std::atol(to.c_str());
-                if (beg > end) {
+                std::uint64_t beg = 0;
+                ret = convert_string_to_uint64(from.c_str(), &beg);
+                if (ret < 0) {
+                    return {};
+                }
+
+                std::uint64_t end = 0;
+                ret = convert_string_to_uint64(to.c_str(), &end);
+                if (ret < 0) {
                     return {};
                 }
 
@@ -147,7 +176,15 @@ namespace yuan::net::http::helper
         }
         
         if (!from.empty()) {
-            res.emplace_back(std::atol(from.c_str()), std::atol(to.c_str()));
+            std::uint64_t beg = 0;
+            ret = convert_string_to_uint64(from.c_str(), &beg);
+            if (ret < 0) {
+                return {};
+            }
+
+            std::uint64_t end = 0;
+            ret = convert_string_to_uint64(to.c_str(), &end);
+            res.emplace_back(beg, end);
         }
 
         return res;

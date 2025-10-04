@@ -66,8 +66,8 @@ namespace yuan::net::http
             it = responseCodeDescs.find(errorCode);
         }
 
-        std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">"+ it->second +"</h1>";;
-        std::string response = "HTTP/1.1 " + it->second + "\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
+        const std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">"+ it->second +"</h1>";
+        const std::string response = "HTTP/1.1 " + it->second + "\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
 
         auto buff = context_->get_connection()->get_output_buff();
         buff->write_string(response);

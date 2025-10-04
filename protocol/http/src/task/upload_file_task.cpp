@@ -21,7 +21,7 @@ namespace yuan::net::http
         }
         
         // 验证文件路径安全性，防止路径遍历攻击
-        std::filesystem::path file_path = std::filesystem::path(attachment_info_->origin_file_name_);
+        const auto file_path = std::filesystem::path(std::filesystem::u8path(attachment_info_->origin_file_name_));
         if (file_path.is_relative()) {
             // 相对路径可能导致安全问题
             return false;
@@ -34,8 +34,7 @@ namespace yuan::net::http
         
         // 检查文件大小是否合理
         std::error_code ec;
-        auto file_size = std::filesystem::file_size(file_path, ec);
-        if (ec || file_size > attachment_info_->length_) {
+        if (const auto file_size = std::filesystem::file_size(file_path, ec); ec || file_size > attachment_info_->length_) {
             return false;
         }
         

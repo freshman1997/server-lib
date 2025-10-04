@@ -13,21 +13,21 @@ namespace yuan::net
         explicit Socket(const char *ip, int port, bool udp = false, int fd = -1);
         ~Socket();
 
-        bool bind();
+        bool bind() const;
 
-        bool listen();
+        bool listen() const;
 
-        int accept(struct sockaddr_in &peer_addr);
+        int accept(struct sockaddr_in &peer_addr) const;
 
-        bool connect(std::shared_ptr<SSLHandler> sslModule = nullptr);
+        bool connect(const std::shared_ptr<SSLHandler> &sslModule = nullptr) const;
 
-        void set_no_deylay(bool on);
+        void set_no_delay(bool on) const;
 
-        void set_reuse(bool on);
+        bool set_reuse(bool on, bool exclude = false) const;
 
-        void set_keep_alive(bool on);
+        void set_keep_alive(bool on) const;
 
-        void set_none_block(bool on);
+        void set_none_block(bool on) const;
 
         int get_fd() const
         {
