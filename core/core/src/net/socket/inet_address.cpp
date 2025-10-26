@@ -103,8 +103,13 @@ namespace yuan::net
             return "";
         }
 #else
+
     char *pstr;
     hostent *phost = gethostbyname(host.c_str());
+    if (phost == nullptr) {
+        return "";
+    }
+    
     int i = 0;
     for (pstr = phost->h_addr_list[0]; pstr != nullptr; pstr = phost->h_addr_list[++i]) {
         u_long tmp = *(u_long *)pstr;

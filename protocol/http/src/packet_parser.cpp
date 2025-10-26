@@ -207,7 +207,7 @@ namespace yuan::net::http
                     }
 
                     packet_->set_original_file_name(originName);
-                    packet_->set_downlload_file(true);
+                    packet_->set_download_file(true);
                     
                     return 1;
                 } else {
@@ -215,7 +215,7 @@ namespace yuan::net::http
                     if (contentType && !ContentParserFactory::get_instance()->can_parse(find_content_type(*contentType))) {
                         auto req = static_cast<HttpRequest *>(packet_);
                         std::string originName = req->get_last_uri();
-                        packet_->set_downlload_file(true);
+                        packet_->set_download_file(true);
                         packet_->set_original_file_name(originName);
                         return 1;
                     }

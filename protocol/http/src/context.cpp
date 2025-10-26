@@ -112,6 +112,6 @@ namespace yuan::net::http
     bool HttpSessionContext::is_donwloading() const
     {
         auto pkt = get_packet();
-        return pkt->is_donwloading() && pkt->is_task_prepared();
+        return pkt->is_downloading() && pkt->is_task_prepared();
     }
 }

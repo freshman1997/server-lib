@@ -35,7 +35,7 @@ namespace yuan::net::http
         {"media/ogg", {".ogg", ContentType::media_ogg}},
         {"video/mp4", {".mp4", ContentType::video_mp4}},
         {"video/flv", {".flv", ContentType::video_flv}},
-        {"video/mkv", {".mkv", ContentType::video_mkv}},
+        {"video/mp4", {".mkv", ContentType::video_mkv}},
     };
 
     ContentType find_content_type(const std::string &name)

@@ -234,11 +234,11 @@ namespace yuan::net::http
 
     bool HttpPacket::parse(buffer::Buffer &buff)
     {
-        if (is_ok() && !is_donwloading()) {
+        if (is_ok() && !is_downloading()) {
             return true;
         }
 
-        if (is_donwloading()) {
+        if (is_downloading()) {
             if (!task_) {
                 linked_buffer_.append_buffer(&buff);
                 return true;
@@ -337,7 +337,7 @@ namespace yuan::net::http
         return false;
     }
 
-    const std::string HttpPacket::get_content_charset() const
+    std::string HttpPacket::get_content_charset() const
     {
         auto it = content_type_extra_.find("charset");
         if (it != content_type_extra_.end()) {

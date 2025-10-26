@@ -61,7 +61,7 @@ namespace yuan::net::http
 
     void HttpServer::on_connected(Connection *conn)
     {
-        const uint64_t sessionId = reinterpret_cast<uint64_t>(conn);
+        const auto sessionId = reinterpret_cast<uint64_t>(conn);
         if (sessions_.contains(sessionId)) {
             std::cerr << "session already exists!!!\n";
             return;
@@ -390,8 +390,7 @@ namespace yuan::net::http
         }
 
         const std::string &ext = fileRelativePath.substr(pos);
-        auto refererKey = req->get_header("referer");
-        if (!refererKey || !play_types_.count(ext)) {
+        if (const auto refererKey = req->get_header("referer"); !refererKey || !play_types_.contains(ext)) {
             serve_download(path, ext, resp);
             return;
         }
@@ -416,12 +415,11 @@ namespace yuan::net::http
             session->add_session_value(path, file_);
             stream = file_;
             session->set_close_call_back([fileRelativePath](HttpSession *httpSession) {
-                const auto &items = httpSession->get_session_values();
-                for (const auto &item : items) {
-                    if (item.second.type == SessionItemType::pval && item.second.number.pval) {
-                        auto *stream = static_cast<std::ifstream *>(item.second.number.pval);
-                        stream->close();
-                        delete stream;
+                for (const auto &items = httpSession->get_session_values(); const auto &val : items | std::views::values) {
+                    if (val.type == SessionItemType::pval && val.number.pval) {
+                        auto *filestream = static_cast<std::ifstream *>(val.number.pval);
+                        filestream->close();
+                        delete filestream;
                     }
                 }
             });
@@ -476,12 +474,12 @@ namespace yuan::net::http
 
         resp->add_header("Content-length", std::to_string(sz));
 
-        stream->seekg(offset, std::ios::beg);
+        stream->seekg(static_cast<int64_t>(offset), std::ios::beg);
         if (resp->get_buff()->writable_size() < sz) {
             resp->get_buff()->resize(sz);
         }
 
-        stream->read(resp->get_buff()->buffer_begin(), sz);
+        stream->read(resp->get_buff()->buffer_begin(), static_cast<int64_t>(sz));
         resp->get_buff()->fill(sz);
 
         if (stream->eof()) {

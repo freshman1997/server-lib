@@ -103,13 +103,11 @@ namespace yuan::net::http
 
         void set_body_content(Content *content)
         {
-            if (body_content_) {
-                delete body_content_;
-            }
+            delete body_content_;
             body_content_ = content;
         }
 
-        Content * get_body_content()
+        Content * get_body_content() const
         {
             return body_content_;
         }
@@ -154,7 +152,7 @@ namespace yuan::net::http
             return chunked_checksum_;
         }
 
-        const std::string get_content_charset() const;
+        std::string get_content_charset() const;
 
         void set_body_state(BodyState state);
 
@@ -168,7 +166,7 @@ namespace yuan::net::http
             pre_content_parser_ = parser;
         }
 
-        ContentParser * get_pre_content_parser()
+        ContentParser * get_pre_content_parser() const
         {
             return pre_content_parser_;
         }
@@ -181,7 +179,7 @@ namespace yuan::net::http
             task_ = task;
         }
 
-        HttpTask * get_task()
+        HttpTask * get_task() const
         {
             return task_;
         }
@@ -197,17 +195,17 @@ namespace yuan::net::http
             return original_file_name_;
         }
 
-        bool is_donwloading()
+        bool is_downloading() const
         {
             return is_download_file_;
         }
 
-        bool is_uploading()
+        bool is_uploading() const
         {
             return is_upload_file_ && task_;
         }
 
-        void set_downlload_file(bool flag)
+        void set_download_file(bool flag)
         {
             is_download_file_ = flag;
         }
@@ -217,12 +215,12 @@ namespace yuan::net::http
             is_upload_file_ = flag;
         }
 
-        bool is_task_prepared()
+        bool is_task_prepared() const
         {
             return task_ && (is_download_file_ ? task_->get_task_type() == HttpTaskType::download_file_ : task_->get_task_type() == HttpTaskType::upload_file_);
         }
 
-        bool is_pending_large_block()
+        bool is_pending_large_block() const
         {
             return is_download_file_ || is_upload_file_;
         }
