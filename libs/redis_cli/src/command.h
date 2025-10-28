@@ -1,5 +1,11 @@
 #ifndef __YUAN_REDIS_COMMAND_H__
 #define __YUAN_REDIS_COMMAND_H__
+#include <functional>
+#include <string>
+#include <vector>
+#include <memory>
+
+#include "redis_value.h"
 
 namespace yuan::redis 
 {
@@ -9,7 +15,17 @@ namespace yuan::redis
         virtual ~Command() = default;
         
     public:
-        virtual int on_reply(const unsigned char *begin, const unsigned char *end) = 0;
+        virtual void set_args(const std::string &cmd_name, const std::vector<std::shared_ptr<RedisValue>> &args) = 0;
+
+        virtual std::shared_ptr<RedisValue> get_result() const = 0;
+
+        virtual void set_callback(std::function<void (std::shared_ptr<RedisValue>)> callback) = 0;
+
+        virtual void on_executed() = 0;
+
+        virtual std::string pack() const = 0;
+
+        virtual int unpack(const unsigned char *begin, const unsigned char *end) = 0;
     };
 }
 

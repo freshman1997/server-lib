@@ -118,7 +118,9 @@ namespace yuan::net
     void OpenSSLModule::set_error_msg(const char *msg, size_t len)
     {
         if (data_->errmsg_) {
-            delete data_->errmsg_;
+            data_->errmsg_->clear();
+            data_->errmsg_->append(msg, len);
+            return;
         }
         data_->errmsg_ = new std::string(msg, len);
     }

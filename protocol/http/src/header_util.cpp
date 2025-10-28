@@ -1,4 +1,5 @@
 #include "header_util.h"
+#include <limits>
 #include <unordered_map>
 
 namespace yuan::net::http::helper
@@ -113,7 +114,7 @@ namespace yuan::net::http::helper
         if (errno == ERANGE) {
             return -2;  // 超出范围
         }
-        if (*result > ULONG_MAX) {
+        if (*result > std::numeric_limits<std::uint64_t>::max()) {
             return -3;  // 理论上不会发生，但安全起见
         }
 

@@ -1,15 +1,19 @@
-#ifndef __YUAN_REDIS_INT_CMD_H__
-#define __YUAN_REDIS_INT_CMD_H__
+#ifndef __YUAN_REDIS_STRING_CMD_H__
+#define __YUAN_REDIS_STRING_CMD_H__
+
 #include "default_cmd.h"
-#include "../value/int_value.h"
+#include "../value/string_value.h"
 #include <memory>
 
 namespace yuan::redis 
 {
-    class IntCmd : public DefaultCmd
+    class StringCmd : public DefaultCmd
     {
     public:
-        IntCmd();
+        StringCmd()
+        {
+            value_ = std::make_shared<StringValue>("");
+        }
 
     public:
         virtual int unpack(const unsigned char *begin, const unsigned char *end) override;
@@ -20,8 +24,8 @@ namespace yuan::redis
         }
 
     private:
-        std::shared_ptr<IntValue> value_;
+        std::shared_ptr<StringValue> value_;
     };
 }
 
-#endif // __YUAN_REDIS_INT_CMD_H__
+#endif // __YUAN_REDIS_STRING_CMD_H__

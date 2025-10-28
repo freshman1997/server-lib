@@ -1,13 +1,32 @@
 #ifndef __YUAN_REDIS_CLIENT_H__
 #define __YUAN_REDIS_CLIENT_H__
 #include "command.h"
+#include <memory>
 
 namespace yuan::redis 
 {
     class RedisClient 
     {
     public:
-        virtual int execute_command(Command &cmd, const unsigned char *cmd_data, int cmd_len) = 0;
+        RedisClient();
+        ~RedisClient();
+
+    public:
+        int connect(const std::string &host, int port);
+        int connect(const std::string &host, int port, const std::string &password);
+        int connect(const std::string &host, int port, const std::string &password, int db);
+        int connect(const std::string &host, int port, const std::string &password, int db, int timeout);
+
+        int execute_command(std::shared_ptr<Command> cmd);
+
+    public:
+        bool is_connected() const;
+
+        void disconnect();
+
+    private:
+        class Impl;
+        std::unique_ptr<Impl> impl_;
     };
 }
 
