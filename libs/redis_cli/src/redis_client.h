@@ -24,6 +24,8 @@ namespace yuan::redis
 
         void disconnect();
 
+        std::shared_ptr<RedisValue> get_last_error() const;
+
     private:
         class Impl;
         std::unique_ptr<Impl> impl_;

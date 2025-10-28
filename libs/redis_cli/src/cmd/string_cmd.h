@@ -10,10 +10,7 @@ namespace yuan::redis
     class StringCmd : public DefaultCmd
     {
     public:
-        StringCmd()
-        {
-            value_ = std::make_shared<StringValue>("");
-        }
+        StringCmd() = default;
 
     public:
         virtual int unpack(const unsigned char *begin, const unsigned char *end) override;

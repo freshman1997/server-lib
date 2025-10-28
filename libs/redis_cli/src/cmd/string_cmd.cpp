@@ -1,11 +1,12 @@
 #include "string_cmd.h"
+#include "internal/def.h"
 #include <cstdlib>
 
 namespace yuan::redis
 {
     int StringCmd::unpack(const unsigned char *buffer, const unsigned char *buffer_end)
     {
-        if (buffer_end - buffer < 1 || *buffer != value_->get_type())
+        if (buffer_end - buffer < 1 || *buffer != resp_string)
         {
             return -1;
         }
@@ -22,7 +23,6 @@ namespace yuan::redis
         int len = std::atoi(str_value.c_str());
         if (len < 0)
         {
-            value_->set_value("");
             return buffer - buffer_end;;
         }
 
@@ -48,7 +48,7 @@ namespace yuan::redis
         
         buffer += 2; // skip \r\n
 
-        value_->set_value(str_value);
+        value_ = std::make_shared<StringValue>(str_value);
 
         return buffer - buffer_end;
     }

@@ -1,5 +1,6 @@
 #include "redis_client.h"
 #include "event/event_loop.h"
+#include "internal/def.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
 #include "option.h"
@@ -8,6 +9,7 @@
 #include "net/socket/socket.h"
 #include "net/connection/tcp_connection.h"
 #include "net/socket/inet_address.h"
+#include "value/error_value.h"
 
 #include <iostream>
 
@@ -37,8 +39,16 @@ namespace yuan::redis
                 return;
             }
 
-            auto buff = conn->get_input_buff();          
-            last_cmd_->unpack((const unsigned char *)buff->peek(), (const unsigned char *)buff->peek_end());
+            auto buff = conn->get_input_buff();
+            int ret = last_cmd_->unpack((const unsigned char *)buff->peek(), (const unsigned char *)buff->peek_end());
+            if (ret < 0)
+            {
+                if (*buff->peek() == resp_error)
+                {
+                    last_error_ = std::make_shared<ErrorValue>(std::string((const char *)buff->peek() + 1, buff->readable_bytes() - 3));
+                }
+            }
+
             last_cmd_->on_executed();
             last_cmd_ = nullptr;
         }
@@ -50,6 +60,7 @@ namespace yuan::redis
                 return;
             }
 
+            last_error_ = nullptr;
             last_cmd_ = CommandManager::get_instance()->get_command();
             if (last_cmd_)
             {
@@ -66,6 +77,7 @@ namespace yuan::redis
     public:
         Option option_;
         std::shared_ptr<Command> last_cmd_;
+        std::shared_ptr<RedisValue> last_error_;
     };
 
     RedisClient::RedisClient()
@@ -94,7 +106,7 @@ namespace yuan::redis
         
         using namespace yuan::net;
 
-        InetAddress addr{ impl_->option_.username_.c_str(), impl_->option_.port_ };
+        InetAddress addr{ impl_->option_.host_.c_str(), impl_->option_.port_ };
         if (addr.get_port() <= 0 || addr.get_port() > 65535) {
             std::cout << "port is invalid!!\n";
             return false;
@@ -164,5 +176,10 @@ namespace yuan::redis
         CommandManager::get_instance()->add_command(cmd);
 
         return 0;
+    }
+
+    std::shared_ptr<RedisValue> RedisClient::get_last_error() const
+    {
+        return impl_->last_error_;
     }
 }
