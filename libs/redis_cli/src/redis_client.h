@@ -1,6 +1,7 @@
 #ifndef __YUAN_REDIS_CLIENT_H__
 #define __YUAN_REDIS_CLIENT_H__
 #include "command.h"
+#include "internal/coroutine.h"
 #include <memory>
 
 namespace yuan::redis 
@@ -17,7 +18,7 @@ namespace yuan::redis
         int connect(const std::string &host, int port, const std::string &password, int db);
         int connect(const std::string &host, int port, const std::string &password, int db, int timeout);
 
-        int execute_command(std::shared_ptr<Command> cmd);
+        SimpleTask execute_command(std::shared_ptr<Command> cmd);
 
     public:
         bool is_connected() const;

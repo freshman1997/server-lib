@@ -10,14 +10,14 @@ namespace yuan::redis
     class StatusValue : public RedisValue
     {
     public:
-        StatusValue(const std::string &status) : status_(status) {}
-        std::string to_string() const override { return status_; }
-        virtual char get_type() const override { return resp_string; }
+        StatusValue(bool status) : status_(status) {}
+        std::string to_string() const override { return status_ ? "OK" : "FAIL"; }
+        virtual char get_type() const override { return resp_status; }
         
-        std::string get_status() const { return status_; }
+        bool get_status() const { return status_; }
 
     private:
-        std::string status_;
+        bool status_;
     };
 
 }

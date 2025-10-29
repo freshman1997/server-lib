@@ -1,5 +1,6 @@
 #include "redis_client.h"
 #include "event/event_loop.h"
+#include "internal/coroutine.h"
 #include "internal/def.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
@@ -9,9 +10,11 @@
 #include "net/socket/socket.h"
 #include "net/connection/tcp_connection.h"
 #include "net/socket/inet_address.h"
+#include "redis_value.h"
 #include "value/error_value.h"
 
 #include <iostream>
+#include <memory>
 
 namespace yuan::redis
 {
@@ -26,6 +29,7 @@ namespace yuan::redis
         {
             //conn->get_output_buff()->write_string("PING\r\n");
             //conn->flush();
+            connection_ = conn;
         }
 
         virtual void on_error(net::Connection *conn)
@@ -48,9 +52,8 @@ namespace yuan::redis
                     last_error_ = std::make_shared<ErrorValue>(std::string((const char *)buff->peek() + 1, buff->readable_bytes() - 3));
                 }
             }
-
-            last_cmd_->on_executed();
             last_cmd_ = nullptr;
+            RedisRegistry::get_instance()->get_event_loop()->set_use_coroutine(true);
         }
 
         virtual void on_write(net::Connection *conn)
@@ -78,6 +81,7 @@ namespace yuan::redis
         Option option_;
         std::shared_ptr<Command> last_cmd_;
         std::shared_ptr<RedisValue> last_error_;
+        net::Connection *connection_ = nullptr;
     };
 
     RedisClient::RedisClient()
@@ -171,11 +175,18 @@ namespace yuan::redis
         return connect(host, port, password, db);
     }
 
-    int RedisClient::execute_command(std::shared_ptr<Command> cmd)
+    SimpleTask do_execute_command(std::shared_ptr<Command> cmd)
+    {
+        co_await std::suspend_always{};
+        RedisRegistry::get_instance()->get_event_loop()->loop();
+        co_return cmd->get_result();
+    }
+
+    SimpleTask RedisClient::execute_command(std::shared_ptr<Command> cmd)
     {
         CommandManager::get_instance()->add_command(cmd);
-
-        return 0;
+        auto co = do_execute_command(cmd);
+        co_return co.execute();
     }
 
     std::shared_ptr<RedisValue> RedisClient::get_last_error() const

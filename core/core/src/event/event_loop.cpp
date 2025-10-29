@@ -32,6 +32,7 @@ namespace yuan::net
 
     public:
         bool quit_ = false;
+        bool use_coroutine_ = false;
         bool is_waiting_ = false;
         Poller *poller_ = nullptr;
         timer::TimerManager *timer_manager_ = nullptr;
@@ -57,12 +58,14 @@ namespace yuan::net
     {
         assert(data_->poller_);
 
+        data_->use_coroutine_ = false;
+        
         uint64_t from = base::time::get_tick_count();
         std::vector<Channel *> channels;
         channels.reserve(4096);
-        while (!data_->quit_) {
+        while (!data_->quit_ && !data_->use_coroutine_) {
             channels.clear();
-            uint64_t to = data_->poller_->poll(2, channels);
+            uint64_t to = data_->poller_->poll(10, channels);
             if (!channels.empty()) {
                 for (const auto &channel : channels) {
                     if (channel) {
@@ -137,5 +140,10 @@ namespace yuan::net
     void EventLoop::wakeup()
     {
         data_->cond.notify_all();
+    }
+
+    void EventLoop::set_use_coroutine(bool use)
+    {
+        data_->use_coroutine_ = use;
     }
 }

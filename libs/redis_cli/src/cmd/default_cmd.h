@@ -1,6 +1,7 @@
 #ifndef __YUAN_REDIS_DEFAULT_CMD_H__
 #define __YUAN_REDIS_DEFAULT_CMD_H__
 #include "../command.h"
+#include "redis_value.h"
 
 #include <memory>
 #include <vector>
@@ -48,6 +49,7 @@ namespace yuan::redis
         std::function<void (std::shared_ptr<RedisValue>)> callback_;
         std::string cmd_string_;
         std::vector<std::shared_ptr<RedisValue>> args_;
+        std::shared_ptr<RedisValue> result_;
     };
 
 }

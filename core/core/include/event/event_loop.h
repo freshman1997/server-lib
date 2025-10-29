@@ -34,6 +34,8 @@ namespace yuan::net
 
         virtual void quit();
 
+        void set_use_coroutine(bool use);
+
     public:
         void wakeup();
 

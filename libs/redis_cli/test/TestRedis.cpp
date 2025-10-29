@@ -1,9 +1,13 @@
 #include "../src/redis_client.h"
 #include "../src/cmd/string_cmd.h"
 #include "../src/internal/redis_registry.h"
+#include "cmd/default_cmd.h"
 #include "event/event_loop.h"
 
+#ifdef _WIN32
 #include <Windows.h>
+#endif
+
 #include <iostream>
 
 int main()
@@ -25,23 +29,29 @@ int main()
         return -1;
     }
 
+    auto strCmd1 = std::make_shared<DefaultCmd>();
+    strCmd1->set_args("set", {std::make_shared<StringValue>("hello world")});
+    auto res1 = client.execute_command(strCmd1).get_result();
+
+    if (res1) {
+        std::cout << "set result: " << res1->to_string() << std::endl;
+    } else {
+        if (client.get_last_error()) {
+            std::cout << client.get_last_error()->to_string() << std::endl;
+        }
+    }
+
     auto strCmd = std::make_shared<StringCmd>();
     strCmd->set_args("get", {std::make_shared<StringValue>("hello")});
-    strCmd->set_callback([&client](std::shared_ptr<RedisValue> value){
-        if (value) {
-            std::cout << "callback get value: " << value->to_string() << std::endl;
-        } else {
-            if (client.get_last_error()) {
-                std::cout << client.get_last_error()->to_string() << std::endl;
-            }
+
+    auto res = client.execute_command(strCmd).get_result();
+    if (res) {
+        std::cout << "get value: " << res->to_string() << std::endl;
+    } else {
+        if (client.get_last_error()) {
+            std::cout << client.get_last_error()->to_string() << std::endl;
         }
-        RedisRegistry::get_instance()->get_event_loop()->quit();
-    }); 
-
-    client.execute_command(strCmd);
-
-    RedisRegistry::get_instance()->get_event_loop()->loop();
-
+    }
 
 #ifdef _WIN32
     WSACleanup();
