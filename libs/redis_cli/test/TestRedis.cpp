@@ -1,8 +1,4 @@
 #include "../src/redis_client.h"
-#include "../src/cmd/string_cmd.h"
-#include "../src/internal/redis_registry.h"
-#include "cmd/default_cmd.h"
-#include "event/event_loop.h"
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -29,27 +25,43 @@ int main()
         return -1;
     }
 
-    auto strCmd1 = std::make_shared<DefaultCmd>();
-    strCmd1->set_args("set", {std::make_shared<StringValue>("hello world")});
-    auto res1 = client.execute_command(strCmd1).get_result();
+    //auto res = client.eval(R"(
+    //    local key = KEYS[1]
+	//	local value = tonumber(ARGV[1])
+	//	local old = tonumber(redis.call("GET", key))
+	//	if old == nil then
+	//		old = 0
+	//	end
+	//	redis.call("SET", key, value + old)
+	//	return value
+    //)", {"key"}, {"1"});
+//
+    //if (res) {
+    //    std::cout << res->to_string() << std::endl;
+    //} else {
+    //    std::cout << "eval failed" << std::endl;
+    //    if (auto err = client.get_last_error()){
+    //        std::cout << err->to_string() << std::endl;
+    //    }
+    //}
 
-    if (res1) {
-        std::cout << "set result: " << res1->to_string() << std::endl;
-    } else {
-        if (client.get_last_error()) {
-            std::cout << client.get_last_error()->to_string() << std::endl;
-        }
-    }
+    auto res = client.script_load(R"(
+        local key = KEYS[1]
+		local value = tonumber(ARGV[1])
+		local old = tonumber(redis.call("GET", key))
+		if old == nil then
+			old = 0
+		end
+		redis.call("SET", key, value + old)
+		return value
+   )");
 
-    auto strCmd = std::make_shared<StringCmd>();
-    strCmd->set_args("get", {std::make_shared<StringValue>("hello")});
-
-    auto res = client.execute_command(strCmd).get_result();
     if (res) {
-        std::cout << "get value: " << res->to_string() << std::endl;
+        std::cout << res->to_string() << std::endl;
     } else {
-        if (client.get_last_error()) {
-            std::cout << client.get_last_error()->to_string() << std::endl;
+        std::cout << "script_load failed" << std::endl;
+        if (auto err = client.get_last_error()){
+            std::cout << err->to_string() << std::endl;
         }
     }
 

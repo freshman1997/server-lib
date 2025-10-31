@@ -16,8 +16,15 @@ namespace yuan::redis
         
         bool get_status() const { return status_; }
 
+        void set_status(bool status) { status_ = status; }
+
+        void set_msg(std::string msg) { msg_ = msg; }
+
+        std::string get_msg() const { return msg_; }
+
     private:
         bool status_;
+        std::string msg_;
     };
 
 }

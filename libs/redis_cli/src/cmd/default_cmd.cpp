@@ -1,10 +1,15 @@
 #include "default_cmd.h"
 #include "internal/def.h"
+#include "redis_value.h"
+#include "value/array_value.h"
+#include "value/error_value.h"
 #include "value/int_value.h"
 #include "value/status_value.h"
 #include "value/string_value.h"
+#include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace yuan::redis 
 {
@@ -16,6 +21,11 @@ namespace yuan::redis
         args_ = args;
     }
 
+    std::string DefaultCmd::get_cmd_name() const
+    {
+        return cmd_string_;
+    }
+
     std::shared_ptr<RedisValue> DefaultCmd::get_result() const
     {
         return result_;
@@ -24,16 +34,25 @@ namespace yuan::redis
     std::string DefaultCmd::pack() const
     {
         std::stringstream ss;
-        ss << cmd_string_;
-        for (const auto &arg : args_)
+        ss << "*" << (args_.size() + 1) << "\r\n";
+        ss << "$" << cmd_string_.size() << "\r\n";
+        ss << cmd_string_ << "\r\n";
+        for (auto &arg : args_)
         {
-            ss << " " << arg->to_string();
+            const auto &tmp = arg->to_string();
+            ss << "$" << tmp.size() << "\r\n";
+            ss << tmp << "\r\n";
         }
-        ss << "\r\n";
+        
         return ss.str();
     }
 
     int DefaultCmd::unpack(const unsigned char *begin, const unsigned char *end)
+    {
+        return DefaultCmd::unpack_result(result_, begin, end);
+    }
+
+    int DefaultCmd::unpack_result(std::shared_ptr<RedisValue> &result, const unsigned char *begin, const unsigned char *end)
     {
         if (end - begin < 1)
         {
@@ -61,11 +80,36 @@ namespace yuan::redis
             
             ++ptr;
             
-            result_ = std::make_shared<StatusValue>(str_value == "OK" ? true : false);
-            
-            return ptr - end;
+            auto status = std::make_shared<StatusValue>(true);
+            if (str_value == "OK" || str_value == "QUEUED")
+            {
+                status->set_status(true);
+            }
+
+            status->set_msg(str_value);
+            result = status;
+
+            return ptr - begin;
         }
         case resp_error:
+        {
+            const unsigned char *ptr = begin + 1;
+            std::string str_value;
+            while (ptr < end && *ptr != '\r')
+            {
+                str_value += static_cast<char>(*ptr);
+                ++ptr;
+            }
+            ++ptr;
+            if (ptr == end || *ptr != '\n')
+            {
+                return -1;
+            }
+            ++ptr;
+            result = std::make_shared<ErrorValue>(str_value);
+            
+            return ptr - begin;
+        }
         case resp_string:
         {
             const unsigned char *ptr = begin + 1;
@@ -104,13 +148,12 @@ namespace yuan::redis
             
             ptr += 2; // skip \r\n
 
-            result_ = std::make_shared<StringValue>(str_value);
+            result = std::make_shared<StringValue>(str_value);
 
-            return ptr - end;
+            return ptr - begin;
         }
         case resp_int:
         {
-            auto result = std::make_shared<IntValue>();
             const unsigned char *ptr = begin + 1;
             std::string int_str;
             while (ptr < end && *ptr != '\r')
@@ -119,6 +162,7 @@ namespace yuan::redis
                 ++ptr;
             }
 
+            ++ptr;
             if (ptr == end || *ptr != '\n')
             {
                 return -1;
@@ -126,29 +170,91 @@ namespace yuan::redis
 
             ++ptr;
 
+            auto intResult = std::make_shared<IntValue>();
             try 
             { 
-                result->set_value(std::stoll(int_str)); 
-                result_ = result;
+                intResult->set_value(std::stoll(int_str)); 
+                result = intResult;
             }
             catch (const std::exception &ignore) 
             { return -1; }
             
             return ptr - begin;
         }
+
         case resp_null:
+        {
+            result = ErrorValue::from_string("null");
+            ++begin;
+            if (begin + 2 > end)
+            {
+                return -1;
+            }
+            
+            if (begin[0] != '\r' || begin[1] != '\n')
+            {
+                return -1;
+            }
+            
+            return 3;
+        }
+
         case resp_float:
         case resp_bool:
         case resp_blob_error:
         case resp_verbatim:
         case resp_bigInt:
         case resp_array:
+        {
+            const unsigned char *ptr = begin + 1;
+            std::string int_str;
+            while (ptr < end && *ptr != '\r')
+            {
+                int_str += static_cast<char>(*ptr);
+                ++ptr;
+            }
+            
+            ++ptr;
+            if (ptr == end || *ptr != '\n')
+            {
+                return -1;
+            }
+            
+            ++ptr;
+            
+            int len = std::atoi(int_str.c_str());
+            if (len < 0)
+            {
+                return -1;
+            }
+
+            auto arrResult = std::make_shared<ArrayValue>();
+            for (int i = 0; i < len; ++i)
+            {
+                std::shared_ptr<RedisValue> res = nullptr;
+                int ret = unpack_result(res, ptr, end);
+                if (ret < 0)
+                {
+                    return -1;
+                }
+
+                arrResult->add_value(res);
+                ptr += ret;
+            }
+
+            result = arrResult;
+            return ptr - begin;
+        }
         case resp_map:
         case resp_set:
         case resp_attr:
         case resp_push:
             break;
+        default:
+            result = ErrorValue::from_string("unknown type");
+            return -1;
         }
+
         return 0;
     }
 }

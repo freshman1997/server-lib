@@ -23,12 +23,7 @@ namespace yuan::redis
     public:
         virtual void set_args(const std::string &cmd_name, const std::vector<std::shared_ptr<RedisValue>> &args);
 
-        virtual void set_callback(std::function<void (std::shared_ptr<RedisValue>)> callback) { callback_ = callback;}
-
-        virtual void on_executed()
-        {
-            (*this)();
-        }
+        virtual std::string get_cmd_name() const;
 
         virtual std::shared_ptr<RedisValue> get_result() const;
         
@@ -36,17 +31,15 @@ namespace yuan::redis
 
         virtual int unpack(const unsigned char *begin, const unsigned char *end);
 
+        static int unpack_result(std::shared_ptr<RedisValue> &result, const unsigned char *begin, const unsigned char *end);
+
     public:
-        void operator()()
+        void add_arg(std::shared_ptr<RedisValue> arg)
         {
-            if (callback_)
-            {
-                callback_(get_result());
-            }
+            args_.push_back(arg);
         }
 
     protected:
-        std::function<void (std::shared_ptr<RedisValue>)> callback_;
         std::string cmd_string_;
         std::vector<std::shared_ptr<RedisValue>> args_;
         std::shared_ptr<RedisValue> result_;

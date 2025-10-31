@@ -2,30 +2,30 @@
 #define __YUAN_REDIS_COROUTINE_H__
 
 #include <coroutine>
-#include <memory>
-#include "redis_value.h"
+#include <utility>
 
 namespace yuan::redis
 {
     class RedisClient;
 
+    template <typename T>
     struct SimpleTask 
     {
         struct promise_type 
         {
-            std::shared_ptr<RedisValue> value_;
+            T value_;
 
             SimpleTask get_return_object() { return SimpleTask { std::coroutine_handle<promise_type>::from_promise(*this) }; }
             std::suspend_never initial_suspend() { return {}; } // 协程立即执行
             std::suspend_always final_suspend() noexcept { return {}; }
             void unhandled_exception() {}
-            std::suspend_always yield_value(std::shared_ptr<RedisValue> value) 
+            std::suspend_always yield_value(T && value) 
             {
-                value_ = value;
+                value_ = std::move(value);
                 return {};
             }
 
-            void return_value(std::shared_ptr<RedisValue> value) {
+            void return_value(T && value) {
                 value_ = std::move(value);
             }
         };
@@ -36,18 +36,18 @@ namespace yuan::redis
         ~SimpleTask() { if (handle_) handle_.destroy(); }
         
         // 获取最终结果
-        std::shared_ptr<RedisValue> get_result() {
+        T get_result() {
             return handle_.promise().value_;
         }
         
         bool done() const { return handle_.done(); }
         
-        operator std::shared_ptr<RedisValue>() const {
+        operator T() const {
             return handle_.promise().value_;
         }
 
         // 执行协程
-        std::shared_ptr<RedisValue> execute() {
+        T execute() {
             if (handle_ && !handle_.done()) {
                 handle_.resume();
             }

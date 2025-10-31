@@ -1,9 +1,7 @@
 #include "redis_client.h"
 #include "event/event_loop.h"
 #include "internal/coroutine.h"
-#include "internal/def.h"
 #include "net/connection/connection.h"
-#include "net/handler/connection_handler.h"
 #include "option.h"
 #include "internal/command_manager.h"
 #include "internal/redis_registry.h"
@@ -11,79 +9,13 @@
 #include "net/connection/tcp_connection.h"
 #include "net/socket/inet_address.h"
 #include "redis_value.h"
-#include "value/error_value.h"
+#include "internal/redis_impl.h"
 
 #include <iostream>
 #include <memory>
 
 namespace yuan::redis
 {
-    class RedisClient::Impl : public net::ConnectionHandler
-    {
-    public:
-        Impl() = default;
-        ~Impl() = default;
-
-    public:
-        virtual void on_connected(net::Connection *conn)
-        {
-            //conn->get_output_buff()->write_string("PING\r\n");
-            //conn->flush();
-            connection_ = conn;
-        }
-
-        virtual void on_error(net::Connection *conn)
-        {
-        }
-
-        virtual void on_read(net::Connection *conn)
-        {
-            if (!last_cmd_)
-            {
-                return;
-            }
-
-            auto buff = conn->get_input_buff();
-            int ret = last_cmd_->unpack((const unsigned char *)buff->peek(), (const unsigned char *)buff->peek_end());
-            if (ret < 0)
-            {
-                if (*buff->peek() == resp_error)
-                {
-                    last_error_ = std::make_shared<ErrorValue>(std::string((const char *)buff->peek() + 1, buff->readable_bytes() - 3));
-                }
-            }
-            last_cmd_ = nullptr;
-            RedisRegistry::get_instance()->get_event_loop()->set_use_coroutine(true);
-        }
-
-        virtual void on_write(net::Connection *conn)
-        {
-            if (last_cmd_)
-            {
-                return;
-            }
-
-            last_error_ = nullptr;
-            last_cmd_ = CommandManager::get_instance()->get_command();
-            if (last_cmd_)
-            {
-                const auto& cmdStr = last_cmd_->pack();
-                conn->get_output_buff()->write_string(cmdStr);
-            }
-        }
-
-        virtual void on_close(net::Connection *conn)
-        {
-
-        }
-
-    public:
-        Option option_;
-        std::shared_ptr<Command> last_cmd_;
-        std::shared_ptr<RedisValue> last_error_;
-        net::Connection *connection_ = nullptr;
-    };
-
     RedisClient::RedisClient()
     {
         impl_ = std::make_unique<Impl>();
@@ -175,15 +107,22 @@ namespace yuan::redis
         return connect(host, port, password, db);
     }
 
-    SimpleTask do_execute_command(std::shared_ptr<Command> cmd)
+    SimpleTask<std::shared_ptr<RedisValue>> do_execute_command(std::shared_ptr<Command> cmd)
     {
         co_await std::suspend_always{};
         RedisRegistry::get_instance()->get_event_loop()->loop();
         co_return cmd->get_result();
     }
 
-    SimpleTask RedisClient::execute_command(std::shared_ptr<Command> cmd)
+    SimpleTask<std::shared_ptr<RedisValue>> RedisClient::execute_command(std::shared_ptr<Command> cmd)
     {
+        if (impl_->multi_cmd_)
+        {
+            impl_->multi_cmd_->add_command(cmd);
+            co_return nullptr;
+        }
+
+        impl_->last_error_ = nullptr;
         CommandManager::get_instance()->add_command(cmd);
         auto co = do_execute_command(cmd);
         co_return co.execute();
