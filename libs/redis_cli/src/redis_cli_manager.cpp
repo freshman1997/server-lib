@@ -7,12 +7,7 @@ namespace yuan::redis
     {
         for (const auto &opt : options)
         {
-            auto redis_client = std::make_shared<RedisClient>();
-            if (redis_client->connect(opt.host_, opt.port_, opt.password_, opt.db_, opt.timeout_ms_) != 0)
-            {
-                return -1;
-            }
-
+            auto redis_client = std::make_shared<RedisClient>(opt);
             m_redis_cli_map.emplace_back(std::make_pair(opt, redis_client));
         }
 

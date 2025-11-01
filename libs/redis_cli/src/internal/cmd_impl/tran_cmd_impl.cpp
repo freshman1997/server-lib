@@ -4,6 +4,7 @@
 #include "redis_client.h"
 #include "internal/redis_impl.h"
 #include "value/error_value.h"
+#include "value/string_value.h"
 
 namespace yuan::redis 
 {
@@ -38,6 +39,78 @@ namespace yuan::redis
         auto multi_cmd = impl_->multi_cmd_;
         impl_->multi_cmd_ = nullptr;
 
-        return execute_command(multi_cmd).get_result();
+        return impl_->execute_command(multi_cmd);
+    }
+
+    std::shared_ptr<RedisValue> RedisClient::discard()
+    {
+        if (!impl_->multi_cmd_)
+        {
+            impl_->last_error_ = ErrorValue::from_string("ERR: DISCARD without MULTI");
+            return nullptr;
+        }
+        
+        auto cmd = std::make_shared<DefaultCmd>();
+        cmd->set_args("discard", {});
+        
+        return impl_->execute_command(cmd);
+    }
+
+    std::shared_ptr<RedisValue> RedisClient::watch(const std::vector<std::string> &keys)
+    {
+        if (keys.empty())
+        {
+            impl_->last_error_ = ErrorValue::from_string("ERR: WATCH without keys");
+            return nullptr;
+        }
+        
+        auto cmd = std::make_shared<DefaultCmd>();
+        cmd->set_args("watch", {});
+        for (auto &key : keys)
+        {
+            cmd->add_arg(StringValue::from_string(key));
+        }
+        
+        return impl_->execute_command(cmd);
+    }
+
+    std::shared_ptr<RedisValue> RedisClient::unwatch()
+    {
+        if (!impl_->multi_cmd_)
+        {
+            impl_->last_error_ = ErrorValue::from_string("ERR: UNWATCH without MULTI");
+            return nullptr;
+        }
+        
+        auto cmd = std::make_shared<DefaultCmd>();
+        cmd->set_args("unwatch", {});
+        
+        return impl_->execute_command(cmd);
+    }
+
+    std::shared_ptr<RedisValue> RedisClient::multi_exec(const std::vector<std::string> &commands)
+    {
+        if (commands.empty())
+        {
+            impl_->last_error_ = ErrorValue::from_string("ERR: empty commands");
+            return nullptr;
+        }
+        
+        if (multi())
+        {
+            impl_->last_error_ = ErrorValue::from_string("ERR: already in multi");
+            return nullptr;
+        }
+        
+        auto cmd = std::make_shared<DefaultCmd>();
+
+        for (auto &command : commands)
+        {
+            cmd->add_arg(StringValue::from_string(command));
+        }
+
+        cmd->set_args("exec", {});
+        
+        return impl_->execute_command(cmd);
     }
 }

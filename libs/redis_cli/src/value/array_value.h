@@ -22,7 +22,11 @@ namespace yuan::redis
             
             for (auto &value : values_)
             {
-                ss << value->to_string() << ",";
+                ss << value->to_string();
+                if (value != values_.back())
+                {
+                    ss << ",";
+                }
             }
             
             ss << "]";

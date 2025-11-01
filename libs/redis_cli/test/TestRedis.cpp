@@ -17,51 +17,32 @@ int main()
 #endif
     using namespace yuan::redis;
 
-    RedisClient client;
-    int ret = client.connect("127.0.0.1", 6379);
-    if (ret != 0)
-    {
-        std::cout << "connect redis failed" << std::endl;
-        return -1;
+    RedisClient client({.host_ = "127.0.0.1", .port_ = 6379, .db_ = 1});
+
+    auto res = client.zadd("test_zset", { { "a", 1.0 }, { "b", 2.0 }, { "c", 3.0 } });
+    if (res) {
+        std::cout << "time: " << res->to_string() << std::endl;
+    } else {
+        if (auto err = client.get_last_error()) {
+            std::cout << "error: " << err->to_string() << std::endl;
+        }
     }
 
-    //auto res = client.eval(R"(
-    //    local key = KEYS[1]
-	//	local value = tonumber(ARGV[1])
-	//	local old = tonumber(redis.call("GET", key))
-	//	if old == nil then
-	//		old = 0
-	//	end
-	//	redis.call("SET", key, value + old)
-	//	return value
-    //)", {"key"}, {"1"});
-//
-    //if (res) {
-    //    std::cout << res->to_string() << std::endl;
-    //} else {
-    //    std::cout << "eval failed" << std::endl;
-    //    if (auto err = client.get_last_error()){
-    //        std::cout << err->to_string() << std::endl;
-    //    }
-    //}
-
-    auto res = client.script_load(R"(
-        local key = KEYS[1]
-		local value = tonumber(ARGV[1])
-		local old = tonumber(redis.call("GET", key))
-		if old == nil then
-			old = 0
-		end
-		redis.call("SET", key, value + old)
-		return value
-   )");
-
+    res = client.hmset("test_hash", { { "hello", "world" }, { "hello1", "world1" } });
     if (res) {
-        std::cout << res->to_string() << std::endl;
+        std::cout << "test_hash: " << res->to_string() << std::endl;
     } else {
-        std::cout << "script_load failed" << std::endl;
-        if (auto err = client.get_last_error()){
-            std::cout << err->to_string() << std::endl;
+        if (auto err = client.get_last_error()) {
+            std::cout << "error: " << err->to_string() << std::endl;
+        }
+    }
+
+    res = client.hgetall("test_hash");
+    if (res) {
+        std::cout << "members: " << res->to_string() << std::endl;
+    } else {
+        if (auto err = client.get_last_error()) {
+            std::cout << "error: " << err->to_string() << std::endl;
         }
     }
 

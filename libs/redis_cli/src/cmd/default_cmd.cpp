@@ -6,9 +6,13 @@
 #include "value/int_value.h"
 #include "value/status_value.h"
 #include "value/string_value.h"
+#include "value/float_value.h"
+#include "value/map_value.h"
+
 #include <memory>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace yuan::redis 
@@ -49,10 +53,10 @@ namespace yuan::redis
 
     int DefaultCmd::unpack(const unsigned char *begin, const unsigned char *end)
     {
-        return DefaultCmd::unpack_result(result_, begin, end);
+        return DefaultCmd::unpack_result(result_, begin, end, unpack_to_map_);
     }
 
-    int DefaultCmd::unpack_result(std::shared_ptr<RedisValue> &result, const unsigned char *begin, const unsigned char *end)
+    int DefaultCmd::unpack_result(std::shared_ptr<RedisValue> &result, const unsigned char *begin, const unsigned char *end, bool toMap)
     {
         if (end - begin < 1)
         {
@@ -60,6 +64,11 @@ namespace yuan::redis
         }
         
         char type = *begin;
+        if (toMap && type == resp_array)
+        {
+            type = resp_map;
+        }
+
         switch (type)
         {
         case resp_status:
@@ -200,7 +209,45 @@ namespace yuan::redis
         }
 
         case resp_float:
+        {
+            const unsigned char *ptr = begin + 1;
+            std::string float_str;
+            while (ptr < end && *ptr != '\r')
+            {
+                float_str += static_cast<char>(*ptr);
+                ++ptr;
+            }
+            
+            ++ptr;
+            if (ptr == end || *ptr != '\n')
+            {
+                return -1;
+            }
+            
+            ++ptr;
+            
+            result = std::make_shared<FloatValue>(float_str);
+
+            return ptr - begin;
+        }
         case resp_bool:
+        {
+            char res = *(begin + 1);
+            ++begin;
+            if (begin + 2 > end)
+            {
+                return -1;
+            }
+            
+            if (begin[0] != '\r' || begin[1] != '\n')
+            {
+                return -1;
+            }
+
+            result = std::make_shared<StatusValue>(res == 't');
+
+            return 3;
+        }
         case resp_blob_error:
         case resp_verbatim:
         case resp_bigInt:
@@ -246,6 +293,77 @@ namespace yuan::redis
             return ptr - begin;
         }
         case resp_map:
+        {
+            const unsigned char *ptr = begin + 1;
+
+            std::string len_str;
+            while (ptr < end && *ptr != '\r')
+            {
+                len_str += static_cast<char>(*ptr);
+                ++ptr;
+            }
+
+            ++ptr;
+
+            if (ptr == end || *ptr != '\n')
+            {
+                return -1;
+            }
+            ++ptr;
+
+            int len = std::atoi(len_str.c_str());
+            if (len < 0 || len % 2 != 0)
+            {
+                return -1;
+            }
+
+            std::unordered_map<std::string, std::shared_ptr<RedisValue>> res;
+            while (ptr < end)
+            {
+                if (*ptr != resp_string) {
+                    return -1;
+                }
+
+                std::shared_ptr<RedisValue> key = nullptr;
+                int ret = unpack_result(key, ptr, end);
+                if (ret < 0)
+                {
+                    return -1;
+                }
+
+                ptr += ret;
+                if (ptr == end) {
+                    return -1;
+                }
+
+                std::shared_ptr<RedisValue> value = nullptr;
+                ret = unpack_result(value, ptr, end);
+                if (ret < 0)
+                {
+                    return -1;
+                }
+                
+                if (key->get_type() != resp_string) {
+                    return -1;
+                }
+
+                const std::string &key_str = key->to_string();
+                if (res.find(key_str) != res.end()) {
+                    return -1;
+                }
+
+                res[key_str] = value;
+                ptr += ret;
+            }
+
+            if (len / 2 != res.size()) {
+                return -1;
+            }
+            
+            result = std::make_shared<MapValue>(res);
+
+            return ptr - begin;
+        }
         case resp_set:
         case resp_attr:
         case resp_push:

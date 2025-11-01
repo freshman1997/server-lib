@@ -1,26 +1,32 @@
 #ifndef __YUAN_REDIS_CLIENT_H__
 #define __YUAN_REDIS_CLIENT_H__
-#include "command.h"
-#include "internal/coroutine.h"
-
+#include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
+
+#include "option.h"
+#include "redis_value.h"
 
 namespace yuan::redis 
 {
     class RedisClient 
     {
     public:
-        RedisClient();
+        RedisClient() = default;
+
+        RedisClient(const Option &opt);
+        
         ~RedisClient();
 
     public:
-        int connect(const std::string &host, int port);
-        int connect(const std::string &host, int port, const std::string &password);
-        int connect(const std::string &host, int port, const std::string &password, int db);
-        int connect(const std::string &host, int port, const std::string &password, int db, int timeout);
+        void set_option(const Option &opt);
 
-        SimpleTask<std::shared_ptr<RedisValue>> execute_command(std::shared_ptr<Command> cmd);
+        bool is_connected() const;
+
+        void disconnect();
+
+        std::shared_ptr<RedisValue> get_last_error() const;
 
     public: // common commands
         // string
@@ -96,8 +102,8 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> zcount(std::string key, double min, double max, bool min_open = false, bool max_open = false);
         std::shared_ptr<RedisValue> zremrangebyrank(std::string key, int64_t start, int64_t stop);
         std::shared_ptr<RedisValue> zremrangebyscore(std::string key, double min, double max, bool min_open = false, bool max_open = false);
-        std::shared_ptr<RedisValue> zunionstore(std::string destination, const std::vector<std::string> &keys, const std::vector<double> &weights, bool aggregate = false);
-        std::shared_ptr<RedisValue> zinterstore(std::string destination, const std::vector<std::string> &keys, const std::vector<double> &weights, bool aggregate = false);
+        std::shared_ptr<RedisValue> zunionstore(std::string destination, const std::vector<std::string> &keys, const std::vector<double> &weights, const std::string &aggregate = "sum");
+        std::shared_ptr<RedisValue> zinterstore(std::string destination, const std::vector<std::string> &keys, const std::vector<double> &weights, const std::string &aggregate = "sum");
         std::shared_ptr<RedisValue> zscan(std::string key, int64_t cursor, const std::string &match_pattern = "", int64_t count = 10);
         std::shared_ptr<RedisValue> zscan(std::string key, int64_t cursor, const std::vector<std::string> &match_patterns, int64_t count = 10);
         std::shared_ptr<RedisValue> zrangebylex(std::string key, std::string min, std::string max, bool min_open = false, bool max_open = false, int64_t offset = 0, int64_t count = 10);
@@ -108,15 +114,7 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> zpopmax(std::string key, int64_t count);
         std::shared_ptr<RedisValue> bzpopmin(std::string key, int timeout, int64_t count);
         std::shared_ptr<RedisValue> bzpopmax(std::string key, int timeout, int64_t count);
-        std::shared_ptr<RedisValue> zpopmin(const std::vector<std::string> &keys, int64_t count);
-        std::shared_ptr<RedisValue> zpopmax(const std::vector<std::string> &keys, int64_t count);
-        std::shared_ptr<RedisValue> bzpopmin(const std::vector<std::string> &keys, int timeout, int64_t count);
-        std::shared_ptr<RedisValue> bzpopmax(const std::vector<std::string> &keys, int timeout, int64_t count);
         std::shared_ptr<RedisValue> zrandmember(std::string key, int count, bool with_scores = false);
-        std::shared_ptr<RedisValue> zmpop(const std::vector<std::string> &keys, int64_t count, bool min);
-        std::shared_ptr<RedisValue> zmpop(const std::vector<std::string> &keys, int timeout, int64_t count, bool min);
-        std::shared_ptr<RedisValue> zmpop(const std::vector<std::string> &keys, int timeout, int64_t count, bool min, bool with_scores);
-        std::shared_ptr<RedisValue> zmpop(const std::vector<std::string> &keys, int timeout, int64_t count, bool min, bool with_scores, bool pop_count);
 
         // bitmap
         std::shared_ptr<RedisValue> setbit(std::string key, int64_t offset, int value);
@@ -171,17 +169,97 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> eval(std::string script, const std::vector<std::string> &keys, const std::vector<std::string> &args);
         std::shared_ptr<RedisValue> evalsha(std::string sha1, const std::vector<std::string> &keys, const std::vector<std::string> &args);
         std::shared_ptr<RedisValue> script_load(std::string script);
+        std::shared_ptr<RedisValue> script_exists(const std::string &sha1s);
         std::shared_ptr<RedisValue> script_exists(const std::vector<std::string> &sha1s);
         std::shared_ptr<RedisValue> script_flush();
         std::shared_ptr<RedisValue> script_kill();
         std::shared_ptr<RedisValue> script_flush(const std::vector<std::string> &keys);
+        
+    public: // special command
+        // auth
+        std::shared_ptr<RedisValue> auth(std::string password);
 
-    public:
-        bool is_connected() const;
+        // info
+        std::shared_ptr<RedisValue> info(std::string section = "");
 
-        void disconnect();
+        // connect
+        std::shared_ptr<RedisValue> ping();
+        std::shared_ptr<RedisValue> echo(std::string message);
+        std::shared_ptr<RedisValue> select(int index);
+        std::shared_ptr<RedisValue> quit();
+        std::shared_ptr<RedisValue> swapdb(int index1, int index2);
+        std::shared_ptr<RedisValue> time();
+        std::shared_ptr<RedisValue> wait(int numreplicas, int timeout);
 
-        std::shared_ptr<RedisValue> get_last_error() const;
+        // server
+        std::shared_ptr<RedisValue> bgrewriteaof();
+        std::shared_ptr<RedisValue> bgsave();
+        std::shared_ptr<RedisValue> client_getname();
+        std::shared_ptr<RedisValue> client_id();
+        std::shared_ptr<RedisValue> client_list();
+        std::shared_ptr<RedisValue> client_pause(int timeout);
+        std::shared_ptr<RedisValue> client_reply(std::string mode);
+        std::shared_ptr<RedisValue> client_setname(std::string name);
+        std::shared_ptr<RedisValue> client_unblock(int id);
+        std::shared_ptr<RedisValue> command();
+        std::shared_ptr<RedisValue> command_count();
+        std::shared_ptr<RedisValue> command_getkeys();
+        std::shared_ptr<RedisValue> command_info(const std::vector<std::string> &commands);
+        std::shared_ptr<RedisValue> config_get(std::string parameter);
+        std::shared_ptr<RedisValue> config_rewrite();
+        std::shared_ptr<RedisValue> config_set(std::string parameter, std::string value);
+        std::shared_ptr<RedisValue> config_resetstat();
+        std::shared_ptr<RedisValue> dbsize();
+        std::shared_ptr<RedisValue> debug_object(std::string key);
+        std::shared_ptr<RedisValue> debug_segfault();
+        std::shared_ptr<RedisValue> flushall(bool async = false);
+        std::shared_ptr<RedisValue> flushdb(bool async = false);
+        std::shared_ptr<RedisValue> lastsave();
+        std::shared_ptr<RedisValue> monitor();
+        std::shared_ptr<RedisValue> role();
+        std::shared_ptr<RedisValue> save();
+        std::shared_ptr<RedisValue> shutdown();
+        std::shared_ptr<RedisValue> shutdown(std::string save);
+        std::shared_ptr<RedisValue> shutdown(std::string save, std::string nopersist);
+        std::shared_ptr<RedisValue> shutdown(std::string save, std::string nopersist, std::string force);
+        std::shared_ptr<RedisValue> shutdown(std::string save, std::string nopersist, std::string force, std::string noflush);
+        std::shared_ptr<RedisValue> shutdown(std::string save, std::string nopersist, std::string force, std::string noflush, std::string async);
+        std::shared_ptr<RedisValue> shutdown(std::string save, std::string nopersist, std::string force, std::string noflush, std::string async, std::string skip_slave_start);
+        std::shared_ptr<RedisValue> shutdown(std::string save, std::string nopersist, std::string force, std::string noflush, std::string async, std::string skip_slave_start, std::string no_save);
+        
+        // stream
+        std::shared_ptr<RedisValue> xack(std::string key, std::string group, const std::vector<std::string> &ids);
+        std::shared_ptr<RedisValue> xadd(std::string key, std::string id, const std::vector<std::string> &fields);
+        std::shared_ptr<RedisValue> xclaim(std::string key, std::string group, std::string consumer, int64_t min_idle_time, const std::vector<std::string> &ids);
+        std::shared_ptr<RedisValue> xclaim(std::string key, std::string group, std::string consumer, int64_t min_idle_time, const std::vector<std::string> &ids, int64_t idle_time);
+        std::shared_ptr<RedisValue> xclaim(std::string key, std::string group, std::string consumer, int64_t min_idle_time, const std::vector<std::string> &ids, int64_t idle_time, bool just_id);
+        std::shared_ptr<RedisValue> xdel(std::string key, const std::vector<std::string> &ids);
+        std::shared_ptr<RedisValue> xgroup_create(std::string key, std::string group, std::string id, bool mkstream = false);
+        std::shared_ptr<RedisValue> xgroup_setid(std::string key, std::string group, std::string id);
+        std::shared_ptr<RedisValue> xgroup_destroy(std::string key, std::string group);
+        std::shared_ptr<RedisValue> xgroup_delconsumer(std::string key, std::string group, std::string consumer);
+        std::shared_ptr<RedisValue> xinfo_stream(std::string key);
+        std::shared_ptr<RedisValue> xinfo_groups(std::string key);
+        std::shared_ptr<RedisValue> xinfo_consumers(std::string key, std::string group);
+        std::shared_ptr<RedisValue> xlen(std::string key);
+        std::shared_ptr<RedisValue> xpending(std::string key, std::string group);
+        std::shared_ptr<RedisValue> xpending(std::string key, std::string group, std::string start, std::string end, int count, std::string consumer);
+        std::shared_ptr<RedisValue> xrange(std::string key, std::string start, std::string end);
+        std::shared_ptr<RedisValue> xrange(std::string key, std::string start, std::string end, int count);
+        std::shared_ptr<RedisValue> xread(const std::vector<std::string> &streams);
+        std::shared_ptr<RedisValue> xread(const std::vector<std::string> &streams, int count);
+        std::shared_ptr<RedisValue> xread(const std::vector<std::string> &streams, int count, bool block);
+        std::shared_ptr<RedisValue> xread(const std::vector<std::string> &streams, int count, bool block, int block_time);
+        std::shared_ptr<RedisValue> xreadgroup(std::string group, std::string consumer, const std::vector<std::string> &streams);
+        std::shared_ptr<RedisValue> xreadgroup(std::string group, std::string consumer, const std::vector<std::string> &streams, int count);
+        std::shared_ptr<RedisValue> xreadgroup(std::string group, std::string consumer, const std::vector<std::string> &streams, int count, bool block);
+        std::shared_ptr<RedisValue> xreadgroup(std::string group, std::string consumer, const std::vector<std::string> &streams, int count, bool block, int block_time);
+        std::shared_ptr<RedisValue> xrevrange(std::string key, std::string end, std::string start);
+        std::shared_ptr<RedisValue> xrevrange(std::string key, std::string end, std::string start, int count);
+        std::shared_ptr<RedisValue> xtrim(std::string key, int64_t max_len, bool approximate);
+
+    private:
+        int connect();
         
     private:
         class Impl;

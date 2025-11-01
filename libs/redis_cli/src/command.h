@@ -20,6 +20,8 @@ namespace yuan::redis
 
         virtual std::shared_ptr<RedisValue> get_result() const = 0;
 
+        virtual void set_result(std::shared_ptr<RedisValue> result) = 0;
+
         virtual std::string pack() const = 0;
 
         virtual int unpack(const unsigned char *begin, const unsigned char *end) = 0;

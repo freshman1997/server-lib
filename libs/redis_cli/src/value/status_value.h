@@ -13,6 +13,16 @@ namespace yuan::redis
         StatusValue(bool status) : status_(status) {}
         std::string to_string() const override { return status_ ? "OK" : "FAIL"; }
         virtual char get_type() const override { return resp_status; }
+
+        bool is_ok() const { return status_; }
+
+        bool is_fail() const { return !status_; }
+
+        bool is_error() const { return !status_; }
+
+        bool is_true() const { return status_; }
+
+        bool is_false() const { return !status_; }
         
         bool get_status() const { return status_; }
 
