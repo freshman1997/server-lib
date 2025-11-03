@@ -24,6 +24,9 @@ namespace yuan::redis
             return std::make_shared<StringValue>(str);
         }
 
+        const std::string & get_value() const { return value_; }
+        std::string & get_value() { return value_; }
+        
     private:
         std::string value_;
     };

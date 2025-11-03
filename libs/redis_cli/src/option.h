@@ -12,6 +12,7 @@ namespace yuan::redis
         std::string password_;
         int db_ = 0;
         int timeout_ms_ = 2000; // milliseconds
+        std::string name_;
     };
 
     struct ClusterOption 

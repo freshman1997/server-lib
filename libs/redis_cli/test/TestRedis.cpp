@@ -1,4 +1,8 @@
 #include "../src/redis_client.h"
+#include "redis_cli_manager.h"
+#include "redis_value.h"
+#include <thread>
+#include <chrono>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -16,33 +20,90 @@ int main()
     }
 #endif
     using namespace yuan::redis;
+    RedisCliManager::get_instance()->init({
+        {.host_ = "127.0.0.1", .port_ = 6379, .db_ = 1, .name_ = "redis1"},
+        {.host_ = "127.0.0.1", .port_ = 6379, .db_ = 1, .name_ = "redis2"},
+    });
 
-    RedisClient client({.host_ = "127.0.0.1", .port_ = 6379, .db_ = 1});
-
-    auto res = client.zadd("test_zset", { { "a", 1.0 }, { "b", 2.0 }, { "c", 3.0 } });
+    auto client = RedisCliManager::get_instance()->get_round_robin_redis_client();
+    std::cout << "client: " << client->get_name() << std::endl;
+    auto res = client->publish("test1", "helloworld");
     if (res) {
-        std::cout << "time: " << res->to_string() << std::endl;
+        std::cout << "push: " << res->to_string() << std::endl;
     } else {
-        if (auto err = client.get_last_error()) {
+        if (auto err = client->get_last_error()) {
             std::cout << "error: " << err->to_string() << std::endl;
         }
     }
 
-    res = client.hmset("test_hash", { { "hello", "world" }, { "hello1", "world1" } });
-    if (res) {
-        std::cout << "test_hash: " << res->to_string() << std::endl;
+    int i = 0;
+    auto subcribeClient = RedisCliManager::get_instance()->get_round_robin_redis_client();
+    std::cout << "client: " << subcribeClient->get_name() << std::endl;
+
+    auto subRes = subcribeClient->subscribe({"test1", "test2"}, [](const std::unordered_map<std::string, std::shared_ptr<RedisValue>> &msg) {
+        for (auto &[key, value] : msg) {
+            std::cout << "channel: " << key << ", value: " << value->to_string() << std::endl;
+        }
+    });
+
+    if (subRes) {
+        std::cout << "subRes: " << subRes->to_string() << std::endl;
     } else {
-        if (auto err = client.get_last_error()) {
+        if (auto err = subcribeClient->get_last_error()) {
             std::cout << "error: " << err->to_string() << std::endl;
         }
     }
 
-    res = client.hgetall("test_hash");
-    if (res) {
-        std::cout << "members: " << res->to_string() << std::endl;
-    } else {
-        if (auto err = client.get_last_error()) {
-            std::cout << "error: " << err->to_string() << std::endl;
+    while (true)
+    {
+        auto res = client->publish("test1", "helloworld" + std::to_string(i + 1));
+        if (res) {
+            std::cout << "push: " << res->to_string() << std::endl;
+        } else {
+            if (auto err = client->get_last_error()) {
+                std::cout << "error: " << err->to_string() << std::endl;
+            }
+        }
+
+        res = client->publish("test2", "你好世界" + std::to_string(i + 1));
+        if (res) {
+            std::cout << "push: " << res->to_string() << std::endl;
+        } else {
+            if (auto err = client->get_last_error()) {
+                std::cout << "error: " << err->to_string() << std::endl;
+            }
+        }
+
+        ++i;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+
+        if (i == 5) {
+            res = subcribeClient->unsubscribe({"test1", "test2"});
+            if (res) {
+                std::cout << "get: " << res->to_string() << std::endl;
+            } else {
+                if (auto err = subcribeClient->get_last_error()) {
+                    std::cout << "error: " << err->to_string() << std::endl;
+                }
+            }
+
+            res = subcribeClient->set("test-key1", "实打实大苏打");
+            if (res) {
+                std::cout << "get: " << res->to_string() << std::endl;
+            } else {
+                if (auto err = subcribeClient->get_last_error()) {
+                    std::cout << "error: " << err->to_string() << std::endl;
+                }
+            }
+
+            res = subcribeClient->get("test-key1");
+            if (res) {
+                std::cout << "get: " << res->to_string() << std::endl;
+            } else {
+                if (auto err = subcribeClient->get_last_error()) {
+                    std::cout << "error: " << err->to_string() << std::endl;
+                }
+            }
         }
     }
 

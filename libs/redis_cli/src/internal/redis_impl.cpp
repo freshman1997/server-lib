@@ -22,14 +22,14 @@ namespace yuan::redis
         {
             auto cmd = std::make_shared<DefaultCmd>();
             cmd->set_args("auth", { StringValue::from_string(option_.password_)});
-            CommandManager::get_instance()->add_command(cmd);
+            CommandManager::get_instance()->add_command(option_.name_, cmd);
         }
 
         if (option_.db_ != 0)
         {
             auto cmd = std::make_shared<DefaultCmd>();
             cmd->set_args("select", { StringValue::from_string(std::to_string(option_.db_))});
-            CommandManager::get_instance()->add_command(cmd);
+            CommandManager::get_instance()->add_command(option_.name_, cmd);
         }
 
         conn_ = conn;
@@ -46,7 +46,7 @@ namespace yuan::redis
 
     void RedisClient::Impl::on_read(net::Connection *conn)
     {
-        if (!last_cmd_ || !is_connected())
+        if ((!last_cmd_ && !subcribe_cmd_) || !is_connected())
         {
             return;
         }
@@ -61,7 +61,8 @@ namespace yuan::redis
             });
         }
 
-        int ret = last_cmd_->unpack((const unsigned char *)buff->peek(), (const unsigned char *)buff->peek_end());
+        auto cmd = last_cmd_ ? last_cmd_ : subcribe_cmd_;
+        int ret = cmd->unpack((const unsigned char *)buff->peek(), (const unsigned char *)buff->peek_end());
         if (ret < 0)
         {
             last_error_ = ErrorValue::to_error((const unsigned char *)buff->peek(), (const unsigned char *)buff->peek_end());
@@ -70,9 +71,23 @@ namespace yuan::redis
                 last_error_ = ErrorValue::from_string("unknown error");
             }
         } else {
-            if (last_cmd_->get_result()->get_type() == resp_error) {
-                last_error_ = last_cmd_->get_result();
-                last_cmd_->set_result(nullptr);
+            if (cmd->get_result()->get_type() == resp_error) {
+                last_error_ = cmd->get_result();
+                cmd->set_result(nullptr);
+            }
+        }
+
+        if (last_cmd_ == subcribe_cmd_) {
+            if (subcribe_cmd_->get_result()) {
+                subcribe_cmd_->set_is_subcribe(true);
+            }
+        }
+
+        if (!last_cmd_ && subcribe_cmd_) {
+            if (!subcribe_cmd_->is_subcribe()) {
+                last_error_ = ErrorValue::from_string("subcribe failed");
+            } else {
+                subcribe_cmd_->exec_callback();
             }
         }
 
@@ -87,7 +102,7 @@ namespace yuan::redis
             return;
         }
 
-        last_cmd_ = CommandManager::get_instance()->get_command();
+        last_cmd_ = CommandManager::get_instance()->get_command(option_.name_);
         if (last_cmd_)
         {
             const auto& cmdStr = last_cmd_->pack();
@@ -104,9 +119,8 @@ namespace yuan::redis
 
     SimpleTask<std::shared_ptr<RedisValue>> do_execute_command(std::shared_ptr<Command> cmd)
     {
-        CommandManager::get_instance()->add_command(cmd);
         auto co = _do_execute_command(cmd);
-        co_return co.execute();
+        co_return _do_execute_command(cmd).execute();
     }
 
     std::shared_ptr<RedisValue> RedisClient::Impl::execute_command(std::shared_ptr<Command> cmd)
@@ -136,6 +150,7 @@ namespace yuan::redis
 
         last_error_ = nullptr;
 
+        CommandManager::get_instance()->add_command(option_.name_, cmd);
         auto co = do_execute_command(cmd);
         return co.execute();
     }

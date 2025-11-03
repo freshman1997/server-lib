@@ -17,7 +17,7 @@ namespace yuan::redis
 
         auto cmd = std::make_shared<MultiCmd>();
         cmd->set_args("multi", {});
-        CommandManager::get_instance()->add_command(cmd);
+        CommandManager::get_instance()->add_command(impl_->option_.name_, cmd);
         
         impl_->multi_cmd_ = cmd;
 

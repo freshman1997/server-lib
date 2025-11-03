@@ -101,4 +101,9 @@ namespace yuan::redis
     {
         return impl_->last_error_;
     }
+
+    const std::string & RedisClient::get_name() const
+    {
+        return impl_->option_.name_;
+    }
 }

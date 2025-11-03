@@ -8,6 +8,7 @@
 #include "value/string_value.h"
 #include "value/float_value.h"
 #include "value/map_value.h"
+#include "internal/utils.h"
 
 #include <memory>
 #include <sstream>
@@ -226,7 +227,8 @@ namespace yuan::redis
             
             ++ptr;
             
-            result = std::make_shared<FloatValue>(float_str);
+            result = std::make_shared<FloatValue>(RedisDoubleConverter::convertSafe(float_str));
+            result->set_raw_str(float_str);
 
             return ptr - begin;
         }
@@ -245,6 +247,7 @@ namespace yuan::redis
             }
 
             result = std::make_shared<StatusValue>(res == 't');
+            result->set_raw_str(res == 't' ? "t" : "f");
 
             return 3;
         }
@@ -290,6 +293,7 @@ namespace yuan::redis
             }
 
             result = arrResult;
+
             return ptr - begin;
         }
         case resp_map:

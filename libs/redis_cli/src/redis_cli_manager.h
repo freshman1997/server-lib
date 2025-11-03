@@ -14,12 +14,14 @@ namespace yuan::redis
         int init(const std::vector<Option> &options);
 
         std::shared_ptr<RedisClient> get_random_redis_client();
+
+        std::shared_ptr<RedisClient> get_round_robin_redis_client();
         
-    private:
         RedisCliManager() = default;
         ~RedisCliManager() = default;
         
     private:
+        int m_redis_cli_idx_ = 0;
         std::vector<std::pair<Option, std::shared_ptr<RedisClient>>> m_redis_cli_map;
     };
 }

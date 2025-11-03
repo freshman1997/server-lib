@@ -3,6 +3,7 @@
 
 #include "internal/def.h"
 #include "redis_value.h"
+#include "internal/utils.h"
 #include <string>
 
 namespace yuan::redis 
@@ -14,20 +15,20 @@ namespace yuan::redis
         {
         }
 
-        FloatValue(float value) : value_(value)
+        FloatValue(double value) : value_(value)
         {
-            raw_str_ = std::to_string(value_);
+            raw_str_ = serializeDouble(value_);
         }
 
         FloatValue(const std::string &str)
         {
             raw_str_ = str;
-            value_ = std::stod(str);
+            value_ = RedisDoubleConverter::convertSafe(str);
         }
         
         virtual std::string to_string() const override
         {
-            return raw_str_.empty() ? std::to_string(value_) : raw_str_;
+            return raw_str_.empty() ? serializeDouble(value_) : raw_str_;
         }
 
 
@@ -36,20 +37,14 @@ namespace yuan::redis
             return resp_float;
         }
         
-        void set_raw_str(const std::string &str)
+        virtual void set_raw_str(const std::string &str)
         {
             raw_str_ = str;
-            value_ = std::stod(str);
+            value_ = RedisDoubleConverter::convertSafe(str);
         }
 
-        std::string get_raw_str() const
-        {
-            return raw_str_;
-        }
-    
     private:
         double value_;
-        std::string raw_str_;
     };
         
 }

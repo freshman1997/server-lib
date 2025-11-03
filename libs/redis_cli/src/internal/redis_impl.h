@@ -1,4 +1,5 @@
 #include "cmd/multi_cmd.h"
+#include "cmd/subcribe_cmd.h"
 #include "internal/coroutine.h"
 #include "option.h"
 #include "redis_client.h"
@@ -83,6 +84,7 @@ namespace yuan::redis
         net::Connection *conn_;
         std::shared_ptr<Command> last_cmd_;
         std::shared_ptr<MultiCmd> multi_cmd_;
+        std::shared_ptr<SubcribeCmd> subcribe_cmd_;
         std::shared_ptr<RedisValue> last_error_;
     };
 

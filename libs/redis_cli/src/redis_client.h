@@ -1,5 +1,6 @@
 #ifndef __YUAN_REDIS_CLIENT_H__
 #define __YUAN_REDIS_CLIENT_H__
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -15,7 +16,7 @@ namespace yuan::redis
     public:
         RedisClient() = default;
 
-        RedisClient(const Option &opt);
+        explicit RedisClient(const Option &opt);
         
         ~RedisClient();
 
@@ -27,6 +28,8 @@ namespace yuan::redis
         void disconnect();
 
         std::shared_ptr<RedisValue> get_last_error() const;
+
+        const std::string & get_name() const;
 
     public: // common commands
         // string
@@ -146,7 +149,7 @@ namespace yuan::redis
 
         // pub/sub
         std::shared_ptr<RedisValue> publish(std::string channel, std::string message);
-        std::shared_ptr<RedisValue> subscribe(const std::vector<std::string> &channels);
+        std::shared_ptr<RedisValue> subscribe(const std::vector<std::string> &channels, std::function<void(const std::unordered_map<std::string, std::shared_ptr<RedisValue>> &)> callback);
         std::shared_ptr<RedisValue> psubscribe(const std::vector<std::string> &patterns);
         std::shared_ptr<RedisValue> unsubscribe(const std::vector<std::string> &channels);
         std::shared_ptr<RedisValue> punsubscribe(const std::vector<std::string> &patterns);
