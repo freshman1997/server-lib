@@ -4,6 +4,7 @@
 #include <vector>
 #include <memory>
 
+#include "buffer/buffer_reader.h"
 #include "redis_value.h"
 
 namespace yuan::redis 
@@ -24,7 +25,7 @@ namespace yuan::redis
 
         virtual std::string pack() const = 0;
 
-        virtual int unpack(const unsigned char *begin, const unsigned char *end) = 0;
+        virtual int unpack(buffer::BufferReader& reader) = 0;
     };
 }
 

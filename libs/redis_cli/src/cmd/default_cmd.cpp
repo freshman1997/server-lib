@@ -13,7 +13,6 @@
 #include <memory>
 #include <sstream>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace yuan::redis 
@@ -52,19 +51,42 @@ namespace yuan::redis
         return ss.str();
     }
 
-    int DefaultCmd::unpack(const unsigned char *begin, const unsigned char *end)
+    int DefaultCmd::unpack(buffer::BufferReader& reader)
     {
-        return DefaultCmd::unpack_result(result_, begin, end, unpack_to_map_);
+        int ret = DefaultCmd::unpack_result(result_, reader, unpack_to_map_);
+        if (ret >= 0) {
+            if (reader.get_remain_bytes() <= 0) {
+                return ret;
+            }
+
+            auto arr = std::make_shared<ArrayValue>();
+            arr->add_value(result_);
+            while  (reader.get_remain_bytes() > 0) {
+                std::shared_ptr<RedisValue> result;
+                ret = DefaultCmd::unpack_result(result, reader, unpack_to_map_);
+                if (ret < 0) {
+                    return ret;
+                }
+                
+                arr->add_value(result);
+            }
+
+            result_ = arr;
+            
+            return 0;
+        }
+
+        return ret;
     }
 
-    int DefaultCmd::unpack_result(std::shared_ptr<RedisValue> &result, const unsigned char *begin, const unsigned char *end, bool toMap)
+    int DefaultCmd::unpack_result(std::shared_ptr<RedisValue> &result, buffer::BufferReader& reader, bool toMap)
     {
-        if (end - begin < 1)
+        if (reader.get_remain_bytes() < 2)
         {
-            return -1;
+            return UnpackCode::need_more_bytes;
         }
         
-        char type = *begin;
+        char type = reader.read_char();
         if (toMap && type == resp_array)
         {
             type = resp_map;
@@ -74,22 +96,13 @@ namespace yuan::redis
         {
         case resp_status:
         {
-            const unsigned char *ptr = begin + 1;
             std::string str_value;
-            while (ptr < end && *ptr != '\r')
+            int ret = reader.read_line(str_value);
+            if (ret < 0)
             {
-                str_value += static_cast<char>(*ptr);
-                ++ptr;
+                return ret;
             }
-            
-            ++ptr;
-            if (ptr == end || *ptr != '\n')
-            {
-                return -1;
-            }
-            
-            ++ptr;
-            
+
             auto status = std::make_shared<StatusValue>(true);
             if (str_value == "OK" || str_value == "QUEUED")
             {
@@ -99,274 +112,204 @@ namespace yuan::redis
             status->set_msg(str_value);
             result = status;
 
-            return ptr - begin;
+            return 0;
         }
         case resp_error:
         {
-            const unsigned char *ptr = begin + 1;
             std::string str_value;
-            while (ptr < end && *ptr != '\r')
+            int ret = reader.read_line(str_value);
+            if (ret < 0)
             {
-                str_value += static_cast<char>(*ptr);
-                ++ptr;
+                return ret;
             }
-            ++ptr;
-            if (ptr == end || *ptr != '\n')
-            {
-                return -1;
-            }
-            ++ptr;
+
             result = std::make_shared<ErrorValue>(str_value);
-            
-            return ptr - begin;
+            return 0;
         }
         case resp_string:
         {
-            const unsigned char *ptr = begin + 1;
             std::string str_value;
-            while (ptr < end && *ptr != '\r')
+            int ret = reader.read_line(str_value);
+            if (ret < 0)
             {
-                str_value += static_cast<char>(*ptr);
-                ++ptr;
+                return ret;
             }
 
             int len = std::atoi(str_value.c_str());
             if (len < 0)
             {
-                return ptr - end;;
+                return 0;
             }
 
             str_value.clear();
-            ptr += 2; // skip \r\n
-            
-            while (ptr < end && len > 0)
+            ret = reader.read_line(str_value);
+            if (ret < 0)
             {
-                str_value += static_cast<char>(*ptr);
-                ++ptr;
-                --len;
+                return ret;
             }
-
-            if (len != 0)
-            {
-                return -1;
-            }
-
-            if (ptr + 2 > end)
-            {
-                return -1;
-            }
-            
-            ptr += 2; // skip \r\n
 
             result = std::make_shared<StringValue>(str_value);
 
-            return ptr - begin;
+            return 0;
         }
         case resp_int:
         {
-            const unsigned char *ptr = begin + 1;
-            std::string int_str;
-            while (ptr < end && *ptr != '\r')
+            std::string str_value;
+            int ret = reader.read_line(str_value);
+            if (ret < 0)
             {
-                int_str += static_cast<char>(*ptr);
-                ++ptr;
+                return ret;
             }
-
-            ++ptr;
-            if (ptr == end || *ptr != '\n')
-            {
-                return -1;
-            }
-
-            ++ptr;
-
-            auto intResult = std::make_shared<IntValue>();
+            
             try 
             { 
-                intResult->set_value(std::stoll(int_str)); 
+                auto intResult = std::make_shared<IntValue>(std::stoll(str_value));
                 result = intResult;
             }
             catch (const std::exception &ignore) 
-            { return -1; }
+            { 
+                return UnpackCode::format_error; 
+            }
             
-            return ptr - begin;
+            return 0;
         }
 
         case resp_null:
         {
             result = ErrorValue::from_string("null");
-            ++begin;
-            if (begin + 2 > end)
-            {
-                return -1;
-            }
-            
-            if (begin[0] != '\r' || begin[1] != '\n')
-            {
-                return -1;
-            }
-            
-            return 3;
+            std::string str_value;
+            return reader.read_line(str_value);
         }
 
         case resp_float:
         {
-            const unsigned char *ptr = begin + 1;
-            std::string float_str;
-            while (ptr < end && *ptr != '\r')
+            std::string str_value;
+            int ret = reader.read_line(str_value);
+            if (ret < 0)
             {
-                float_str += static_cast<char>(*ptr);
-                ++ptr;
+                return ret;
             }
             
-            ++ptr;
-            if (ptr == end || *ptr != '\n')
-            {
-                return -1;
-            }
-            
-            ++ptr;
-            
-            result = std::make_shared<FloatValue>(RedisDoubleConverter::convertSafe(float_str));
-            result->set_raw_str(float_str);
+            result = std::make_shared<FloatValue>(RedisDoubleConverter::convertSafe(str_value));
+            result->set_raw_str(str_value);
 
-            return ptr - begin;
+            return 0;
         }
         case resp_bool:
         {
-            char res = *(begin + 1);
-            ++begin;
-            if (begin + 2 > end)
+            std::string str_value;
+            int ret = reader.read_line(str_value);
+            if (ret < 0)
             {
-                return -1;
-            }
-            
-            if (begin[0] != '\r' || begin[1] != '\n')
-            {
-                return -1;
+                return ret;
             }
 
-            result = std::make_shared<StatusValue>(res == 't');
-            result->set_raw_str(res == 't' ? "t" : "f");
+            if (str_value.empty()) {
+                return UnpackCode::format_error;
+            }
 
-            return 3;
+            result = std::make_shared<StatusValue>(str_value[0] == 't');
+            result->set_raw_str(str_value);
+
+            return 0;
         }
         case resp_blob_error:
         case resp_verbatim:
         case resp_bigInt:
+            return -2;
+        
         case resp_array:
         {
-            const unsigned char *ptr = begin + 1;
-            std::string int_str;
-            while (ptr < end && *ptr != '\r')
+            std::string str_value;
+            int ret = reader.read_line(str_value);
+            if (ret < 0)
             {
-                int_str += static_cast<char>(*ptr);
-                ++ptr;
+                return ret;
             }
             
-            ++ptr;
-            if (ptr == end || *ptr != '\n')
-            {
-                return -1;
-            }
-            
-            ++ptr;
-            
-            int len = std::atoi(int_str.c_str());
+            int len = std::atoi(str_value.c_str());
             if (len < 0)
             {
-                return -1;
+                return UnpackCode::format_error;
             }
 
             auto arrResult = std::make_shared<ArrayValue>();
             for (int i = 0; i < len; ++i)
             {
                 std::shared_ptr<RedisValue> res = nullptr;
-                int ret = unpack_result(res, ptr, end);
+                int ret = unpack_result(res, reader, toMap);
                 if (ret < 0)
                 {
-                    return -1;
+                    return ret;
                 }
 
                 arrResult->add_value(res);
-                ptr += ret;
             }
 
             result = arrResult;
 
-            return ptr - begin;
+            return 0;
         }
         case resp_map:
         {
-            const unsigned char *ptr = begin + 1;
-
-            std::string len_str;
-            while (ptr < end && *ptr != '\r')
+            std::string str_value;
+            int ret = reader.read_line(str_value);
+            if (ret < 0)
             {
-                len_str += static_cast<char>(*ptr);
-                ++ptr;
+                return ret;
             }
 
-            ++ptr;
-
-            if (ptr == end || *ptr != '\n')
-            {
-                return -1;
-            }
-            ++ptr;
-
-            int len = std::atoi(len_str.c_str());
+            int len = std::atoi(str_value.c_str());
             if (len < 0 || len % 2 != 0)
             {
-                return -1;
+                return UnpackCode::format_error;
             }
 
             std::unordered_map<std::string, std::shared_ptr<RedisValue>> res;
-            while (ptr < end)
+            while (reader.get_remain_bytes() > 0)
             {
-                if (*ptr != resp_string) {
-                    return -1;
+                char subType = reader.peek_char();
+                if (subType != resp_string) {
+                    return UnpackCode::format_error;
                 }
 
                 std::shared_ptr<RedisValue> key = nullptr;
-                int ret = unpack_result(key, ptr, end);
+                int ret = unpack_result(key, reader);
                 if (ret < 0)
                 {
-                    return -1;
+                    return ret;
                 }
 
-                ptr += ret;
-                if (ptr == end) {
-                    return -1;
+                if (reader.get_remain_bytes() <= 0) {
+                    return UnpackCode::need_more_bytes;
                 }
 
                 std::shared_ptr<RedisValue> value = nullptr;
-                ret = unpack_result(value, ptr, end);
+                ret = unpack_result(value, reader);
                 if (ret < 0)
                 {
-                    return -1;
+                    return ret;
                 }
                 
                 if (key->get_type() != resp_string) {
-                    return -1;
+                    return UnpackCode::format_error;
                 }
 
                 const std::string &key_str = key->to_string();
                 if (res.find(key_str) != res.end()) {
-                    return -1;
+                    return UnpackCode::format_error;
                 }
 
                 res[key_str] = value;
-                ptr += ret;
             }
 
             if (len / 2 != res.size()) {
-                return -1;
+                return UnpackCode::format_error;
             }
             
             result = std::make_shared<MapValue>(res);
 
-            return ptr - begin;
+            return 0;
         }
         case resp_set:
         case resp_attr:

@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <sstream>
+#include <cstdint>
 #include <iomanip>
 
 namespace yuan::redis

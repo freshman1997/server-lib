@@ -23,7 +23,7 @@ namespace yuan::redis
         return ss.str();
     }
 
-    int MultiCmd::unpack(const unsigned char *begin, const unsigned char *end)
+    int MultiCmd::unpack(buffer::BufferReader& reader)
     {
         if (cmds_.empty())
         {
@@ -33,11 +33,10 @@ namespace yuan::redis
         
         auto cmd_size = cmds_.size();
         auto idx = 0;
-        auto ptr = begin;
-        while (ptr < end && idx < cmd_size)
+        while (reader.get_remain_bytes() > 0 && idx < cmd_size)
         {
             std::shared_ptr<RedisValue> cmdResult;
-            int ret = DefaultCmd::unpack_result(cmdResult, ptr, end);
+            int ret = DefaultCmd::unpack_result(cmdResult, reader);
             if (ret < 0 || !cmdResult)
             {
                 result_ = ErrorValue::from_string("ERR: run multi cmd failed, cmdName: " + cmds_[idx]->get_cmd_name() + ", idx: " + std::to_string(idx - 1));
@@ -58,11 +57,14 @@ namespace yuan::redis
             }
 
             ++idx;
-            ptr += ret;
+        }
+
+        if (reader.get_remain_bytes() <= 0) {
+            return UnpackCode::need_more_bytes;
         }
 
         std::shared_ptr<RedisValue> resultList;
-        int ret = DefaultCmd::unpack_result(resultList, ptr, end);
+        int ret = DefaultCmd::unpack_result(resultList, reader);
         if (ret < 0 || !resultList)
         {
             result_ = ErrorValue::from_string("ERR: run multi cmd failed, cmdName: " + cmds_[idx]->get_cmd_name() + ", idx: " + std::to_string(idx - 1));

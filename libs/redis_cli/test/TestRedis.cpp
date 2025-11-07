@@ -1,6 +1,8 @@
-#include "../src/redis_client.h"
 #include "redis_cli_manager.h"
 #include "redis_value.h"
+#include "value/array_value.h"
+#include "value/int_value.h"
+#include "value/string_value.h"
 #include <thread>
 #include <chrono>
 
@@ -54,7 +56,7 @@ int main()
         }
     }
 
-    while (true)
+    while (client->is_connected() && subcribeClient->is_connected())
     {
         auto res = client->publish("test1", "helloworld" + std::to_string(i + 1));
         if (res) {
@@ -81,6 +83,24 @@ int main()
             res = subcribeClient->unsubscribe({"test1", "test2"});
             if (res) {
                 std::cout << "get: " << res->to_string() << std::endl;
+                auto arr = res->as<ArrayValue>();
+                for (int i = 0; i < arr->get_values().size(); i += 3) {
+                    auto tag = arr->get_values()[i]->as<StringValue>();
+                    if (tag && tag->get_value() == "unsubscribe") {
+                        if (i + 2 >= arr->get_values().size()) {
+                            std::cout << "unsubscribe error" << std::endl;
+                            break;
+                        }
+
+                        auto channel = arr->get_values()[i + 1]->as<StringValue>();
+                        auto unsubcribeRes = arr->get_values()[i + 2]->as<IntValue>();
+
+                        if (channel && unsubcribeRes && !channel->get_value().empty() && unsubcribeRes->get_value() == 1) {
+                            std::cout << "unsubscribe success: " << channel->get_value() << std::endl;
+                            subcribeClient->unsubscibe_channel(channel->get_value());
+                        }
+                    }
+                }
             } else {
                 if (auto err = subcribeClient->get_last_error()) {
                     std::cout << "error: " << err->to_string() << std::endl;
@@ -105,7 +125,25 @@ int main()
                 }
             }
         }
+
+        if (i == 10) {
+            subRes = subcribeClient->subscribe({"test1", "test2"}, [](const std::unordered_map<std::string, std::shared_ptr<RedisValue>> &msg) {
+                for (auto &[key, value] : msg) {
+                    std::cout << "channel: " << key << ", value: " << value->to_string() << std::endl;
+                }
+            });
+
+            if (subRes) {
+                std::cout << "subRes: " << subRes->to_string() << std::endl;
+            } else {
+                if (auto err = subcribeClient->get_last_error()) {
+                    std::cout << "error: " << err->to_string() << std::endl;
+                }
+            }
+        }
     }
+
+    RedisCliManager::get_instance()->release_all();
 
 #ifdef _WIN32
     WSACleanup();

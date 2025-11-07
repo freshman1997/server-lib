@@ -35,7 +35,6 @@ namespace yuan::redis
     int RedisClient::connect()
     {
         using namespace yuan::net;
-        impl_->clear_mask();
 
         InetAddress addr{ impl_->option_.host_.empty() ? "127.0.0.1" : impl_->option_.host_.c_str(), impl_->option_.port_ };
         if (addr.get_port() <= 0 || addr.get_port() > 65535) {
@@ -55,7 +54,7 @@ namespace yuan::redis
         if (!sock->connect()) {
             delete sock;
             sock = nullptr;
-            impl_->last_error_ = ErrorValue::from_string("connect failed");
+            impl_->last_error_ = ErrorValue::from_string(impl_->option_.name_ + " connect failed");
             return -1;
         }
 
@@ -66,7 +65,7 @@ namespace yuan::redis
         conn->set_event_handler(loop);
         loop->update_channel(conn->get_channel());
 
-        impl_->set_mask(RedisState::connecting);
+        impl_->on_do_connect(conn);
 
         auto co = do_connect(this);
         bool res = co.execute();
@@ -91,10 +90,8 @@ namespace yuan::redis
             return;
         }
 
-        impl_->clear_mask();
         impl_->set_mask(RedisState::closed);
-        impl_->conn_->close();
-        RedisRegistry::get_instance()->get_event_loop()->quit();
+        impl_->close();
     }
 
     std::shared_ptr<RedisValue> RedisClient::get_last_error() const
@@ -105,5 +102,12 @@ namespace yuan::redis
     const std::string & RedisClient::get_name() const
     {
         return impl_->option_.name_;
+    }
+
+    void RedisClient::unsubscibe_channel(const std::string &channel)
+    {
+        if (impl_->subcribe_cmd_) {
+            impl_->subcribe_cmd_->unsubcribe(channel);
+        }
     }
 }

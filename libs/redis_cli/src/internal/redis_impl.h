@@ -1,3 +1,4 @@
+#include "buffer/buffer_reader.h"
 #include "cmd/multi_cmd.h"
 #include "cmd/subcribe_cmd.h"
 #include "internal/coroutine.h"
@@ -5,6 +6,8 @@
 #include "redis_client.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
+#include "timer/timer_task.h"
+
 #include <cstdint>
 #include <memory>
 
@@ -14,11 +17,12 @@ namespace yuan::redis
     {
         connecting = 1,
         connected = 2,
-        disconnecting = 3,
-        closed = 4,
+        exec_command = 3,
+        disconnecting = 4,
+        closed = 5,
     };
 
-    class RedisClient::Impl : public net::ConnectionHandler
+    class RedisClient::Impl : public net::ConnectionHandler, public timer::TimerTask
     {
     public:
         Impl() = default;
@@ -43,11 +47,22 @@ namespace yuan::redis
             set_mask(RedisState::closed);
         }
 
+    public:
+        virtual void on_timer(timer::Timer *timer);
+        
+    public:
+        void on_do_connect(net::Connection *conn);
+
         void close();
 
         void set_mask(RedisState state)
         {
             mask_ |= (1 << (uint8_t)state);
+        }
+
+        void clear_mask(RedisState state)
+        {
+            mask_ &= ~(1 << (uint8_t)state);
         }
 
         void clear_mask()
@@ -86,6 +101,8 @@ namespace yuan::redis
         std::shared_ptr<MultiCmd> multi_cmd_;
         std::shared_ptr<SubcribeCmd> subcribe_cmd_;
         std::shared_ptr<RedisValue> last_error_;
+        time_t last_check_time_ = 0;
+        buffer::BufferReader reader_;
     };
 
     SimpleTask<std::shared_ptr<RedisValue>> do_execute_command(std::shared_ptr<Command> cmd);

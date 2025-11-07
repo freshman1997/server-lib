@@ -29,18 +29,20 @@ namespace yuan::net
 
     class OpenSSLHandler : public SSLHandler
     {
+        friend class OpenSSLModule;
     public:
         OpenSSLHandler();
         ~OpenSSLHandler();
 
     public:
-        virtual void set_user_data(void *udata1, void *udata2, SSLMode mode);
-
         virtual int ssl_init_action();
 
         virtual int ssl_write(buffer::Buffer *buff);
 
         virtual int ssl_read(buffer::Buffer *buff);
+
+    private:
+        void set_ssl_data(OpenSSLModule *module, void *ssl, SSLMode mode);
 
     private:
         class HandlerData;

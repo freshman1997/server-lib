@@ -102,4 +102,18 @@ namespace yuan::buffer
         free_all_buffers();
         append_buffer(buff);
     }
+
+    std::vector<buffer::Buffer *> LinkedBuffer::to_vector(bool clear)
+    {
+        std::vector<buffer::Buffer *> ret;
+        for (auto it = buffers_.rbegin(); it != buffers_.rend(); ++it) {
+            ret.push_back(*it);
+        }
+
+        if (clear) {
+            buffers_.clear();
+        }
+        
+        return ret;
+    }
 }

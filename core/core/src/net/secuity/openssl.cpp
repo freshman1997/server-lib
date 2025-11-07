@@ -108,9 +108,13 @@ namespace yuan::net
             return nullptr;
         }
        
-        SSL_set_fd(ssl, fd);
-        std::shared_ptr<SSLHandler> handler = std::make_shared<OpenSSLHandler>();
-        handler->set_user_data(this, ssl, mode);
+        if (!SSL_set_fd(ssl, fd)) {
+            ERR_print_errors_cb(set_err_msg, this);
+            return nullptr;
+        }
+
+        auto handler = std::make_shared<OpenSSLHandler>();
+        handler->set_ssl_data(this, ssl, mode);
 
         return handler;
     }
@@ -127,6 +131,7 @@ namespace yuan::net
 
     class OpenSSLHandler::HandlerData
     {
+        friend OpenSSLModule;
     public:
         ~HandlerData() 
         {
@@ -170,10 +175,10 @@ namespace yuan::net
         return res;
     }
 
-    void OpenSSLHandler::set_user_data(void *udata1, void *udata2, SSLMode mode)
+    void OpenSSLHandler::set_ssl_data(OpenSSLModule *module, void *ssl, SSLMode mode)
     {
-        data_->module_ = (OpenSSLModule *)udata1;
-        data_->ssl_ = (SSL *)udata2;
+        data_->module_ = module;
+        data_->ssl_ = (SSL *)ssl;
         data_->mode_ = mode;
     }
 

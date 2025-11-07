@@ -19,7 +19,7 @@ namespace yuan::redis
 
         virtual std::string pack() const;
 
-        virtual int unpack(const unsigned char *begin, const unsigned char *end);
+        virtual int unpack(buffer::BufferReader& reader);
     
     private:
         std::vector<std::shared_ptr<Command>> cmds_;

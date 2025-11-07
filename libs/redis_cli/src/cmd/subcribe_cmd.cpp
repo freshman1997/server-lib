@@ -5,15 +5,15 @@
 
 namespace yuan::redis 
 {
-    int SubcribeCmd::unpack(const unsigned char *begin, const unsigned char *end)
+    int SubcribeCmd::unpack(buffer::BufferReader& reader)
     {
         if (!is_subcribe_) {
-            int ret = DefaultCmd::unpack(begin, end);
+            int ret = DefaultCmd::unpack(reader);
             if (ret >= 0 && result_) {
-
                 if (result_->get_type() != resp_array) {
                     return -1;
                 }
+                
                 auto arr = result_->as<ArrayValue>();
                 if (!arr || arr->get_values().size() != channels_.size()) {
                     return -1;
@@ -26,7 +26,7 @@ namespace yuan::redis
         }
 
         result_ = nullptr;
-        int ret = DefaultCmd::unpack(begin, end);
+        int ret = DefaultCmd::unpack(reader);
         if (ret < 0 || !result_ || result_->get_type() != resp_array){
             return ret;
         }
@@ -61,6 +61,8 @@ namespace yuan::redis
 
             messages_[channel->get_value()] = arr_data[i + 1];
         }
+
+        result_ = nullptr;
             
         return ret;
     }

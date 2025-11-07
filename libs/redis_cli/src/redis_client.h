@@ -11,7 +11,7 @@
 
 namespace yuan::redis 
 {
-    class RedisClient 
+    class RedisClient : public std::enable_shared_from_this<RedisClient>
     {
     public:
         RedisClient() = default;
@@ -30,6 +30,9 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> get_last_error() const;
 
         const std::string & get_name() const;
+
+    public:
+        void unsubscibe_channel(const std::string &channel);
 
     public: // common commands
         // string

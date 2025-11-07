@@ -22,6 +22,13 @@ namespace yuan::redis
 	static const char resp_set       = '~'; // ~<len>\r\n... (same as Array)
 	static const char resp_attr      = '|'; // |<len>\r\n(key)\r\n(value)\r\n... + command reply
 	static const char resp_push      = '>'; // ><len>\r\n... (same as Array)
+
+	enum UnpackCode : char 
+	{
+		unpack_success 		= 0, // 解包成功
+		format_error 		= -1, // 格式错误
+		need_more_bytes 	= -2, // 需要更多字节
+	};
 }
 
 #endif // ___YUAN_REDIS_INTERNAL_DEF_H__

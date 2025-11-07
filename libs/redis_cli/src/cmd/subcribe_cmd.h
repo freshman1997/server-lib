@@ -36,7 +36,7 @@ namespace yuan::redis
 
         void exec_callback();
 
-        virtual int unpack(const unsigned char *begin, const unsigned char *end);
+        virtual int unpack(buffer::BufferReader& reader);
 
         void set_is_subcribe(bool is_subcribe)
         {
@@ -58,6 +58,20 @@ namespace yuan::redis
             if (channels_.empty()) {
                 is_subcribe_ = false;
             }
+        }
+
+        void unsubcribe(const std::string &channel)
+        {
+            channels_.erase(channel);
+            if (channels_.empty()) {
+                is_subcribe_ = false;
+            }
+        }
+
+        void unsubcribe_all()
+        {
+            channels_.clear();
+            is_subcribe_ = false;
         }
 
     private:

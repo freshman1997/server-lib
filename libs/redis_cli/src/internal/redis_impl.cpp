@@ -1,13 +1,18 @@
 #include "redis_impl.h"
+#include "base/time.h"
 #include "buffer/buffer.h"
 #include "coroutine.h"
 #include "def.h"
 #include "event/event_loop.h"
 #include "internal/command_manager.h"
 #include "internal/redis_registry.h"
+#include "timer/timer.h"
 #include "value/error_value.h"
 #include "value/string_value.h"
 #include "buffer/linked_buffer.h"
+#include "timer/timer_manager.h"
+
+#include <iostream>
 
 namespace yuan::redis 
 {
@@ -32,7 +37,6 @@ namespace yuan::redis
             CommandManager::get_instance()->add_command(option_.name_, cmd);
         }
 
-        conn_ = conn;
         set_mask(RedisState::connected);
     }
 
@@ -40,6 +44,7 @@ namespace yuan::redis
     {
         if (conn_)
         {
+            set_mask(RedisState::closed);
             conn_->close();
         }
     }
@@ -51,27 +56,22 @@ namespace yuan::redis
             return;
         }
 
-        auto buff = conn->get_input_buff();
-        if (conn->get_input_linked_buffer()->get_size() > 1) {
-            conn->get_input_linked_buffer()->foreach([this, buff](buffer::Buffer *buf) -> bool {
-                if (buf != buff) {
-                    buff->append_buffer(*buf);
-                }
-                return true;
-            });
-        }
+        reader_.add_buffer(conn->get_input_linked_buffer()->to_vector(true));
 
         auto cmd = last_cmd_ ? last_cmd_ : subcribe_cmd_;
-        int ret = cmd->unpack((const unsigned char *)buff->peek(), (const unsigned char *)buff->peek_end());
+        int ret = cmd->unpack(reader_);
         if (ret < 0)
         {
-            last_error_ = ErrorValue::to_error((const unsigned char *)buff->peek(), (const unsigned char *)buff->peek_end());
-            if (!last_error_)
-            {
+            if (ret == UnpackCode::need_more_bytes) {
+                return;
+            } else if (ret == UnpackCode::format_error) {
+                last_error_ = ErrorValue::from_string("format error");
+            } else {
                 last_error_ = ErrorValue::from_string("unknown error");
             }
         } else {
-            if (cmd->get_result()->get_type() == resp_error) {
+            reader_.init();
+            if (cmd->get_result() && cmd->get_result()->get_type() == resp_error) {
                 last_error_ = cmd->get_result();
                 cmd->set_result(nullptr);
             }
@@ -133,7 +133,7 @@ namespace yuan::redis
 
             int ret = client_->connect();
             if (ret < 0) {
-                last_error_ = ErrorValue::from_string("connect failed");
+                last_error_ = ErrorValue::from_string(option_.name_ + " connect failed");
                 return nullptr;
             }
         }
@@ -150,8 +150,46 @@ namespace yuan::redis
 
         last_error_ = nullptr;
 
+        set_mask(RedisState::exec_command);
+
         CommandManager::get_instance()->add_command(option_.name_, cmd);
         auto co = do_execute_command(cmd);
-        return co.execute();
+        auto res = co.execute();
+
+        clear_mask(RedisState::exec_command);
+
+        return res;
+    }
+
+    void RedisClient::Impl::on_do_connect(net::Connection *conn)
+    {
+        clear_mask();
+        set_mask(RedisState::connecting);
+        last_check_time_ = base::time::now();
+        conn_ = conn;
+        RedisRegistry::get_instance()->get_timer_manager()->interval(0, 1000, this, -1);
+    }
+
+    void RedisClient::Impl::on_timer(timer::Timer *timer)
+    {
+        auto now = base::time::now();
+        if (now - last_check_time_ > 10000) {
+            close();
+            last_error_ = ErrorValue::from_string("connection time out");
+            RedisRegistry::get_instance()->get_event_loop()->set_use_coroutine(true);
+            timer->cancel();
+        } else { 
+            if (is_connected()) {
+                last_check_time_ = now;
+                auto ping = std::make_shared<DefaultCmd>();
+                ping->set_args("ping", {});
+                auto res = execute_command(ping);
+                if (last_error_) {
+                    std::cout << "ping error: " << last_error_->to_string() << "\n";
+                } else {
+                    std::cout << "ping success: " << res->to_string() << "\n";
+                }
+            }
+        }
     }
 }

@@ -3,6 +3,16 @@
 
 namespace yuan::redis 
 {
+    void RedisCliManager::release_all()
+    {
+        for (auto &[opt, redis_cli] : m_redis_cli_map)
+        {
+            redis_cli->disconnect();
+            redis_cli = nullptr;
+        }
+        m_redis_cli_map.clear();
+    }
+
     int RedisCliManager::init(const std::vector<Option> &options)
     {
         for (const auto &opt : options)

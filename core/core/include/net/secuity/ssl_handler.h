@@ -16,8 +16,6 @@ namespace yuan::net
     public:
         virtual ~SSLHandler() {}
 
-        virtual void set_user_data(void *udata1, void *udata2, SSLMode mode) = 0;
-
         virtual int ssl_init_action() = 0;
 
         virtual int ssl_write(buffer::Buffer *buff) = 0;

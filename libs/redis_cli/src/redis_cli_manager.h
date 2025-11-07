@@ -19,6 +19,8 @@ namespace yuan::redis
         
         RedisCliManager() = default;
         ~RedisCliManager() = default;
+
+        void release_all();
         
     private:
         int m_redis_cli_idx_ = 0;

@@ -163,6 +163,14 @@ namespace yuan::buffer
             return begin() + read_index;
         }
 
+        char peek(size_t idx)
+        {
+            if (idx >= readable_bytes()) {
+                return 0;
+            }
+            return *(begin() + read_index + idx);
+        }
+
         const char* peek_end() const
         { 
             return begin() + read_index + readable_bytes();

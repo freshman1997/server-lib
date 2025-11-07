@@ -55,10 +55,6 @@ namespace yuan::redis
             cmd->add_arg(std::make_shared<StringValue>(channel));
         }
 
-        if (impl_->subcribe_cmd_ && impl_->subcribe_cmd_->is_subcribe()) {
-            
-        }
-        
         return impl_->execute_command(cmd);
     }
 

@@ -2,6 +2,7 @@
 #define __LINKED_BUFF_H__
 #include <functional>
 #include <list>
+#include <vector>
 
 namespace yuan::buffer
 {
@@ -38,6 +39,8 @@ namespace yuan::buffer
         void foreach(std::function<bool (buffer::Buffer *buff)> func);
 
         void keep_one_buffer();
+
+        std::vector<buffer::Buffer *> to_vector(bool clear = false);
 
     private:
         std::list<buffer::Buffer *> buffers_;
