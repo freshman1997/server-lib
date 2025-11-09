@@ -15,8 +15,6 @@ namespace yuan::redis
         std::string to_string() const override { return error_; }
         char get_type() const override { return resp_error; }
 
-        static std::shared_ptr<RedisValue> to_error(const unsigned char *begin, const unsigned char *end);
-
         static std::shared_ptr<RedisValue> from_string(const std::string &str)
         {
             return std::make_shared<ErrorValue>(str);

@@ -8,14 +8,14 @@
 
 namespace yuan::redis 
 {
-    class MapValue : public RedisValue
+    class MapValue final : public RedisValue
     {
     public:
         MapValue() = default;
-        MapValue(const std::unordered_map<std::string, std::shared_ptr<RedisValue>> &map) : map_val_(map) {}
-        ~MapValue() = default;
+        explicit MapValue(const std::unordered_map<std::string, std::shared_ptr<RedisValue>> &map) : map_val_(map) {}
+        ~MapValue() override = default;
 
-        virtual std::string to_string() const
+        std::string to_string() const override
         {
             std::ostringstream oss;
             
@@ -29,7 +29,7 @@ namespace yuan::redis
             return oss.str();
         }
 
-        virtual char get_type() const
+        char get_type() const override
         {
             return resp_map;
         }

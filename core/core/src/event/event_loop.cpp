@@ -50,9 +50,7 @@ namespace yuan::net
         data_->is_waiting_ = false;
     }
 
-    EventLoop::~EventLoop()
-    {
-    }
+    EventLoop::~EventLoop() = default;
 
     void EventLoop::loop()
     {
@@ -65,7 +63,7 @@ namespace yuan::net
         channels.reserve(4096);
         while (!data_->quit_ && !data_->use_coroutine_) {
             channels.clear();
-            uint64_t to = data_->poller_->poll(10, channels);
+            const uint64_t to = data_->poller_->poll(10, channels);
             if (!channels.empty()) {
                 for (const auto &channel : channels) {
                     if (channel) {

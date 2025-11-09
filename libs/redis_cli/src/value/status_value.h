@@ -7,12 +7,12 @@
 
 namespace yuan::redis 
 {
-    class StatusValue : public RedisValue
+    class StatusValue final : public RedisValue
     {
     public:
-        StatusValue(bool status) : status_(status) {}
+        explicit StatusValue(const bool status) : status_(status) {}
         std::string to_string() const override { return status_ ? "OK" : "FAIL"; }
-        virtual char get_type() const override { return resp_status; }
+        char get_type() const override { return resp_status; }
 
         bool is_ok() const { return status_; }
 
@@ -26,15 +26,10 @@ namespace yuan::redis
         
         bool get_status() const { return status_; }
 
-        void set_status(bool status) { status_ = status; }
-
-        void set_msg(std::string msg) { msg_ = msg; }
-
-        std::string get_msg() const { return msg_; }
+        void set_status(const bool status) { status_ = status; }
 
     private:
         bool status_;
-        std::string msg_;
     };
 
 }

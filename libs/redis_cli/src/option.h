@@ -6,7 +6,7 @@ namespace yuan::redis
 {
     struct Option 
     {
-        std::string host_;
+        std::string host_ = std::string("localhost");
         int port_ = 6379;
         std::string username_;
         std::string password_;
@@ -14,17 +14,6 @@ namespace yuan::redis
         int timeout_ms_ = 2000; // milliseconds
         std::string name_;
     };
-
-    struct ClusterOption 
-    {
-        std::string startup_node_host_;
-        int startup_node_port_ = 6379;
-        std::string username_;
-        std::string password_;
-        int timeout_ms_ = 2000; // milliseconds
-    };
-
-    
 }
 
 #endif // __YUAN_REDIS_OPTION_H__

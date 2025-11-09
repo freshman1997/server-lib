@@ -7,17 +7,17 @@
 
 namespace yuan::redis 
 {
-    class IntValue : public RedisValue
+    class IntValue final : public RedisValue
     {
     public:
         IntValue() : value_(0) {}
-        IntValue(int64_t value) : value_(value) {}
+        explicit IntValue(int64_t value) : value_(value) {}
         std::string to_string() const override { return std::to_string(value_); }
 
-        virtual char get_type() const override { return resp_int; }
+        char get_type() const override { return resp_int; }
 
         int64_t get_value() const { return value_; }
-        void set_value(int64_t value) { value_ = value; }
+        void set_value(const int64_t value) { value_ = value; }
 
     private:
         int64_t value_;

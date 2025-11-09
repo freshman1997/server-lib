@@ -32,4 +32,4 @@ namespace yuan::redis
     };
 }
 
-#endif // __STRING_VALUE_H__
+#endif // __YUAN_REDIS_STRING_VALUE_H__

@@ -1,8 +1,11 @@
-#include "cmd/default_cmd.h"
-#include "redis_client.h"
-#include "value/string_value.h"
 #include "../redis_impl.h"
 #include "../utils.h"
+#include "cmd/default_cmd.h"
+#include "redis_client.h"
+#include "value/float_value.h"
+#include "value/int_value.h"
+#include "value/string_value.h"
+
 #include <string>
 
 namespace yuan::redis
@@ -29,7 +32,7 @@ namespace yuan::redis
         }
 
         for (auto &[member, score] : member_scores) {
-            cmd->add_arg(std::make_shared<StringValue>(serializeDouble(score)));
+            cmd->add_arg(std::make_shared<FloatValue>(score));
             cmd->add_arg(std::make_shared<StringValue>(member));
         }
 
@@ -81,18 +84,18 @@ namespace yuan::redis
             cmd->add_arg(std::make_shared<StringValue>("("));
         }
 
-        cmd->add_arg(std::make_shared<StringValue>(serializeDouble(min)));
+        cmd->add_arg(std::make_shared<FloatValue>(min));
         
         if (max_open) {
             cmd->add_arg(std::make_shared<StringValue>("("));
         }
 
-        cmd->add_arg(std::make_shared<StringValue>(serializeDouble(max)));
+        cmd->add_arg(std::make_shared<FloatValue>(max));
         
         if (offset > 0) {
             cmd->add_arg(std::make_shared<StringValue>("LIMIT"));
-            cmd->add_arg(std::make_shared<StringValue>(std::to_string(offset)));
-            cmd->add_arg(std::make_shared<StringValue>(std::to_string(count)));
+            cmd->add_arg(std::make_shared<IntValue>(offset));
+            cmd->add_arg(std::make_shared<IntValue>(count));
         }
 
         if (with_scores) {

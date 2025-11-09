@@ -42,7 +42,7 @@ namespace yuan::redis
 
     std::shared_ptr<RedisValue> RedisClient::select(int index)
     {
-        auto cmd = std::make_shared<DefaultCmd>();
+        const auto cmd = std::make_shared<DefaultCmd>();
         cmd->set_args("select", {std::make_shared<StringValue>(std::to_string(index))});
         return impl_->execute_command(cmd);
     }

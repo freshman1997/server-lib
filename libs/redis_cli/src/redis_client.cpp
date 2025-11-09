@@ -36,13 +36,13 @@ namespace yuan::redis
     {
         using namespace yuan::net;
 
-        InetAddress addr{ impl_->option_.host_.empty() ? "127.0.0.1" : impl_->option_.host_.c_str(), impl_->option_.port_ };
+        const InetAddress addr{ impl_->option_.host_, impl_->option_.port_ };
         if (addr.get_port() <= 0 || addr.get_port() > 65535) {
             impl_->last_error_ = ErrorValue::from_string("port is invalid");
             return -1;
         }
         
-        net::Socket *sock = new net::Socket(addr.get_ip().c_str(), addr.get_port());
+        auto *sock = new net::Socket(addr.get_ip().c_str(), addr.get_port());
         if (!sock->valid()) {
             delete sock;
             sock = nullptr;
@@ -58,7 +58,7 @@ namespace yuan::redis
             return -1;
         }
 
-        auto loop = RedisRegistry::get_instance()->get_event_loop();
+        const auto loop = RedisRegistry::get_instance()->get_event_loop();
         
         Connection *conn = new TcpConnection(sock);
         conn->set_connection_handler(impl_.get());
@@ -68,7 +68,7 @@ namespace yuan::redis
         impl_->on_do_connect(conn);
 
         auto co = do_connect(this);
-        bool res = co.execute();
+        const bool res = co.execute();
 
         return res ? 0 : -1;
     }
@@ -81,6 +81,16 @@ namespace yuan::redis
     bool RedisClient::is_connected() const
     {
         return impl_->is_connected();
+    }
+
+    bool RedisClient::is_closed() const
+    {
+        return impl_->is_closed();
+    }
+
+    bool RedisClient::is_timeout() const
+    {
+        return impl_->is_timeout();
     }
 
     void RedisClient::disconnect()
@@ -106,8 +116,8 @@ namespace yuan::redis
 
     void RedisClient::unsubscibe_channel(const std::string &channel)
     {
-        if (impl_->subcribe_cmd_) {
-            impl_->subcribe_cmd_->unsubcribe(channel);
+        if (impl_->subcribe_cmd) {
+            impl_->subcribe_cmd->unsubcribe(channel);
         }
     }
 }

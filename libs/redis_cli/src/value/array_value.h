@@ -8,13 +8,14 @@
 
 namespace yuan::redis 
 {
-    class ArrayValue : public RedisValue
+    class ArrayValue final : public RedisValue
     {
     public:
         ArrayValue() = default;
-        ~ArrayValue() = default;
+        ~ArrayValue() override = default;
+
     public:
-        virtual std::string to_string() const
+        std::string to_string() const override
         {
             std::stringstream ss;
             
@@ -34,7 +35,7 @@ namespace yuan::redis
             return ss.str();
         }
 
-        virtual char get_type() const
+        char get_type() const override
         {
             return resp_array;
         }

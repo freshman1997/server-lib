@@ -20,7 +20,7 @@ namespace yuan::redis
     {
         auto cmd = std::make_shared<SubcribeCmd>();
         cmd->set_args("subscribe", {});
-        cmd->set_callback(callback);
+        cmd->set_callback(std::move(callback));
         cmd->set_channels(channels);
 
         for (auto &channel : channels)
@@ -28,7 +28,7 @@ namespace yuan::redis
             cmd->add_arg(std::make_shared<StringValue>(channel));
         }
         
-        impl_->subcribe_cmd_ = cmd;
+        impl_->subcribe_cmd = cmd;
         return impl_->execute_command(cmd);
     }
 

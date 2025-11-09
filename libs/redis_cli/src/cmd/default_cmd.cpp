@@ -59,11 +59,11 @@ namespace yuan::redis
                 return ret;
             }
 
-            auto arr = std::make_shared<ArrayValue>();
+            const auto arr = std::make_shared<ArrayValue>();
             arr->add_value(result_);
             while  (reader.get_remain_bytes() > 0) {
                 std::shared_ptr<RedisValue> result;
-                ret = DefaultCmd::unpack_result(result, reader, unpack_to_map_);
+                ret = unpack_result(result, reader, unpack_to_map_);
                 if (ret < 0) {
                     return ret;
                 }
@@ -97,19 +97,18 @@ namespace yuan::redis
         case resp_status:
         {
             std::string str_value;
-            int ret = reader.read_line(str_value);
-            if (ret < 0)
+            if (int ret = reader.read_line(str_value); ret < 0)
             {
                 return ret;
             }
 
-            auto status = std::make_shared<StatusValue>(true);
-            if (str_value == "OK" || str_value == "QUEUED")
+            auto status = std::make_shared<StatusValue>(false);
+            if (str_value == "OK" || str_value == "QUEUED" || str_value == "SUCCESS" || str_value == "PONG")
             {
                 status->set_status(true);
             }
 
-            status->set_msg(str_value);
+            status->set_raw_str(str_value);
             result = status;
 
             return 0;
@@ -117,8 +116,7 @@ namespace yuan::redis
         case resp_error:
         {
             std::string str_value;
-            int ret = reader.read_line(str_value);
-            if (ret < 0)
+            if (int ret = reader.read_line(str_value); ret < 0)
             {
                 return ret;
             }
@@ -135,8 +133,7 @@ namespace yuan::redis
                 return ret;
             }
 
-            int len = std::atoi(str_value.c_str());
-            if (len < 0)
+            if (int len = std::atoi(str_value.c_str()); len < 0)
             {
                 return 0;
             }
@@ -155,8 +152,7 @@ namespace yuan::redis
         case resp_int:
         {
             std::string str_value;
-            int ret = reader.read_line(str_value);
-            if (ret < 0)
+            if (int ret = reader.read_line(str_value); ret < 0)
             {
                 return ret;
             }
@@ -184,8 +180,7 @@ namespace yuan::redis
         case resp_float:
         {
             std::string str_value;
-            int ret = reader.read_line(str_value);
-            if (ret < 0)
+            if (int ret = reader.read_line(str_value); ret < 0)
             {
                 return ret;
             }
@@ -198,8 +193,7 @@ namespace yuan::redis
         case resp_bool:
         {
             std::string str_value;
-            int ret = reader.read_line(str_value);
-            if (ret < 0)
+            if (int ret = reader.read_line(str_value); ret < 0)
             {
                 return ret;
             }
@@ -218,11 +212,11 @@ namespace yuan::redis
         case resp_bigInt:
             return -2;
         
+        case resp_push:
         case resp_array:
         {
             std::string str_value;
-            int ret = reader.read_line(str_value);
-            if (ret < 0)
+            if (int ret = reader.read_line(str_value); ret < 0)
             {
                 return ret;
             }
@@ -274,7 +268,7 @@ namespace yuan::redis
                 }
 
                 std::shared_ptr<RedisValue> key = nullptr;
-                int ret = unpack_result(key, reader);
+                ret = unpack_result(key, reader);
                 if (ret < 0)
                 {
                     return ret;
@@ -296,7 +290,7 @@ namespace yuan::redis
                 }
 
                 const std::string &key_str = key->to_string();
-                if (res.find(key_str) != res.end()) {
+                if (res.contains(key_str)) {
                     return UnpackCode::format_error;
                 }
 
@@ -313,8 +307,6 @@ namespace yuan::redis
         }
         case resp_set:
         case resp_attr:
-        case resp_push:
-            break;
         default:
             result = ErrorValue::from_string("unknown type");
             return -1;

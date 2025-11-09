@@ -71,7 +71,7 @@ namespace yuan::net
             }
         }
 
-        struct timeval tv;
+        timeval tv{};
         tv.tv_sec = timeout / 1000;
         tv.tv_usec = (timeout % 1000) * 1000;
 

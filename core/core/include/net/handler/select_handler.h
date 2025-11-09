@@ -8,7 +8,7 @@ namespace yuan::net
     class SelectHandler
     {
     public:
-        virtual ~SelectHandler() {}
+        virtual ~SelectHandler() = default;
 
         virtual void on_read_event() = 0;
 

@@ -23,8 +23,8 @@ int main()
 #endif
     using namespace yuan::redis;
     RedisCliManager::get_instance()->init({
-        {.host_ = "127.0.0.1", .port_ = 6379, .db_ = 1, .name_ = "redis1"},
-        {.host_ = "127.0.0.1", .port_ = 6379, .db_ = 1, .name_ = "redis2"},
+        { .db_ = 1, .name_ = "redis1"},
+        { .db_ = 1, .name_ = "redis2"},
     });
 
     auto client = RedisCliManager::get_instance()->get_round_robin_redis_client();
@@ -58,7 +58,9 @@ int main()
 
     while (client->is_connected() && subcribeClient->is_connected())
     {
-        auto res = client->publish("test1", "helloworld" + std::to_string(i + 1));
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+
+        res = client->publish("test1", "helloworld" + std::to_string(i + 1));
         if (res) {
             std::cout << "push: " << res->to_string() << std::endl;
         } else {
@@ -77,7 +79,6 @@ int main()
         }
 
         ++i;
-        std::this_thread::sleep_for(std::chrono::seconds(1));
 
         if (i == 5) {
             res = subcribeClient->unsubscribe({"test1", "test2"});

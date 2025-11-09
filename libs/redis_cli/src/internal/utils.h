@@ -104,7 +104,7 @@ namespace yuan::redis
         static double convertSafe(const std::string& str, double default_value = 0.0) {
             try {
                 return convert(str);
-            } catch (const std::exception& e) {
+            } catch (const std::exception& ) {
                 return default_value;
             }
         }

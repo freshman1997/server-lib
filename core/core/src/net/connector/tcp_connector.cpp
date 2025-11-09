@@ -1,9 +1,11 @@
 #include "net/connector/tcp_connector.h"
+
+#include "net/channel/channel.h"
 #include "net/connection/tcp_connection.h"
+#include "net/handler/connector_handler.h"
 #include "net/handler/event_handler.h"
 #include "net/socket/socket.h"
 #include "timer/timer_manager.h"
-#include "net/handler/connector_handler.h"
 #include "timer/timer_util.hpp"
 
 #include <cassert>
@@ -35,16 +37,16 @@ namespace yuan::net
         timer::Timer *conn_timer_ = nullptr;
     };
 
-    TcpConnector::TcpConnector() : data_(std::make_unique<TcpConnector::TcpConnectorData>())
+    TcpConnector::TcpConnector() : data_(std::make_unique<TcpConnectorData>())
     {
     }
 
-    TcpConnector::~TcpConnector() {}
+    TcpConnector::~TcpConnector() = default;
 
     void TcpConnector::on_connected(Connection *conn)
     {
         if (data_->ssl_module) {
-            auto sslHandler = data_->ssl_module->create_handler(conn->get_channel()->get_fd(), SSLHandler::SSLMode::connector_);
+            const auto sslHandler = data_->ssl_module->create_handler(conn->get_channel()->get_fd(), SSLHandler::SSLMode::connector_);
             if (!sslHandler) {
                 data_->connector_handler_->on_connect_failed(conn);
                 return;

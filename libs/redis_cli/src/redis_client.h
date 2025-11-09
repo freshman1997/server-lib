@@ -25,6 +25,10 @@ namespace yuan::redis
 
         bool is_connected() const;
 
+        bool is_closed() const;
+
+        bool is_timeout() const;
+
         void disconnect();
 
         std::shared_ptr<RedisValue> get_last_error() const;

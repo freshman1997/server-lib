@@ -3,18 +3,16 @@
 
 #include "buffer/linked_buffer.h"
 #include "connection.h"
-#include "net/channel/channel.h"
 #include "net/handler/select_handler.h"
-#include "net/socket/inet_address.h"
 
 namespace yuan::net
 {
     class TcpConnection : public Connection
     {
     public:
-        TcpConnection(const std::string ip, int port, int fd);
+        TcpConnection(std::string ip, int port, int fd);
 
-        TcpConnection(Socket *scok);
+        explicit TcpConnection(Socket *scok);
 
         virtual ~TcpConnection();
 

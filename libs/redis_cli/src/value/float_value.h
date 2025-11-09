@@ -8,36 +8,36 @@
 
 namespace yuan::redis 
 {
-    class FloatValue : public RedisValue
+    class FloatValue final : public RedisValue
     {
     public:
         FloatValue() : value_(0.0)
         {
         }
 
-        FloatValue(double value) : value_(value)
+        explicit FloatValue(const double value) : value_(value)
         {
             raw_str_ = serializeDouble(value_);
         }
 
-        FloatValue(const std::string &str)
+        explicit FloatValue(const std::string &str)
         {
             raw_str_ = str;
             value_ = RedisDoubleConverter::convertSafe(str);
         }
         
-        virtual std::string to_string() const override
+        std::string to_string() const override
         {
             return raw_str_.empty() ? serializeDouble(value_) : raw_str_;
         }
 
 
-        virtual char get_type() const override
+        char get_type() const override
         {
             return resp_float;
         }
         
-        virtual void set_raw_str(const std::string &str)
+        void set_raw_str(const std::string &str) override
         {
             raw_str_ = str;
             value_ = RedisDoubleConverter::convertSafe(str);
