@@ -58,7 +58,7 @@ int main()
 
     while (client->is_connected() && subcribeClient->is_connected())
     {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        std::this_thread::sleep_for(std::chrono::seconds(3));
 
         res = client->publish("test1", "helloworld" + std::to_string(i + 1));
         if (res) {
@@ -143,8 +143,6 @@ int main()
             }
         }
     }
-
-    RedisCliManager::get_instance()->release_all();
 
 #ifdef _WIN32
     WSACleanup();

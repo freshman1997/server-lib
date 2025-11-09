@@ -43,8 +43,8 @@ namespace yuan::redis
             return nullptr;
         }
 
-        int idx = (m_redis_cli_idx_ + 1) % m_redis_cli_map.size();
-        m_redis_cli_idx_ = idx;
+        int idx = m_redis_cli_idx_ % m_redis_cli_map.size();
+        m_redis_cli_idx_ = idx + 1;
         return m_redis_cli_map[idx].second;
     }
 

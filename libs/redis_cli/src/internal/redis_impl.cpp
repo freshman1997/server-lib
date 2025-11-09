@@ -43,6 +43,8 @@ namespace yuan::redis
                 close();
             }
         }
+        
+        resume();
     }
 
     void RedisClient::Impl::close()
