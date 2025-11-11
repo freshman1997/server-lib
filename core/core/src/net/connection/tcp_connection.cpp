@@ -1,5 +1,6 @@
 #include "net/connection/tcp_connection.h"
 #include "buffer/buffer.h"
+#include "buffer/pool.h"
 #include "net/channel/channel.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
@@ -200,24 +201,24 @@ namespace yuan::net
 
     void TcpConnection::on_read_event()
     {
-        input_buffer_.keep_one_buffer();
+        input_buffer_.free_all_buffers();
 
         bool read = false, close = false;
         int bytes = 0;
-        buffer::Buffer *buf = input_buffer_.get_current_buffer();
+        buffer::Buffer *buf = buffer::BufferedPool::get_instance()->allocate();
         do {
             if (read) {
-                buf = input_buffer_.allocate_buffer();
+                buf = buffer::BufferedPool::get_instance()->allocate();
             }
 
-            if (ssl_handler_) {
-                bytes = ssl_handler_->ssl_read(buf);
-            } else {
+            if (!ssl_handler_) {
                 #ifndef _WIN32
                     bytes = ::read(channel_->get_fd(), buf->buffer_begin(), buf->writable_size());
                 #else
                     bytes = ::recv(channel_->get_fd(), buf->buffer_begin(), buf->writable_size(), 0);
                 #endif
+            } else {
+                bytes = ssl_handler_->ssl_read(buf);
             }
         
             if (bytes <= 0) {
@@ -242,9 +243,14 @@ namespace yuan::net
             } else {
                 read = true;
                 buf->fill(bytes);
+                input_buffer_.append_buffer(buf);
             }
         } while (bytes >= buf->writable_size());
 
+        if (buf && buf->empty()) {
+            buffer::BufferedPool::get_instance()->free(buf);
+        }
+        
         if (close) {
             abort();
         } else if (read) {

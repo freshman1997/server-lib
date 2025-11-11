@@ -133,13 +133,15 @@ namespace yuan::redis
                 return ret;
             }
 
-            if (int len = std::atoi(str_value.c_str()); len < 0)
+            int len = std::atoi(str_value.c_str());
+            if (len < 0 || reader.get_remain_bytes() < len)
             {
                 return 0;
             }
 
             str_value.clear();
-            ret = reader.read_line(str_value);
+            str_value.resize(len);
+            ret = reader.read(str_value.data(), len);
             if (ret < 0)
             {
                 return ret;

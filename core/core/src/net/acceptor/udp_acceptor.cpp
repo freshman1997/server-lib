@@ -1,3 +1,4 @@
+#include "buffer/pool.h"
 #include "net/acceptor/udp/udp_instance.h"
 #include "net/channel/channel.h"
 #include "net/connection/connection.h"
@@ -98,7 +99,8 @@ namespace yuan::net
         socklen_t size = sizeof(peer_addr);
     #endif
         ::memset(&peer_addr, 0, sizeof(peer_addr));
-        auto buff = instance_->get_input_buff_list()->get_current_buffer();
+        instance_->get_input_buff_list()->free_all_buffers();
+        auto buff = buffer::BufferedPool::get_instance()->allocate();
         buff->reset();
         if (buff->writable_size() < UDP_DATA_LIMIT) {
             buff->resize(UDP_DATA_LIMIT);
@@ -109,7 +111,7 @@ namespace yuan::net
         const struct sockaddr_in *address = (struct sockaddr_in*)(&peer_addr);
         do {
             if (read) {
-                buff = instance_->get_input_buff_list()->allocate_buffer();
+                buff = buffer::BufferedPool::get_instance()->allocate();
             }
         #ifdef __linux__
             bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
@@ -130,12 +132,16 @@ namespace yuan::net
                 channel_->enable_read();
                 channel_->enable_write();
                 handler_->update_channel(channel_);
-                return;
+                break;
             } else {
                 buff->fill(bytes);
                 read = true;
             }
         } while (bytes >= buff->writable_size());
+
+        if (buff && buff->empty()) {
+            buffer::BufferedPool::get_instance()->free(buff);
+        }
 
         if (read) {
             InetAddress addr = {::inet_ntoa(address->sin_addr), ntohs(address->sin_port)};
