@@ -22,7 +22,7 @@ namespace yuan::redis
     
     RedisClient::~RedisClient()
     {
-        disconnect();
+        close();
     }
 
     static SimpleTask<bool> do_connect(RedisClient *client)
@@ -93,7 +93,7 @@ namespace yuan::redis
         return impl_->is_timeout();
     }
 
-    void RedisClient::disconnect()
+    void RedisClient::close()
     {
         impl_->last_error_ = nullptr;
         if (!is_connected()) {
@@ -109,6 +109,11 @@ namespace yuan::redis
         return impl_->last_error_;
     }
 
+    void RedisClient::set_last_error(std::shared_ptr<RedisValue> error)
+    {
+        impl_->last_error_ = error;
+    }
+
     const std::string & RedisClient::get_name() const
     {
         return impl_->option_.name_;
@@ -118,6 +123,24 @@ namespace yuan::redis
     {
         if (impl_->subcribe_cmd) {
             impl_->subcribe_cmd->unsubcribe(channel);
+            if (!impl_->subcribe_cmd->is_subcribe()) {
+                impl_->subcribe_cmd = nullptr;
+            }
         }
+    }
+
+    int RedisClient::receive(int timeout)
+    {
+        return impl_->fetch_next_message(timeout);
+    }
+
+    int RedisClient::receive()
+    {
+        return impl_->fetch_next_message(0);
+    }
+
+    bool RedisClient::is_subcribing() const
+    {
+        return impl_->subcribe_cmd != nullptr && impl_->subcribe_cmd->is_subcribe();
     }
 }

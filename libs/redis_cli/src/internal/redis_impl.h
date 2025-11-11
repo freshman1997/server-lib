@@ -26,6 +26,7 @@ namespace yuan::redis
 
     class RedisClient::Impl final : public net::ConnectionHandler, public timer::TimerTask
     {
+        friend class Psub;
     public:
         Impl() = default;
         ~Impl() override = default;
@@ -107,12 +108,20 @@ namespace yuan::redis
 
         std::shared_ptr<RedisValue> execute_command(std::shared_ptr<Command> cmd);
 
+        buffer::BufferReader * get_reader()
+        {
+            return &reader_;
+        }
+
+        int fetch_next_message(int timeout);
+
     public:
         uint8_t mask_ = 0;
         RedisClient *client_ = nullptr;
         Option option_;
         net::Connection *conn_ = nullptr;
         std::shared_ptr<Command> last_cmd_;
+        std::shared_ptr<Command> pending_cmd_;
         std::shared_ptr<MultiCmd> multi_cmd_;
         std::shared_ptr<SubcribeCmd> subcribe_cmd;
         std::shared_ptr<RedisValue> last_error_;

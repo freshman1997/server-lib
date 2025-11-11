@@ -63,18 +63,13 @@ namespace yuan::net
         channels.reserve(4096);
         while (!data_->quit_ && !data_->use_coroutine_) {
             channels.clear();
-            const uint64_t to = data_->poller_->poll(10, channels);
+            const uint64_t to = data_->poller_->poll(2, channels);
             if (!channels.empty()) {
                 for (const auto &channel : channels) {
                     if (channel) {
                         channel->on_event();
                     }
                 }
-            }
-
-            if (to - from >= data_->timer_manager_->get_time_unit()) {
-                from = to;
-                data_->timer_manager_->tick();
             }
 
             if (to - from < data_->timer_manager_->get_time_unit()) {
@@ -85,6 +80,12 @@ namespace yuan::net
                     data_->cond.wait_until(lock, now + std::chrono::milliseconds(data_->timer_manager_->get_time_unit() - (to - from)));
                     data_->is_waiting_ = false;
                 }
+            }
+
+            auto now = base::time::get_tick_count();
+            if (now - from >= data_->timer_manager_->get_time_unit()) {
+                from = now;
+                data_->timer_manager_->tick();
             }
         }
     }

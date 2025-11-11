@@ -5,7 +5,6 @@
 #include "coroutine.h"
 #include "def.h"
 #include "event/event_loop.h"
-#include "internal/command_manager.h"
 #include "internal/redis_registry.h"
 #include "timer/timer.h"
 #include "timer/timer_manager.h"
@@ -13,14 +12,16 @@
 #include "value/error_value.h"
 #include "value/status_value.h"
 #include "value/string_value.h"
+#include "timer/timer_util.hpp"
 
+#include <cassert>
 #include <iostream>
 
 namespace yuan::redis 
 {
     static void resume()
     {
-        RedisRegistry::get_instance()->get_event_loop()->set_use_coroutine(true);
+        RedisRegistry::get_instance()->use_corutine();
     }
 
     void RedisClient::Impl::on_connected(net::Connection *conn)
@@ -85,12 +86,6 @@ namespace yuan::redis
             }
         }
 
-        if (last_cmd_ == subcribe_cmd) {
-            if (subcribe_cmd->get_result()) {
-                subcribe_cmd->set_is_subcribe(true);
-            }
-        }
-
         if (!last_cmd_ && subcribe_cmd) {
             if (!subcribe_cmd->is_subcribe()) {
                 last_error_ = ErrorValue::from_string("subscribe failed");
@@ -100,8 +95,6 @@ namespace yuan::redis
         }
 
         reader_.init();
-        last_cmd_ = nullptr;
-
         if (is_timeout()) {
             close();
         }
@@ -116,18 +109,26 @@ namespace yuan::redis
             return;
         }
 
-        last_cmd_ = CommandManager::get_instance()->get_command(option_.name_);
-        if (last_cmd_)
+        if (pending_cmd_)
         {
-            const auto& cmdStr = last_cmd_->pack();
+            const auto& cmdStr = pending_cmd_->pack();
             conn->get_output_buff()->write_string(cmdStr);
+            last_cmd_ = pending_cmd_;
         }
     }
 
-    SimpleTask<std::shared_ptr<RedisValue>> do_execute_command(std::shared_ptr<Command> cmd)
+    SimpleTask<std::shared_ptr<RedisValue>> do_execute_command(std::shared_ptr<Command> cmd, RedisClient* client)
     {
         co_await std::suspend_always{};
-        RedisRegistry::get_instance()->get_event_loop()->loop();
+
+        if (client->is_connected() && !client->is_closed()) {
+            RedisRegistry::get_instance()->get_event_loop()->loop();
+        }
+
+        if (client->is_closed()) {
+            client->set_last_error(ErrorValue::from_string("connection closed"));
+        }
+
         co_return cmd->get_result();
     }
 
@@ -166,15 +167,21 @@ namespace yuan::redis
             return nullptr;
         }
 
+        if (pending_cmd_) {
+            last_error_ = ErrorValue::from_string("executing");
+            return nullptr;
+        }
+
         last_error_ = nullptr;
 
-        set_mask(RedisState::exec_command);
+        pending_cmd_ = cmd;
+        last_cmd_ = nullptr;
 
-        CommandManager::get_instance()->add_command(option_.name_, cmd);
-        auto co = do_execute_command(cmd);
+        auto co = do_execute_command(cmd, client_);
         auto res = co.execute();
 
-        clear_mask(RedisState::exec_command);
+        pending_cmd_ = nullptr;
+        last_cmd_ = nullptr;
 
         return res;
     }
@@ -246,4 +253,40 @@ namespace yuan::redis
         }
     }
 
+    int RedisClient::Impl::fetch_next_message(int timeout)
+    {
+        if (is_closed()) {
+            last_error_ = ErrorValue::from_string("connection closed");
+            return -1;
+        }
+
+        if (!is_connected()) {
+            last_error_ = ErrorValue::from_string("not connected");
+            return -1;
+        }
+
+        return [timeout, this]() -> SimpleTask<int> {
+            co_await std::suspend_always{};
+
+            timer::Timer *timer = nullptr;
+            bool is_timeout = false;
+            if (timeout > 0) {
+                timer = timer::TimerUtil::build_timeout_timer(RedisRegistry::get_instance()->get_timer_manager(), timeout, [this, &is_timeout](timer::Timer *t) {
+                    last_error_ = ErrorValue::from_string("fetch message timeout");
+                    t->cancel();
+                    is_timeout = true;
+                    RedisRegistry::get_instance()->use_corutine();
+                });
+            }
+
+            RedisRegistry::get_instance()->run();
+
+            if (!is_timeout && timer) {
+                timer->cancel();
+            }
+
+            co_return is_timeout ? -1 : 0;
+
+        }().execute();
+    }
 }

@@ -28,7 +28,11 @@ namespace yuan::redis
         net::Poller *get_poller() const { return poller_; }
 
         timer::TimerManager *get_timer_manager() const { return timer_manager_; }
-        
+
+        void run();
+
+        void use_corutine();
+
     private:
         net::EventLoop *event_loop_;
         net::Poller *poller_;

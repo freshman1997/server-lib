@@ -11,6 +11,19 @@
 
 namespace yuan::redis 
 {
+    struct SubMessage
+    {
+        std::shared_ptr<RedisValue> channel;
+        std::shared_ptr<RedisValue> message;
+    };
+
+    struct PSubMessage
+    {
+        std::shared_ptr<RedisValue> pattern;
+        std::shared_ptr<RedisValue> channel;
+        std::shared_ptr<RedisValue> message;
+    };
+
     class RedisClient : public std::enable_shared_from_this<RedisClient>
     {
     public:
@@ -29,11 +42,19 @@ namespace yuan::redis
 
         bool is_timeout() const;
 
-        void disconnect();
+        void close();
 
         std::shared_ptr<RedisValue> get_last_error() const;
 
+        void set_last_error(std::shared_ptr<RedisValue> error);
+
         const std::string & get_name() const;
+
+        int receive(int timeout);
+
+        int receive();
+
+        bool is_subcribing() const;
 
     public:
         void unsubscibe_channel(const std::string &channel);
@@ -156,8 +177,8 @@ namespace yuan::redis
 
         // pub/sub
         std::shared_ptr<RedisValue> publish(std::string channel, std::string message);
-        std::shared_ptr<RedisValue> subscribe(const std::vector<std::string> &channels, std::function<void(const std::unordered_map<std::string, std::shared_ptr<RedisValue>> &)> callback);
-        std::shared_ptr<RedisValue> psubscribe(const std::vector<std::string> &patterns);
+        std::shared_ptr<RedisValue> subscribe(const std::vector<std::string> &channels, std::function<void(const std::vector<SubMessage> &messages)> msg_callback);
+        std::shared_ptr<RedisValue> psubscribe(const std::vector<std::string> &patterns, std::function<void(const std::vector<PSubMessage> &messages)> pmsg_callback);
         std::shared_ptr<RedisValue> unsubscribe(const std::vector<std::string> &channels);
         std::shared_ptr<RedisValue> punsubscribe(const std::vector<std::string> &patterns);
         std::shared_ptr<RedisValue> psubscribe(const std::vector<std::string> &patterns, const std::vector<std::string> &channels);

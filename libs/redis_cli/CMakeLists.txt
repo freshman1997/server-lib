@@ -12,3 +12,5 @@ target_include_directories(redisCli PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LI
 
 add_executable(redisCliTest ./test/TestRedis.cpp)
 target_link_libraries(redisCliTest PUBLIC redisCli)
+add_executable(redisCliTest1 ./test/TestRedis1.cpp)
+target_link_libraries(redisCliTest1 PUBLIC redisCli)

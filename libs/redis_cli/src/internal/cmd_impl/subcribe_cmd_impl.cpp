@@ -16,12 +16,13 @@ namespace yuan::redis
         return impl_->execute_command(cmd);
     }
 
-    std::shared_ptr<RedisValue> RedisClient::subscribe(const std::vector<std::string> &channels, std::function<void(const std::unordered_map<std::string, std::shared_ptr<RedisValue>> &)> callback)
+    std::shared_ptr<RedisValue> RedisClient::subscribe(const std::vector<std::string> &channels, std::function<void(const std::vector<SubMessage> &messages)> msg_callback)
     {
         auto cmd = std::make_shared<SubcribeCmd>();
         cmd->set_args("subscribe", {});
-        cmd->set_callback(std::move(callback));
+        cmd->set_msg_callback(std::move(msg_callback));
         cmd->set_channels(channels);
+        cmd->set_message_cmd("message");
 
         for (auto &channel : channels)
         {
@@ -32,15 +33,20 @@ namespace yuan::redis
         return impl_->execute_command(cmd);
     }
 
-    std::shared_ptr<RedisValue> RedisClient::psubscribe(const std::vector<std::string> &patterns)
+    std::shared_ptr<RedisValue> RedisClient::psubscribe(const std::vector<std::string> &patterns, std::function<void(const std::vector<PSubMessage> &messages)> pmsg_callback)
     {
-        auto cmd = std::make_shared<DefaultCmd>();
+        auto cmd = std::make_shared<SubcribeCmd>();
         cmd->set_args("psubscribe", {});
+        cmd->set_pmsg_callback(pmsg_callback);
+        cmd->set_channels(patterns);
+        cmd->set_message_cmd("pmessage");
         
         for (auto &pattern : patterns)
         {
             cmd->add_arg(std::make_shared<StringValue>(pattern));
         }
+
+        impl_->subcribe_cmd = cmd;
         
         return impl_->execute_command(cmd);
     }
@@ -55,6 +61,10 @@ namespace yuan::redis
             cmd->add_arg(std::make_shared<StringValue>(channel));
         }
 
+        if (impl_->subcribe_cmd) {
+            impl_->subcribe_cmd->unsubcribe(channels);
+        }
+
         return impl_->execute_command(cmd);
     }
 
@@ -66,6 +76,10 @@ namespace yuan::redis
         for (auto &pattern : patterns)
         {
             cmd->add_arg(std::make_shared<StringValue>(pattern));
+        }
+
+        if (impl_->subcribe_cmd) {
+            impl_->subcribe_cmd->unsubcribe(patterns);
         }
         
         return impl_->execute_command(cmd);

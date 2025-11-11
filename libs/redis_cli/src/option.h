@@ -11,7 +11,7 @@ namespace yuan::redis
         std::string username_;
         std::string password_;
         int db_ = 0;
-        int timeout_ms_ = 2000; // milliseconds
+        int timeout_ms_ = 0; // milliseconds
         std::string name_;
     };
 }

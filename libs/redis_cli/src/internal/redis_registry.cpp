@@ -21,4 +21,14 @@ namespace yuan::redis
         delete poller_;
         delete timer_manager_;
     }
+
+    void RedisRegistry::run()
+    {
+        event_loop_->loop();
+    }
+
+    void RedisRegistry::use_corutine()
+    {
+        event_loop_->set_use_coroutine(true);
+    }
 }
