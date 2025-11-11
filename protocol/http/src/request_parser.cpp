@@ -71,7 +71,7 @@ namespace yuan::net::http
                 break;
             }
             case 'o': {
-                for (int i = 0; i < 7 && buff.readable_bytes(); ++i) {
+                for (int i = 0; i < 6 && buff.readable_bytes(); ++i) {
                     method.push_back(std::tolower(buff.read_int8()));
                 }
 

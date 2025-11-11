@@ -139,15 +139,20 @@ namespace yuan::redis
                 return 0;
             }
 
-            str_value.clear();
-            str_value.resize(len);
-            ret = reader.read(str_value.data(), len);
+            auto pstr = std::make_shared<StringValue>(str_value);
+            auto &str = pstr->get_value(); 
+            str.resize(len);
+            ret = reader.read(str.data(), len);
             if (ret < 0)
             {
                 return ret;
             }
 
-            result = std::make_shared<StringValue>(str_value);
+            result = pstr;
+
+            // skip \r\n
+            str_value.clear();
+            reader.read_line(str_value);
 
             return 0;
         }

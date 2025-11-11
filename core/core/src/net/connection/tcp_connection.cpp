@@ -231,6 +231,8 @@ namespace yuan::net
                             goto again;
                         }
                     #endif
+
+                        std::cerr << "read error: " << errno << std::endl;
                         connectionHandler_->on_error(this);
                         close = true;
                         break; 
@@ -245,7 +247,7 @@ namespace yuan::net
                 buf->fill(bytes);
                 input_buffer_.append_buffer(buf);
             }
-        } while (bytes >= buf->writable_size());
+        } while (bytes > 0 && buf->writable_size() == 0);
 
         if (buf && buf->empty()) {
             buffer::BufferedPool::get_instance()->free(buf);

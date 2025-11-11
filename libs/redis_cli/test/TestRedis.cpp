@@ -1,8 +1,5 @@
 #include "redis_cli_manager.h"
 #include "redis_value.h"
-#include "value/array_value.h"
-#include "value/int_value.h"
-#include "value/string_value.h"
 #include <thread>
 #include <chrono>
 
@@ -27,8 +24,7 @@ int main()
     });
 
     auto client = RedisCliManager::get_instance()->get_round_robin_redis_client();
-    std::cout << "client: " << client->get_name() << std::endl;
-    auto res = client->publish("test1", "helloworld");
+    auto res = client->info();
     if (res) {
         std::cout << "push: " << res->to_string() << std::endl;
     } else {
@@ -38,10 +34,8 @@ int main()
     }
 
     int i = 0;
-    while (client->is_connected() && !client->is_closed())
+    while (client->is_connected())
     {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-
         res = client->publish("test1", "helloworld" + std::to_string(i + 1));
         if (res) {
             std::cout << "push: " << res->to_string() << std::endl;

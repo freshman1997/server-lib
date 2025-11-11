@@ -211,6 +211,7 @@ namespace yuan::net::http
 
         // 注册 reload_config 事件
         on("/reload_config", [this]<typename T0, typename T1>(T0 && req, T1 && resp) { reload_config(std::forward<T0>(req), std::forward<T1>(resp)); });
+        on("/upload", [this]<typename T0, typename T1>(T0 && req, T1 && resp) { serve_upload(std::forward<T0>(req), std::forward<T1>(resp)); });
 
         const auto &proxiesCfg = HttpConfigManager::get_instance()->get_type_array_properties<nlohmann::json>("proxies");
         if (!proxiesCfg.empty()) {
@@ -267,8 +268,6 @@ namespace yuan::net::http
 
             delete it->second;
             sessions_.erase(it);
-        } else {
-            std::cerr << "internal error found!!!\n";
         }
     }
 
@@ -587,6 +586,30 @@ namespace yuan::net::http
         resp->add_header("Connection", "close");
         resp->set_response_code(net::http::ResponseCode::ok_);
         resp->add_header("Content-Length", std::to_string(resp->get_buff()->readable_bytes()));
+        resp->send();
+    }
+
+    void HttpServer::serve_upload(HttpRequest *req, HttpResponse *resp)
+    {
+        if (req->get_method() == HttpMethod::options_) {
+            handle_cors_options(req, resp);
+            return;
+        }
+        
+        resp->process_error();
+    }
+
+    void HttpServer::handle_cors_options(HttpRequest *req, HttpResponse *resp)
+    {
+        // 设置跨域头部
+        resp->add_header("Access-Control-Allow-Origin", "*");
+        resp->add_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+        resp->add_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+        resp->add_header("Access-Control-Max-Age", "86400"); // 24小时缓存
+        
+        // 设置响应状态码
+        resp->set_response_code(ResponseCode::ok_);
+        resp->add_header("Content-Length", "0");
         resp->send();
     }
 }

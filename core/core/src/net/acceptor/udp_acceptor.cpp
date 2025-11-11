@@ -110,7 +110,7 @@ namespace yuan::net
         int bytes = 0;
         const struct sockaddr_in *address = (struct sockaddr_in*)(&peer_addr);
         do {
-            if (read) {
+            if (read && buff->writable_size() == 0) {
                 buff = buffer::BufferedPool::get_instance()->allocate();
             }
         #ifdef __linux__
@@ -136,8 +136,9 @@ namespace yuan::net
             } else {
                 buff->fill(bytes);
                 read = true;
+                instance_->get_input_buff_list()->append_buffer(buff);
             }
-        } while (bytes >= buff->writable_size());
+        } while (bytes > 0 && buff->writable_size() == 0);
 
         if (buff && buff->empty()) {
             buffer::BufferedPool::get_instance()->free(buff);

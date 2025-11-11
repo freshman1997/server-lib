@@ -88,6 +88,10 @@ namespace yuan::net::http
 
         void reload_config(HttpRequest *req, HttpResponse *resp);
 
+        void serve_upload(HttpRequest *req, HttpResponse *resp);
+
+        void handle_cors_options(HttpRequest *req, HttpResponse *resp);
+
     private:
         bool quit_;
         State state_;

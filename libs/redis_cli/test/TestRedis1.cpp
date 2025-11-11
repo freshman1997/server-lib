@@ -1,8 +1,5 @@
 #include "redis_cli_manager.h"
 #include "redis_value.h"
-#include "value/array_value.h"
-#include "value/int_value.h"
-#include "value/string_value.h"
 #include <thread>
 #include <chrono>
 
@@ -43,9 +40,8 @@ int main()
         }
     }
 
-    while (subcribeClient->is_connected() && !subcribeClient->is_closed())
+    while (subcribeClient->is_connected())
     {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
         if (subcribeClient->is_subcribing()) {
             int ret = subcribeClient->receive(2000);
             if (ret < 0) {
@@ -55,33 +51,6 @@ int main()
                     std::cout << "receive error: " << ret << std::endl;
                 }
                 subcribeClient->close();
-            }
-        }
-
-        auto res = subcribeClient->punsubscribe({"test*"});
-        if (res) {
-            std::cout << "punsubscribe: " << res->to_string() << std::endl;
-        } else {
-            if (auto err = subcribeClient->get_last_error()) {
-                std::cout << "punsubscribe error: " << err->to_string() << std::endl;
-            }
-        }
-
-        res = subcribeClient->set("hello1", "world1");
-        if (res) {
-            std::cout << "set: " << res->to_string() << std::endl;
-        } else {
-            if (auto err = subcribeClient->get_last_error()) {
-                std::cout << "set error: " << err->to_string() << std::endl;
-            }
-        }
-
-        res = subcribeClient->get("hello1");
-        if (res) {
-            std::cout << "get: " << res->to_string() << std::endl;
-        } else {
-            if (auto err = subcribeClient->get_last_error()) {
-                std::cout << "get error: " << err->to_string() << std::endl;
             }
         }
     }
