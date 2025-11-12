@@ -755,7 +755,7 @@ namespace yuan::net::http
                 uploadBytes += item.second;
             }
 
-            if (uploaded_chunks_.size() + 1 == totalChunk && uploadBytes + chunkSize != fileSize) {
+            if (upIt->second.size() + 1 == totalChunk && uploadBytes + chunkSize != fileSize) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
             }
@@ -767,9 +767,9 @@ namespace yuan::net::http
 
             std::ofstream of;
             if (chunkIdx == 0) {
-                of.open(std::filesystem::path(filename->value_));
+                of.open(std::filesystem::u8path(filename->value_));
             } else {
-                of.open(std::filesystem::path(filename->value_), std::ios::app);
+                of.open(std::filesystem::u8path(filename->value_), std::ios::app);
             }
 
             if (!of.good()) {
