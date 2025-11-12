@@ -109,6 +109,9 @@ namespace yuan::net
         if (output_buffer_.get_current_buffer()->empty()) {
             output_buffer_.free_current_buffer();
         }
+
+        channel_->enable_write();
+        eventHandler_->update_channel(channel_);
     }
 
     void TcpConnection::write_and_flush(buffer::Buffer *buff)
@@ -156,12 +159,20 @@ namespace yuan::net
                     close();
                     return;
                 }
+
+                channel_->enable_write();
+                eventHandler_->update_channel(channel_);
                 break;
             }
         }
 
-        if (output_buffer_.get_size() == 0 && state_ == ConnectionState::closing) {
-            do_close();
+        if (output_buffer_.get_size() == 0) {
+            if (state_ == ConnectionState::closing) {
+                do_close();
+            } else {
+                channel_->disable_write();
+                eventHandler_->update_channel(channel_);
+            }
         }
     }
 

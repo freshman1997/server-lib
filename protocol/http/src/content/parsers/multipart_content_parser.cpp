@@ -231,6 +231,7 @@ namespace yuan::net::http
             const std::string &tmpName = get_random_filename(originName);
             file = new std::fstream(tmpName.c_str(), std::ios_base::out);
             if (!file->good()) {
+                delete file;
                 return -1;
             }
             extra["____tmp_file_name"] = tmpName;
@@ -239,11 +240,13 @@ namespace yuan::net::http
         const auto &contentExtra = packet->get_content_type_extra();
         auto it = contentExtra.find("boundary");
         if (it == contentExtra.end()) {
+            delete file;
             return -1;
         }
 
         const std::string &boundaryStart = "--" + it->second;
         if (end - begin < boundaryStart.size()) {
+            delete file;
             return -1;
         }
         
@@ -256,6 +259,7 @@ namespace yuan::net::http
         }
 
         if (begin + 2 > end) {
+            delete file;
             return -1;
         }
 

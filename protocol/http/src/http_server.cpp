@@ -607,11 +607,6 @@ namespace yuan::net::http
 
     void HttpServer::serve_upload(HttpRequest *req, HttpResponse *resp)
     {
-        if (req->get_method() == HttpMethod::options_) {
-            handle_cors_options(req, resp);
-            return;
-        }
-        
         if (req->get_method() != HttpMethod::post_) {
             resp->process_error(ResponseCode::method_not_allowed);
             return;
@@ -685,7 +680,7 @@ namespace yuan::net::http
             }
 
             int totalChunk = std::atoi(totalChunkSize->value_.c_str());
-            if (chunkSize == 0) {
+            if (totalChunk == 0) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
             }
@@ -772,9 +767,9 @@ namespace yuan::net::http
 
             std::ofstream of;
             if (chunkIdx == 0) {
-                of.open(filename->value_);
+                of.open(std::filesystem::path(filename->value_));
             } else {
-                of.open(filename->value_, std::ios::app);
+                of.open(std::filesystem::path(filename->value_), std::ios::app);
             }
 
             if (!of.good()) {
@@ -801,7 +796,7 @@ namespace yuan::net::http
 
             upIt->second.insert({chunkIdx, chunkSize});
 
-            std::cout << "chunkIdx: " << chunkIdx << ", totalChunk: " << totalChunk << std::endl;
+            std::cout << "chunkIdx: " << chunkIdx << ", chunkSize: " << file->get_content_length() << ", totalChunk: " << totalChunk << std::endl;
             if (upIt->second.size() == totalChunk) {
                 uploaded_chunks_.erase(upIt);
                 std::cout << "upload successfully, filename: " << filename->value_ << ", size: " << fileSize << std::endl;
@@ -809,19 +804,5 @@ namespace yuan::net::http
         } else {
             resp->process_error(ResponseCode::bad_request);
         }
-    }
-
-    void HttpServer::handle_cors_options(HttpRequest *req, HttpResponse *resp)
-    {
-        // 设置跨域头部
-        resp->add_header("Access-Control-Allow-Origin", "*");
-        resp->add_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        resp->add_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
-        resp->add_header("Access-Control-Max-Age", "86400"); // 24小时缓存
-        
-        // 设置响应状态码
-        resp->set_response_code(ResponseCode::ok_);
-        resp->add_header("Content-Length", "0");
-        resp->send();
     }
 }

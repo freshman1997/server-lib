@@ -75,6 +75,7 @@ namespace yuan::net::http
         chunked_checksum_.clear();
 
         is_download_file_ = false;
+        is_upload_file_ = false;
         if (task_) {
             delete task_;
             task_ = nullptr;
@@ -257,20 +258,20 @@ namespace yuan::net::http
         if (res < 0) {
             is_good_ = false;
             return false;
-        } else {
-            if (res == 1) {
-                const std::string *ctype = get_header(http_header_key::content_type);
-                is_good_ = true;
-                if (ctype) {
-                    is_good_ = parse_content_type(ctype->c_str(), ctype->c_str() + ctype->size(), content_type_text_, content_type_extra_).first;
-                    content_type_ = find_content_type(content_type_text_);
-                }
-                return true;
-            } else {
-                is_good_ = true;
-                return false;
-            }
         }
+
+        if (res == 1) {
+            const std::string *ctype = get_header(http_header_key::content_type);
+            is_good_ = true;
+            if (ctype) {
+                is_good_ = parse_content_type(ctype->c_str(), ctype->c_str() + ctype->size(), content_type_text_, content_type_extra_).first;
+                content_type_ = find_content_type(content_type_text_);
+            }
+            return true;
+        }
+
+        is_good_ = true;
+        return false;
     }
 
     bool HttpPacket::write(buffer::Buffer &buff)
