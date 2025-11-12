@@ -260,7 +260,7 @@ namespace yuan::net
             if (state_ == ConnectionState::connecting && connectionHandler_) {
                 state_ = ConnectionState::connected;
                 connectionHandler_->on_connected(this);
-            }
+        }
 
             if (state_ == ConnectionState::connected && connectionHandler_) {
                 connectionHandler_->on_read(this);

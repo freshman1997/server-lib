@@ -1,17 +1,22 @@
+#include "content/types.h"
 #include "net/poller/epoll_poller.h"
 #include "net/poller/poll_poller.h"
 #include "net/poller/select_poller.h"
 #include "net/poller/kqueue_poller.h"
 #include "net/secuity/openssl.h"
 #include "nlohmann/json.hpp"
+#include "nlohmann/json_fwd.hpp"
 #include "task/upload_file_task.h"
 #include "url.h"
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <memory>
+#include <ostream>
 #include <string>
 #include <filesystem>
 
@@ -370,6 +375,17 @@ namespace yuan::net::http
             return;
         }
 
+        if (fileRelativePath == "upload") {
+            resp->get_buff()->write_string(config::upload_html_text.data(), config::upload_html_text.size());
+            resp->add_header("Content-Type", "text/html; charset=utf-8");
+            resp->set_response_code(ResponseCode::ok_);
+            resp->add_header("Connection", "close");
+            resp->add_header("Content-Length", std::to_string(resp->get_buff()->readable_bytes()));
+            resp->send();
+            resp->get_context()->get_connection()->close();
+            return;
+        }
+
         std::string path;
         if (pathPrefix[pathPrefix.size() - 1] == '/') {
             path = pathPrefix + fileRelativePath;
@@ -596,7 +612,203 @@ namespace yuan::net::http
             return;
         }
         
-        resp->process_error();
+        if (req->get_method() != HttpMethod::post_) {
+            resp->process_error(ResponseCode::method_not_allowed);
+            return;
+        }
+
+        if (req->get_content_type() != ContentType::multpart_form_data)
+        {
+            resp->process_error(ResponseCode::bad_request);
+            return;
+        }
+
+        const auto &content = req->get_body_content();
+        if (!content || content->type_ == ContentType::not_support || !content->content_data_) {
+            resp->process_error(ResponseCode::bad_request);
+            return;
+        }
+
+        if (content->type_ == ContentType::multpart_form_data) {
+            const auto &multipart_form_data = dynamic_cast<FormDataContent *>(content->content_data_);
+            if (!multipart_form_data) {
+                resp->process_error();
+                return;
+            }
+
+            auto it = multipart_form_data->properties.find("chunksize");
+            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            const auto &sizeItem = std::dynamic_pointer_cast<FormDataStringItem>(it->second);
+            if (!sizeItem) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            uint64_t chunkSize = std::atol(sizeItem->value_.c_str());
+            if (chunkSize == 0) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            it = multipart_form_data->properties.find("filesize");
+            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            const auto &fileSizeItem = std::dynamic_pointer_cast<FormDataStringItem>(it->second);
+            if (!sizeItem) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            uint64_t fileSize = std::atol(fileSizeItem->value_.c_str());
+            if (fileSize == 0) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            it = multipart_form_data->properties.find("totalchunks");
+            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            const auto &totalChunkSize = std::dynamic_pointer_cast<FormDataStringItem>(it->second);
+            if (!sizeItem) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            int totalChunk = std::atoi(totalChunkSize->value_.c_str());
+            if (chunkSize == 0) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            it = multipart_form_data->properties.find("chunkindex");
+            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            const auto &chunkIdxItem = std::dynamic_pointer_cast<FormDataStringItem>(it->second);
+            if (!sizeItem) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            int chunkIdx = std::atoi(chunkIdxItem->value_.c_str());
+            if (chunkIdx < 0 || chunkIdx > totalChunk) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            it = multipart_form_data->properties.find("filename");
+            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_ ) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            const auto &filename = std::dynamic_pointer_cast<FormDataStringItem>(it->second);
+            if (!filename || filename->value_.empty()) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            it = multipart_form_data->properties.find("uploadid");
+            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_ ) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            const auto &uploadId = std::dynamic_pointer_cast<FormDataStringItem>(it->second);
+            if (!uploadId || uploadId->value_.empty()) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            it = multipart_form_data->properties.find("file");
+            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::stream_) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            const auto &file = std::dynamic_pointer_cast<FormDataStreamItem>(it->second);
+            if (!file || file->get_content_length() == 0 || file->get_content_length() != chunkSize) {
+                resp->process_error();
+                return;
+            }
+
+            auto upIt = uploaded_chunks_.find(uploadId->value_);
+            if (chunkIdx == 0 && upIt != uploaded_chunks_.end()) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            if (upIt == uploaded_chunks_.end()) {
+                uploaded_chunks_[uploadId->value_] = {};
+                upIt = uploaded_chunks_.find(uploadId->value_);
+            }
+
+            uint64_t uploadBytes = 0;
+            for (const auto &item : upIt->second) {
+                uploadBytes += item.second;
+            }
+
+            if (uploaded_chunks_.size() + 1 == totalChunk && uploadBytes + chunkSize != fileSize) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            if (upIt->second.contains(chunkIdx)) {
+                resp->process_error(ResponseCode::bad_request);
+                return;
+            }
+
+            std::ofstream of;
+            if (chunkIdx == 0) {
+                of.open(filename->value_);
+            } else {
+                of.open(filename->value_, std::ios::app);
+            }
+
+            if (!of.good()) {
+                resp->process_error();
+                return;
+            }
+
+            if (chunkIdx > 0) {
+                of.seekp(uploadBytes, std::ios_base::beg);
+            }
+
+            std::cerr << "size >>> " << file->get_content_length() << std::endl;
+            of.write(file->begin_, file->get_content_length());
+            of.close();
+
+            nlohmann::json jval;
+            jval["uploaded"] = "true";
+            resp->set_response_code(ResponseCode::ok_);
+            resp->add_header("Content-Type", "application/json");
+            resp->add_header("Connection", "close");
+            resp->get_buff()->write_string(jval.dump());
+            resp->send();
+            resp->get_context()->get_connection()->close();
+
+            upIt->second.insert({chunkIdx, chunkSize});
+
+            std::cout << "chunkIdx: " << chunkIdx << ", totalChunk: " << totalChunk << std::endl;
+            if (upIt->second.size() == totalChunk) {
+                uploaded_chunks_.erase(upIt);
+                std::cout << "upload successfully, filename: " << filename->value_ << ", size: " << fileSize << std::endl;
+            }
+        } else {
+            resp->process_error(ResponseCode::bad_request);
+        }
     }
 
     void HttpServer::handle_cors_options(HttpRequest *req, HttpResponse *resp)

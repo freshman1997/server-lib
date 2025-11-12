@@ -19,9 +19,18 @@ namespace yuan::net::http
         bool parse(HttpPacket *packet) override;
 
     private:
+        struct StreamResult
+        {
+            std::string type_;
+            std::unordered_map<std::string, std::string> extra_;
+            uint32_t len_;
+            const char * stream_begin_;
+            const char * stream_end_;
+        };
+
         ContentDisposition parse_content_disposition(const char *begin, const char *end);
         std::pair<uint32_t, std::string> parse_part_value(const char *begin, const char *end);
-        std::tuple<std::string, std::unordered_map<std::string, std::string>, uint32_t> parse_part_file_content(HttpPacket *packet, const char *begin, const char *end, const std::string &originName);
+        int parse_part_file_content(StreamResult &result, HttpPacket *packet, const char *begin, const char *end, const std::string &originName);
     };
 
     class MultipartByterangesParser : public ContentParser

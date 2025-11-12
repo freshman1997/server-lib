@@ -181,7 +181,9 @@ namespace yuan::net::http
         useBuff->append_buffer(buff);
         
         if (!is_header_done()) {
-            parse_header(*useBuff);
+            if (!parse_header(*useBuff)) {
+                return -1;
+            }
         }
 
         if (header_state == HeaderState::too_long) {
@@ -193,6 +195,17 @@ namespace yuan::net::http
             if (length > 0) {
                 if (packet_->get_body_length() == 0) {
                     packet_->set_body_length(length);
+                }
+
+                int res = parse_body(*useBuff, length);
+                if (res > 0) {
+                    body_state = BodyState::fully;
+                } else if (res == 0) {
+                    body_state = BodyState::partial;
+                    return 0;
+                } else {
+                    body_state = BodyState::too_long;
+                    return -2;
                 }
 
                 auto cd = packet_->get_header(http_header_key::content_disposition);
@@ -221,12 +234,6 @@ namespace yuan::net::http
                     }
                 }
 
-                int res = parse_body(*useBuff, length);
-                if (res > 0) {
-                    body_state = BodyState::fully;
-                } else if (res == 0) {
-                    body_state = BodyState::partial;
-                }
                 return res;
             } else {
                 body_state = BodyState::empty;

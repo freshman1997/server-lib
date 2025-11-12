@@ -2,6 +2,7 @@
 #define __NET_HTTP_CONTENT_TYPES_H__
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -46,6 +47,7 @@ namespace yuan::net::http
     struct FormDataItem
     {
         FormDataType item_type_;
+        virtual ~FormDataItem() {}
     };
 
     struct FormDataStringItem : FormDataItem
@@ -82,7 +84,7 @@ namespace yuan::net::http
         const char *begin_ = nullptr;
         const char *end_ = nullptr;
 
-        FormDataStreamItem(const std::string &name, 
+        explicit FormDataStreamItem(const std::string &name, 
             const std::pair<std::string, std::unordered_map<std::string, std::string>> &type, 
             const char *begin, const char *end) 
             : origin_name_(std::move(name)), content_type_(std::move(type)), begin_(begin), end_(end) {
@@ -103,7 +105,7 @@ namespace yuan::net::http
     struct FormDataContent : public ContentData
     {
         std::string type;
-        std::unordered_map<std::string, FormDataItem> properties;
+        std::unordered_map<std::string, std::shared_ptr<FormDataItem>> properties;
     };
 
     struct RangeDataItem

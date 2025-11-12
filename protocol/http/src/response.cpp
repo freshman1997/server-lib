@@ -48,6 +48,12 @@ namespace yuan::net::http
         std::string header("HTTP/1.1");
         header.append(" ").append(descIt->second).append("\r\n");
 
+        // 设置跨域头部
+        add_header("Access-Control-Allow-Origin", "*");
+        add_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+        add_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+        add_header("Access-Control-Max-Age", "86400"); // 24小时缓存
+        
         for (const auto &item : headers_) {
             header.append(item.first).append(": ").append(item.second).append("\r\n");
         }

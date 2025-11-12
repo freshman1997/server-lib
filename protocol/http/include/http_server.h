@@ -1,5 +1,6 @@
 #ifndef __HTTP_SERVER_H__
 #define __HTTP_SERVER_H__
+#include <cstdint>
 #include <memory>
 #include <set>
 #include <string>
@@ -105,6 +106,7 @@ namespace yuan::net::http
         std::unordered_map<std::string, std::string> static_paths_;
         std::set<std::string> play_types_;
         HttpProxy *proxy_;
+        std::unordered_map<std::string, std::unordered_map<int, uint64_t>> uploaded_chunks_;
     };
 }
 

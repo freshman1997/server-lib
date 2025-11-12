@@ -5,6 +5,8 @@
 #include "buffer/pool.h"
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -289,6 +291,61 @@ public:
             count -= buffers_[current_buf_idx_]->readable_bytes();
             --current_buf_idx_;
         }
+    }
+
+    uint64_t write(std::ofstream &out)
+    {
+        if (!out.is_open() || !out.good()) {
+            return -1;
+        }
+
+        if (buffers_.empty() || get_remain_bytes() == 0) {
+            return 0;
+        }
+
+        uint64_t written = 0;
+        
+        while (cur_buf_idx_ < buffers_.size()) {
+            out.write(buffers_[current_buf_idx_]->peek_for(), buffers_[current_buf_idx_]->readable_bytes());
+            if (out.fail()) {
+                return -1;
+            }
+
+            written += buffers_[current_buf_idx_]->readable_bytes();
+            ++current_buf_idx_;
+            current_offset_ += buffers_[current_buf_idx_]->readable_bytes();
+        }
+
+        return written;
+    }
+
+    uint64_t write_fail_rollback(std::ofstream &out)
+    {
+        if (!out.is_open() || !out.good()) {
+            return -1;
+        }
+
+        if (buffers_.empty() || get_remain_bytes() == 0) {
+            return 0;
+        }
+
+        mark();
+
+        uint64_t written = 0;
+        
+        while (cur_buf_idx_ < buffers_.size()) {
+            out.write(buffers_[current_buf_idx_]->peek_for(), buffers_[current_buf_idx_]->readable_bytes());
+            if (out.fail()) {
+                rollback();
+                return -1;
+            }
+
+            written += buffers_[current_buf_idx_]->readable_bytes();
+            ++current_buf_idx_;
+            current_offset_ += buffers_[current_buf_idx_]->readable_bytes();
+        }
+
+        return written;
     }
 
 private:

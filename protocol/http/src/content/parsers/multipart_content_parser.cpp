@@ -8,6 +8,7 @@
 #include "ops/option.h"
 #include <cstdlib>
 #include <fstream>
+#include <iostream>
 
 namespace yuan::net::http 
 {
@@ -67,25 +68,32 @@ namespace yuan::net::http
             if (fit == dis.second.second.end()) {
                 const auto &res = parse_part_value(begin, end);
                 begin += res.first;
-                fd->properties[pit->second] = FormDataStringItem(res.second);
+                fd->properties[pit->second] = std::make_shared<FormDataStringItem>(res.second);
             } else {
-                const auto &res = parse_part_file_content(packet, begin, end, fit->second);
-                if (std::get<0>(res).empty()) {
+                StreamResult result;
+                int ret = parse_part_file_content(result, packet, begin, end, fit->second);
+                if (ret < 0 || result.type_.empty()) {
                     delete content;
                     return false;
                 }
 
-                auto &extra = std::get<1>(res);
+                const auto &extra = result.extra_;
                 auto tIt = extra.find("____tmp_file_name");
                 if (tIt == extra.end()) {
-                    fd->properties[pit->second] = FormDataStreamItem(fit->second, 
-                    {std::get<0>(res), extra }, 
-                    begin, begin + std::get<2>(res));
+                    std::pair<std::string, std::unordered_map<std::string, std::string>> type = {result.type_, result.extra_ };
+                    auto it = contentExtra.find("boundary");
+                    if (it == contentExtra.end()) {
+                        delete content;
+                        return false;
+                    }
+
+                    // ----boundary--
+                    fd->properties[pit->second] = std::make_shared<FormDataStreamItem>(fit->second, type, result.stream_begin_, result.stream_end_);
                 } else {
-                    fd->properties[pit->second] = FormDataFileItem(fit->second, tIt->second, extra);
+                    fd->properties[pit->second] = std::make_shared<FormDataFileItem>(fit->second, tIt->second, extra);
                 }
 
-                begin += std::get<2>(res);
+                begin += result.len_;
             }
 
             begin += helper::skip_new_line(begin);
@@ -189,8 +197,7 @@ namespace yuan::net::http
         return std::to_string(now) + b64.substr(0, b64.size() - 2) + ext;
     }
 
-    std::tuple<std::string, std::unordered_map<std::string, std::string>, uint32_t> MultipartFormDataParser::parse_part_file_content(
-        HttpPacket *packet, const char *begin, const char *end, const std::string &originName)
+    int MultipartFormDataParser::parse_part_file_content(StreamResult &result, HttpPacket *packet, const char *begin, const char *end, const std::string &originName)
     {
         const char *p = begin;
         ContentType ctype;
@@ -202,7 +209,7 @@ namespace yuan::net::http
         }
 
         if (ctypeName != http_header_key::content_type) {
-            return {{}, {}, 0};
+            return -1;
         }
 
         ++begin;
@@ -213,7 +220,7 @@ namespace yuan::net::http
         std::string ctypeText;
         const auto &res = packet->parse_content_type(begin, end, ctypeText, extra);
         if (!res.first || ctypeText.empty()){
-            return {{}, {}, 0};
+            return -1;
         }
 
         begin += res.second;
@@ -224,14 +231,22 @@ namespace yuan::net::http
             const std::string &tmpName = get_random_filename(originName);
             file = new std::fstream(tmpName.c_str(), std::ios_base::out);
             if (!file->good()) {
-                return {{}, {}, 0};
+                return -1;
             }
             extra["____tmp_file_name"] = tmpName;
         }
 
         const auto &contentExtra = packet->get_content_type_extra();
         auto it = contentExtra.find("boundary");
+        if (it == contentExtra.end()) {
+            return -1;
+        }
+
         const std::string &boundaryStart = "--" + it->second;
+        if (end - begin < boundaryStart.size()) {
+            return -1;
+        }
+        
         const char *from = begin;
         while (begin != end) {
             if (helper::str_cmp(begin, begin + boundaryStart.size(), boundaryStart.c_str())) {
@@ -240,14 +255,24 @@ namespace yuan::net::http
             ++begin;
         }
 
+        if (begin + 2 > end) {
+            return -1;
+        }
+
         if (file) {
-            file->write(from, (begin - from));
+            file->write(from, (begin - from) - 2);
             file->flush();
             file->close();
             delete file;
         }
 
-        return {ctypeText, extra, begin - p};
+        result.type_ = ctypeText;
+        result.extra_ = extra;
+        result.len_ = begin - p;
+        result.stream_begin_ = from;
+        result.stream_end_ = begin - 2;
+
+        return 0;
     }
 
     bool MultipartByterangesParser::can_parse(ContentType contentType)
