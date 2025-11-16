@@ -746,44 +746,94 @@ namespace yuan::net::http
             }
 
             if (upIt == uploaded_chunks_.end()) {
-                uploaded_chunks_[uploadId->value_] = {};
+                uploaded_chunks_[uploadId->value_] = {filename->value_, fileSize, totalChunk, {}};
                 upIt = uploaded_chunks_.find(uploadId->value_);
             }
 
             uint64_t uploadBytes = 0;
-            for (const auto &item : upIt->second) {
-                uploadBytes += item.second;
+            for (const auto &item : upIt->second.chunks_) {
+                uploadBytes += item.second.chunk_size_;
             }
 
-            if (upIt->second.size() + 1 == totalChunk && uploadBytes + chunkSize != fileSize) {
+            if (upIt->second.chunks_.size() + 1 == totalChunk && uploadBytes + chunkSize != fileSize) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
             }
 
-            if (upIt->second.contains(chunkIdx)) {
+            if (upIt->second.chunks_.contains(chunkIdx)) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
             }
+
+            UploadChunk chunk;
+            chunk.chunk_size_ = chunkSize;
+            chunk.idx_ = chunkIdx;
+            chunk.tmp_file_ = std::string(uploadId->value_ + "__" + chunkIdxItem->value_);
 
             std::ofstream of;
-            if (chunkIdx == 0) {
-                of.open(std::filesystem::u8path(filename->value_));
-            } else {
-                of.open(std::filesystem::u8path(filename->value_), std::ios::app);
-            }
+            of.open(chunk.tmp_file_, std::ios::binary);
 
             if (!of.good()) {
                 resp->process_error();
                 return;
             }
 
-            if (chunkIdx > 0) {
-                of.seekp(uploadBytes, std::ios_base::beg);
-            }
-
-            std::cerr << "size >>> " << file->get_content_length() << std::endl;
             of.write(file->begin_, file->get_content_length());
             of.close();
+
+            upIt->second.chunks_.insert({chunkIdx, chunk});
+
+            std::cout << "chunkIdx: " << chunkIdx << ", chunkSize: " << file->get_content_length() << ", totalChunk: " << totalChunk << std::endl;
+            if (upIt->second.chunks_.size() == totalChunk) {
+
+                std::ofstream finalFile;
+                // 修复Windows和Linux的文件路径兼容性问题
+                finalFile.open(std::filesystem::u8path(upIt->second.origin_file_name_), std::ios::binary);
+                if (!finalFile.good()) {
+                    resp->process_error();
+                    return;
+                }
+
+                for (int i = 0; i < totalChunk; i++) {
+                    if (!upIt->second.chunks_.contains(i)) {
+                        resp->process_error();
+                        return;
+                    }
+
+                    std::ifstream tmpFile;
+                    tmpFile.open(upIt->second.chunks_[i].tmp_file_, std::ios::binary);
+                    if (!tmpFile.good()) {
+                        resp->process_error();
+                        return;
+                    }
+
+                    tmpFile.seekg(0, std::ios_base::end);
+                    std::size_t actualSize = tmpFile.tellg();
+                    tmpFile.seekg(0, std::ios_base::beg);
+
+                    std::vector<char> tmpFileData(actualSize);
+                    tmpFile.read(tmpFileData.data(), actualSize);
+                    std::size_t bytesRead = tmpFile.gcount();
+                    
+                    if (bytesRead > 0) {
+                        finalFile.write(tmpFileData.data(), bytesRead);
+                    }
+                    tmpFile.close();
+                }
+
+                for (int i = 0; i < totalChunk; i++)
+                {
+                    if (upIt->second.chunks_.contains(i)) {
+                        std::filesystem::remove(upIt->second.chunks_[i].tmp_file_);
+                    }
+                }
+
+                finalFile.close();
+
+                std::cout << "upload successfully, filename: " << filename->value_ << ", size: " << fileSize << std::endl;
+
+                uploaded_chunks_.erase(upIt);
+            }
 
             nlohmann::json jval;
             jval["uploaded"] = "true";
@@ -793,14 +843,6 @@ namespace yuan::net::http
             resp->get_buff()->write_string(jval.dump());
             resp->send();
             resp->get_context()->get_connection()->close();
-
-            upIt->second.insert({chunkIdx, chunkSize});
-
-            std::cout << "chunkIdx: " << chunkIdx << ", chunkSize: " << file->get_content_length() << ", totalChunk: " << totalChunk << std::endl;
-            if (upIt->second.size() == totalChunk) {
-                uploaded_chunks_.erase(upIt);
-                std::cout << "upload successfully, filename: " << filename->value_ << ", size: " << fileSize << std::endl;
-            }
         } else {
             resp->process_error(ResponseCode::bad_request);
         }
