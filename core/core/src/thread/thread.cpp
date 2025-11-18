@@ -28,7 +28,7 @@ namespace yuan::thread
         th = new std::thread([this] { run(); });
     }
 
-    void Thread::join()
+    void Thread::join() const
     {
         assert(th != nullptr && !join_);
         if (th->joinable() && !join_) {
@@ -42,7 +42,7 @@ namespace yuan::thread
         stop_.store(true, std::memory_order_release);
     }
 
-    void Thread::detach()
+    void Thread::detach() const
     {
         assert(th != nullptr);
         th->detach();

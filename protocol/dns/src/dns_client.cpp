@@ -2,7 +2,7 @@
 #include "event/event_loop.h"
 #include "net/acceptor/udp/udp_instance.h"
 #include "net/connection/udp_connection.h"
-#include "net/poller/epoll_poller.h"
+#include "net/poller/select_poller.h"
 #include "net/socket/socket.h"
 #include "timer/wheel_timer_manager.h"
 #include "net/acceptor/udp_acceptor.h"
@@ -75,7 +75,7 @@ namespace yuan::net::dns
         }
         
         timer::WheelTimerManager manager;
-        EpollPoller poller;
+        SelectPoller poller;
         net::EventLoop loop(&poller, &manager);
         timer_manager_ = &manager;
         ev_loop_ = &loop;

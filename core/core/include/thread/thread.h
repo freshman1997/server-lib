@@ -17,11 +17,11 @@ namespace yuan::thread
 
         void start();
 
-        void join();
+        void join() const;
 
         void stop();
 
-        void detach();
+        void detach() const;
 
         bool is_stop() { return stop_.load() == true; }
 
