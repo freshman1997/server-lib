@@ -6,11 +6,12 @@
 #include <string>
 #include <unordered_map>
 
-#include "net/handler/connection_handler.h"
 #include "common.h"
-#include "context.h"
+#include "define/upload.h"
+#include "net/handler/connection_handler.h"
 #include "net/secuity/ssl_module.h"
 #include "request_dispatcher.h"
+#include "thread/thread_pool.h"
 #include "timer/timer_manager.h"
 
 namespace yuan::net
@@ -92,22 +93,6 @@ namespace yuan::net::http
         void serve_upload(HttpRequest *req, HttpResponse *resp);
 
     private:
-        struct UploadChunk
-        {
-            int idx_;
-            uint64_t chunk_size_;
-            std::string tmp_file_;
-        };
-
-        struct UploadFileMapping
-        {
-            std::string origin_file_name_;
-            uint64_t file_size_;
-            int total_chunks_;
-            std::unordered_map<int, UploadChunk> chunks_;
-        };
-
-    private:
         bool quit_;
         State state_;
         Poller *poller_;
@@ -121,6 +106,7 @@ namespace yuan::net::http
         std::set<std::string> play_types_;
         HttpProxy *proxy_;
         std::unordered_map<std::string, UploadFileMapping> uploaded_chunks_;
+        std::unique_ptr<thread::ThreadPool> thread_pool_;
     };
 }
 

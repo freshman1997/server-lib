@@ -7,7 +7,7 @@ namespace yuan::thread
     {
     }
 
-    ThreadPool::ThreadPool(int thread_num) : thread_amount_(thread_num)
+    ThreadPool::ThreadPool(const int thread_num) : thread_amount_(thread_num)
     {
         init();
     }
@@ -15,13 +15,15 @@ namespace yuan::thread
     ThreadPool::~ThreadPool()
     {
         cond_.notify_all();
-        for (auto &it : threads_) {
+        for (const auto &it : threads_) {
             it->stop();
         }
+        threads_.clear();
         
-        for (auto &it : tasks_) {
+        for (const auto &it : tasks_) {
             delete it;
         }
+        tasks_.clear();
     }
 
     void ThreadPool::init()
@@ -31,7 +33,7 @@ namespace yuan::thread
         }
     }
 
-    void ThreadPool::start()
+    void ThreadPool::start() const
     {
         for (auto &it : threads_) {
             it->start();
@@ -40,7 +42,7 @@ namespace yuan::thread
 
     void ThreadPool::push_task(Runnable *task)
     {
-        std::unique_lock<std::mutex> lock(mut_);
+        std::unique_lock lock(mut_);
         this->tasks_.push_back(task);
 
         cond_.notify_one();
@@ -48,7 +50,7 @@ namespace yuan::thread
 
     Runnable * ThreadPool::pop_task()
     {
-        std::unique_lock<std::mutex> lock(mut_);
+        std::unique_lock lock(mut_);
         
         if (tasks_.empty()) {
             return nullptr;

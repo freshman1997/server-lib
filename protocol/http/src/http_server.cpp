@@ -1,24 +1,27 @@
 #include "content/types.h"
+#include "context.h"
 #include "net/poller/epoll_poller.h"
+#include "net/poller/kqueue_poller.h"
 #include "net/poller/poll_poller.h"
 #include "net/poller/select_poller.h"
-#include "net/poller/kqueue_poller.h"
 #include "net/secuity/openssl.h"
 #include "nlohmann/json.hpp"
 #include "nlohmann/json_fwd.hpp"
+#include "task/save_upload_tmp_chunk_task.h"
 #include "task/upload_file_task.h"
 #include "url.h"
+
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <ostream>
 #include <string>
-#include <filesystem>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -227,6 +230,8 @@ namespace yuan::net::http
             }
         }
 
+        thread_pool_ = std::make_unique<thread::ThreadPool>(1);
+
         return true;
     }
 
@@ -244,6 +249,8 @@ namespace yuan::net::http
         this->event_loop_ = &loop;
 
         std::cout << HttpConfigManager::get_instance()->get_string_property("server_name", "web server") << " started\n";
+
+        thread_pool_->start();
 
         loop.loop();
     }
@@ -770,73 +777,30 @@ namespace yuan::net::http
             chunk.idx_ = chunkIdx;
             chunk.tmp_file_ = std::string(uploadId->value_ + "__" + chunkIdxItem->value_);
 
-            std::ofstream of;
-            of.open(chunk.tmp_file_, std::ios::binary);
-
-            if (!of.good()) {
-                resp->process_error();
-                return;
-            }
-
-            of.write(file->begin_, file->get_content_length());
-            of.close();
-
             upIt->second.chunks_.insert({chunkIdx, chunk});
-
             std::cout << "chunkIdx: " << chunkIdx << ", chunkSize: " << file->get_content_length() << ", totalChunk: " << totalChunk << std::endl;
-            if (upIt->second.chunks_.size() == totalChunk) {
 
-                std::ofstream finalFile;
-                // 修复Windows和Linux的文件路径兼容性问题
-                finalFile.open(std::filesystem::u8path(upIt->second.origin_file_name_), std::ios::binary);
-                if (!finalFile.good()) {
-                    resp->process_error();
-                    return;
+            {
+                UploadTmpChunk tmpChunk{};
+                tmpChunk.chunk_ = chunk;
+                tmpChunk.buffer_ = req->get_buff(true);
+                tmpChunk.begin_ = file->begin_;
+                tmpChunk.end_ = file->end_;
+                const auto task = new SaveUploadTempChunkTask(tmpChunk);
+
+                if (upIt->second.chunks_.size() == totalChunk && uploadBytes + chunkSize == fileSize) {
+                    // 线程池只有一个线程，丢进去没事
+                    task->set_mapping(std::make_shared<UploadFileMapping>(upIt->second));
+                    std::cout << "upload successfully, filename: " << filename->value_ << ", size: " << fileSize << std::endl;
+                    uploaded_chunks_.erase(upIt);
                 }
 
-                for (int i = 0; i < totalChunk; i++) {
-                    if (!upIt->second.chunks_.contains(i)) {
-                        resp->process_error();
-                        return;
-                    }
-
-                    std::ifstream tmpFile;
-                    tmpFile.open(upIt->second.chunks_[i].tmp_file_, std::ios::binary);
-                    if (!tmpFile.good()) {
-                        resp->process_error();
-                        return;
-                    }
-
-                    tmpFile.seekg(0, std::ios_base::end);
-                    std::size_t actualSize = tmpFile.tellg();
-                    tmpFile.seekg(0, std::ios_base::beg);
-
-                    std::vector<char> tmpFileData(actualSize);
-                    tmpFile.read(tmpFileData.data(), actualSize);
-                    std::size_t bytesRead = tmpFile.gcount();
-                    
-                    if (bytesRead > 0) {
-                        finalFile.write(tmpFileData.data(), bytesRead);
-                    }
-                    tmpFile.close();
-                }
-
-                for (int i = 0; i < totalChunk; i++)
-                {
-                    if (upIt->second.chunks_.contains(i)) {
-                        std::filesystem::remove(upIt->second.chunks_[i].tmp_file_);
-                    }
-                }
-
-                finalFile.close();
-
-                std::cout << "upload successfully, filename: " << filename->value_ << ", size: " << fileSize << std::endl;
-
-                uploaded_chunks_.erase(upIt);
+                thread_pool_->push_task(task);
             }
 
             nlohmann::json jval;
             jval["uploaded"] = "true";
+            jval["chunkIdx"] = chunkIdx;
             resp->set_response_code(ResponseCode::ok_);
             resp->add_header("Content-Type", "application/json");
             resp->add_header("Connection", "close");

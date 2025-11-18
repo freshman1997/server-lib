@@ -7,8 +7,8 @@ namespace yuan::thread
     {
     public:
         Runnable() : valid_(true) {}
-        Runnable(bool valid) : valid_(valid) {}
-        virtual ~Runnable() {}
+        explicit Runnable(const bool valid) : valid_(valid) {}
+        virtual ~Runnable() = default;
         void cancel_task() { valid_ = false; }
         void enable_task() { valid_ = true; }
         bool is_valid() const { return valid_; }

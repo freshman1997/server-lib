@@ -22,15 +22,17 @@ namespace yuan::buffer
         }
     }
 
-    buffer::Buffer * BufferedPool::allocate(const std::size_t sz)
+    Buffer * BufferedPool::allocate(const std::size_t sz)
     {
+        std::lock_guard lock(buffer_mutex_);
+
         if (free_list_.empty()) {
             free_list_.push_front(new Buffer());
             free_list_.push_front(new Buffer());
             free_list_.push_front(new Buffer());
         }
 
-        buffer::Buffer *buf = free_list_.back();
+        Buffer *buf = free_list_.back();
         buf->resize(sz);
         using_list_.insert(buf);
         free_list_.pop_back();
@@ -39,8 +41,9 @@ namespace yuan::buffer
         return buf;
     }
 
-    void BufferedPool::free(buffer::Buffer *buf)
+    void BufferedPool::free(Buffer *buf)
     {
+        std::lock_guard lock(buffer_mutex_);
         if (!buf) {
             return;
         }
@@ -57,13 +60,13 @@ namespace yuan::buffer
         //check_size();
     }
 
-    void BufferedPool::check_size()
+    void BufferedPool::check_size() const
     {
         std::size_t sz = get_size();
         std::cout << "============> " << get_buffer_size() << '\n';
     }
 
-    std::size_t BufferedPool::get_buffer_size()
+    std::size_t BufferedPool::get_buffer_size() const
     {
         std::size_t sz = 0;
         for (const auto &item : using_list_) {

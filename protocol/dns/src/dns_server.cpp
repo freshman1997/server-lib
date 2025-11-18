@@ -41,7 +41,7 @@ namespace yuan::net::dns
 
     void DnsServer::on_write(Connection *conn)
     {
-        std::cout << "--------------------\n";
+        //std::cout << "--------------------\n";
     }
 
     void DnsServer::on_close(Connection *conn)
@@ -64,7 +64,7 @@ namespace yuan::net::dns
             return false;
         }
 
-        sock->set_no_deylay(true);
+        sock->set_no_delay(true);
         sock->set_reuse(true);
         sock->set_none_block(true);
 

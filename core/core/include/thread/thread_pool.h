@@ -17,10 +17,10 @@ namespace yuan::thread
         friend WorkerThread;
     public:
         ThreadPool();
-        ThreadPool(int thread_num);
+        explicit ThreadPool(int thread_num);
         ~ThreadPool();
 
-        void start();
+        void start() const;
         void push_task(Runnable *);
         Runnable * pop_task();
 
@@ -31,8 +31,8 @@ namespace yuan::thread
 
     private:
         int thread_amount_;
-        int timeout_;
-        std::size_t max_queue_size_;
+        int timeout_{};
+        std::size_t max_queue_size_{};
         std::deque<Runnable *> tasks_;
         std::vector<WorkerThread *> threads_;
         std::mutex mut_;
