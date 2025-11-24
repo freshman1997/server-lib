@@ -45,11 +45,12 @@ namespace yuan::net::http
         if (response_->is_uploading() && conn_->is_connected())
         {
             auto &reader = get_packet()->get_buffer_reader();
-            reader.add_buffer(buffer::BufferedPool::get_instance()->allocate(1024 * 1024 * 2));
+            reader.init();
             response_->write(reader);
             for (const auto &buffers = reader.take_buffers(); auto &buffer : buffers) {
-                conn_->write_and_flush(buffer);
+                conn_->write(buffer);
             }
+            conn_->flush();
         }
 
         return true;

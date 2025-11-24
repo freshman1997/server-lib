@@ -67,7 +67,7 @@ namespace yuan::net::http
         add_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
         add_header("Access-Control-Max-Age", "86400"); // 24小时缓存
 
-        if (!get_header(http_header_key::content_length)) {
+        if (!get_header("Content-Length")) {
             add_header("Content-Length", std::to_string(reader_.readable_bytes()));
         }
         

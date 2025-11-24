@@ -732,28 +732,37 @@ namespace yuan::buffer {
             return totalBytes;
         }
 
-        int64_t fill_from_stream(std::ifstream &istream, const size_t size) const
+        int64_t fill_from_stream(std::ifstream &istream, const size_t size)
         {
             if (!istream.is_open() || !istream.good()) {
                 return -1;
             }
 
             if (get_writable_bytes() < size) {
-                return -2;
+                const size_t neededBytes = size - get_writable_bytes();
+                buffers_.push_back(BufferedPool::get_instance()->allocate(neededBytes));
             }
 
             int64_t realReadBytes = 0;
-            istream.clear();
+            uint64_t needBytes = size;
             for (const auto & buffer : buffers_) {
-                if (buffer->writable_size() > 0) {
-                    istream.read(buffer->peek_for(), buffer->writable_size());
-                    if (const size_t read = istream.gcount(); read < buffer->writable_size()) {
-                        return -3;
-                    }
-                    realReadBytes += buffer->writable_size();
-                    buffer->fill(buffer->writable_size());
+                if (buffer->writable_size() <= 0) {
+                    continue;
+                }
+
+                const size_t readThisTurn = buffer->writable_size() > needBytes ? needBytes : buffer->writable_size();
+                istream.read(buffer->peek_for(), readThisTurn);
+                const size_t read = istream.gcount();
+                realReadBytes += read;
+                needBytes -= read;
+                buffer->fill(read);
+
+                if (needBytes <= 0 || istream.eof()) {
+                    break;
                 }
             }
+
+            total_bytes_ += realReadBytes;
 
             return realReadBytes;
         }

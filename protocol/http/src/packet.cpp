@@ -335,6 +335,7 @@ namespace yuan::net::http
 
     void HttpPacket::allocate_body(size_t sz)
     {
+        reader_.init();
         reader_.add_buffer(buffer::BufferedPool::get_instance()->allocate(sz));
     }
 

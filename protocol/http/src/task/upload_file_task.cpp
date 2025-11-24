@@ -1,4 +1,5 @@
 #include "task/upload_file_task.h"
+#include "ops/option.h"
 #include <iostream>
 #include <filesystem>
 #include <algorithm>
@@ -21,19 +22,19 @@ namespace yuan::net::http
         }
         
         // 验证文件路径安全性，防止路径遍历攻击
-        const auto file_path = std::filesystem::path(std::filesystem::path(attachment_info_->origin_file_name_));
+        const auto file_path = std::filesystem::path(std::filesystem::u8path(attachment_info_->origin_file_name_));
         if (file_path.is_relative()) {
             // 相对路径可能导致安全问题
             return false;
         }
         
         // 检查文件是否存在
-        if (!std::filesystem::exists(file_path)) {
+        std::error_code ec;
+        if (!std::filesystem::exists(file_path, ec)) {
             return false;
         }
         
         // 检查文件大小是否合理
-        std::error_code ec;
         if (const auto file_size = std::filesystem::file_size(file_path, ec); ec || file_size > attachment_info_->length_) {
             return false;
         }
@@ -59,11 +60,6 @@ namespace yuan::net::http
             return check_completed();
         }
 
-        // 检查缓冲区大小
-        if (buff.writable_size() == 0) {
-            return false;
-        }
-
         // 检查文件流状态
         if (!file_stream_.is_open() || !file_stream_.good()) {
             return false;
@@ -72,7 +68,7 @@ namespace yuan::net::http
         try {
             // Write the data to the file
             // and update the offset
-            const std::size_t bytes_to_write = std::min<std::size_t>(buff.writable_size(), attachment_info_->length_ - attachment_info_->offset_);
+            const std::size_t bytes_to_write = std::min<std::size_t>(config::client_max_content_length, attachment_info_->length_ - attachment_info_->offset_);
             if (bytes_to_write == 0) {
                 return false;
             }

@@ -341,7 +341,7 @@ namespace yuan::net::http
 
         resp->allocate_body(sz);
         file.seekg(0, std::ios_base::beg);
-        const auto &reader = resp->get_buffer_reader();
+        auto &reader = resp->get_buffer_reader();
         if (const int ret = reader.fill_from_stream(file, sz); ret < 0) {
             resp->get_context()->process_error();
             return;
@@ -491,7 +491,7 @@ namespace yuan::net::http
         resp->add_header("Content-Type", contentType);
         resp->add_header("Content-Range", bytes);
         resp->add_header("Content-Dispostion", "inline; filename=\"" + url::url_encode(fileRelativePath) + "\"");
-        std::size_t sz = contentSize + offset > length ? length - offset : contentSize;
+        const std::size_t sz = contentSize + offset > length ? length - offset : contentSize;
         if (sz > contentSize) {
             resp->process_error(ResponseCode::bad_request);
             return;
@@ -501,9 +501,11 @@ namespace yuan::net::http
 
         stream->seekg(static_cast<int64_t>(offset), std::ios::beg);
 
-        resp->allocate_body(sz);
-        const auto &reader = resp->get_buffer_reader();
-        reader.fill_from_stream(*stream, sz);
+        auto &reader = resp->get_buffer_reader();
+        if (const auto readBytes = reader.fill_from_stream(*stream, sz); readBytes < 0) {
+            resp->process_error(ResponseCode::internal_server_error);
+            return;
+        }
 
         if (stream->eof()) {
             stream->clear();
