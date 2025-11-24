@@ -1,37 +1,15 @@
 #include "content/types.h"
-#include "context.h"
 #include "net/poller/epoll_poller.h"
-#include "net/poller/kqueue_poller.h"
 #include "net/poller/poll_poller.h"
 #include "net/poller/select_poller.h"
+#include "net/poller/kqueue_poller.h"
 #include "net/secuity/openssl.h"
 #include "nlohmann/json.hpp"
 #include "nlohmann/json_fwd.hpp"
-#include "task/save_upload_tmp_chunk_task.h"
 #include "task/upload_file_task.h"
+#include "task/save_upload_tmp_chunk_task.h"
 #include "url.h"
-
-#include <cerrno>
-#include <chrono>
-#include <cstddef>
-#include <cstdio>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <memory>
-#include <ostream>
-#include <string>
-
-#ifdef _WIN32
-#include <winsock2.h>
-#include <windows.h>
-#include <winnls.h>
-#include <winnt.h>
-#else
-#include <unistd.h>
-#endif
-
+#include "context.h"
 #include "timer/wheel_timer_manager.h"
 #include "net/acceptor/tcp_acceptor.h"
 #include "event/event_loop.h"
@@ -47,6 +25,28 @@
 #include "header_key.h"
 #include "header_util.h"
 #include "proxy.h"
+#include "thread/thread_pool.h"
+
+#include <cerrno>
+#include <chrono>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <ostream>
+#include <string>
+#include <filesystem>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <windows.h>
+#include <winnls.h>
+#include <winnt.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace yuan::net::http
 {
@@ -248,9 +248,9 @@ namespace yuan::net::http
         loop.update_channel(acceptor_->get_channel());
         this->event_loop_ = &loop;
 
-        std::cout << HttpConfigManager::get_instance()->get_string_property("server_name", "web server") << " started\n";
-
         thread_pool_->start();
+
+        std::cout << HttpConfigManager::get_instance()->get_string_property("server_name", "web server") << " started\n";
 
         loop.loop();
     }
@@ -325,7 +325,7 @@ namespace yuan::net::http
         resp->add_header("Connection", "close");
         resp->add_header("Content-Type", "image/x-icon");
         resp->set_response_code(net::http::ResponseCode::ok_);
-        std::fstream file;
+        std::ifstream file;
         file.open("icon.ico");
         if (!file.good()) {
             resp->get_context()->process_error(net::http::ResponseCode::not_found);
@@ -333,16 +333,19 @@ namespace yuan::net::http
         }
 
         file.seekg(0, std::ios_base::end);
-        std::size_t sz = file.tellg();
+        const std::size_t sz = file.tellg();
         if (sz == 0 || sz > config::client_max_content_length) {
             resp->get_context()->process_error();
             return;
         }
 
-        resp->get_buff()->resize(sz);
+        resp->allocate_body(sz);
         file.seekg(0, std::ios_base::beg);
-        file.read(resp->get_buff()->buffer_begin(), sz);
-        resp->get_buff()->fill(sz);
+        const auto &reader = resp->get_buffer_reader();
+        if (const int ret = reader.fill_from_stream(file, sz); ret < 0) {
+            resp->get_context()->process_error();
+            return;
+        }
 
         resp->add_header("Content-length", std::to_string(sz));
         resp->send();
@@ -372,22 +375,22 @@ namespace yuan::net::http
 
         const std::string &fileRelativePath = url.substr(prefixIdx + 1);
         if (fileRelativePath == "filelist.html") {
-            resp->get_buff()->write_string(config::file_list_html_text.data(), config::file_list_html_text.size());
+            resp->append_body(config::file_list_html_text.data());
             resp->add_header("Content-Type", "text/html; charset=utf-8");
             resp->set_response_code(ResponseCode::ok_);
             resp->add_header("Connection", "close");
-            resp->add_header("Content-Length", std::to_string(resp->get_buff()->readable_bytes()));
+            resp->add_header("Content-Length", std::to_string(resp->get_buffer_reader().readable_bytes()));
             resp->send();
             resp->get_context()->get_connection()->close();
             return;
         }
 
-        if (fileRelativePath == "upload") {
-            resp->get_buff()->write_string(config::upload_html_text.data(), config::upload_html_text.size());
+        if (fileRelativePath == "upload.html") {
+            resp->append_body(config::upload_html_text.data());
             resp->add_header("Content-Type", "text/html; charset=utf-8");
             resp->set_response_code(ResponseCode::ok_);
             resp->add_header("Connection", "close");
-            resp->add_header("Content-Length", std::to_string(resp->get_buff()->readable_bytes()));
+            resp->add_header("Content-Length", std::to_string(resp->get_buffer_reader().readable_bytes()));
             resp->send();
             resp->get_context()->get_connection()->close();
             return;
@@ -497,12 +500,10 @@ namespace yuan::net::http
         resp->add_header("Content-length", std::to_string(sz));
 
         stream->seekg(static_cast<int64_t>(offset), std::ios::beg);
-        if (resp->get_buff()->writable_size() < sz) {
-            resp->get_buff()->resize(sz);
-        }
 
-        stream->read(resp->get_buff()->buffer_begin(), static_cast<int64_t>(sz));
-        resp->get_buff()->fill(sz);
+        resp->allocate_body(sz);
+        const auto &reader = resp->get_buffer_reader();
+        reader.fill_from_stream(*stream, sz);
 
         if (stream->eof()) {
             stream->clear();
@@ -591,7 +592,7 @@ namespace yuan::net::http
         resp->add_header("Content-Type", "application/json");
         resp->add_header("Connection", "close");
         resp->append_body(jsonResponse.dump());
-        resp->add_header("Content-Length", std::to_string(resp->get_buff()->readable_bytes()));
+        resp->add_header("Content-Length", std::to_string(resp->get_buffer_reader().readable_bytes()));
         resp->set_response_code(net::http::ResponseCode::ok_);
         resp->send();
     }
@@ -600,15 +601,15 @@ namespace yuan::net::http
     {
         if (HttpConfigManager::get_instance()->reload_config()) {
             load_static_paths();
-            resp->get_buff()->write_string("Configuration reloaded successfully.");
+            resp->append_body("Configuration reloaded successfully.");
         } else {
-            resp->get_buff()->write_string("Failed to reload configuration.");
+            resp->append_body("Failed to reload configuration.");
         }
 
         resp->add_header("Content-Type", "text/plain; charset=utf-8");
         resp->add_header("Connection", "close");
         resp->set_response_code(net::http::ResponseCode::ok_);
-        resp->add_header("Content-Length", std::to_string(resp->get_buff()->readable_bytes()));
+        resp->add_header("Content-Length", std::to_string(resp->get_buffer_reader().readable_bytes()));
         resp->send();
     }
 
@@ -638,7 +639,7 @@ namespace yuan::net::http
                 return;
             }
 
-            auto it = multipart_form_data->properties.find("chunksize");
+            auto it = multipart_form_data->properties.find("chunkSize");
             if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
@@ -656,7 +657,7 @@ namespace yuan::net::http
                 return;
             }
 
-            it = multipart_form_data->properties.find("filesize");
+            it = multipart_form_data->properties.find("fileSize");
             if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
@@ -674,7 +675,7 @@ namespace yuan::net::http
                 return;
             }
 
-            it = multipart_form_data->properties.find("totalchunks");
+            it = multipart_form_data->properties.find("totalChunks");
             if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
@@ -692,7 +693,7 @@ namespace yuan::net::http
                 return;
             }
 
-            it = multipart_form_data->properties.find("chunkindex");
+            it = multipart_form_data->properties.find("chunkIndex");
             if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
@@ -710,7 +711,7 @@ namespace yuan::net::http
                 return;
             }
 
-            it = multipart_form_data->properties.find("filename");
+            it = multipart_form_data->properties.find("fileName");
             if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_ ) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
@@ -722,7 +723,7 @@ namespace yuan::net::http
                 return;
             }
 
-            it = multipart_form_data->properties.find("uploadid");
+            it = multipart_form_data->properties.find("uploadId");
             if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_ ) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
@@ -742,6 +743,11 @@ namespace yuan::net::http
 
             const auto &file = std::dynamic_pointer_cast<FormDataStreamItem>(it->second);
             if (!file || file->get_content_length() == 0 || file->get_content_length() != chunkSize) {
+                resp->process_error();
+                return;
+            }
+
+            if (file->len_ < chunkSize) {
                 resp->process_error();
                 return;
             }
@@ -772,7 +778,7 @@ namespace yuan::net::http
                 return;
             }
 
-            UploadChunk chunk;
+            http::UploadChunk chunk;
             chunk.chunk_size_ = chunkSize;
             chunk.idx_ = chunkIdx;
             chunk.tmp_file_ = std::string(uploadId->value_ + "__" + chunkIdxItem->value_);
@@ -783,14 +789,13 @@ namespace yuan::net::http
             {
                 UploadTmpChunk tmpChunk{};
                 tmpChunk.chunk_ = chunk;
-                tmpChunk.buffer_ = req->get_buff(true);
+                req->get_buffer_reader().copy_to_and_clean(tmpChunk.reader_);
                 tmpChunk.begin_ = file->begin_;
-                tmpChunk.end_ = file->end_;
-                const auto task = new SaveUploadTempChunkTask(tmpChunk);
-
+                tmpChunk.len_ = file->len_;
+                auto *task = new SaveUploadTempChunkTask(std::move(tmpChunk));
                 if (upIt->second.chunks_.size() == totalChunk && uploadBytes + chunkSize == fileSize) {
                     // 线程池只有一个线程，丢进去没事
-                    task->set_mapping(std::make_shared<UploadFileMapping>(upIt->second));
+                    task->set_mapping(std::make_shared<http::UploadFileMapping>(upIt->second));
                     std::cout << "upload successfully, filename: " << filename->value_ << ", size: " << fileSize << std::endl;
                     uploaded_chunks_.erase(upIt);
                 }
@@ -804,7 +809,7 @@ namespace yuan::net::http
             resp->set_response_code(ResponseCode::ok_);
             resp->add_header("Content-Type", "application/json");
             resp->add_header("Connection", "close");
-            resp->get_buff()->write_string(jval.dump());
+            resp->append_body(jval.dump());
             resp->send();
             resp->get_context()->get_connection()->close();
         } else {

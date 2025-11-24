@@ -1,4 +1,6 @@
 #include "header_util.h"
+
+#include <io.h>
 #include <limits>
 #include <unordered_map>
 
@@ -52,7 +54,37 @@ namespace yuan::net::http::helper
                 break;
             }
 
-            id.push_back(std::tolower(ch));
+            id.push_back(ch);
+        }
+
+        return id;
+    }
+
+    std::string read_identifier(buffer::BufferReader &reader)
+    {
+        std::string id;
+        bool quoted = false;
+        while (reader.readable_bytes() > 0) {
+            const char ch = reader.peek_char();
+            if (ch == ' ') {
+                reader.read_char();
+                continue;
+            }
+
+            if (ch == '\"') {
+                reader.read_char();
+                if (quoted) {
+                    break;
+                }
+                quoted = true;
+                continue;
+            }
+
+            if (ch == '=' || ch == ':' || ch == ';' || ch == '\r') {
+                break;
+            }
+
+            id.push_back(reader.read_char());
         }
 
         return id;
@@ -75,7 +107,18 @@ namespace yuan::net::http::helper
     void read_next(const char *begin, const char *end, char ending, std::string &str)
     {
         while (begin <= end) {
-            char ch = *begin;
+            const char ch = *begin;
+            if (ch == ending) {
+                break;
+            }
+            str.push_back(ch);
+        }
+    }
+
+    void read_next(buffer::BufferReader &reader, const char ending, std::string &str)
+    {
+        while (reader.readable_bytes() > 0) {
+            const char ch = reader.read_char();
             if (ch == ending) {
                 break;
             }

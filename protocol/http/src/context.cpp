@@ -37,26 +37,19 @@ namespace yuan::net::http
             has_parsed_ = true;
         }
 
-        bool res = false;
-        conn_->process_input_data([this, &res](buffer::Buffer *buff) -> bool {
-            // 暂时采用 copy 的方式
-            auto pkt = get_packet();
-            res = pkt->parse(*buff);
-            return pkt->good();
-        }, false);
-
-        return res;
+        return get_packet()->parse(conn_->get_input_linked_buffer()->to_vector(true));
     }
 
-    bool HttpSessionContext::write()
+    bool HttpSessionContext::write() const
     {
         if (response_->is_uploading() && conn_->is_connected())
         {
-            auto buff = response_->get_buff(true);
-            buff->reset();
-            buff->resize(1024 * 1024 * 2);
-            response_->write(*buff);
-            conn_->write_and_flush(buff);
+            auto &reader = get_packet()->get_buffer_reader();
+            reader.add_buffer(buffer::BufferedPool::get_instance()->allocate(1024 * 1024 * 2));
+            response_->write(reader);
+            for (const auto &buffers = reader.take_buffers(); auto &buffer : buffers) {
+                conn_->write_and_flush(buffer);
+            }
         }
 
         return true;

@@ -1,6 +1,7 @@
 #ifndef __NET_HTTP_HEADER_UTIL_H__
 #define __NET_HTTP_HEADER_UTIL_H__
-#include <cstdint>
+#include "buffer/buffer_reader.h"
+
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -31,10 +32,14 @@ namespace yuan::net::http::helper
 
     std::string read_identifier(const char *p, const char *end);
 
+    std::string read_identifier(buffer::BufferReader &reader);
+
     uint32_t skip_new_line(const char *data);
 
     void read_next(const char *begin, const char *end, char ending, std::string &str);
-    
+
+    void read_next(buffer::BufferReader &reader, char ending, std::string &str);
+
     std::vector<std::pair<std::uint64_t, std::uint64_t>> parse_range(const std::string &range, int &ret);
 };
 

@@ -24,7 +24,7 @@ namespace yuan::net
         ~EventLoop();
 
     public:
-        void loop();
+        void loop() const;
 
         virtual void on_new_connection(Connection *conn);
 

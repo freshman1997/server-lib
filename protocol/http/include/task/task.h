@@ -1,7 +1,7 @@
 #ifndef __NET_HTTP_TASK_H__
 #define __NET_HTTP_TASK_H__
 
-#include "buffer/buffer.h"
+#include "buffer/buffer_reader.h"
 namespace yuan::net::http 
 {
     enum class HttpTaskType
@@ -14,8 +14,8 @@ namespace yuan::net::http
     class HttpTask
     {
     public:
-        virtual ~HttpTask() {}
-        virtual bool on_data(buffer::Buffer *buf) { return false; }
+        virtual ~HttpTask() = default;
+        virtual int on_data(buffer::BufferReader &buf) { return false; }
         virtual bool init() { return true; }
         virtual void reset() {}
         virtual bool is_done() const { return false; }

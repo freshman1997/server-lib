@@ -12,16 +12,19 @@ namespace yuan::net::http
 
     bool TextContentParser::parse(HttpPacket *packet)
     {
-        auto preContent = packet->get_body_content();
-        if (preContent && !preContent->file_info_.tmp_file_name_.empty()) {
+        if (const auto preContent = packet->get_body_content(); preContent && !preContent->file_info_.tmp_file_name_.empty()) {
             preContent->type_ = packet->get_content_type();
             return true;
         }
 
-        TextContent *tc = new TextContent;
-        Content *content = new Content(packet->get_content_type(), tc);
-        tc->begin = packet->body_begin();
-        tc->end = packet->body_end();
+        if (!packet->get_buffer_reader()) {
+            return false;
+        }
+
+        auto *tc = new TextContent;
+        auto *content = new Content(packet->get_content_type(), tc);
+        tc->begin = packet->get_buffer_reader().get_read_offset();
+        tc->len = packet->get_buffer_reader().readable_bytes();
         packet->set_body_content(content);
         
         return true;

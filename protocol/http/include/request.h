@@ -26,8 +26,8 @@ namespace yuan::net::http
     {
         friend class HttpRequestParser;
     public:
-        HttpRequest(HttpSessionContext *context_);
-        ~HttpRequest();
+        explicit HttpRequest(HttpSessionContext *context_);
+        ~HttpRequest() override;
 
     public:
         virtual void reset();

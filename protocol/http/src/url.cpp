@@ -35,7 +35,6 @@ namespace yuan::url
     std::string url_decode(const char *begin, const char *end)
     {
         std::string result;
-        size_t sz = end - begin;
         const char *str = begin;
         for (; str < end; ++str) {
             if (*str == '%' && str + 2 < end) {
@@ -48,6 +47,29 @@ namespace yuan::url
                 result += ' ';
             } else {
                 result += *str;
+            }
+        }
+        return result;
+    }
+
+    std::string url_decode(buffer::BufferReader &reader)
+    {
+        std::string result;
+        const size_t sz = reader.readable_bytes();
+        for (; reader; ++reader) {
+            if (*reader == '%' && reader.get_read_offset() + 2 < sz) {
+                int hex_value;
+                std::string tmp(nullptr,2);
+                if (const int r = reader.read(tmp.data(), tmp.size()); r < 2) {
+                    return "";
+                }
+                std::istringstream hex_stream(tmp);
+                hex_stream >> std::hex >> hex_value;
+                result += static_cast<char>(hex_value);
+            } else if (*reader == '+') {
+                result += ' ';
+            } else {
+                result += *reader;
             }
         }
         return result;

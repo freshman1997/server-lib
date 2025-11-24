@@ -1,5 +1,4 @@
 #include "content/parsers/chunked_content_parser.h"
-#include "buffer/pool.h"
 #include "content/types.h"
 #include "content_type.h"
 #include "packet.h"
@@ -18,7 +17,6 @@ namespace yuan::net::http
         exceed_chunk_size_save_file_ = 1024 * 1024;
         file_stream_ = nullptr;
         cur_chunk_size_ = 0;
-        cached_buffer_ = nullptr;
     }
     
     ChunkedContentParser::~ChunkedContentParser()
@@ -32,11 +30,6 @@ namespace yuan::net::http
             file_stream_->flush();
             file_stream_->close();
             file_stream_ = nullptr;
-        }
-
-        if (cached_buffer_) {
-            buffer::BufferedPool::get_instance()->free(cached_buffer_);
-            cached_buffer_ = nullptr;
         }
 
         rand_file_name_.clear();
@@ -53,15 +46,14 @@ namespace yuan::net::http
         return true;
     }
 
-    static std::pair<int, ChunkState> read_chunk_length(const char *begin, const char *end, int &readLen)
+    static std::pair<int, ChunkState> read_chunk_length(buffer::BufferReader &reader, int &readLen)
     {
         int len = 0;
-        ChunkState state = ChunkState::invalid_chunck_;
+        auto state = ChunkState::invalid_chunck_;
 
-        const char *from = begin;
-        
-        for (; begin != end; ++begin) {
-            char ch = *begin;
+        const size_t from = reader.get_read_offset();
+        for (; reader; ++reader) {
+            const char ch = *reader;
             if (ch == '\r') {
                 state = ChunkState::completed_;
                 break;
@@ -76,7 +68,7 @@ namespace yuan::net::http
             }
         }
 
-        readLen = begin - from;
+        readLen = reader.get_read_offset() - from;
 
         return {len, state};
     }
@@ -84,36 +76,30 @@ namespace yuan::net::http
     // 解析
     ChunkState ChunkedContentParser::parse_chunked(HttpPacket *packet)
     {
-        buffer::Buffer *buffer = packet->get_buff(true, false);
-        const char *begin = buffer->peek();
-        const char *end = buffer->peek_end();
-        if (!begin || !end || end - begin <= 0) {
+        auto &reader = packet->get_buffer_reader();
+        if (reader.readable_bytes() <= 0) {
             return ChunkState::invalid_chunck_;
         }
 
-        ChunkState resultState = ChunkState::invalid_chunck_;
-        buffer::Buffer *newBuffer = cached_buffer_ ? cached_buffer_ : packet->get_buff();
-        while (begin != end) {
+        auto resultState = ChunkState::invalid_chunck_;
+        while (reader.readable_bytes() > 0) {
             int readLen = 0;
-            int fromIdx = buffer->get_read_index();
-            auto p = read_chunk_length(begin, end, readLen);
+            const auto &p = read_chunk_length(reader, readLen);
             if (p.first < 0 || p.second != ChunkState::completed_ || readLen == 0) {
                 resultState = p.second;
                 break;
             }
 
-            begin += readLen;
-            if (begin + 2 > end) {
+            if (reader.get_read_offset() + 2 > reader.readable_bytes()) {
                 resultState = ChunkState::need_more_;
-                buffer->reset_read_index(fromIdx);
                 break;
             }
 
-            buffer->add_read_index(2);
+            reader.read_char();
+            reader.read_char();
 
-            if (*begin == '\r' && *(begin + 1) == '\n') {
-                begin += 2;
-            } else {
+            if (!reader.skip_newline_symbol()) {
+                resultState = ChunkState::internal_error_;
                 break;
             }
 
@@ -127,42 +113,33 @@ namespace yuan::net::http
             }
 
             cur_chunk_size_ += p.first;
-            buffer->add_read_index(p.first);
-            newBuffer->write_string(begin, p.first);
-
-            begin += p.first;
-            if (begin + 2 > end) {
+            if (reader.get_read_offset() + 2 > reader.readable_bytes()) {
                 resultState = ChunkState::need_more_;
-                buffer->reset_read_index(fromIdx);
                 break;
             }
 
-            buffer->add_read_index(2);
-
-            if (*begin == '\r' && *(begin + 1) == '\n') {
-                begin += 2;
-            } else {
+            if (!reader.skip_newline_symbol()) {
+                resultState = ChunkState::internal_error_;
                 break;
             }
         }
 
         std::string x_checksum, checksum;
-        while (begin != end) {
-            if (*begin == '\r' && *(begin + 1) == '\n') {
-                begin += 2;
+        while (reader.readable_bytes() > 0) {
+            if (!reader.skip_newline_symbol()) {
                 resultState = ChunkState::completed_;
                 break;
             }
 
-            if (*begin != ':') {
-                x_checksum.push_back(std::tolower(*begin));
+            if (*reader != ':') {
+                x_checksum.push_back(std::tolower(*reader));
             }
-            else if (*begin != ' ')
+            else if (*reader != ' ')
             {
-                checksum.push_back(std::tolower(*begin));
+                checksum.push_back(std::tolower(*reader));
             }
 
-            ++begin;
+            ++reader;
         }
 
         if (!x_checksum.empty() && x_checksum != "x-checksum") {
@@ -172,18 +149,10 @@ namespace yuan::net::http
         }
 
         bool wrote = false;
-        if (resultState == ChunkState::need_more_) {
-            if (!cached_buffer_) {
-                cached_buffer_ = packet->get_buff(true, false);
-            }
-
-            if (buffer->readable_bytes() > 0) {
-                packet->get_buff()->append_buffer(*buffer);
-            }
-        } else if (resultState == ChunkState::completed_) {
+        if (resultState == ChunkState::completed_) {
             if (file_stream_) {
-                if (cached_buffer_ && cached_buffer_->readable_bytes() > 0) {
-                    file_stream_->write(cached_buffer_->peek(), cached_buffer_->readable_bytes());
+                if (reader.readable_bytes() > 0) {
+                    reader.write(*file_stream_);
                     if (!file_stream_->good()) {
                         file_stream_->close();
                         delete file_stream_;
@@ -192,56 +161,45 @@ namespace yuan::net::http
                     }
 
                     file_stream_->flush();
-                    cached_buffer_->reset();
                     wrote = true;
-                }
-            } else {
-                if (cached_buffer_) {
-                    packet->swap_buffer(newBuffer);
-                    newBuffer = nullptr;
-                    cached_buffer_ = nullptr;
                 }
             }
 
             packet->set_chunked_checksum(checksum);
         }
 
-        if (cur_chunk_size_ >= exceed_chunk_size_save_file_ && !wrote && newBuffer) {
+        if (cur_chunk_size_ >= exceed_chunk_size_save_file_ && !wrote) {
             if (!file_stream_) {
                 rand_file_name_ = "___tmp___" + std::to_string(yuan::base::time::now());
-                file_stream_ = new std::fstream();
+                file_stream_ = new std::ofstream();
                 file_stream_->open(rand_file_name_.c_str(), std::ios_base::app | std::ios_base::binary);
                 if (!file_stream_->good()) {
                     return ChunkState::internal_error_;
                 }
             }
 
-            file_stream_->write(newBuffer->peek(), newBuffer->readable_bytes());
+            reader.write(*file_stream_);
             if (!file_stream_->good()) {
                 file_stream_->close();
                 delete file_stream_;
                 file_stream_ = nullptr;
                 return ChunkState::internal_error_;
             }
-
-            newBuffer->reset();
         }
-
-        buffer::BufferedPool::get_instance()->free(buffer);
 
         return resultState;
     }
 
     bool ChunkedContentParser::parse(HttpPacket *packet)
     {
-        ChunkState state = parse_chunked(packet);
+        const ChunkState state = parse_chunked(packet);
 
         if (state == ChunkState::need_more_) {
             packet->set_body_state(BodyState::partial);
         }
 
         if (state == ChunkState::completed_) {
-            Content *content = new Content(ContentType::chunked, nullptr);
+            auto *content = new Content(ContentType::chunked, nullptr);
 
             content->file_info_.tmp_file_name_ = rand_file_name_;
             content->file_info_.file_size_ = cur_chunk_size_;

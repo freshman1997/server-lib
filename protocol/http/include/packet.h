@@ -1,6 +1,5 @@
 #ifndef __NET_HTTP_PACKET_H__
 #define __NET_HTTP_PACKET_H__
-#include "attachment/attachment.h"
 #include "buffer/buffer.h"
 #include "buffer/linked_buffer.h"
 #include "content_type.h"
@@ -9,7 +8,6 @@
 #include "response_code.h"
 #include "task/task.h"
 
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -55,9 +53,9 @@ namespace yuan::net::http
     public:
         void send();
 
-        bool parse(buffer::Buffer &buff);
+        bool parse(const std::vector<buffer::Buffer *> &buffers);
 
-        bool write(buffer::Buffer &buff);
+        bool write(buffer::BufferReader &reader) const;
 
         void add_header(const std::string &k, const std::string &v);
 
@@ -86,10 +84,6 @@ namespace yuan::net::http
         }
 
         const std::string * get_header(const std::string &key);
-
-        const char * body_begin();
-
-        const char * body_end();
 
         ContentType get_content_type() const
         {
@@ -132,11 +126,13 @@ namespace yuan::net::http
             return context_;
         }
 
-        std::pair<bool, uint32_t> parse_content_type(const char *begin, const char *end, std::string &type, std::unordered_map<std::string, std::string> &extra);
+        static std::pair<bool, uint32_t> parse_content_type(const char *begin, const char *end, std::string &type, std::unordered_map<std::string, std::string> &extra);
+
+        static std::pair<bool, uint32_t> parse_content_type(buffer::BufferReader &reader, std::string &type, std::unordered_map<std::string, std::string> &extra);
 
         bool parse_content();
 
-        buffer::Buffer * get_buff(bool take = false, bool reset = true);
+        void allocate_body(size_t sz);
 
         void pack_and_send(Connection *conn);
 
@@ -170,8 +166,6 @@ namespace yuan::net::http
         {
             return pre_content_parser_;
         }
-
-        void swap_buffer(buffer::Buffer *buf);
 
     public: // task
         void set_task(HttpTask *task)
@@ -225,11 +219,16 @@ namespace yuan::net::http
             return is_download_file_ || is_upload_file_;
         }
 
+        buffer::BufferReader & get_buffer_reader()
+        {
+            return reader_;
+        }
+
     protected:
         HttpSessionContext *context_;
         HttpPacketParser *parser_;
         HttpVersion version_ = HttpVersion::v_1_1;
-        bool is_good_;
+        bool is_good_{};
         ResponseCode error_code_;
         uint32_t body_length_;
         ContentType content_type_;
@@ -238,14 +237,13 @@ namespace yuan::net::http
         std::string content_type_text_;
         std::unordered_map<std::string, std::string> content_type_extra_;
         Content *body_content_;
-        buffer::Buffer * buffer_;
         ContentParser *pre_content_parser_;
         std::string chunked_checksum_;
         std::string original_file_name_;
-        bool is_upload_file_;
-        bool is_download_file_;
+        bool is_upload_file_{};
+        bool is_download_file_{};
         HttpTask *task_;
-        buffer::LinkedBuffer linked_buffer_;
+        buffer::BufferReader reader_;
     };
 }
 

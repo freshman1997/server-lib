@@ -1,16 +1,17 @@
 #include "content/parsers/multipart_content_parser.h"
-#include "header_util.h"
 #include "base/utils/base64.h"
 #include "content/types.h"
 #include "content_type.h"
-#include "packet.h"
 #include "header_key.h"
+#include "header_util.h"
 #include "ops/option.h"
+#include "packet.h"
 #include <cstdlib>
 #include <fstream>
+#include <io.h>
 #include <iostream>
 
-namespace yuan::net::http 
+namespace yuan::net::http
 {
     bool MultipartFormDataParser::can_parse(ContentType contentType)
     {
@@ -19,31 +20,42 @@ namespace yuan::net::http
 
     bool MultipartFormDataParser::parse(HttpPacket *packet)
     {
-        const char *begin = packet->body_begin();
-        const char *end = packet->body_end();
+        auto &reader = packet->get_buffer_reader();
+
         const auto &contentExtra = packet->get_content_type_extra();
-        auto it = contentExtra.find("boundary");
+        const auto it = contentExtra.find("boundary");
         if (it == contentExtra.end()) {
             return false;
         }
 
         // skip boundary
-        std::string boundaryStart = "--" + it->second;
-        if (end - begin < boundaryStart.size()) {
+        const auto &boundary = it->second;
+        if (boundary.empty()) {
             return false;
         }
 
-        std::string boundaryEnd = "--" + it->second + "--";
-        FormDataContent *fd = new FormDataContent;
-        fd->type = helper::dispistion_type_names[(std::size_t)helper::ContentDispositionType::form_data_];
-        Content *content = new Content(ContentType::multpart_form_data, fd);
-        while (begin <= end)
-        {
-            begin += boundaryStart.size();
-            begin += helper::skip_new_line(begin);
+        const std::string boundaryStart = "--" + boundary + "\r\n";
+        if (reader.readable_bytes() < boundaryStart.size()) {
+            return false;
+        }
 
-            auto dis = parse_content_disposition(begin, end);
+        const std::string boundaryEnd = "--" + boundary + "--";
+        auto *fd = new FormDataContent;
+        fd->type = helper::dispistion_type_names[static_cast<std::size_t>(helper::ContentDispositionType::form_data_)];
+        auto *content = new Content(ContentType::multpart_form_data, fd);
+        if (!reader.read_match_ignore_case(boundaryStart.data())) {
+            std::cout << reader.read_from_offset(reader.get_read_offset(), boundaryStart.size()) << std::endl;
+            delete content;
+            return false;
+        }
+
+        const std::string contentStart = "\r\n--" + boundary;
+
+        while (reader.readable_bytes() > 0)
+        {
+            auto dis = parse_content_disposition(reader);
             if (dis.first == 0) {
+                std::cout << reader.read_from_offset(reader.get_read_offset(), 20) << std::endl;
                 delete content;
                 return false;
             }
@@ -54,51 +66,58 @@ namespace yuan::net::http
                 return false;
             }
 
-            begin += dis.first;
-            begin += helper::skip_new_line(begin);
-
             auto pit = dis.second.second.find(helper::name_);
             if (pit == dis.second.second.end()) {
                 delete content;
                 return false;
             }
 
-            auto fit = dis.second.second.find(helper::filename_);
-            begin += helper::skip_new_line(begin);
-            if (fit == dis.second.second.end()) {
-                const auto &res = parse_part_value(begin, end);
-                begin += res.first;
+            if (!reader.skip_newline_symbol()) {
+                delete content;
+                return false;
+            }
+
+            if (const auto fit = dis.second.second.find(helper::filename_); fit == dis.second.second.end()) {
+                if (!reader.skip_newline_symbol()) {
+                    delete content;
+                    return false;
+                }
+
+                const auto &res = parse_part_value(reader, contentStart);
+                if (res.first < 0) {
+                    delete content;
+                    return false;
+                }
                 fd->properties[pit->second] = std::make_shared<FormDataStringItem>(res.second);
             } else {
                 StreamResult result;
-                int ret = parse_part_file_content(result, packet, begin, end, fit->second);
-                if (ret < 0 || result.type_.empty()) {
+                if (const int ret = parse_part_file_content(result, packet, reader, fit->second, contentStart); ret < 0 || result.type_.empty()) {
                     delete content;
                     return false;
                 }
 
                 const auto &extra = result.extra_;
-                auto tIt = extra.find("____tmp_file_name");
-                if (tIt == extra.end()) {
+                if (const auto tIt = extra.find("____tmp_file_name"); tIt == extra.end()) {
                     std::pair<std::string, std::unordered_map<std::string, std::string>> type = {result.type_, result.extra_ };
-                    auto it = contentExtra.find("boundary");
-                    if (it == contentExtra.end()) {
+                    if (!contentExtra.contains("boundary")) {
                         delete content;
                         return false;
                     }
 
                     // ----boundary--
-                    fd->properties[pit->second] = std::make_shared<FormDataStreamItem>(fit->second, type, result.stream_begin_, result.stream_end_);
+                    fd->properties[pit->second] = std::make_shared<FormDataStreamItem>(fit->second, type, result.stream_begin_, result.len_);
                 } else {
                     fd->properties[pit->second] = std::make_shared<FormDataFileItem>(fit->second, tIt->second, extra);
                 }
-
-                begin += result.len_;
             }
 
-            begin += helper::skip_new_line(begin);
-            if (helper::str_cmp(begin, begin + boundaryEnd.size(), boundaryEnd.c_str())) {
+            if (const std::string tmp = reader.read_from_offset(reader.get_read_offset() - boundary.size() - 2,  boundaryEnd.size(), true); tmp == boundaryEnd) {
                 break;
+            }
+
+            if (!reader.skip_newline_symbol()) {
+                delete content;
+                return false;
             }
         }
 
@@ -107,51 +126,50 @@ namespace yuan::net::http
         return true;
     }
 
-    ContentDisposition MultipartFormDataParser::parse_content_disposition(const char *begin, const char *end)
+    ContentDisposition MultipartFormDataParser::parse_content_disposition(buffer::BufferReader &reader)
     {
         ContentDisposition res = {0, {}};
-        const char *p = begin;
-        if (p + 21 > end) {
+        if (21 > reader.readable_bytes()) {
             return res;
         }
 
-        if (!helper::str_cmp(p, p + 20, "content-disposition:")) {
+        const size_t from = reader.get_read_offset();
+        if (!reader.read_match_ignore_case("content-disposition:")) {
             return res;
         }
-
-        p += 20;
 
         std::string type;
-        for (; p <= end; ++p) {
-            char ch = *p;
+        for (char ch = reader.read_char(); reader; ch = reader.read_char()) {
             if (ch == ' ') {
                 continue;
             }
 
             if (ch == ';') {
-                ++p;
+                ++reader;
                 break;
             }
             type.push_back(std::tolower(ch));
         }
 
         std::unordered_map<std::string, std::string> &kvs = res.second.second;
-        while (p <= end) {
-            const auto &k = helper::read_identifier(p, end);
+        while (reader.readable_bytes() > 0) {
+            const auto &k = helper::read_identifier(reader);
             if (k.empty()) {
                 return res;
             }
 
-            p += k.size() + 2;
-            const auto &v = helper::read_identifier(p, end);
+            if (!reader.read_match("=")) {
+                return res;
+            }
+
+            const auto &v = helper::read_identifier(reader);
             if (v.empty()) {
                 return res;
             }
 
             kvs[k] = v;
-            p += v.size() + 2;
-            if (*p == ';') {
-                ++p;
+            if (*reader == ';') {
+                ++reader;
             } else {
                 break;
             }
@@ -161,27 +179,10 @@ namespace yuan::net::http
             return res;
         }
 
-        res.first = p - begin;
+        res.first = reader.get_read_offset() - from;
         res.second.first = type;
 
         return res;
-    }
-
-    std::pair<uint32_t, std::string> MultipartFormDataParser::parse_part_value(const char *begin, const char *end)
-    {
-        const char *p = begin;
-        std::string val;
-        while (p != end)
-        {
-            char ch = *p;
-            if (ch == '\r') {
-                break;
-            }
-            val.push_back(ch);
-            ++p;
-        }
-
-        return {p - begin, val};
     }
 
     static std::string get_random_filename(const std::string &origin)
@@ -197,84 +198,80 @@ namespace yuan::net::http
         return std::to_string(now) + b64.substr(0, b64.size() - 2) + ext;
     }
 
-    int MultipartFormDataParser::parse_part_file_content(StreamResult &result, HttpPacket *packet, const char *begin, const char *end, const std::string &originName)
+    std::pair<int, std::string> MultipartFormDataParser::parse_part_value(buffer::BufferReader &reader, const std::string &boundary)
     {
-        const char *p = begin;
-        ContentType ctype;
+        if (reader.readable_bytes() < boundary.size()) {
+            return {-1, {}};
+        }
+
+        const size_t from = reader.get_read_offset();
+        int len = reader.find_match_ignore_case(boundary);
+        if (len < 0) {
+            return {-1, {}};
+        }
+
+        return {len, reader.read_from_offset(from, len)};
+    }
+
+    int MultipartFormDataParser::parse_part_file_content(StreamResult &result, const HttpPacket *packet, buffer::BufferReader &reader, const std::string &originName, const std::string &boundary)
+    {
         std::unordered_map<std::string, std::string> extra;
         std::string ctypeName;
-        while (begin <= end && *begin != ':') {
-            ctypeName.push_back(std::tolower(*begin));
-            ++begin;
+        while (reader.readable_bytes() > 0 && *reader != ':') {
+            ctypeName.push_back(std::tolower(*reader));
+            ++reader;
         }
 
         if (ctypeName != http_header_key::content_type) {
             return -1;
         }
 
-        ++begin;
-        if (*begin == ' ') {
-            ++begin;
+        ++reader;
+        if (*reader == ' ') {
+            ++reader;
         }
 
         std::string ctypeText;
-        const auto &res = packet->parse_content_type(begin, end, ctypeText, extra);
+        const auto &res = HttpPacket::parse_content_type(reader, ctypeText, extra);
         if (!res.first || ctypeText.empty()){
             return -1;
         }
 
-        begin += res.second;
-        begin += helper::skip_new_line(begin);
+        if (!reader.skip_newline_symbol()) {
+            return -1;
+        }
 
-        std::fstream *file = nullptr;
+        if (reader.readable_bytes() < boundary.size()) {
+            return -1;
+        }
+
+        const size_t from = reader.get_read_offset();
+        const int len = reader.find_match_ignore_case(boundary);
+        if (len <= 0) {
+            return -1;
+        }
+
         if (config::form_data_upload_save) {
             const std::string &tmpName = get_random_filename(originName);
-            file = new std::fstream(tmpName.c_str(), std::ios_base::out);
-            if (!file->good()) {
-                delete file;
+            std::ofstream file(tmpName.c_str(), std::ios_base::out);
+            if (!file.good()) {
                 return -1;
             }
             extra["____tmp_file_name"] = tmpName;
-        }
 
-        const auto &contentExtra = packet->get_content_type_extra();
-        auto it = contentExtra.find("boundary");
-        if (it == contentExtra.end()) {
-            delete file;
-            return -1;
-        }
-
-        const std::string &boundaryStart = "--" + it->second;
-        if (end - begin < boundaryStart.size()) {
-            delete file;
-            return -1;
-        }
-        
-        const char *from = begin;
-        while (begin != end) {
-            if (helper::str_cmp(begin, begin + boundaryStart.size(), boundaryStart.c_str())) {
-                break;
+            if (const auto r = reader.write(file, len); r < 0) {
+                std::filesystem::remove(tmpName);
+                return -1;
             }
-            ++begin;
-        }
 
-        if (begin + 2 > end) {
-            delete file;
-            return -1;
-        }
-
-        if (file) {
-            file->write(from, (begin - from) - 2);
-            file->flush();
-            file->close();
-            delete file;
+            file.flush();
+            file.close();
         }
 
         result.type_ = ctypeText;
         result.extra_ = extra;
-        result.len_ = begin - p;
+        result.len_ = len;
         result.stream_begin_ = from;
-        result.stream_end_ = begin - 2;
 
         return 0;
     }
@@ -286,54 +283,62 @@ namespace yuan::net::http
 
     bool MultipartByterangesParser::parse(HttpPacket *packet)
     {
-        if (packet->get_body_content()) {
+        auto &reader = packet->get_buffer_reader();
+        if (packet->get_body_content() || reader.readable_bytes() == 0) {
             return false;
         }
-        
-        const char *begin = packet->body_begin();
-        const char *end = packet->body_end();
+
+        size_t begin = reader.get_read_offset();
 
         const auto &contentExtra = packet->get_content_type_extra();
-        auto it = contentExtra.find("boundary");
+        const auto it = contentExtra.find("boundary");
         if (it == contentExtra.end()) {
             return false;
         }
-        
-        std::string boundaryStart = "--" + it->second;
-        if (end - begin < boundaryStart.size()) {
+
+        const std::string boundaryStart = "--" + it->second;
+        if (reader.readable_bytes() < boundaryStart.size()) {
             return false;
         }
 
-        std::string boundaryEnd = "--" + it->second + "--";
-        RangeDataContent *rangeContent = new RangeDataContent;
-        Content *content = new Content(ContentType::multpart_form_data, rangeContent);
-        
-        while (begin <= end)
+        const std::string boundaryEnd = "--" + it->second + "--";
+        auto *rangeContent = new RangeDataContent;
+        const auto content = new Content(ContentType::multpart_form_data, rangeContent);
+
+        while (reader.readable_bytes() > 0)
         {
             // skip boundary
-            if (!helper::str_cmp(begin, begin + boundaryStart.size(), boundaryStart.c_str())) {
+            if (!reader.read_match(boundaryStart.c_str(), boundaryStart.size())) {
                 delete content;
                 return false;
             }
 
-            begin += boundaryStart.size();
-            begin += helper::skip_new_line(begin);
+            if (!reader.skip_newline_symbol()) {
+                delete content;
+                delete rangeContent;
+                return false;
+            }
 
-            RangeDataItem *item = new RangeDataItem;
+            auto *item = new RangeDataItem;
             rangeContent->contents.push_back(item);
 
-            const auto &res = packet->parse_content_type(begin, end, item->content_type_.first, item->content_type_.second);
+            const auto &res = HttpPacket::parse_content_type(reader, item->content_type_.first, item->content_type_.second);
             if (!res.first || item->content_type_.first.empty()){
                 delete content;
+                delete rangeContent;
                 return false;
             }
 
-            begin += res.second;
-            begin += helper::skip_new_line(begin);
+            if (!reader.skip_newline_symbol()) {
+                delete content;
+                delete rangeContent;
+                return false;
+            }
 
-            const auto &rangeRes = parse_content_range(begin, end);
+            const auto &rangeRes = parse_content_range(reader);
             if (!std::get<0>(rangeRes)) {
                 delete content;
+                delete rangeContent;
                 return false;
             }
 
@@ -346,15 +351,24 @@ namespace yuan::net::http
 
             if (item->chunk.from > item->chunk.to || item->chunk.length == 0) {
                 delete content;
+                delete rangeContent;
                 return false;
             }
 
             begin += item->chunk.to - item->chunk.from;
-            item->chunk.content.end = begin;
-            
-            begin += helper::skip_new_line(begin);
+            item->chunk.content.len = begin;
 
-            if (helper::str_cmp(begin, begin + boundaryEnd.size(), boundaryEnd.c_str())) {
+            if (!reader.skip_newline_symbol()) {
+                delete content;
+                delete rangeContent;
+                return false;
+            }
+
+            if (!reader.read_match(boundaryEnd.c_str(), boundaryEnd.size())) {
+                delete content;
+                delete rangeContent;
+                return false;
+            } else {
                 break;
             }
         }
@@ -364,49 +378,44 @@ namespace yuan::net::http
         return true;
     }
 
-    std::tuple<bool, uint32_t, uint32_t, uint32_t, uint32_t> MultipartByterangesParser::parse_content_range(const char *begin, const char *end)
+    std::tuple<bool, uint32_t, uint32_t, uint32_t, uint32_t> MultipartByterangesParser::parse_content_range(buffer::BufferReader &reader)
     {
-        const char *p = begin;
-        if (!helper::str_cmp(p, p + 13, http_header_key::content_range)) {
+        const size_t fromPos = reader.get_read_offset();
+        if (!reader.read_match_ignore_case(http_header_key::content_range)) {
             return {false, 0, 0, 0, 0};
         }
 
-        p += 13;
-
-        if (*p == ':') {
-            ++p;
+        if (*reader == ':') {
+            ++reader;
         }
 
-        p += helper::skip_new_line(p);
-
-        if (!helper::str_cmp(p, p + 5, "bytes")) {
+        if (!reader.skip_newline_symbol()) {
             return {false, 0, 0, 0, 0};
         }
 
-        p += 5;
-        p += helper::skip_new_line(p);
+        if (!reader.read_match_ignore_case("bytes")) {
+            return {false, 0, 0, 0, 0};
+        }
+
+        if (!reader.skip_newline_symbol()) {
+            return {false, 0, 0, 0, 0};
+        }
 
         std::string from;
-        helper::read_next(p, end, '-', from);
-
-        p += from.size() + (from.empty() ? 0 : 1);
+        helper::read_next(reader, '-', from);
 
         std::string to;
-        helper::read_next(p, end, '/', to);
+        helper::read_next(reader, '/', to);
         if (to.empty()) {
             return {false, 0, 0, 0, 0};
         }
 
-        p += to.size() + 1;
-
         std::string sz;
-        helper::read_next(p, end, '\r', sz);
+        helper::read_next(reader, '\r', sz);
         if (sz.empty()) {
             return {false, 0, 0, 0, 0};
         }
 
-        p += sz.size() + 2;
-
-        return {true, std::atoi(from.c_str()), std::atoi(to.c_str()), std::atoi(sz.c_str()), p - begin};
+        return {true, std::atoi(from.c_str()), std::atoi(to.c_str()), std::atoi(sz.c_str()), reader.get_read_offset() - fromPos};
     }
 }

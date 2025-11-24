@@ -18,7 +18,7 @@ namespace yuan::net::http
     {
     public:
         ChunkedContentParser();
-        ~ChunkedContentParser();
+        ~ChunkedContentParser() override;
         
     public:
         virtual void reset() override;
@@ -55,8 +55,7 @@ namespace yuan::net::http
         int exceed_chunk_size_save_file_;
         int cur_chunk_size_;
         std::string rand_file_name_;
-        std::fstream *file_stream_;
-        buffer::Buffer *cached_buffer_;
+        std::ofstream *file_stream_;
     };
 }
 

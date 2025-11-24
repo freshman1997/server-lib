@@ -56,7 +56,7 @@ namespace yuan::net::http
     public:
         bool parse();
 
-        bool write();
+        bool write() const;
 
         bool is_completed();
 

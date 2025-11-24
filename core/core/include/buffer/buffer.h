@@ -15,7 +15,7 @@ namespace yuan::buffer
     class Buffer
     {
     public:
-        int8_t read_uint8()
+        int8_t read_int8()
         {
             int8_t be8;
             ::memcpy(&be8, peek(), sizeof(int8_t));
@@ -23,7 +23,7 @@ namespace yuan::buffer
             return be8;
         }
 
-        uint8_t read_int8()
+        uint8_t read_uint8()
         {
             uint8_t ube8;
             ::memcpy(&ube8, peek(), sizeof(uint8_t));

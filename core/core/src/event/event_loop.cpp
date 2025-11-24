@@ -52,7 +52,7 @@ namespace yuan::net
 
     EventLoop::~EventLoop() = default;
 
-    void EventLoop::loop()
+    void EventLoop::loop() const
     {
         assert(data_->poller_);
 

@@ -1,9 +1,11 @@
 #ifndef __NET_HTTP_FORM_DATA_PARSER_H__
 #define __NET_HTTP_FORM_DATA_PARSER_H__
+#include "buffer/buffer_reader.h"
+
+#include "content/content_parser.h"
 #include <cstdint>
 #include <unordered_map>
 #include <utility>
-#include "content/content_parser.h"
 
 namespace yuan::net::http 
 {
@@ -23,14 +25,13 @@ namespace yuan::net::http
         {
             std::string type_;
             std::unordered_map<std::string, std::string> extra_;
-            uint32_t len_;
-            const char * stream_begin_;
-            const char * stream_end_;
+            size_t stream_begin_;
+            size_t len_;
         };
 
-        ContentDisposition parse_content_disposition(const char *begin, const char *end);
-        std::pair<uint32_t, std::string> parse_part_value(const char *begin, const char *end);
-        int parse_part_file_content(StreamResult &result, HttpPacket *packet, const char *begin, const char *end, const std::string &originName);
+        static ContentDisposition parse_content_disposition(buffer::BufferReader &reader);
+        static std::pair<int, std::string> parse_part_value(buffer::BufferReader &reader, const std::string &boundary);
+        static int parse_part_file_content(StreamResult &result, const HttpPacket *packet, buffer::BufferReader &reader, const std::string &originName, const std::string &boundary);
     };
 
     class MultipartByterangesParser : public ContentParser
@@ -43,7 +44,7 @@ namespace yuan::net::http
         bool parse(HttpPacket *packet) override;
     
     private:
-        std::tuple<bool, uint32_t, uint32_t, uint32_t, uint32_t> parse_content_range(const char *begin, const char *end);
+        static std::tuple<bool, uint32_t, uint32_t, uint32_t, uint32_t> parse_content_range(buffer::BufferReader &reader);
     };
 }
 

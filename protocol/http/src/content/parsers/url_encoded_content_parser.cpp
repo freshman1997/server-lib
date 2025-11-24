@@ -15,8 +15,12 @@ namespace yuan::net::http
         if (packet->get_body_content()) {
             return false;
         }
-        
-        const std::string &data = url::url_decode(packet->body_begin(), packet->body_end());
+
+        if (!packet->get_buffer_reader()) {
+            return false;
+        }
+
+        const std::string &data = url::url_decode(packet->get_buffer_reader());
         return url::decode_parameters(data, packet->get_request_params(), true);
     }
 }

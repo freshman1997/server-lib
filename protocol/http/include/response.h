@@ -11,13 +11,13 @@ namespace yuan::net::http
     class HttpResponse : public HttpPacket
     {
     public:
-        HttpResponse(HttpSessionContext *context);
-        ~HttpResponse();
+        explicit HttpResponse(HttpSessionContext *context);
+        ~HttpResponse() override;
 
     public:
         virtual void reset();
 
-        virtual bool pack_header(Connection *conn = nullptr);
+        virtual bool pack_header(Connection *conn);
 
         virtual PacketType get_packet_type()
         {
@@ -39,7 +39,7 @@ namespace yuan::net::http
         
         void append_body(const std::string &data);
 
-        void process_error(ResponseCode errorCode = ResponseCode::internal_server_error);
+        void process_error(ResponseCode errorCode = ResponseCode::internal_server_error) const;
 
         void dispatch_task();
 

@@ -11,11 +11,11 @@ namespace yuan::net::http
         HttpResponseParser(HttpPacket *packet) : HttpPacketParser(packet)
         {}
 
-        virtual bool parse_header(buffer::Buffer &buff);
+        virtual bool parse_header(buffer::BufferReader &reader);
 
     private:
-        bool parse_status(buffer::Buffer &buff);
-        bool parse_status_desc(buffer::Buffer &buff);
+        bool parse_status(buffer::BufferReader &reader);
+        bool parse_status_desc(buffer::BufferReader &reader);
     };
 }
 

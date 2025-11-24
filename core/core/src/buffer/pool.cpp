@@ -24,7 +24,7 @@ namespace yuan::buffer
 
     Buffer * BufferedPool::allocate(const std::size_t sz)
     {
-        std::lock_guard lock(buffer_mutex_);
+        std::unique_lock lock(buffer_mutex_);
 
         if (free_list_.empty()) {
             free_list_.push_front(new Buffer());
@@ -43,7 +43,7 @@ namespace yuan::buffer
 
     void BufferedPool::free(Buffer *buf)
     {
-        std::lock_guard lock(buffer_mutex_);
+        std::unique_lock lock(buffer_mutex_);
         if (!buf) {
             return;
         }

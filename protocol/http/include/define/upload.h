@@ -1,10 +1,9 @@
 #ifndef __YUAN_NET_HTTP_DEFINE_UPLOAD_H__
 #define __YUAN_NET_HTTP_DEFINE_UPLOAD_H__
-#include <cstdint>
 #include <string>
 #include <unordered_map>
 
-#include "buffer/buffer.h"
+#include "buffer/buffer_reader.h"
 
 namespace yuan::net::http
 {
@@ -17,10 +16,10 @@ namespace yuan::net::http
 
     struct UploadTmpChunk
     {
-        buffer::Buffer *buffer_ = nullptr;
-        const char *begin_ = nullptr;
-        const char *end_ = nullptr;
+        size_t begin_ = 0;
+        size_t len_ = 0;
         UploadChunk chunk_;
+        buffer::BufferReader reader_;
     };
 
     struct UploadFileMapping

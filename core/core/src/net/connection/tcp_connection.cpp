@@ -163,6 +163,8 @@ namespace yuan::net
                 channel_->enable_write();
                 eventHandler_->update_channel(channel_);
                 break;
+            } else {
+                break;
             }
         }
 

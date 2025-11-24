@@ -9,7 +9,7 @@ namespace yuan::net::http
 {
     void SaveUploadTempChunkTask::run_internal()
     {
-        if (!tmp_chunk_.begin_ || !tmp_chunk_.end_) {
+        if (!tmp_chunk_.begin_ || !tmp_chunk_.reader_) {
             std::cerr << "empty body!!!" << std::endl;
             return;
         }
@@ -22,12 +22,13 @@ namespace yuan::net::http
             return;
         }
 
-        const size_t bytesToWrite = tmp_chunk_.end_ - tmp_chunk_.begin_;
-        of.write(tmp_chunk_.begin_, bytesToWrite);
+        if (const auto ret = tmp_chunk_.reader_.write_from_offset(of, tmp_chunk_.begin_, static_cast<int64_t>(tmp_chunk_.len_)); ret != tmp_chunk_.len_) {
+            std::cerr << "write file error: " << ret << std::endl;
+            return;
+        }
         of.close();
 
-        std::cout << "flush to disk, chunkIdx: " << tmp_chunk_.chunk_.idx_ << ", chunkSize: " << bytesToWrite << std::endl;
-        buffer::BufferedPool::get_instance()->free(tmp_chunk_.buffer_);
+        std::cout << "flush to disk, chunkIdx: " << tmp_chunk_.chunk_.idx_ << ", chunkSize: " << tmp_chunk_.len_ << std::endl;
 
         do_merge_chunks();
     }

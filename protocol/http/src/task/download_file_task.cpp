@@ -37,23 +37,26 @@ namespace yuan::net::http
         return file_stream_.good();
     }
 
-    bool HttpDownloadFileTask::on_data(buffer::Buffer *buf)
+    int HttpDownloadFileTask::on_data(buffer::BufferReader &reader)
     {
-        if (!attachment_info_ || !buf) {
-            return false;
+        if (!attachment_info_ || reader.readable_bytes() == 0) {
+            return -1;
         }
 
         if (attachment_info_->offset_ >= attachment_info_->length_) {
-            return false;
+            return -1;
         }
 
         if (file_stream_.is_open() && file_stream_.good()) {
-            std::size_t bytes_to_write = buf->readable_bytes();
+            const std::size_t bytes_to_write = reader.readable_bytes();
             if (bytes_to_write == 0) {
                 return check_completed();
             }
 
-            file_stream_.write(buf->peek(), bytes_to_write);
+            if (const auto write = reader.write_fail_rollback(file_stream_); write < 0 || write != bytes_to_write) {
+                return -1;
+            }
+
             file_stream_.flush();
             attachment_info_->offset_ += bytes_to_write;
 
@@ -64,7 +67,7 @@ namespace yuan::net::http
             return check_completed();
         }
 
-        return false;
+        return 1;
     }
 
     bool HttpDownloadFileTask::is_done() const
@@ -84,30 +87,32 @@ namespace yuan::net::http
         }
     }
 
-    bool HttpDownloadFileTask::check_completed()
+    int HttpDownloadFileTask::check_completed()
     {
         if (attachment_info_->offset_ >= attachment_info_->length_) {
-            file_stream_.close();
-            if (completed_callback_) {
-                try {
-                    completed_callback_();
-                } catch (const std::exception& e) {
-                    std::cerr << "Callback exception: " << e.what() << std::endl;
-                    return false;
-                }
-            }
-
             try {
+                file_stream_.close();
+
                 if (std::rename(attachment_info_->tmp_file_name_.c_str(), attachment_info_->origin_file_name_.c_str()) != 0) {
                     std::cerr << "Failed to rename file: " << strerror(errno) << std::endl;
-                    return false;
+                    return -1;
                 }
-                return true;
+
+                if (completed_callback_) {
+                    try {
+                        completed_callback_();
+                    } catch (const std::exception& e) {
+                        std::cerr << "Callback exception: " << e.what() << std::endl;
+                        return -1;
+                    }
+                }
+
+                return 0;
             } catch (const std::exception& e) {
                 std::cerr << "File rename exception: " << e.what() << std::endl;
             }
         }
         
-        return false;
+        return -1;
     }
 }

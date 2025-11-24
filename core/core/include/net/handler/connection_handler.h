@@ -8,8 +8,6 @@ namespace yuan::net
     class ConnectionHandler
     {
     public:
-        virtual ~ConnectionHandler() = default;
-
         virtual void on_connected(Connection *conn) = 0;
 
         virtual void on_error(Connection *conn) = 0;

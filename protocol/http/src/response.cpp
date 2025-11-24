@@ -1,10 +1,11 @@
-#include "net/connection/connection.h"
-#include "response_parser.h"
 #include "response.h"
 #include "buffer/buffer.h"
 #include "buffer/pool.h"
 #include "context.h"
+#include "header_key.h"
+#include "net/connection/connection.h"
 #include "response_code_desc.h"
+#include "response_parser.h"
 
 namespace yuan::net::http
 {
@@ -21,30 +22,42 @@ namespace yuan::net::http
 
     void HttpResponse::append_body(const char *data)
     {
-        buffer_->write_string(data);
+        const size_t len = strlen(data);
+        if (len == 0) {
+            return;
+        }
+
+        const auto buff = buffer::BufferedPool::get_instance()->allocate(len);
+        buff->write_string(data);
+        reader_.add_buffer(buff);
     }
 
     void HttpResponse::append_body(const std::string &data)
     {
-        buffer_->write_string(data);
+        const auto buff = buffer::BufferedPool::get_instance()->allocate(data.size());
+        buff->write_string(data);
+        reader_.add_buffer(buff);
     }
 
     void HttpResponse::reset()
     {
         HttpPacket::reset();
         respCode_ = ResponseCode::bad_request;
-        buffer_->reset();
     }
 
     bool HttpResponse::pack_header(Connection *conn)
     {
-        auto descIt = responseCodeDescs.find(respCode_);
+        if (!conn) {
+            return false;
+        }
+
+        const auto descIt = responseCodeDescs.find(respCode_);
         if (descIt == responseCodeDescs.end() || respCode_ == ResponseCode::internal_server_error) {
             context_->process_error();
             return false;
         }
 
-        auto outputBuffer = conn ? conn->get_output_buff() : context_->get_connection()->get_output_buff();
+        const auto outputBuffer = conn ? conn->get_output_buff() : context_->get_connection()->get_output_buff();
         std::string header("HTTP/1.1");
         header.append(" ").append(descIt->second).append("\r\n");
 
@@ -53,9 +66,13 @@ namespace yuan::net::http
         add_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
         add_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
         add_header("Access-Control-Max-Age", "86400"); // 24小时缓存
+
+        if (!get_header(http_header_key::content_length)) {
+            add_header("Content-Length", std::to_string(reader_.readable_bytes()));
+        }
         
-        for (const auto &item : headers_) {
-            header.append(item.first).append(": ").append(item.second).append("\r\n");
+        for (const auto &[key, val] : headers_) {
+            header.append(key).append(": ").append(val).append("\r\n");
         }
 
         header.append("\r\n");
@@ -64,7 +81,7 @@ namespace yuan::net::http
         return true;
     }
 
-    void HttpResponse::process_error(ResponseCode errorCode)
+    void HttpResponse::process_error(ResponseCode errorCode) const
     {
         auto it = responseCodeDescs.find(errorCode);
         if (it == responseCodeDescs.end()) {
@@ -87,18 +104,10 @@ namespace yuan::net::http
             return;
         }
 
-        if (buffer_ && buffer_->readable_bytes() > 0) {
-            task_->on_data(buffer_);
-            buffer_->reset();
+        if (reader_.readable_bytes() > 0) {
+            task_->on_data(reader_);
+            reader_.init();
         }
-
-        if (linked_buffer_.get_size() > 0) {
-            linked_buffer_.foreach([this](buffer::Buffer *buff) -> bool {
-                return task_->on_data(buff);
-            });
-            linked_buffer_.clear();
-        }
-
         // TODO: dispatch task
     }
 }

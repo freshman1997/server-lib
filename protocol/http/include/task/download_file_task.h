@@ -22,7 +22,7 @@ namespace yuan::net::http
     public:
         virtual bool init() override;
 
-        virtual bool on_data(buffer::Buffer *buf) override;
+        virtual int on_data(buffer::BufferReader &reader) override;
 
         virtual HttpTaskType get_task_type() const override
         {
@@ -45,11 +45,11 @@ namespace yuan::net::http
         }
 
     private:
-        bool check_completed();
+        int check_completed();
         
     private:
         std::shared_ptr<AttachmentInfo> attachment_info_;
-        std::fstream file_stream_;
+        std::ofstream file_stream_;
         std::function<void()> completed_callback_;
     };
 }

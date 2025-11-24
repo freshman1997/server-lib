@@ -5,40 +5,46 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
-#include "nlohmann/json.hpp"
+#include "buffer/buffer_reader.h"
 #include "content_type.h"
+#include "nlohmann/json.hpp"
 
 namespace yuan::net::http 
 {
     struct ContentData
     {
-        virtual ~ContentData() {}
+        virtual ~ContentData() = default;
     };
 
-    struct TextContent : public ContentData
+    struct TextContent : ContentData
     {
-        const char *begin   = nullptr;
-        const char *end     = nullptr;
+        size_t begin   = 0;
+        size_t len     = 0;
 
-        std::string get_content() const
+        std::string get_content(buffer::BufferReader &reader) const
         {
-            if (begin && end) {
-                return std::string(begin, end);
-            } else {
+            if (begin && len > 0) {
+                std::string content;
+                content.reserve(len);
+                if (const int r = reader.read(content.data(), len); r >= 0) {
+                    return content;
+                }
             }
             return {};
         }
     };
 
-    struct JsonContent : public ContentData
+    struct JsonContent : ContentData
     {
         nlohmann::json jval;
     };
 
     enum class FormDataType
     {
+        none_,
         string_,
         stream_,
         file_,
@@ -46,14 +52,14 @@ namespace yuan::net::http
 
     struct FormDataItem
     {
-        FormDataType item_type_;
-        virtual ~FormDataItem() {}
+        FormDataType item_type_ = FormDataType::none_;
+        virtual ~FormDataItem() = default;
     };
 
     struct FormDataStringItem : FormDataItem
     {
         std::string value_;
-        FormDataStringItem(const std::string &val) : value_(std::move(val)) {
+        explicit FormDataStringItem(std::string val) : value_(std::move(val)) {
             item_type_ = FormDataType::string_;
         }
     };
@@ -63,13 +69,13 @@ namespace yuan::net::http
         std::string origin_name_;
         std::string tmp_file_name_;
         std::unordered_map<std::string, std::string> content_type_;
-        FormDataFileItem(const std::string &origin, const std::string &tmpName, const std::unordered_map<std::string, std::string>&ctype) 
-            : origin_name_(std::move(origin)), tmp_file_name_(std::move(tmpName)),content_type_(std::move(ctype))  {
+        FormDataFileItem(std::string origin, std::string tmpName, const std::unordered_map<std::string, std::string>&ctype)
+            : origin_name_(std::move(origin)), tmp_file_name_(std::move(tmpName)),content_type_(ctype)  {
             item_type_ = FormDataType::file_;
             content_type_.erase("____tmp_file_name");
         }
 
-        ~FormDataFileItem() {
+        ~FormDataFileItem() override {
             if (!tmp_file_name_.empty()) {
                 std::remove(tmp_file_name_.c_str());
                 std::cout << "removed tmp file: " << tmp_file_name_ << std::endl;
@@ -81,24 +87,20 @@ namespace yuan::net::http
     {
         std::string origin_name_;
         std::pair<std::string, std::unordered_map<std::string, std::string>> content_type_;
-        const char *begin_ = nullptr;
-        const char *end_ = nullptr;
+        size_t begin_ = 0;
+        size_t len_ = 0;
 
-        explicit FormDataStreamItem(const std::string &name, 
-            const std::pair<std::string, std::unordered_map<std::string, std::string>> &type, 
-            const char *begin, const char *end) 
-            : origin_name_(std::move(name)), content_type_(std::move(type)), begin_(begin), end_(end) {
+        explicit FormDataStreamItem(std::string name,
+            const std::pair<std::string, std::unordered_map<std::string, std::string>> &type,
+                                    const size_t begin, const size_t len)
+            : origin_name_(std::move(name)), content_type_(type), begin_(begin), len_(len) {
 
             item_type_ = FormDataType::stream_;
         }
 
-        std::size_t get_content_length()
+        std::size_t get_content_length() const
         {
-            if (begin_ && end_) {
-                return end_ - begin_;
-            }
-
-            return 0;
+            return len_;
         }
     };
 
@@ -124,10 +126,11 @@ namespace yuan::net::http
     struct RangeDataContent : public ContentData
     {
         std::vector<RangeDataItem *> contents;
-        ~RangeDataContent() {
+        ~RangeDataContent() override {
             for (const auto it : contents) {
                 delete it;
             }
+            contents.clear();
         }
     };
 
@@ -154,9 +157,7 @@ namespace yuan::net::http
         Content(ContentType type, ContentData *data) : type_(type), content_data_(data) {}
         ~Content() 
         {
-            if (content_data_) {
-                delete content_data_;
-            }
+            delete content_data_;
         }
     };
 }

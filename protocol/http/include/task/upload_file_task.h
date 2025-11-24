@@ -31,7 +31,7 @@ namespace yuan::net::http
 
         bool init() override;
 
-        bool on_data(buffer::Buffer *buf) override;
+        int on_data(buffer::BufferReader &buff) override;
 
         HttpTaskType get_task_type() const override
         {
@@ -57,7 +57,7 @@ namespace yuan::net::http
 
     private:
         std::shared_ptr<AttachmentInfo> attachment_info_;
-        std::fstream file_stream_;
+        std::ifstream file_stream_;
         std::function<void()> completed_callback_;
     };
 }

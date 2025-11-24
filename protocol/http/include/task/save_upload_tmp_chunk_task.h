@@ -16,11 +16,6 @@ namespace yuan::net::http
         SaveUploadTempChunkTask() = default;
         ~SaveUploadTempChunkTask() override = default;
 
-        void set_temp_chunk(const UploadTmpChunk &chunk)
-        {
-            tmp_chunk_ = chunk;
-        }
-
         void set_mapping(const std::shared_ptr<UploadFileMapping> &mapping)
         {
             upload_file_mapping_ = mapping;

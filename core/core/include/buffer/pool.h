@@ -6,8 +6,6 @@
 
 #include "../singleton/singleton.h"
 
-#include <condition_variable>
-
 namespace yuan::buffer
 {
     class Buffer;
@@ -22,11 +20,11 @@ namespace yuan::buffer
 
         std::size_t get_buffer_size() const;
 
-        Buffer * allocate(std::size_t sz = 8192);
+        buffer::Buffer * allocate(std::size_t sz = 8192);
 
-        void free(Buffer *buf);
+        void free(buffer::Buffer *buf);
 
-        static void buffer_append_size(Buffer *buf, size_t size = 0);
+        void buffer_append_size(buffer::Buffer *buf, size_t size = 0);
 
         BufferedPool();
         ~BufferedPool();
@@ -38,8 +36,8 @@ namespace yuan::buffer
         void check_size() const;
 
     private:
-        std::set<Buffer *> using_list_;
-        std::list<Buffer *> free_list_;
+        std::set<buffer::Buffer *> using_list_;
+        std::list<buffer::Buffer *> free_list_;
         std::mutex buffer_mutex_;
     };
 }

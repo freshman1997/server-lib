@@ -25,8 +25,8 @@ namespace yuan::net::http
 
     ContentParserFactory::~ContentParserFactory()
     {
-        for (auto &item : parsers) {
-            delete item.second;
+        for (const auto &val : parsers | std::views::values) {
+            delete val;
         }
     }
 
@@ -56,7 +56,7 @@ namespace yuan::net::http
             chunked_parser->reset();
         }
 
-        auto it = parsers.find(packet->get_content_type());
+        const auto it = parsers.find(packet->get_content_type());
         if (it == parsers.end() || !it->second->can_parse(packet->get_content_type())) {
             return false;
         }

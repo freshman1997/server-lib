@@ -21,7 +21,7 @@ namespace yuan::net::http
         }
         
         // 验证文件路径安全性，防止路径遍历攻击
-        const auto file_path = std::filesystem::path(std::filesystem::u8path(attachment_info_->origin_file_name_));
+        const auto file_path = std::filesystem::path(std::filesystem::path(attachment_info_->origin_file_name_));
         if (file_path.is_relative()) {
             // 相对路径可能导致安全问题
             return false;
@@ -47,10 +47,10 @@ namespace yuan::net::http
         return file_stream_.good();
     }
 
-    bool HttpUploadFileTask::on_data(buffer::Buffer *buf)
+    int HttpUploadFileTask::on_data(buffer::BufferReader &buff)
     {
         // 参数验证
-        if (!attachment_info_ || !buf) {
+        if (!attachment_info_) {
             return false;
         }
 
@@ -60,7 +60,7 @@ namespace yuan::net::http
         }
 
         // 检查缓冲区大小
-        if (buf->writable_size() == 0) {
+        if (buff.writable_size() == 0) {
             return false;
         }
 
@@ -72,22 +72,20 @@ namespace yuan::net::http
         try {
             // Write the data to the file
             // and update the offset
-            std::size_t bytes_to_write = std::min<std::size_t>(buf->writable_size(), attachment_info_->length_ - attachment_info_->offset_);
+            const std::size_t bytes_to_write = std::min<std::size_t>(buff.writable_size(), attachment_info_->length_ - attachment_info_->offset_);
             if (bytes_to_write == 0) {
                 return false;
             }
-            
-            file_stream_.read(buf->buffer_begin(), bytes_to_write);
-            
-            std::size_t read_bytes = file_stream_.gcount();
-            if (read_bytes > 0) {
+
+            if (const auto read_bytes = buff.fill_from_stream(file_stream_, bytes_to_write); read_bytes > 0) {
                 attachment_info_->offset_ += read_bytes;
-                buf->fill(read_bytes);
+            } else {
+                return false;
             }
 
-        #ifdef _DEBUG
+        //#ifdef _DEBUG
             std::cout << "Uploaded " << attachment_info_->offset_ << " bytes of " << attachment_info_->length_ << " bytes. " << ((attachment_info_->offset_ * 1.0) / (attachment_info_->length_ * 1.0) * 100) << "%" << std::endl;
-        #endif
+        //#endif
 
             return check_completed();
 
