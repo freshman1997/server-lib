@@ -4,6 +4,7 @@
 #include "packet.h"
 #include "nlohmann/json.hpp"
 #include <fstream>
+#include <memory>
 
 namespace yuan::net::http 
 {
@@ -39,7 +40,7 @@ namespace yuan::net::http
                 return false;
             }
 
-            JsonContent *jc = new JsonContent;
+            auto jc = std::make_shared<JsonContent>();
             jc->jval = std::move(jval);
             preContent->type_ = ContentType::application_json;
             preContent->content_data_ = jc;

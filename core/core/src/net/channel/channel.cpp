@@ -3,11 +3,6 @@
 
 namespace yuan::net
 {
-    const int Channel::READ_EVENT = 0x1;
-    const int Channel::WRITE_EVENT = 0x2;
-    const int Channel::EXCEP_EVENT = 0x4;
-    const int Channel::NONE_EVENT = 0;
-
     Channel::Channel() : Channel(0)
     {
     }
@@ -25,7 +20,7 @@ namespace yuan::net
     void Channel::on_event()
     {
         if (!handler_) {
-            // TODO
+            delete this;
             return;
         }
 

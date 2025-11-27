@@ -1,6 +1,5 @@
 #ifndef __NET_HTTP_PACKET_H__
 #define __NET_HTTP_PACKET_H__
-#include "attachment/attachment.h"
 #include "buffer/buffer.h"
 #include "buffer/linked_buffer.h"
 #include "content_type.h"
@@ -9,7 +8,6 @@
 #include "response_code.h"
 #include "task/task.h"
 
-#include <memory>
 #include <string>
 #include <vector>
 

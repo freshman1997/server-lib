@@ -25,9 +25,10 @@ namespace yuan::net::http
 
     struct UploadFileMapping
     {
-        std::string origin_file_name_;
-        uint64_t file_size_;
         int total_chunks_;
+        uint64_t file_size_;
+        std::string origin_file_name_;
+        std::string upload_id_;
         std::unordered_map<int, UploadChunk> chunks_;
     };
 }

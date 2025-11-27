@@ -1,11 +1,6 @@
-#include "response_code.h"
-#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
-#include <ios>
 #include <iostream>
-#include <string>
-#include <fstream>
 
 #ifndef _WIN32
 #include <signal.h>
@@ -15,12 +10,7 @@
 #include <windows.h>
 #endif
 
-#include "buffer/buffer.h"
-#include "context.h"
 #include "http_server.h"
-#include "request.h"
-#include "response.h"
-#include "net/connection/connection.h"
 
 using namespace yuan;
 

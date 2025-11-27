@@ -4,6 +4,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -12,9 +13,16 @@
 
 namespace yuan::net::http 
 {
-    struct ContentData
+    struct ContentData : std::enable_shared_from_this<ContentData>
     {
         virtual ~ContentData() {}
+
+        template<typename T>
+        std::shared_ptr<T> as()
+        {
+            static_assert(std::is_base_of<ContentData, T>::value, "should be inherited from ContentData");
+            return std::dynamic_pointer_cast<T>(shared_from_this());
+        }
     };
 
     struct TextContent : public ContentData
@@ -44,7 +52,7 @@ namespace yuan::net::http
         file_,
     };
 
-    struct FormDataItem
+    struct FormDataItem : public std::enable_shared_from_this<FormDataItem>
     {
         FormDataType item_type_;
         virtual ~FormDataItem() {}
@@ -66,7 +74,6 @@ namespace yuan::net::http
         FormDataFileItem(const std::string &origin, const std::string &tmpName, const std::unordered_map<std::string, std::string>&ctype) 
             : origin_name_(std::move(origin)), tmp_file_name_(std::move(tmpName)),content_type_(std::move(ctype))  {
             item_type_ = FormDataType::file_;
-            content_type_.erase("____tmp_file_name");
         }
 
         ~FormDataFileItem() {
@@ -106,6 +113,19 @@ namespace yuan::net::http
     {
         std::string type;
         std::unordered_map<std::string, std::shared_ptr<FormDataItem>> properties;
+
+        template<typename T>
+        std::shared_ptr<T> get_item(const std::string &name) 
+        {
+            static_assert(std::is_base_of<FormDataItem, T>::value, "should be inherited from FormDataItem");
+
+            auto it = properties.find(name);
+            if (it != properties.end()) {
+                return std::dynamic_pointer_cast<T>(it->second);
+            }
+
+            return nullptr;
+        }
     };
 
     struct RangeDataItem
@@ -123,18 +143,13 @@ namespace yuan::net::http
 
     struct RangeDataContent : public ContentData
     {
-        std::vector<RangeDataItem *> contents;
-        ~RangeDataContent() {
-            for (const auto it : contents) {
-                delete it;
-            }
-        }
+        std::vector<std::shared_ptr<RangeDataItem>> contents;
     };
 
     struct Content
     {
         ContentType type_ = ContentType::not_support;
-        ContentData *content_data_ = nullptr;
+        std::shared_ptr<ContentData> content_data_ = nullptr;
 
         struct FileInfo
         {
@@ -152,11 +167,12 @@ namespace yuan::net::http
         } file_info_;
 
         Content(ContentType type, ContentData *data) : type_(type), content_data_(data) {}
-        ~Content() 
+
+        template<typename T>
+        std::shared_ptr<T> get_content_data()
         {
-            if (content_data_) {
-                delete content_data_;
-            }
+            static_assert(std::is_base_of<ContentData, T>::value, "should be inherited from ContentData");
+            return std::dynamic_pointer_cast<T>(content_data_);
         }
     };
 }

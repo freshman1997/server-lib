@@ -77,10 +77,10 @@ namespace yuan::net
         }
 
     public:
-        static const int READ_EVENT;
-        static const int WRITE_EVENT;
-        static const int EXCEP_EVENT;
-        static const int NONE_EVENT;
+        static constexpr int READ_EVENT  = 0b001;
+        static constexpr int WRITE_EVENT = 0b010;
+        static constexpr int EXCEP_EVENT = 0b100;
+        static constexpr int NONE_EVENT  = 0;
 
     private:
         int events_;

@@ -632,19 +632,13 @@ namespace yuan::net::http
         }
 
         if (content->type_ == ContentType::multpart_form_data) {
-            const auto &multipart_form_data = dynamic_cast<FormDataContent *>(content->content_data_);
+            const auto &multipart_form_data = content->get_content_data<FormDataContent>();
             if (!multipart_form_data) {
                 resp->process_error();
                 return;
             }
 
-            auto it = multipart_form_data->properties.find("chunksize");
-            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_) {
-                resp->process_error(ResponseCode::bad_request);
-                return;
-            }
-
-            const auto &sizeItem = std::dynamic_pointer_cast<FormDataStringItem>(it->second);
+            auto sizeItem  = multipart_form_data->get_item<FormDataStringItem>("chunksize");
             if (!sizeItem) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
@@ -656,13 +650,7 @@ namespace yuan::net::http
                 return;
             }
 
-            it = multipart_form_data->properties.find("filesize");
-            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_) {
-                resp->process_error(ResponseCode::bad_request);
-                return;
-            }
-
-            const auto &fileSizeItem = std::dynamic_pointer_cast<FormDataStringItem>(it->second);
+            const auto &fileSizeItem = multipart_form_data->get_item<FormDataStringItem>("filesize");
             if (!sizeItem) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
@@ -674,13 +662,7 @@ namespace yuan::net::http
                 return;
             }
 
-            it = multipart_form_data->properties.find("totalchunks");
-            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_) {
-                resp->process_error(ResponseCode::bad_request);
-                return;
-            }
-
-            const auto &totalChunkSize = std::dynamic_pointer_cast<FormDataStringItem>(it->second);
+            const auto &totalChunkSize = multipart_form_data->get_item<FormDataStringItem>("totalchunks");
             if (!sizeItem) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
@@ -692,13 +674,7 @@ namespace yuan::net::http
                 return;
             }
 
-            it = multipart_form_data->properties.find("chunkindex");
-            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_) {
-                resp->process_error(ResponseCode::bad_request);
-                return;
-            }
-
-            const auto &chunkIdxItem = std::dynamic_pointer_cast<FormDataStringItem>(it->second);
+            const auto &chunkIdxItem = multipart_form_data->get_item<FormDataStringItem>("chunkindex");
             if (!sizeItem) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
@@ -710,37 +686,19 @@ namespace yuan::net::http
                 return;
             }
 
-            it = multipart_form_data->properties.find("filename");
-            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_ ) {
-                resp->process_error(ResponseCode::bad_request);
-                return;
-            }
-
-            const auto &filename = std::dynamic_pointer_cast<FormDataStringItem>(it->second);
+            const auto &filename = multipart_form_data->get_item<FormDataStringItem>("filename");
             if (!filename || filename->value_.empty()) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
             }
 
-            it = multipart_form_data->properties.find("uploadid");
-            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::string_ ) {
-                resp->process_error(ResponseCode::bad_request);
-                return;
-            }
-
-            const auto &uploadId = std::dynamic_pointer_cast<FormDataStringItem>(it->second);
+            const auto &uploadId = multipart_form_data->get_item<FormDataStringItem>("uploadid");
             if (!uploadId || uploadId->value_.empty()) {
                 resp->process_error(ResponseCode::bad_request);
                 return;
             }
 
-            it = multipart_form_data->properties.find("file");
-            if (it == multipart_form_data->properties.end() || it->second->item_type_ != FormDataType::stream_) {
-                resp->process_error(ResponseCode::bad_request);
-                return;
-            }
-
-            const auto &file = std::dynamic_pointer_cast<FormDataStreamItem>(it->second);
+            const auto &file = multipart_form_data->get_item<FormDataStreamItem>("file");
             if (!file || file->get_content_length() == 0 || file->get_content_length() != chunkSize) {
                 resp->process_error();
                 return;
@@ -753,7 +711,7 @@ namespace yuan::net::http
             }
 
             if (upIt == uploaded_chunks_.end()) {
-                uploaded_chunks_[uploadId->value_] = {filename->value_, fileSize, totalChunk, {}};
+                uploaded_chunks_[uploadId->value_] = {totalChunk, fileSize, filename->value_, uploadId->value_, {}};
                 upIt = uploaded_chunks_.find(uploadId->value_);
             }
 

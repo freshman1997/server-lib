@@ -41,7 +41,7 @@ int main()
     [](net::http::HttpRequest *req, net::http::HttpResponse *resp){
         if (resp->good()) {
             if (resp->get_response_code() == net::http::ResponseCode::ok_) {
-                if (resp->is_donwloading()) {
+                if (resp->is_downloading()) {
                     std::cout << "File download, filename: " << resp->get_original_file_name() << "contextType: << " << (int)resp->get_content_type() << ", length: " << resp->get_body_length() << std::endl;
 
                     auto attachment = std::make_shared<yuan::net::http::AttachmentInfo>();
@@ -55,7 +55,7 @@ int main()
                     
                     net::http::HttpDownloadFileTask *task = new net::http::HttpDownloadFileTask([resp]() {
                         std::cout << "File download completed: " << resp->get_original_file_name() << std::endl;
-                        resp->set_downlload_file(false);
+                        resp->set_download_file(false);
                     });
 
                     task->set_attachment_info(attachment);
@@ -87,11 +87,11 @@ int main()
                         std::cout << data << std::endl;
                         file.close();
                     } else {
-                        const net::http::TextContent *textContent = static_cast<const net::http::TextContent *>(content->content_data_);
+                        auto textContent = content->content_data_->as<net::http::TextContent>();
                         std::cout << textContent->get_content() << std::endl;
                     }
                 } else if (content->type_ == yuan::net::http::ContentType::application_json) {
-                    const net::http::JsonContent *jsonContent = static_cast<const net::http::JsonContent *>(content->content_data_);
+                    auto jsonContent = content->content_data_->as<net::http::JsonContent>();
                     std::cout << jsonContent->jval.dump(4) << std::endl;
                 } else if (content->type_ == yuan::net::http::ContentType::multpart_form_data) {
                     // Handle multipart form data

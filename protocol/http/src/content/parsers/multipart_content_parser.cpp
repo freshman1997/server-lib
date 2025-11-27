@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <memory>
 
 namespace yuan::net::http 
 {
@@ -319,7 +320,7 @@ namespace yuan::net::http
             begin += boundaryStart.size();
             begin += helper::skip_new_line(begin);
 
-            RangeDataItem *item = new RangeDataItem;
+            auto item = std::make_shared<RangeDataItem>();
             rangeContent->contents.push_back(item);
 
             const auto &res = packet->parse_content_type(begin, end, item->content_type_.first, item->content_type_.second);

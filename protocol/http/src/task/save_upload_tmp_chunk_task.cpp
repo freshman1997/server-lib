@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <string>
 
 namespace yuan::net::http
 {
@@ -40,10 +41,17 @@ namespace yuan::net::http
 
         std::ofstream finalFile;
         // 修复Windows和Linux的文件路径兼容性问题
-        finalFile.open(std::filesystem::u8path(upload_file_mapping_->origin_file_name_), std::ios::binary);
+        finalFile.open(std::filesystem::path(std::u8string((char8_t*)upload_file_mapping_->origin_file_name_.data())), std::ios::binary);
         if (!finalFile.good()) {
             std::cerr << "write file error: " << errno << std::endl;
             return;
+        }
+
+        for (int i = 0; i < upload_file_mapping_->total_chunks_; i++) {
+            if (!upload_file_mapping_->chunks_.contains(i)) {
+                std::cerr << upload_file_mapping_->upload_id_ << " chunk not found: " << i << ", please retry later. " << std::endl;
+                return;
+            }
         }
 
         for (int i = 0; i < upload_file_mapping_->total_chunks_; i++) {
