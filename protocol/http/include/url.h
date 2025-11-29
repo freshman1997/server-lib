@@ -8,8 +8,8 @@
 namespace yuan::url
 {
     std::string url_encode(const std::string &str);
-    std::string url_decode(const std::string &str);
-    std::string url_decode(const char *begin, const char *end);
+    std::string url_decode(const std::string &str, bool is_query_string = false);
+    std::string url_decode(const char *begin, const char *end, bool is_query_string = false);
 
     bool decode_url_domain(const std::string &url, std::vector<std::string> &urlDomain);
     bool decode_parameters(const std::string &url, std::unordered_map<std::string, std::vector<std::string>> &params, bool fromBody = false);
