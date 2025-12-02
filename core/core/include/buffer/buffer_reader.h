@@ -141,72 +141,6 @@ public:
         return count;
     }
 
-    bool read_match(const char *str)
-    {
-        if (str == nullptr) {
-            return false;
-        }
-
-        if (strlen(str) > get_remain_bytes()) {
-            return false;
-        }
-
-        if (strlen(str) == 0) {
-            return true;
-        }
-
-        mark();
-
-        const char *p = str;
-        while (*p != '\0') {
-            if (read_char() != *p) {
-                break;
-            }
-            ++p;
-        }
-
-        if (*p == '\0') {
-            return true;
-        }
-
-        rollback();
-
-        return false;
-    }
-
-    bool read_match_ignore_case(const char *str)
-    {
-        if (str == nullptr) {
-            return false;
-        }
-
-        if (strlen(str) > get_remain_bytes()) {
-            return false;
-        }
-
-        if (strlen(str) == 0) {
-            return true;
-        }
-
-        mark();
-
-        const char *p = str;
-        while (*p != '\0') {
-            if (std::tolower(read_char()) != std::tolower(*p)) {
-                break;
-            }
-            ++p;
-        }
-
-        if (*p == '\0') {
-            return true;
-        }
-
-        rollback();
-        
-        return false;
-    }
-
     char peek_char() const
     {
         if (current_buf_idx_ >= buffers_.size()) {
@@ -346,6 +280,12 @@ public:
         }
 
         return written;
+    }
+
+    void just_clear()
+    {
+        buffers_.clear();
+        init();
     }
 
 private:

@@ -266,6 +266,11 @@ namespace yuan::buffer
             return readable_bytes() == 0;
         }
 
+        bool full()
+        {
+            return writable_size() == 0;
+        }
+
         void shink_to_fit()
         {
             if (empty() && buffs.size() > 8192) {

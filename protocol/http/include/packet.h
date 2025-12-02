@@ -223,14 +223,20 @@ namespace yuan::net::http
             return is_download_file_ || is_upload_file_;
         }
 
+        std::string get_peer_ip() const;
+
+        uint32_t get_peer_ip_uint32() const;
+
     protected:
-        HttpSessionContext *context_;
-        HttpPacketParser *parser_;
         HttpVersion version_ = HttpVersion::v_1_1;
         bool is_good_;
+        bool is_upload_file_;
+        bool is_download_file_;
         ResponseCode error_code_;
-        uint32_t body_length_;
         ContentType content_type_;
+        uint32_t body_length_;
+        HttpSessionContext *context_;
+        HttpPacketParser *parser_;
         std::unordered_map<std::string, std::vector<std::string>> params_;
         std::unordered_map<std::string, std::string> headers_;
         std::string content_type_text_;
@@ -238,12 +244,9 @@ namespace yuan::net::http
         Content *body_content_;
         buffer::Buffer * buffer_;
         ContentParser *pre_content_parser_;
+        HttpTask *task_;
         std::string chunked_checksum_;
         std::string original_file_name_;
-        bool is_upload_file_;
-        bool is_download_file_;
-        HttpTask *task_;
-        buffer::LinkedBuffer linked_buffer_;
     };
 }
 

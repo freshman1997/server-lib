@@ -1,6 +1,7 @@
 #include "buffer/linked_buffer.h"
 #include "net/connection/connection.h"
 #include "context.h"
+#include "ops/option.h"
 #include "packet.h"
 #include "request.h"
 #include "response.h"
@@ -37,15 +38,9 @@ namespace yuan::net::http
             has_parsed_ = true;
         }
 
-        bool res = false;
-        conn_->process_input_data([this, &res](buffer::Buffer *buff) -> bool {
-            // 暂时采用 copy 的方式
-            auto pkt = get_packet();
-            res = pkt->parse(*buff);
-            return pkt->good();
-        }, false);
-
-        return res;
+        auto pkt = get_packet();
+        pkt->parse(*conn_->get_input_buff());
+        return pkt->good();
     }
 
     bool HttpSessionContext::write()
@@ -54,7 +49,7 @@ namespace yuan::net::http
         {
             auto buff = response_->get_buff(true);
             buff->reset();
-            buff->resize(1024 * 1024 * 2);
+            buff->resize(static_cast<size_t>(config::client_max_content_length + config::max_header_length));
             response_->write(*buff);
             conn_->write_and_flush(buff);
         }

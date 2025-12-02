@@ -32,11 +32,9 @@ namespace yuan::net::dns
 
     void DnsClient::on_read(Connection *conn)
     {
-        conn->process_input_data([this](buffer::Buffer *buff) -> bool {
-            std::string str(buff->peek(), buff->peek() + buff->readable_bytes());
-            std::cout << "xxxxxxx: " << str << '\n';
-            return true;
-        }, false);
+        auto buff = conn->get_input_buff();
+        std::string str(buff->peek(), buff->peek() + buff->readable_bytes());
+        std::cout << "xxxxxxx: " << str << '\n';
         conn->close();
         ev_loop_->quit();
     }
@@ -48,7 +46,7 @@ namespace yuan::net::dns
         }
 
         retry_cnt_++;
-        auto buf = conn->get_output_buff();
+        auto buf = conn->get_output_linked_buffer()->get_current_buffer();
         //std::string daoke = R"({"MsgID":943024804,"Cmd":24,"MsgBody":{"Uin":261281,"RoleID":"369691744731399841","GiftID":1}})";
 
         //std::string daoke = R"({"MsgID":1080876021,"Cmd":24,"MsgBody":{"Uin":441882,"RoleID":"425986807601037850","GiftID":1}})";

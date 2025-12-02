@@ -22,6 +22,9 @@ namespace yuan::buffer
 
     buffer::Buffer * LinkedBuffer::get_current_buffer()
     {
+        if (buffers_.empty()) {
+            allocate_buffer();
+        }
         return buffers_.back();
     }
 

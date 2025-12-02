@@ -75,6 +75,7 @@ namespace yuan::net::http
             return;
         }
 
+        conn->set_max_packet_size(static_cast<size_t>(config::client_max_content_length + config::max_header_length));
         sessions_[sessionId] = new HttpSession(sessionId, new HttpSessionContext(conn), timer_manager_);
     }
 

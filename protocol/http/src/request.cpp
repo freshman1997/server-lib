@@ -54,7 +54,7 @@ namespace yuan::net::http
 
     bool HttpRequest::pack_header(Connection *conn)
     {
-        auto outputBuffer = conn ? conn->get_output_buff() : context_->get_connection()->get_output_buff();
+        auto outputBuffer = conn ? conn->get_output_linked_buffer()->get_current_buffer() : context_->get_connection()->get_output_linked_buffer()->get_current_buffer();
         const std::string &method = get_raw_method();
         std::string header = method.empty() ? "GET" : method;
         header.append(" ");
@@ -68,6 +68,8 @@ namespace yuan::net::http
 
         header.append("\r\n");
         outputBuffer->write_string(header);
+        
+        context_->get_connection()->flush();
 
         return true;
     }

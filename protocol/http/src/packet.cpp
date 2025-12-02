@@ -4,6 +4,7 @@
 #include "content/content_parser_factory.h"
 #include "context.h"
 #include "header_key.h"
+#include "net/socket/inet_address.h"
 #include "packet_parser.h"
 #include "content/content_parser.h"
 
@@ -82,7 +83,6 @@ namespace yuan::net::http
         }
 
         original_file_name_.clear();
-        linked_buffer_.clear();
     }
 
     const std::string * HttpPacket::get_header(const std::string &key)
@@ -137,14 +137,16 @@ namespace yuan::net::http
 
     const char * HttpPacket::body_begin()
     {
-        return body_length_ == 0 ? nullptr : buffer_->peek();
+        auto buff = get_context()->get_connection()->get_input_buff();
+        return body_length_ == 0 ? nullptr : buff->peek();
     }
 
     const char * HttpPacket::body_end()
     {
+        auto buff = get_context()->get_connection()->get_input_buff();
         return body_length_ == 0 ? nullptr : 
-            buffer_->readable_bytes() > 0 
-            ? buffer_->peek() + body_length_ : nullptr;
+            buff->readable_bytes() > 0 
+            ? buff->peek() + body_length_ : nullptr;
     }
     
     std::pair<bool, uint32_t> HttpPacket::parse_content_type(const char *begin, const char *end, std::string &ctype, std::unordered_map<std::string, std::string> &extra)
@@ -241,8 +243,7 @@ namespace yuan::net::http
 
         if (is_downloading()) {
             if (!task_) {
-                linked_buffer_.append_buffer(&buff);
-                return true;
+                return false;
             }
 
             task_->on_data(&buff);
@@ -357,5 +358,15 @@ namespace yuan::net::http
         } else {
             buffer_ = buffer::BufferedPool::get_instance()->allocate();
         }
+    }
+
+    std::string HttpPacket::get_peer_ip() const
+    {
+        return context_->get_connection()->get_remote_address().get_ip();
+    }
+
+    uint32_t HttpPacket::get_peer_ip_uint32() const
+    {
+        return context_->get_connection()->get_remote_address().get_net_ip();
     }
 }

@@ -18,11 +18,8 @@ namespace yuan::net::ftp
     
     void ServerFtpSession::on_read(Connection *conn)
     {
-        conn->process_input_data([this](buffer::Buffer *buff) ->bool {
-            command_parser_.set_buff(buff);
-            return true;
-        });
-
+        auto buff = conn->get_input_buff(true);
+        command_parser_.set_buff(buff);
         const auto &cmds = command_parser_.split_cmds(delimiter.data(), " ");
         if (cmds.empty()) {
             std::cout << "command did not receive all!\n";
@@ -45,10 +42,11 @@ namespace yuan::net::ftp
                 return;
             }
 
-            conn->get_output_buff()->write_string(std::to_string((int)res.code_));
-            conn->get_output_buff()->write_string(" ");
-            conn->get_output_buff()->write_string(res.body_);
-            conn->get_output_buff()->write_string("\r\n");
+            auto outBuff = conn->get_output_linked_buffer()->get_current_buffer();
+            outBuff->write_string(std::to_string((int)res.code_));
+            outBuff->write_string(" ");
+            outBuff->write_string(res.body_);
+            outBuff->write_string("\r\n");
             conn->flush();
 
             if (res.close_) {

@@ -1,0 +1,33 @@
+
+{
+    "name": "hello",
+    "namespace": "yuan::rpc::decl",
+    "version": "1",
+    "description": "hello world",
+    "fields": [
+        {
+            "name": "name",
+            "type": "s",
+            "desc": "name string"
+        },
+        {
+            "name": "age",
+            "type": "i",
+            "desc": "age int",
+            "default": 0
+        },
+        {
+            "name": "balance",
+            "type": "d",
+            "desc": "balance double",
+            "default": 0.0,
+            "min": 0.0,
+            "max": 100.0,
+            "tans_type": "s"
+        },
+        {
+            "name": "children",
+            "type": "a"
+        }
+    ]
+}

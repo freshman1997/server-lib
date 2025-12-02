@@ -43,6 +43,10 @@ namespace yuan::buffer
 
     void BufferedPool::free(Buffer *buf)
     {
+        if (!buf) {
+            return;
+        }
+        
         std::lock_guard lock(buffer_mutex_);
         if (!buf) {
             return;

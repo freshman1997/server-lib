@@ -177,11 +177,8 @@ namespace yuan::net::http
             return -2;
         }
 
-        buffer::Buffer *useBuff = packet_->get_buff();
-        useBuff->append_buffer(buff);
-        
         if (!is_header_done()) {
-            if (!parse_header(*useBuff)) {
+            if (!parse_header(buff)) {
                 return -1;
             }
         }
@@ -197,7 +194,7 @@ namespace yuan::net::http
                     packet_->set_body_length(length);
                 }
 
-                int res = parse_body(*useBuff, length);
+                int res = parse_body(buff, length);
                 if (res > 0) {
                     body_state = BodyState::fully;
                 } else if (res == 0) {

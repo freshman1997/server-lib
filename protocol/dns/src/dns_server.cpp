@@ -31,11 +31,9 @@ namespace yuan::net::dns
 
     void DnsServer::on_read(Connection *conn)
     {
-        conn->process_input_data([this](buffer::Buffer *buff) -> bool {
-            std::string str(buff->peek(), buff->peek() + buff->readable_bytes());
-            std::cout << "xxxxxxx: " << str << '\n';
-            return true;
-        }, false);
+        auto buff = conn->get_input_buff();
+        std::string str(buff->peek(), buff->peek() + buff->readable_bytes());
+        std::cout << "xxxxxxx: " << str << '\n';
         conn->forward(conn);
     }
 

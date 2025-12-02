@@ -44,7 +44,7 @@ namespace yuan::net::http
             return false;
         }
 
-        auto outputBuffer = conn ? conn->get_output_buff() : context_->get_connection()->get_output_buff();
+        auto outputBuffer = conn ? conn->get_output_linked_buffer()->get_current_buffer() : context_->get_connection()->get_output_linked_buffer()->get_current_buffer();
         std::string header("HTTP/1.1");
         header.append(" ").append(descIt->second).append("\r\n");
 
@@ -75,7 +75,7 @@ namespace yuan::net::http
         const std::string msg = "<h1 style=\"margin:0 auto;display: flex;justify-content: center;\">"+ it->second +"</h1>";
         const std::string response = "HTTP/1.1 " + it->second + "\r\nContent-Type: text/html; charset=UTF-8\r\nConnection: close\r\nContent-Length: " + std::to_string(msg.size()) + "\r\n\r\n" + msg;
 
-        auto buff = context_->get_connection()->get_output_buff();
+        auto buff = context_->get_connection()->get_output_linked_buffer()->get_current_buffer();
         buff->write_string(response);
         context_->get_connection()->flush();
         context_->get_connection()->close();
@@ -91,14 +91,5 @@ namespace yuan::net::http
             task_->on_data(buffer_);
             buffer_->reset();
         }
-
-        if (linked_buffer_.get_size() > 0) {
-            linked_buffer_.foreach([this](buffer::Buffer *buff) -> bool {
-                return task_->on_data(buff);
-            });
-            linked_buffer_.clear();
-        }
-
-        // TODO: dispatch task
     }
 }

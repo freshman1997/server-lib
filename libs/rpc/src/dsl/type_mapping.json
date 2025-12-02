@@ -1,0 +1,45 @@
+{
+    "b": {
+        "len": 1,
+        "desc": "boolean"
+    },
+    "c": {
+        "len": 1,
+        "desc": "char"
+    },
+    "h": {
+        "len": 2,
+        "desc": "short"
+    },
+    "l": {
+        "len": 4,
+        "desc": "long"
+    },
+    "i": {
+        "len": 4,
+        "desc": "int"
+    },
+    "q": {
+        "len": 8,
+        "desc": "long long"
+    },
+    "d": {
+        "len": 8,
+        "desc": "double"
+    },
+    "e": {
+        "len": 4,
+        "desc": "float"
+    },
+    "s": {
+        "len": -1,
+        "refer": "i",
+        "desc": "string"
+    },
+    "a": {
+        "len": -1,
+        "refer": "",
+        "require": "i",
+        "desc": "array"
+    }
+}

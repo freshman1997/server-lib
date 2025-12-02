@@ -27,10 +27,6 @@ namespace yuan::net
 
         virtual const InetAddress & get_remote_address();
 
-        virtual buffer::Buffer * get_input_buff(bool take = false);
-
-        virtual buffer::Buffer * get_output_buff(bool take = false);
-
         virtual void write(buffer::Buffer *buff);
 
         virtual void write_and_flush(buffer::Buffer *buff);
@@ -51,12 +47,6 @@ namespace yuan::net
 
         virtual ConnectionHandler * get_connection_handler();
 
-        virtual void process_input_data(std::function<bool (buffer::Buffer *buff)> func, bool clear = true);
-
-        virtual buffer::LinkedBuffer * get_input_linked_buffer();
-
-        virtual buffer::LinkedBuffer * get_output_linked_buffer();
-        
         virtual void forward(Connection *conn);
 
         virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler);
@@ -90,8 +80,6 @@ namespace yuan::net
         EventHandler *eventHandler_;
         UdpInstance *instance_;
         timer::Timer *alive_timer_;
-        buffer::LinkedBuffer input_buffer_;
-        buffer::LinkedBuffer output_buffer_;
     };
 }
 

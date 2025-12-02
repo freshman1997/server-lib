@@ -124,106 +124,96 @@ namespace yuan::net::websocket
 
     bool WebSocketPacketParser::unpack(WebSocketConnection *conn)
     {
-        bool res = true;
-        conn->get_native_connection()->process_input_data([conn, this, &res](buffer::Buffer *buff) -> bool 
-        {
-            frame_buffer_ = get_frame_buffer();
-            auto chunks = conn->get_input_chunks();
-            if (chunks->empty() || chunks->back().head_.is_fin()) {
-                chunks->push_back(ProtoChunk());
-            }
-
-            auto pc = &chunks->back();
-            while (true) {
-                int unpackRes = -1;
-                ProtoChunk chunk;
-                if (frame_buffer_->empty()) {
-                    unpackRes = read_chunk(&chunk, buff);
-                } else {
-                    if (!buff->empty()) {
-                        frame_buffer_->append_buffer(*buff);
-                        buff->set_read_index(buff->readable_bytes());
-                    }
-                    unpackRes = read_chunk(&chunk, frame_buffer_);
-                }
-
-                if (unpackRes < 0) {
-                    res = false;
-                    return res;
-                }
-
-                if (unpackRes == 1) {
-                    if (!buff->empty()) {
-                        frame_buffer_->append_buffer(*buff);
-                    }
-                    return true;
-                }
-
-                bool merge = false;
-                if (pc->has_set_head_) {
-                    if (!pc->head_.is_fin()) {
-                        if (!chunk.head_.is_fin() && (!chunk.head_.is_continue_frame() || !pc->body_ || !chunk.body_)) {
-                            res = false;
-                            return res;
-                        }
-                    } else {
-                        res = false;
-                        return res;
-                    }
-                    merge = true;
-                } else {
-                    *pc = chunk;
-                    if (!pc->head_.is_fin()) {
-                        if (!pc->head_.is_continue_frame() && !pc->head_.is_text_frame() && !pc->head_.is_binary_frame()) {
-                            res = false;
-                            return res;
-                        }
-                    }
-                }
-
-                // 到这里应该是已经读完包体的
-                if (chunk.body_) {
-                    assert(chunk.head_.extend_pay_load_len_ == chunk.body_->readable_bytes());
-                    if (chunk.head_.need_mask()) {
-                        apply_mask(chunk.body_, (uint32_t)chunk.body_->readable_bytes(), chunk.head_.masking_key_, 4);
-                    }
-                }
-
-                if (merge) {
-                    // 合并
-                    pc->head_.extend_pay_load_len_ += chunk.head_.extend_pay_load_len_;
-                    // TODO 包体优化，减少拷贝
-                    pc->body_->append_buffer(*chunk.body_);
-                    buffer::BufferedPool::get_instance()->free(chunk.body_);
-                }
-
-                if (pc->head_.extend_pay_load_len_ > PACKET_MAX_BYTE) {
-                    res = false;
-                    return res;
-                }
-
-                if (chunk.head_.is_fin()) {
-                    chunks->push_back(ProtoChunk());
-                    pc = &chunks->back();
-                }
-
-                frame_buffer_->shink_to_fit();
-
-                if (frame_buffer_->empty() && buff->empty()) {
-                    break;
-                }
-            }
-            return true;
-        });
-
+        auto buff = conn->get_native_connection()->get_input_buff();
+        frame_buffer_ = get_frame_buffer();
         auto chunks = conn->get_input_chunks();
+        if (chunks->empty() || chunks->back().head_.is_fin()) {
+            chunks->push_back(ProtoChunk());
+        }
+
+        auto pc = &chunks->back();
+        while (true) {
+            int unpackRes = -1;
+            ProtoChunk chunk;
+            if (frame_buffer_->empty()) {
+                unpackRes = read_chunk(&chunk, buff);
+            } else {
+                if (!buff->empty()) {
+                    frame_buffer_->append_buffer(*buff);
+                    buff->set_read_index(buff->readable_bytes());
+                }
+                unpackRes = read_chunk(&chunk, frame_buffer_);
+            }
+
+            if (unpackRes < 0) {
+                return false;
+            }
+
+            if (unpackRes == 1) {
+                if (!buff->empty()) {
+                    frame_buffer_->append_buffer(*buff);
+                }
+                return true;
+            }
+
+            bool merge = false;
+            if (pc->has_set_head_) {
+                if (!pc->head_.is_fin()) {
+                    if (!chunk.head_.is_fin() && (!chunk.head_.is_continue_frame() || !pc->body_ || !chunk.body_)) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+                merge = true;
+            } else {
+                *pc = chunk;
+                if (!pc->head_.is_fin()) {
+                    if (!pc->head_.is_continue_frame() && !pc->head_.is_text_frame() && !pc->head_.is_binary_frame()) {
+                        return false;
+                    }
+                }
+            }
+
+            // 到这里应该是已经读完包体的
+            if (chunk.body_) {
+                assert(chunk.head_.extend_pay_load_len_ == chunk.body_->readable_bytes());
+                if (chunk.head_.need_mask()) {
+                    apply_mask(chunk.body_, (uint32_t)chunk.body_->readable_bytes(), chunk.head_.masking_key_, 4);
+                }
+            }
+
+            if (merge) {
+                // 合并
+                pc->head_.extend_pay_load_len_ += chunk.head_.extend_pay_load_len_;
+                // TODO 包体优化，减少拷贝
+                pc->body_->append_buffer(*chunk.body_);
+                buffer::BufferedPool::get_instance()->free(chunk.body_);
+            }
+
+            if (pc->head_.extend_pay_load_len_ > PACKET_MAX_BYTE) {
+                return false;
+            }
+
+            if (chunk.head_.is_fin()) {
+                chunks->push_back(ProtoChunk());
+                pc = &chunks->back();
+            }
+
+            frame_buffer_->shink_to_fit();
+
+            if (frame_buffer_->empty() && buff->empty()) {
+                break;
+            }
+        }
+
         if (chunks->size() >= 1 && !chunks->back().has_set_head_ && chunks->back().body_ == nullptr) {
             chunks->pop_back();
         }
 
         frame_buffer_->shink_to_fit();
 
-        return res;
+        return true;
     }
 
     bool WebSocketPacketParser::pack_header(buffer::Buffer *buff, uint8_t type, uint32_t buffSize, bool isEnd, bool isContinueFrame)

@@ -13,7 +13,7 @@
 
 namespace yuan::net
 {
-    UdpConnection::UdpConnection(const InetAddress &addr) : address_(std::move(addr))
+    UdpConnection::UdpConnection(const InetAddress &addr) : address_(std::move(addr)), Connection()
     {
         active_ = true;
         closed_ = false;
@@ -24,7 +24,6 @@ namespace yuan::net
         alive_timer_ = nullptr;
         adapter_ = nullptr;
         idle_cnt_ = 0;
-        input_buffer_.allocate_buffer();
     }
 
     UdpConnection::UdpConnection(const InetAddress &addr, UdpAdapter *adapter) : UdpConnection(addr)
@@ -71,17 +70,7 @@ namespace yuan::net
     {
         return address_;
     }
-
-    buffer::Buffer * UdpConnection::get_input_buff(bool take)
-    {
-        return take ? input_buffer_.take_current_buffer() : input_buffer_.get_current_buffer();
-    }
-
-    buffer::Buffer * UdpConnection::get_output_buff(bool take)
-    {
-        return take ? output_buffer_.take_current_buffer() : output_buffer_.get_current_buffer();
-    }
-
+    
     void UdpConnection::write(buffer::Buffer * buff)
     {
         if (!buff || closed_) {
@@ -188,11 +177,15 @@ namespace yuan::net
 
     void UdpConnection::on_read_event()
     {
-        assert(state_ == ConnectionState::connected && connectionHandler_);
+        assert(state_ == ConnectionState::connected && connectionHandler_ && input_buffer_);
         auto *list = instance_->get_input_buff_list();
-        input_buffer_ = *list;
-        list->clear();
-        list->allocate_buffer();
+        const auto& buffers = list->to_vector();
+
+        for (auto buf : buffers) {
+            input_buffer_->append_buffer(*buf);
+        }
+
+        list->free_all_buffers();
 
         bool ok = adapter_ ? adapter_->on_recv() : true;
         if (ok) {
@@ -263,32 +256,9 @@ namespace yuan::net
             active_ = false;
         }
     }
-
-    void UdpConnection::process_input_data(std::function<bool (buffer::Buffer *buff)> func, bool clear)
-    {
-        input_buffer_.foreach(func);
-        if (clear) {
-            input_buffer_.keep_one_buffer();
-        }
-    }
-
-    buffer::LinkedBuffer * UdpConnection::get_input_linked_buffer()
-    {
-        return &input_buffer_;
-    }
-
-    buffer::LinkedBuffer * UdpConnection::get_output_linked_buffer()
-    {
-        return &output_buffer_;
-    }
-
     void UdpConnection::forward(Connection *conn)
     {
-        auto out = conn->get_output_linked_buffer();
-        out->free_all_buffers();
-        *out = input_buffer_;
-        input_buffer_.clear();
-        input_buffer_.allocate_buffer();
+        conn->write(get_input_buff(true));
     }
 
     void UdpConnection::set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler)

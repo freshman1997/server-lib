@@ -78,20 +78,17 @@ namespace yuan::net::ftp
             }
 
             state_ = FileSteamState::processing;
-            conn->process_input_data([this](buffer::Buffer *buff) ->int {
-                int ret = current_file_info_->write_file(buff);            
-                if (ret < 0) {
-                    state_ = FileSteamState::file_error;
-                    session_->on_error(this);
-                    return false;
-                } else if (current_file_info_->is_completed()) {
-                    state_ = FileSteamState::idle;
-                    session_->on_completed(this);
-                    current_file_info_ = nullptr;
-                    last_active_time_ = base::time::now();
-                }
-                return true;
-            });
+            auto buff = conn->get_input_buff();
+            int ret = current_file_info_->write_file(buff);            
+            if (ret < 0) {
+                state_ = FileSteamState::file_error;
+                session_->on_error(this);
+            } else if (current_file_info_->is_completed()) {
+                state_ = FileSteamState::idle;
+                session_->on_completed(this);
+                current_file_info_ = nullptr;
+                last_active_time_ = base::time::now();
+            }
 
             float per = (current_file_info_->current_progress_) / (current_file_info_->file_size_ * 1.0);
             std::cout << ">>> receive: " << std::to_string(per * 100) << "%\n";
@@ -110,7 +107,7 @@ namespace yuan::net::ftp
             }
 
             state_ = FileSteamState::processing;
-            auto buff = conn->get_output_buff();
+            auto buff = conn->get_output_linked_buffer()->get_current_buffer();
             bool newBuff = false;
             if (buff->readable_bytes() > 0) {
                 newBuff = true;
@@ -132,7 +129,7 @@ namespace yuan::net::ftp
                 if (newBuff) {
                     conn->write(buff);
                 }
-                conn->flush();
+                
                 if (session_ && current_file_info_->is_completed()) {
                     state_ = FileSteamState::idle;
                     session_->on_completed(this);
@@ -140,6 +137,8 @@ namespace yuan::net::ftp
                 }
                 last_active_time_ = base::time::now();
             }
+
+            conn->flush();
         }
     }
 

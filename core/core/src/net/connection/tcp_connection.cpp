@@ -20,13 +20,13 @@
 
 namespace yuan::net
 {
-    TcpConnection::TcpConnection(const std::string ip, int port, int fd)
+    TcpConnection::TcpConnection(const std::string ip, int port, int fd) : Connection()
     {
         socket_ = new Socket(ip.c_str(), port, false, fd);
         init();
     }
 
-    TcpConnection::TcpConnection(Socket *sock) : socket_(sock)
+    TcpConnection::TcpConnection(Socket *sock) : socket_(sock), Connection()
     {
         init();
     }
@@ -87,16 +87,6 @@ namespace yuan::net
     const InetAddress & TcpConnection::get_remote_address()
     {
         return *socket_->get_address();
-    }
-
-    buffer::Buffer * TcpConnection::get_input_buff(bool take)
-    {
-        return take ? input_buffer_.take_current_buffer() : input_buffer_.get_current_buffer();
-    }
-
-    buffer::Buffer * TcpConnection::get_output_buff(bool take)
-    {
-        return take ? output_buffer_.take_current_buffer() : output_buffer_.get_current_buffer();
     }
 
     void TcpConnection::write(buffer::Buffer * buff)
@@ -212,24 +202,32 @@ namespace yuan::net
 
     void TcpConnection::on_read_event()
     {
-        input_buffer_.free_all_buffers();
-
+        // 第一次可读可写表示连接已经建立
+        if (state_ == ConnectionState::connecting && connectionHandler_) {
+            state_ = ConnectionState::connected;
+            connectionHandler_->on_connected(this);
+        }
+        
         bool read = false, close = false;
         int bytes = 0;
-        buffer::Buffer *buf = buffer::BufferedPool::get_instance()->allocate();
+
+        input_buffer_->reset();
+
         do {
-            if (read) {
-                buf = buffer::BufferedPool::get_instance()->allocate();
+            if (read && input_buffer_->full()) {
+                connectionHandler_->on_error(this);
+                close = true;
+                break;
             }
 
             if (!ssl_handler_) {
                 #ifndef _WIN32
                     bytes = ::read(channel_->get_fd(), buf->buffer_begin(), buf->writable_size());
                 #else
-                    bytes = ::recv(channel_->get_fd(), buf->buffer_begin(), buf->writable_size(), 0);
+                    bytes = ::recv(channel_->get_fd(), input_buffer_->buffer_begin(), input_buffer_->writable_size(), 0);
                 #endif
             } else {
-                bytes = ssl_handler_->ssl_read(buf);
+                bytes = ssl_handler_->ssl_read(input_buffer_);
             }
         
             if (bytes <= 0) {
@@ -255,24 +253,13 @@ namespace yuan::net
                 }
             } else {
                 read = true;
-                buf->fill(bytes);
-                input_buffer_.append_buffer(buf);
+                input_buffer_->fill(bytes);
             }
-        } while (bytes > 0 && buf->writable_size() == 0);
+        } while (bytes > 0 && input_buffer_->full());
 
-        if (buf && buf->empty()) {
-            buffer::BufferedPool::get_instance()->free(buf);
-        }
-        
         if (close) {
             abort();
         } else if (read) {
-            // 第一次可读可写表示连接已经建立
-            if (state_ == ConnectionState::connecting && connectionHandler_) {
-                state_ = ConnectionState::connected;
-                connectionHandler_->on_connected(this);
-        }
-
             if (state_ == ConnectionState::connected && connectionHandler_) {
                 connectionHandler_->on_read(this);
             }
@@ -314,31 +301,9 @@ namespace yuan::net
         return connectionHandler_;
     }
 
-    void TcpConnection::process_input_data(std::function<bool (buffer::Buffer *buff)> func, bool clear)
-    {
-        input_buffer_.foreach(func);
-        if (clear) {
-            input_buffer_.keep_one_buffer();
-        }
-    }
-
-    buffer::LinkedBuffer * TcpConnection::get_input_linked_buffer()
-    {
-        return &input_buffer_;
-    }
-
-    buffer::LinkedBuffer * TcpConnection::get_output_linked_buffer()
-    {
-        return &output_buffer_;
-    }
-
     void TcpConnection::forward(Connection *conn)
     {
-        auto out = conn->get_output_linked_buffer();
-        out->free_all_buffers();
-        *out = input_buffer_;
-        input_buffer_.clear();
-        input_buffer_.allocate_buffer();
+        conn->write(get_input_buff(true));
     }
 
     void TcpConnection::set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler)

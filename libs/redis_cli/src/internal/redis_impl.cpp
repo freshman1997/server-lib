@@ -67,7 +67,7 @@ namespace yuan::redis
             return;
         }
 
-        reader_.add_buffer(conn->get_input_linked_buffer()->to_vector(true));
+        reader_.add_buffer(conn->get_input_buff());
 
         const auto cmd = last_cmd_ ? last_cmd_ : subcribe_cmd;
         if (const int ret = cmd->unpack(reader_); ret < 0)
@@ -94,7 +94,7 @@ namespace yuan::redis
             }
         }
 
-        reader_.init();
+        reader_.just_clear();
         if (is_timeout()) {
             close();
         }
@@ -112,7 +112,7 @@ namespace yuan::redis
         if (pending_cmd_)
         {
             const auto& cmdStr = pending_cmd_->pack();
-            conn->get_output_buff()->write_string(cmdStr);
+            conn->get_output_linked_buffer()->get_current_buffer()->write_string(cmdStr);
             last_cmd_ = pending_cmd_;
         }
     }

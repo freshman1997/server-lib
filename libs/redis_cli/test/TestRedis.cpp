@@ -20,7 +20,7 @@ int main()
 #endif
     using namespace yuan::redis;
     RedisCliManager::get_instance()->init({
-        { .db_ = 1, .name_ = "redis1"},
+        { .port_ = 6378, .db_ = 1, .name_ = "redis1"},
     });
 
     auto client = RedisCliManager::get_instance()->get_round_robin_redis_client();

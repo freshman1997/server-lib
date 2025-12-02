@@ -184,7 +184,7 @@ namespace yuan::net::ftp
             return false;
         }
 
-        context_.conn_->get_output_buff()->write_string(cmd);
+        context_.conn_->get_output_linked_buffer()->get_current_buffer()->write_string(cmd);
         context_.conn_->flush();
         
         return true;
