@@ -197,8 +197,9 @@ R"(
 
     <script>
         // 文件列表API端点 - 替换为你的实际API地址
-        const apiPrefix = '/static/';
-        var apiUrl = apiPrefix; // 假设API端点为 '/static/files'
+        const apiPrefix = window.location.href.substring(0, window.location.href.lastIndexOf('/'));
+        var apiUrl = apiPrefix + '/';
+        var basePath = apiPrefix.substring(apiPrefix.lastIndexOf('/'))
         // 或者使用相对路径 '/api/files'
         var processing = false; // 防止重复请求
         
@@ -283,7 +284,7 @@ R"(
             
             // 创建隐藏的下载链接并触发点击
             const a = document.createElement('a');
-            a.href = url;
+            a.href = encodeURIComponent(url);
             a.style.display = 'none';
             // 媒体文件使用新标签页打开
             const mediaExtensions = ['mp4', 'mp3', 'wav', 'ogg', 'avi', 'mkv', 'mov'];
@@ -365,7 +366,7 @@ R"(
             
             container.innerHTML = '';
             container.appendChild(list);
-            document.getElementById('dirName').innerText = '/' + apiUrl.substring(apiPrefix.length);
+            document.getElementById('dirName').innerText = basePath + apiUrl.substring(apiPrefix.length);
             document.getElementById('fileCount').innerText = files.length;
 
             if (apiUrl != apiPrefix) {

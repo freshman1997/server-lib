@@ -11,7 +11,7 @@ namespace yuan::url
         escaped.fill('0');
         escaped << std::hex;
 
-        for (auto c : str) {
+        for (const auto c : str) {
             // 保留字符不编码
             if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
                 escaped << c;
@@ -19,7 +19,7 @@ namespace yuan::url
             // 其他字符编码为 %xx 形式
             else {
                 escaped << std::uppercase;
-                escaped << '%' << std::setw(2) << int((unsigned char) c);
+                escaped << '%' << std::setw(2) << static_cast<int>(static_cast<unsigned char>(c));
                 escaped << std::nouppercase;
             }
         }
@@ -27,24 +27,30 @@ namespace yuan::url
         return escaped.str();
     }
 
-    std::string url_decode(const std::string &str)
+    std::string url_decode(const std::string &str, const bool is_query_string)
     {
-        return url_decode(str.c_str(), str.c_str() + str.size());
+        return url_decode(str.c_str(), str.c_str() + str.size(), is_query_string);
     }
 
-    std::string url_decode(const char *begin, const char *end)
+    std::string url_decode(const char *begin, const char *end, const bool is_query_string)
     {
         std::string result;
-        size_t sz = end - begin;
-        const char *str = begin;
-        for (; str < end; ++str) {
+        result.reserve(end - begin);
+
+        for (const char *str = begin; str < end; ++str) {
             if (*str == '%' && str + 2 < end) {
-                int hex_value;
+                // 处理百分号编码
                 std::istringstream hex_stream(std::string(str + 1, str + 3));
-                hex_stream >> std::hex >> hex_value;
-                result += static_cast<char>(hex_value);
-                str += 2;
-            } else if (*str == '+') {
+                if (int hex_value; hex_stream >> std::hex >> hex_value && hex_value >= 0 && hex_value <= 255) {
+                    // 将解码后的字符加入结果
+                    result += static_cast<char>(hex_value);
+                    str += 2;
+                } else {
+                    // 如果解析失败，保持原样
+                    result += *str;
+                }
+            } else if (is_query_string && *str == '+') {
+                // 只有在查询字符串中才将 + 替换为空格
                 result += ' ';
             } else {
                 result += *str;

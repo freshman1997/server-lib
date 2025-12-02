@@ -50,7 +50,7 @@
 
 namespace yuan::net::http
 {
-    HttpServer::HttpServer() : quit_(false), state_(State::invalid), poller_(nullptr), acceptor_(nullptr), event_loop_(nullptr), timer_manager_(nullptr), ssl_module_(nullptr), proxy_(nullptr)
+    HttpServer::HttpServer() : quit_(false), poller_(nullptr), acceptor_(nullptr), event_loop_(nullptr), timer_manager_(nullptr), ssl_module_(nullptr), proxy_(nullptr)
     {
         
     }
@@ -367,7 +367,7 @@ namespace yuan::net::http
 
         if (url.size() == prefixIdx + 1) {
             // 访问的是根目录
-            serve_list_files("/static/", pathPrefix, resp);
+            serve_list_files(pathPrefix, pathPrefix, resp);
             return;
         }
 
@@ -402,7 +402,7 @@ namespace yuan::net::http
         }
 
         if (std::filesystem::is_directory(std::u8string(path.begin(), path.end()))) {
-            serve_list_files(url, path, resp);
+            serve_list_files(pathPrefix, path, resp);
             return;
         }
 
@@ -555,10 +555,12 @@ namespace yuan::net::http
         resp->send();
     }
 
-    void HttpServer::serve_list_files(const std::string &relPath, const std::string &filePath, HttpResponse *resp)
+    void HttpServer::serve_list_files(const std::string &prefix, const std::string &filePath, HttpResponse *resp)
     {
         nlohmann::json jsonResponse;
         std::vector<std::string> files;
+        const std::string &dir = filePath.substr(prefix.length());
+
         try {
             for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(std::u8string(filePath.begin(), filePath.end())))) {
                 if (entry.is_regular_file())
@@ -569,7 +571,7 @@ namespace yuan::net::http
                     item["size"] = std::filesystem::file_size(entry);
                     auto sys_time = std::chrono::file_clock::to_sys(entry.last_write_time());
                     item["modified"] = std::chrono::system_clock::to_time_t(sys_time); // 转换为时间戳
-                    item["url"] = relPath + entry.path().filename().string();
+                    item["url"] = dir + entry.path().filename().string();
                     jsonResponse.push_back(item);
                 }
                 else if (entry.is_directory())
@@ -579,7 +581,7 @@ namespace yuan::net::http
                     item["type"] = 2;
                     auto sys_time =  std::chrono::file_clock::to_sys(entry.last_write_time());
                     item["modified"] = std::chrono::system_clock::to_time_t(sys_time); // 转换为时间戳
-                    item["url"] = relPath + entry.path().filename().string() + "/";
+                    item["url"] = dir + entry.path().filename().string() + "/";
                     jsonResponse.push_back(item);
                 }
             }
@@ -657,7 +659,7 @@ namespace yuan::net::http
                 return;
             }
 
-            uint64_t fileSize = std::atol(fileSizeItem->value_.c_str());
+            uint64_t fileSize = std::atoll(fileSizeItem->value_.c_str());
             if (fileSize == 0) {
                 resp->process_error(ResponseCode::bad_request);
                 return;

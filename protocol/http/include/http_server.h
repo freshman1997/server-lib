@@ -28,18 +28,6 @@ namespace yuan::net::http
 
     class HttpServer : public ConnectionHandler
     {
-        enum State
-        {
-            invalid = -1,
-            create_socket,
-            bind_address,
-            listen_address,
-            create_acceptor,
-            create_poller,
-            create_event_loop,
-            success
-        };        
-
     public:
         HttpServer();
         ~HttpServer();
@@ -80,13 +68,13 @@ namespace yuan::net::http
 
         void load_static_paths();
 
-        static void icon(net::http::HttpRequest *req, net::http::HttpResponse *resp);
+        static void icon(HttpRequest *req, HttpResponse *resp);
 
         void serve_static(HttpRequest *req, HttpResponse *resp);
 
         static void serve_download(const std::string &filePath, const std::string &ext, HttpResponse *resp);
 
-        static void serve_list_files(const std::string &relPath, const std::string &filePath, HttpResponse *resp);
+        static void serve_list_files(const std::string &prefix, const std::string &filePath, HttpResponse *resp);
 
         void reload_config(HttpRequest *req, HttpResponse *resp);
 
@@ -94,7 +82,6 @@ namespace yuan::net::http
 
     private:
         bool quit_;
-        State state_;
         Poller *poller_;
         Acceptor *acceptor_;
         EventLoop *event_loop_;
