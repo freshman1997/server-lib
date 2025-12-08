@@ -1,7 +1,4 @@
 #include "redis_cli_manager.h"
-#include "redis_value.h"
-#include <thread>
-#include <chrono>
 
 #ifdef _WIN32
 #include <Windows.h>

@@ -1,7 +1,4 @@
 #include "redis_cli_manager.h"
-#include "redis_value.h"
-#include <thread>
-#include <chrono>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -24,6 +21,38 @@ int main()
     });
 
     auto client = RedisCliManager::get_instance()->get_round_robin_redis_client();
+    
+
+    client->multi();
+    client->set("test1", "helloworld1");
+    client->set("test2", "你好世界1");
+    auto multiRes = client->exec();
+    if (multiRes) {
+        std::cout << "multiRes: " << multiRes->to_string() << std::endl;
+    } else {
+        if (auto err = client->get_last_error()) {
+            std::cout << "error: " << err->to_string() << std::endl;
+        }
+    }
+
+    auto text = client->get("test1");
+    if (text) {
+        std::cout << "get: " << text->to_string() << std::endl;
+    } else {
+        if (auto err = client->get_last_error()) {
+            std::cout << "error: " << err->to_string() << std::endl;
+        }
+    }
+
+    text = client->get("test2");
+    if (text) {
+        std::cout << "get: " << text->to_string() << std::endl;
+    } else {
+        if (auto err = client->get_last_error()) {
+            std::cout << "error: " << err->to_string() << std::endl;
+        }
+    }
+
     auto res = client->info();
     if (res) {
         std::cout << "push: " << res->to_string() << std::endl;

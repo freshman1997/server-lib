@@ -28,7 +28,13 @@ namespace yuan::redis
     {
         friend class Psub;
     public:
-        Impl() = default;
+        Impl()
+        {
+            clear_mask();
+        }
+        
+        Impl(const Impl &) = delete;
+        Impl &operator=(const Impl &) = delete;
         ~Impl() override = default;
 
     public:

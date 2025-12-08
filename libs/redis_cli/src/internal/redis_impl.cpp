@@ -138,6 +138,11 @@ namespace yuan::redis
             return nullptr;
         }
 
+        if (multi_cmd_) {
+            multi_cmd_->add_command(cmd);
+            return nullptr;
+        }
+
         if (!is_connecting()) {
             if (!client_) {
                 last_error_ = ErrorValue::from_string("unexpected error");
@@ -159,11 +164,6 @@ namespace yuan::redis
 
         if (is_timeout()) {
             close();
-            return nullptr;
-        }
-
-        if (multi_cmd_) {
-            multi_cmd_->add_command(cmd);
             return nullptr;
         }
 
