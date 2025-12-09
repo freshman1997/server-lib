@@ -96,6 +96,7 @@ namespace yuan::net
             }
 
             auto buf = input_buffer_;
+            input_buffer_ = nullptr;
             set_max_packet_size(max_packet_size_);
             return buf;
         }
@@ -108,7 +109,7 @@ namespace yuan::net
         void set_max_packet_size(size_t size)
         {
             assert(size > 0 && size <= 1024 * 1024 * 100); // 100mb
-            if (size == max_packet_size_) {
+            if (size == max_packet_size_ && input_buffer_) {
                 return;
             }
 

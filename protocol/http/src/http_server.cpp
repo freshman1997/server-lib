@@ -744,7 +744,7 @@ namespace yuan::net::http
             {
                 UploadTmpChunk tmpChunk{};
                 tmpChunk.chunk_ = chunk;
-                tmpChunk.buffer_ = req->get_buff(true);
+                tmpChunk.buffer_ = req->get_context()->get_connection()->get_input_buff(true);
                 tmpChunk.begin_ = file->begin_;
                 tmpChunk.end_ = file->end_;
                 const auto task = new SaveUploadTempChunkTask(tmpChunk);
