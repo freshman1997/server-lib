@@ -232,13 +232,12 @@ namespace yuan::net::http
                 }
 
                 return res;
-            } else {
-                body_state = BodyState::empty;
-                return 1;
             }
+            body_state = BodyState::empty;
+            return 1;
         }
 
-        return is_body_done();
+        return is_body_done() ? 1 : 0;
     }
 
     bool HttpPacketParser::done() const

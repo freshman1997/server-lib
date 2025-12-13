@@ -33,21 +33,21 @@ namespace yuan::net::http
             return false;
         }
 
-        if (!is_donwloading() && !has_parsed_) {
+        if (!is_downloading() && !has_parsed_) {
             reset();
             has_parsed_ = true;
         }
 
-        auto pkt = get_packet();
+        const auto pkt = get_packet();
         pkt->parse(*conn_->get_input_buff());
         return pkt->good();
     }
 
-    bool HttpSessionContext::write()
+    bool HttpSessionContext::write() const
     {
         if (response_->is_uploading() && conn_->is_connected())
         {
-            auto buff = response_->get_buff(true);
+            const auto buff = response_->get_buff(true);
             buff->reset();
             buff->resize(static_cast<size_t>(config::client_max_content_length + config::max_header_length));
             response_->write(*buff);
@@ -104,9 +104,9 @@ namespace yuan::net::http
             static_cast<HttpPacket *>(request_) : static_cast<HttpPacket *>(response_);
     }
 
-    bool HttpSessionContext::is_donwloading() const
+    bool HttpSessionContext::is_downloading() const
     {
-        auto pkt = get_packet();
+        const auto pkt = get_packet();
         return pkt->is_downloading() && pkt->is_task_prepared();
     }
 }

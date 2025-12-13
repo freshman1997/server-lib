@@ -170,8 +170,7 @@ namespace yuan::net::http
             return false;
         }
 
-        size_t pos = url.find_first_of("?");
-        if (pos != std::string::npos) {
+        if (const size_t pos = url.find_first_of('?'); pos != std::string::npos) {
             req->url_ = url.substr(0, pos);
         } else {
             req->url_ = url;

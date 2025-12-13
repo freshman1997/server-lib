@@ -227,6 +227,8 @@ namespace yuan::net::http
 
         uint32_t get_peer_ip_uint32() const;
 
+        static size_t get_max_packet_size();
+
     protected:
         HttpVersion version_ = HttpVersion::v_1_1;
         bool is_good_;
