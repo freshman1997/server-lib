@@ -3,6 +3,9 @@ project(server-lib)
 set(CMAKE_CXX_STANDARD 20)
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static")
 
+# Set PIC for all targets
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 include_directories(
     third_party/json/include/
     third_party/kcp/

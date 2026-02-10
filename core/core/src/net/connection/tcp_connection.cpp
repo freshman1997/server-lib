@@ -222,7 +222,7 @@ namespace yuan::net
 
             if (!ssl_handler_) {
                 #ifndef _WIN32
-                    bytes = ::read(channel_->get_fd(), buf->buffer_begin(), buf->writable_size());
+                    bytes = ::read(channel_->get_fd(), input_buffer_->buffer_begin(), input_buffer_->writable_size());
                 #else
                     bytes = ::recv(channel_->get_fd(), input_buffer_->buffer_begin(), input_buffer_->writable_size(), 0);
                 #endif

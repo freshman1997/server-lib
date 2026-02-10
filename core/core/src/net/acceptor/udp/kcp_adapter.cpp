@@ -34,43 +34,33 @@ namespace yuan::net
         conn_ = conn;
         kcp_ = ikcp_create(conv, conn);
         kcp_->output = &KcpAdapter::on_send;
+	    ikcp_wndsize(kcp_, 128, 128);
         ikcp_nodelay(kcp_, 1, 10, 1, 1);
         updateTimer_ = timerManager->interval(0, timerManager->get_time_unit(), this, -1);
         return true;
     }
 
-    bool KcpAdapter::on_recv()
+    int KcpAdapter::on_recv(buffer::Buffer *buff)
     {
-        assert(conn_ && conn_->get_input_buff());
-
-        auto buff = conn_->get_input_buff();
         int ret = ikcp_input(kcp_, buff->peek(), buff->readable_bytes());
         if (ret < 0) {
-            return false;
+            return ret;
         }
 
         buff->reset();
-        int n = ikcp_recv(kcp_, buff->begin(), buff->writable_size());
-        if (n > 0) {
-            buff->fill(n);
+        ret = ikcp_recv(kcp_, buff->begin(), buff->writable_size());
+        if (ret < 0) {
+            return ret;
         }
 
-        return true;
+        buff->fill(ret);
+
+        return ret;
     }
 
-    int KcpAdapter::on_write()
+    int KcpAdapter::on_write(buffer::Buffer *buff)
     {
-        assert(conn_);
-        auto buffers = conn_->get_output_linked_buffer()->to_vector();
-        int total = 0;
-        for (auto buff : buffers) {
-            int ret = ikcp_send(kcp_, buff->peek(), buff->readable_bytes());
-            if (ret < 0) {
-                return ret;
-            }
-            total += ret;
-        }
-        return 0;
+        return ikcp_send(kcp_, buff->peek(), buff->readable_bytes());
     }
 
     void KcpAdapter::on_release()

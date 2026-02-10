@@ -17,8 +17,8 @@ namespace yuan::net
 
     public:
         virtual bool init(Connection *conn, timer::TimerManager *timerManager);
-        virtual bool on_recv();
-        virtual int on_write();
+        virtual int on_recv(buffer::Buffer *buff);
+        virtual int on_write(buffer::Buffer *buff);
         virtual void on_release();
 
     public:

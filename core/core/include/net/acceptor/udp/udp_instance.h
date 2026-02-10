@@ -52,6 +52,11 @@ namespace yuan::net
 
         void enable_rw_events();
 
+        void set_adapter_type(UdpAdapterType type)
+        {
+            adapter_type_ = type;
+        }
+
     private:
         void try_free_connections();
 

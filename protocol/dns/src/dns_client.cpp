@@ -1,4 +1,5 @@
 #include "dns_client.h"
+#include "buffer/pool.h"
 #include "event/event_loop.h"
 #include "net/acceptor/udp/udp_instance.h"
 #include "net/connection/udp_connection.h"
@@ -28,6 +29,7 @@ namespace yuan::net::dns
     void DnsClient::on_error(Connection *conn)
     {
         std::cout << "connection error!\n";
+        ev_loop_->quit();
     }
 
     void DnsClient::on_read(Connection *conn)
@@ -35,8 +37,8 @@ namespace yuan::net::dns
         auto buff = conn->get_input_buff();
         std::string str(buff->peek(), buff->peek() + buff->readable_bytes());
         std::cout << "xxxxxxx: " << str << '\n';
-        conn->close();
-        ev_loop_->quit();
+        //conn->close();
+        //ev_loop_->quit();
     }
 
     void DnsClient::on_write(Connection *conn)
@@ -46,7 +48,7 @@ namespace yuan::net::dns
         }
 
         retry_cnt_++;
-        auto buf = conn->get_output_linked_buffer()->get_current_buffer();
+        auto buf = buffer::BufferedPool::get_instance()->allocate();
         //std::string daoke = R"({"MsgID":943024804,"Cmd":24,"MsgBody":{"Uin":261281,"RoleID":"369691744731399841","GiftID":1}})";
 
         //std::string daoke = R"({"MsgID":1080876021,"Cmd":24,"MsgBody":{"Uin":441882,"RoleID":"425986807601037850","GiftID":1}})";
@@ -55,7 +57,7 @@ namespace yuan::net::dns
         std::string daoke = R"({"MsgID":943024804,"Cmd":22,"MsgBody":{"Uin":261281,"RoleID":"369691744731399841","GiftID":1}})";
         //std::string daoke = R"({"MsgID":943024804,"Cmd":3,"MsgBody":{"TargetPlayer":{"Uin":261281,"RoleID":"369691744731399841","RoleName":"晗月叶树"},"TargetType":1,"TextMsg":"sl 20"}})";
         buf->write_string(daoke);
-        conn->flush();
+        conn->write_and_flush(buf);
     }
 
     void DnsClient::on_close(Connection *conn)
@@ -71,6 +73,8 @@ namespace yuan::net::dns
             delete sock;
             return false;
         }
+
+        sock->set_no_delay(true);
         
         timer::WheelTimerManager manager;
         SelectPoller poller;

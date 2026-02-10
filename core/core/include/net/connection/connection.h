@@ -6,7 +6,6 @@
 #include "buffer/linked_buffer.h"
 #include <cassert>
 #include <memory>
-#include <wincon.h>
 
 namespace yuan::buffer
 {

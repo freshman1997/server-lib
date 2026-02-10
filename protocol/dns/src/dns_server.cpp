@@ -44,7 +44,7 @@ namespace yuan::net::dns
 
     void DnsServer::on_close(Connection *conn)
     {
-
+        std::cout << "connection closing\n";
     }
 
     bool DnsServer::serve(int port)

@@ -1,5 +1,6 @@
 #ifndef __NET_UDP_CONNECTION_H__
 #define __NET_UDP_CONNECTION_H__
+#include "buffer/buffer.h"
 #include "buffer/linked_buffer.h"
 #include "connection.h"
 #include "net/socket/inet_address.h"
@@ -69,6 +70,10 @@ namespace yuan::net
     private:
         void do_close();
 
+        void process_pending_output_buffer();
+
+        bool proc_one_buff(buffer::Buffer *buff);
+
     private:
         bool active_;
         bool closed_;
@@ -80,6 +85,7 @@ namespace yuan::net
         EventHandler *eventHandler_;
         UdpInstance *instance_;
         timer::Timer *alive_timer_;
+        buffer::LinkedBuffer pending_output_buffer_;
     };
 }
 

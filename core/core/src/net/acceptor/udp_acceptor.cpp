@@ -61,6 +61,7 @@ namespace yuan::net
         }
 
         instance_ = new UdpInstance(this);
+        //instance_->set_adapter_type(adapterType);
         channel_ = new Channel;
         channel_->enable_read();
         channel_->enable_write();
@@ -180,16 +181,7 @@ namespace yuan::net
             return 0;
         }
 
-        int ret = send_to(conn->get_remote_address(), buff);
-        if (ret > 0) {
-            if (ret >= buff->readable_bytes()) {
-                buff->reset();
-            } else {
-                buff->add_read_index(ret);
-                //std::cout << "still remains data: " << buff->readable_bytes() << " bytes.\n";
-            }
-        }
-        return ret;
+        return send_to(conn->get_remote_address(), buff);
     }
 
     int UdpAcceptor::send_to(const InetAddress &address, buffer::Buffer *buff)

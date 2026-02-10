@@ -1,4 +1,5 @@
 #include "buffer/buffer.h"
+#include "buffer/pool.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
 #include "net/socket/inet_address.h"
@@ -74,33 +75,31 @@ namespace yuan::net
     void UdpConnection::write(buffer::Buffer * buff)
     {
         if (!buff || closed_) {
+            buffer::BufferedPool::get_instance()->free(buff);
             return;
         }
 
-        output_buffer_.append_buffer(buff);
-        if (output_buffer_.get_current_buffer()->empty()) {
-            output_buffer_.get_current_buffer()->reset();
-            output_buffer_.free_current_buffer();
-        }
-
         if (adapter_) {
-            int ret = adapter_->on_write();
-            if (ret < 0) {
+            if (!proc_one_buff(buff)) {
                 connectionHandler_->on_error(this);
                 do_close();
-            } else {
+                return;
+            }
+        } else {
+            output_buffer_.append_buffer(buff);
+            if (output_buffer_.get_current_buffer()->empty()) {
                 output_buffer_.get_current_buffer()->reset();
-                if (output_buffer_.get_size() > 1) {
-                    output_buffer_.free_current_buffer();
-                }
+                output_buffer_.free_current_buffer();
             }
         }
+
         active_ = true;
     }
 
     void UdpConnection::write_and_flush(buffer::Buffer *buff)
     {
         if (!buff || closed_) {
+            buffer::BufferedPool::get_instance()->free(buff);
             return;
         }
 
@@ -117,6 +116,7 @@ namespace yuan::net
                 auto buff = output_buffer_.get_current_buffer();
                 int sent = instance_->on_send(this, buff);
                 if (sent > 0) {
+                    buff->add_read_index(sent);
                     if (buff->empty()) {
                         output_buffer_.free_current_buffer();
                     } else {
@@ -187,7 +187,7 @@ namespace yuan::net
 
         list->free_all_buffers();
 
-        bool ok = adapter_ ? adapter_->on_recv() : true;
+        bool ok = adapter_ ? adapter_->on_recv(input_buffer_) > 0 : true;
         if (ok) {
             active_ = true;
             connectionHandler_->on_read(this);
@@ -199,6 +199,7 @@ namespace yuan::net
     void UdpConnection::on_write_event()
     {
         connectionHandler_->on_write(this);
+        process_pending_output_buffer();
         if (!output_buffer_.get_current_buffer()->empty()) {
             flush();
         }
@@ -256,6 +257,7 @@ namespace yuan::net
             active_ = false;
         }
     }
+
     void UdpConnection::forward(Connection *conn)
     {
         conn->write(get_input_buff(true));
@@ -264,5 +266,44 @@ namespace yuan::net
     void UdpConnection::set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler)
     {
         assert(false);
+    }
+
+    bool UdpConnection::proc_one_buff(buffer::Buffer *buff)
+    {
+        int ret = adapter_->on_write(buff);
+        if (ret < 0) {
+            return false;
+        } else {
+            if (ret < buff->readable_bytes()) {
+                buff->add_read_index(ret);
+                pending_output_buffer_.append_buffer(buff);
+            } else {
+                buffer::BufferedPool::get_instance()->free(buff);
+            }
+            return true;
+        }
+    }
+
+    void UdpConnection::process_pending_output_buffer()
+    {
+        if (pending_output_buffer_.get_current_buffer()->empty()) {
+            return;
+        }
+
+        std::size_t sz = pending_output_buffer_.get_size();
+        for (int i = 0; i < sz; ++i) {
+            auto buff = pending_output_buffer_.get_current_buffer();
+            if (!proc_one_buff(buff)) {
+                connectionHandler_->on_error(this);
+                do_close();
+                return;
+            }
+
+            if (buff->empty()) {
+                pending_output_buffer_.free_current_buffer();
+            } else {
+                return;
+            }
+        }
     }
 }
