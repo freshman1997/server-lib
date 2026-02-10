@@ -56,7 +56,7 @@ namespace yuan::net::http
     public:
         bool parse();
 
-        bool write();
+        bool write() const;
 
         bool is_completed();
 
@@ -75,7 +75,7 @@ namespace yuan::net::http
         
         inline HttpPacket * get_packet() const;
 
-        bool is_donwloading() const;
+        bool is_downloading() const;
         
     private:
         void reset() const;

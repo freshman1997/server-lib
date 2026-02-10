@@ -1,12 +1,13 @@
 #include "packet.h"
 #include "buffer/pool.h"
-#include "net/connection/connection.h"
+#include "content/content_parser.h"
 #include "content/content_parser_factory.h"
 #include "context.h"
 #include "header_key.h"
+#include "net/connection/connection.h"
 #include "net/socket/inet_address.h"
+#include "ops/option.h"
 #include "packet_parser.h"
-#include "content/content_parser.h"
 
 namespace yuan::net::http 
 {
@@ -255,7 +256,18 @@ namespace yuan::net::http
             return true;
         }
 
-        int res = parser_->parse(buff);
+        buffer::Buffer *buf = &buff;
+        if (buffer_->readable_bytes() > 0) {
+            buffer_->append_buffer(buff);
+            buf = buffer_;
+        }
+
+        if (buf->readable_bytes() > get_max_packet_size()) {
+            std::cerr << "too large packet!!" << std::endl;
+            return false;
+        }
+
+        const int res = parser_->parse(*buf);
         if (res < 0) {
             is_good_ = false;
             return false;
@@ -269,6 +281,10 @@ namespace yuan::net::http
                 content_type_ = find_content_type(content_type_text_);
             }
             return true;
+        }
+
+        if (res == 0) {
+            buffer_->append_buffer(buff);
         }
 
         is_good_ = true;
@@ -369,4 +385,10 @@ namespace yuan::net::http
     {
         return context_->get_connection()->get_remote_address().get_net_ip();
     }
+
+    size_t HttpPacket::get_max_packet_size()
+    {
+        return config::max_header_length + config::client_max_content_length;
+    }
+
 }

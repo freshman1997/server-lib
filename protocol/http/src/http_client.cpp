@@ -73,7 +73,7 @@ namespace yuan::net::http
             return;
         }
 
-        if (context->is_donwloading()) {
+        if (context->is_downloading()) {
             return;
         }
 

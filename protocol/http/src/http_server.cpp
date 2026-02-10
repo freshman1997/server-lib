@@ -75,7 +75,7 @@ namespace yuan::net::http
             return;
         }
 
-        conn->set_max_packet_size(static_cast<size_t>(config::client_max_content_length + config::max_header_length));
+        conn->set_max_packet_size(HttpPacket::get_max_packet_size());
         sessions_[sessionId] = new HttpSession(sessionId, new HttpSessionContext(conn), timer_manager_);
     }
 
@@ -93,8 +93,8 @@ namespace yuan::net::http
             return;
         }
 
-        auto session = it->second;
-        auto context = session->get_context();
+        const auto session = it->second;
+        const auto context = session->get_context();
         if (!context->parse()) {
             if (context->has_error()) {
                 context->process_error(context->get_error_code());
@@ -120,8 +120,7 @@ namespace yuan::net::http
                     return;
                 }
 
-                auto handler = dispatcher_.get_handler(context->get_request()->get_raw_url());
-                if (handler) {
+                if (const auto handler = dispatcher_.get_handler(context->get_request()->get_raw_url())) {
                     handler(context->get_request(), context->get_response());
                 } else {
                     // 404
@@ -137,15 +136,15 @@ namespace yuan::net::http
 
     void HttpServer::on_write(Connection *conn)
     {
-        uint64_t sessionId = (uint64_t)conn;
-        auto it = sessions_.find(sessionId);
+        const uint64_t sessionId = reinterpret_cast<uint64_t>(conn);
+        const auto it = sessions_.find(sessionId);
         if (it == sessions_.end()) {
             std::cout << "----------------> error\n";
             return;
         }
 
-        auto context = it->second->get_context();
-        context->write();
+        const auto context = it->second->get_context();
+        (void)context->write();
     }
 
     void HttpServer::on_close(Connection *conn)
@@ -159,11 +158,10 @@ namespace yuan::net::http
             std::cout << HttpConfigManager::get_instance()->get_string_property("server_name") << " starting...\n";
         }
 
-        net::Socket *sock = new net::Socket("", port);
+        Socket *sock = new net::Socket("", port);
         if (!sock->valid()) {
             std::cerr << "create socket fail!!! " << errno << "\n";
             delete sock;
-            sock = nullptr;
             return false;
         }
 
