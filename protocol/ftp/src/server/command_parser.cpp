@@ -1,66 +1,65 @@
 #include "server/command_parser.h"
 #include "buffer/pool.h"
-#include "base/utils/string_util.h"
-#include "common/def.h"
 
-#include <cassert>
+#include <algorithm>
+#include <cctype>
 
-namespace yuan::net::ftp 
+namespace yuan::net::ftp
 {
-    FtpCommandParser::FtpCommandParser() : buff_(nullptr)
+    namespace
     {
-
+        std::string to_upper(std::string value)
+        {
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+            return value;
+        }
     }
+
+    FtpCommandParser::FtpCommandParser() : buff_(nullptr) {}
 
     FtpCommandParser::~FtpCommandParser()
     {
         if (buff_) {
             buffer::BufferedPool::get_instance()->free(buff_);
-            buff_ = nullptr;
         }
     }
 
     std::vector<FtpCommand> FtpCommandParser::split_cmds(const std::string_view &endWith, const std::string &splitStr)
     {
-        const char *begin = buff_->peek();
-        const char *end = buff_->peek_end();
-        int idx = base::util::find_first(begin, end, endWith.data());
-        if (idx < 0) {
-            return {};
-        }
-
         std::vector<FtpCommand> res;
-        for ( ; idx > 0 && begin <= end; ) {
-            int foundIdx = base::util::find_first(begin, end, splitStr.c_str());
-            bool hasArgs = true;
-            if (foundIdx < 0) {
-                foundIdx = idx;
-                hasArgs = false;
-            }
-
-            std::string cmd = std::string(begin, begin + foundIdx);
-            std::string args;
-            if (hasArgs) {
-                assert(begin + foundIdx + 1 < begin + idx);
-                args = std::string(begin + foundIdx + 1, begin + idx);
-            }
-
-            begin += idx + endWith.size();
-            idx = base::util::find_first(begin, end, endWith.data());
-
-            res.push_back({cmd, args});
+        if (!buff_ || buff_->readable_bytes() == 0) {
+            return res;
         }
 
-        // move rest
-        std::string tmp(begin, end);
-        buff_->reset();
-        buff_->write_string(tmp);
-
+        while (buff_->readable_bytes() >= endWith.size()) {
+            const char *begin = buff_->peek();
+            const char *end = buff_->peek_end();
+            const char *lineEnd = std::search(begin, end, endWith.begin(), endWith.end());
+            if (lineEnd == end) {
+                break;
+            }
+            std::string line(begin, lineEnd);
+            buff_->add_read_index(static_cast<size_t>((lineEnd - begin) + endWith.size()));
+            buff_->shink_to_fit();
+            if (line.empty()) {
+                continue;
+            }
+            auto splitPos = line.find(splitStr);
+            std::string cmd = splitPos == std::string::npos ? line : line.substr(0, splitPos);
+            std::string args = splitPos == std::string::npos ? std::string{} : line.substr(splitPos + splitStr.size());
+            while (!args.empty() && args.front() == ' ') {
+                args.erase(args.begin());
+            }
+            res.push_back({to_upper(std::move(cmd)), std::move(args)});
+        }
         return res;
     }
 
     void FtpCommandParser::set_buff(buffer::Buffer *buff)
     {
+        if (!buff) {
+            return;
+        }
         if (buff_) {
             buff_->append_buffer(*buff);
             buffer::BufferedPool::get_instance()->free(buff);
@@ -69,8 +68,5 @@ namespace yuan::net::ftp
         }
     }
 
-    buffer::Buffer * FtpCommandParser::get_buff()
-    {
-        return buff_;
-    }
+    buffer::Buffer *FtpCommandParser::get_buff() { return buff_; }
 }

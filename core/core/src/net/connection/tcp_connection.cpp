@@ -44,6 +44,7 @@ namespace yuan::net
 
         state_ = ConnectionState::connecting;
         ssl_handler_ = nullptr;
+        is_closing_ = false;
     }
 
     TcpConnection::~TcpConnection()
@@ -64,9 +65,8 @@ namespace yuan::net
         }
 
         if (socket_) {
-            std::cout << "connection closed, ip: " << socket_->get_address()->get_ip() << ", port: " << socket_->get_address()->get_port() 
-                    << ", fd: " << channel_->get_fd() << "\n";
-            
+            std::cout << "connection closed, ip: " << socket_->get_address()->get_ip() << ", port: " << socket_->get_address()->get_port()
+                      << ", fd: " << channel_->get_fd() << "\n";
             delete socket_;
             socket_ = nullptr;
         }
@@ -84,12 +84,12 @@ namespace yuan::net
         return state_ == ConnectionState::connected;
     }
 
-    const InetAddress & TcpConnection::get_remote_address()
+    const InetAddress &TcpConnection::get_remote_address()
     {
         return *socket_->get_address();
     }
 
-    void TcpConnection::write(buffer::Buffer * buff)
+    void TcpConnection::write(buffer::Buffer *buff)
     {
         if (!buff || state_ != ConnectionState::connected) {
             return;
@@ -134,14 +134,13 @@ namespace yuan::net
                 ret = ::send(channel_->get_fd(), output_buffer_.get_current_buffer()->peek(), output_buffer_.get_current_buffer()->readable_bytes(), MSG_NOSIGNAL);
             #endif
             }
-        
+
             if (ret > 0) {
                 if (ret >= output_buffer_.get_current_buffer()->readable_bytes()) {
                     output_buffer_.free_current_buffer();
                     ++i;
                 } else {
                     output_buffer_.get_current_buffer()->add_read_index(ret);
-                    //std::cout << "still remains data: " << output_buffer_.get_current_buffer()->readable_bytes() << " bytes.\n";
                 }
             } else if (ret < 0) {
                 if (EAGAIN != errno && EWOULDBLOCK != errno) {
@@ -168,13 +167,11 @@ namespace yuan::net
         }
     }
 
-    // 丢弃所有未发送的数据
     void TcpConnection::abort()
     {
         do_close();
     }
 
-    // 发送完数据后返回
     void TcpConnection::close()
     {
         ConnectionState lastState = state_;
@@ -192,7 +189,7 @@ namespace yuan::net
         return ConnectionType::TCP;
     }
 
-    Channel * TcpConnection::get_channel()
+    Channel *TcpConnection::get_channel()
     {
         return channel_;
     }
@@ -204,12 +201,11 @@ namespace yuan::net
 
     void TcpConnection::on_read_event()
     {
-        // 第一次可读可写表示连接已经建立
         if (state_ == ConnectionState::connecting && connectionHandler_) {
             state_ = ConnectionState::connected;
             connectionHandler_->on_connected(this);
         }
-        
+
         bool read = false, close = false;
         int bytes = 0;
 
@@ -223,15 +219,15 @@ namespace yuan::net
             }
 
             if (!ssl_handler_) {
-                #ifndef _WIN32
-                    bytes = ::read(channel_->get_fd(), input_buffer_->buffer_begin(), input_buffer_->writable_size());
-                #else
-                    bytes = ::recv(channel_->get_fd(), input_buffer_->buffer_begin(), input_buffer_->writable_size(), 0);
-                #endif
+            #ifndef _WIN32
+                bytes = ::read(channel_->get_fd(), input_buffer_->buffer_begin(), input_buffer_->writable_size());
+            #else
+                bytes = ::recv(channel_->get_fd(), input_buffer_->buffer_begin(), input_buffer_->writable_size(), 0);
+            #endif
             } else {
                 bytes = ssl_handler_->ssl_read(input_buffer_);
             }
-        
+
             if (bytes <= 0) {
                 if (bytes == 0) {
                     close = true;
@@ -242,11 +238,10 @@ namespace yuan::net
                             goto again;
                         }
                     #endif
-
                         std::cerr << "read error: " << errno << std::endl;
                         connectionHandler_->on_error(this);
                         close = true;
-                        break; 
+                        break;
                     }
                 again:
                     channel_->enable_read();
@@ -260,6 +255,7 @@ namespace yuan::net
         } while (bytes > 0 && input_buffer_->full());
 
         if (close) {
+            std::cout << "connection closed by peer, ip: " << socket_->get_address()->get_ip() << ", port: " << socket_->get_address()->get_port() << "\n";
             abort();
         } else if (read) {
             if (state_ == ConnectionState::connected && connectionHandler_) {
@@ -270,7 +266,6 @@ namespace yuan::net
 
     void TcpConnection::on_write_event()
     {
-        // 第一次可读可写表示连接已经建立
         if (state_ == ConnectionState::connecting && connectionHandler_) {
             state_ = ConnectionState::connected;
             connectionHandler_->on_connected(this);
@@ -295,10 +290,14 @@ namespace yuan::net
 
     void TcpConnection::do_close()
     {
+        if (is_closing_) {
+            return;
+        }
+        is_closing_ = true;
         delete this;
     }
 
-    ConnectionHandler * TcpConnection::get_connection_handler()
+    ConnectionHandler *TcpConnection::get_connection_handler()
     {
         return connectionHandler_;
     }

@@ -7,6 +7,6 @@ FILE(GLOB_RECURSE LOG_SRC "./src/*.cpp")
 
 add_library(Logger ${LOG_SRC})
 
-target_link_libraries(Logger PUBLIC Core)
+target_link_libraries(Logger PUBLIC Core fmt)
 
 target_include_directories(Logger PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>" "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")

@@ -1,0 +1,5 @@
+#include "server/commands/dele.h"
+#include "common/response_code.h"
+#include "server/command_support.h"
+#include <filesystem>
+namespace yuan::net::ftp { REGISTER_COMMAND_IMPL(CommandDele); FtpCommandResponse CommandDele::execute(FtpSession *session, const std::string &args) { FtpCommandResponse denied{FtpResponseCode::invalid, ""}; if (!ensure_login(session, denied)) { return denied; } if (args.empty()) { return {FtpResponseCode::__501__, "File name is required."}; } auto path = resolve_path(session, args); if (!path_within_root(session, path) || !std::filesystem::is_regular_file(path)) { return {FtpResponseCode::__550__, "File is not available."}; } std::error_code ec; bool removed = std::filesystem::remove(path, ec); if (ec || !removed) { return {FtpResponseCode::__550__, "Cannot delete file."}; } return {FtpResponseCode::__250__, "File deleted."}; } CommandType CommandDele::get_command_type() { return CommandType::cmd_dele; } std::string CommandDele::get_comand_name() { return "DELE"; } }

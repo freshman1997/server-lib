@@ -65,6 +65,7 @@ namespace yuan::net
         ConnectionHandler *connectionHandler_;
         EventHandler *eventHandler_;
         std::shared_ptr<SSLHandler> ssl_handler_;
+        bool is_closing_;  // 防止重复调用 do_close 导致 double-free
     };
 }
 

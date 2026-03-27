@@ -1,15 +1,16 @@
 #ifndef __NET_FTP_COMMON_FILE_STREAM_SESSION_H__
 #define __NET_FTP_COMMON_FILE_STREAM_SESSION_H__
 #include "net/handler/connection_handler.h"
+#include "net/socket/inet_address.h"
 #include "timer/timer_task.h"
 #include "def.h"
 
-namespace yuan::net 
+namespace yuan::net
 {
     class Connection;
 }
 
-namespace yuan::net::ftp 
+namespace yuan::net::ftp
 {
     class FtpSession;
 
@@ -34,7 +35,9 @@ namespace yuan::net::ftp
         virtual void on_timer(timer::Timer *timer);
 
     public:
-        Connection * get_connection();
+        Connection *get_connection();
+
+        const InetAddress &get_remote_address() const;
 
         std::size_t get_write_buff_size();
 
@@ -42,7 +45,7 @@ namespace yuan::net::ftp
 
         void set_work_file(FtpFileInfo *info);
 
-        FtpFileInfo * get_work_file();
+        FtpFileInfo *get_work_file();
 
         void quit();
 
@@ -54,6 +57,7 @@ namespace yuan::net::ftp
         uint32_t last_active_time_;
         FtpFileInfo *current_file_info_;
         Connection *conn_;
+        InetAddress remote_addr_;
         timer::Timer *conn_timer_;
         FtpSession *session_;
     };

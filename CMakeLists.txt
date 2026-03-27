@@ -10,6 +10,7 @@ include_directories(
     third_party/json/include/
     third_party/kcp/
     third_party/openssl-3.4.0/include/
+    third_party/fmt/include/
 )
 
 # 修改 http 可启用ssl ssl/ca.crt ssl/ca.key
@@ -19,6 +20,7 @@ set(HTTP_USE_SSL OFF)
 set(WS_USE_SSL OFF)
 
 add_subdirectory(third_party/kcp)
+add_subdirectory(third_party/fmt)
 add_subdirectory(core)
 add_subdirectory(protocol/http)
 add_subdirectory(protocol/ftp)
@@ -29,6 +31,7 @@ add_subdirectory(test)
 add_subdirectory(plugins)
 add_subdirectory(logger)
 add_subdirectory(libs)
+add_subdirectory(server)
 
 add_executable(Test main.cpp)
 target_link_libraries(Test PUBLIC Core HttpProto DnsProto FtpProto)

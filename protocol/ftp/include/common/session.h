@@ -3,17 +3,19 @@
 
 #include "net/handler/connection_handler.h"
 #include "net/connection/connection.h"
+#include "net/socket/inet_address.h"
 #include "file_manager.h"
 #include "event/event_loop.h"
 #include "handler/file_stream_event.h"
 #include "timer/timer_task.h"
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
-#include <cstdint>
 
-namespace yuan::net::ftp 
+namespace yuan::net::ftp
 {
     class FtpFileStream;
     class FtpApp;
@@ -29,19 +31,19 @@ namespace yuan::net::ftp
 
     struct FtpSessionValue
     {
-        union 
+        union
         {
-            int32_t         ival;
-            double          dval;
-            std::string    *sval;
-            void           *ptr;
+            int32_t ival;
+            double dval;
+            std::string *sval;
+            void *ptr;
         } item{.ptr = nullptr};
 
         FtpSessionValueType type = FtpSessionValueType::invalid;
     };
 
     class FtpSession;
-    
+
     class FtpSessionContext
     {
     public:
@@ -54,7 +56,7 @@ namespace yuan::net::ftp
     public:
         bool login_success()
         {
-            return !user_.logined_;
+            return user_.logined_;
         }
 
         bool start_file_stream_transe();
@@ -67,6 +69,8 @@ namespace yuan::net::ftp
         User user_;
         FileManager file_manager_;
         std::string cwd_;
+        std::string root_dir_;
+        std::optional<InetAddress> passive_addr_;
         std::unordered_map<std::string, FtpSessionValue> values;
     };
 
@@ -76,86 +80,50 @@ namespace yuan::net::ftp
     public:
         FtpSession(Connection *conn, FtpApp *app, WorkMode mode, bool keepUtilSent = false);
         virtual ~FtpSession();
-
-    public:
         virtual void on_connected(Connection *conn);
-
         virtual void on_error(Connection *conn);
-
         virtual void on_read(Connection *conn) = 0;
-
         virtual void on_write(Connection *conn);
-
         virtual void on_close(Connection *conn);
-
-    public: // timer task
         virtual void on_timer(timer::Timer *timer);
-
-    public: // file stream event
         virtual void on_opened(FtpFileStreamSession *fs);
-
         virtual void on_connect_timeout(FtpFileStreamSession *fs);
-
         virtual void on_start(FtpFileStreamSession *fs);
-
         virtual void on_error(FtpFileStreamSession *fs);
-
         virtual void on_completed(FtpFileStreamSession *fs);
-
         virtual void on_closed(FtpFileStreamSession *fs);
-
         virtual void on_idle_timeout(FtpFileStreamSession *fs);
-    
-    public:
+
         void quit();
-
-        Connection * get_connection()
-        {
-            return context_.conn_;
-        }
-
-        FtpApp * get_app()
-        {
-            return context_.app_;
-        }
-
+        Connection *get_connection() { return context_.conn_; }
+        FtpApp *get_app() { return context_.app_; }
         bool login();
-
         void set_username(const std::string &username);
-
         void set_password(const std::string &passwd);
-
         bool start_file_stream(const InetAddress &addr, StreamMode mode);
-
-        bool login_success()
-        {
-            return context_.login_success();
-        }
-
+        bool login_success() { return context_.login_success(); }
         bool send_command(const std::string &cmd);
-
         void change_cwd(const std::string &filepath);
-
+        const std::string &get_cwd() const { return context_.cwd_; }
+        const std::string &get_root_dir() const { return context_.root_dir_; }
+        void set_root_dir(const std::string &dir) { context_.root_dir_ = dir; }
+        void set_passive_addr(const InetAddress &addr);
+        std::optional<InetAddress> get_passive_addr() const { return context_.passive_addr_; }
+        void clear_passive_addr();
         void check_file_stream(FtpFileStreamSession *fs);
-
-        void set_keep_util_sent_flag(bool flag)
-        {
-            keep_util_sent_ = flag;
-        }
-
-        bool get_keep_util_sent_flag(bool flag)
-        {
-            return keep_util_sent_;
-        }
-
+        void set_keep_util_sent_flag(bool flag) { keep_util_sent_ = flag; }
+        bool get_keep_util_sent_flag(bool flag) { return keep_util_sent_; }
         void on_error(int errcode);
-
         void on_file_stream_close(FtpFileStream *ffs);
 
-    public:
         template<typename T>
-        void set_item_value(const std::string &key, T && val)
+        void set_item_value(const std::string &key, T &&val)
         {
+            // Free old string value if overwriting an existing string entry
+            auto it = context_.values.find(key);
+            if (it != context_.values.end() && it->second.type == FtpSessionValueType::string_val && it->second.item.sval) {
+                delete it->second.item.sval;
+            }
             FtpSessionValue itemVal;
             if constexpr (std::is_same<int32_t, T>::value) {
                 itemVal.type = FtpSessionValueType::int32_val;
@@ -172,7 +140,6 @@ namespace yuan::net::ftp
             } else {
                 static_assert("invalid type found");
             }
-
             context_.values[key] = itemVal;
         }
 
@@ -181,42 +148,21 @@ namespace yuan::net::ftp
         {
             auto it = context_.values.find(key);
             if constexpr (std::is_same<int32_t, T>::value) {
-                if (it == context_.values.end()) {
-                    return 0;
-                }
-                return it->second.type == FtpSessionValueType::int32_val ? it->second.item.ival : 0;
+                return it == context_.values.end() || it->second.type != FtpSessionValueType::int32_val ? 0 : it->second.item.ival;
             } else if constexpr (std::is_same<void *, T>::value) {
-                if (it == context_.values.end()) {
-                    return nullptr;
-                }
-                return it->second.type == FtpSessionValueType::ptr_val ? it->second.item.ptr : nullptr;
+                return it == context_.values.end() || it->second.type != FtpSessionValueType::ptr_val ? nullptr : it->second.item.ptr;
             } else if constexpr (std::is_same<double, T>::value) {
-                if (it == context_.values.end()) {
-                    return 0;
-                }
-                return it->second.type == FtpSessionValueType::double_val ? it->second.item.dval : 0;
+                return it == context_.values.end() || it->second.type != FtpSessionValueType::double_val ? 0 : it->second.item.dval;
             } else if constexpr (std::is_same<std::string *, T>::value) {
-                if (it == context_.values.end()) {
-                    return nullptr;
-                }
-                return it->second.type == FtpSessionValueType::string_val ? it->second.item.sval : nullptr;
+                return it == context_.values.end() || it->second.type != FtpSessionValueType::string_val ? nullptr : it->second.item.sval;
             } else {
                 static_assert("invalid type found");
             }
-
             return {};
         }
 
-        void remove_item(const std::string &key)
-        {
-            context_.values.erase(key);
-        }
-
-        FileManager * get_file_manager()
-        {
-            return &context_.file_manager_;
-        }
-
+        void remove_item(const std::string &key) { context_.values.erase(key); }
+        FileManager *get_file_manager() { return &context_.file_manager_; }
         bool set_work_file(FtpFileInfo *info);
 
     protected:
@@ -224,6 +170,7 @@ namespace yuan::net::ftp
         bool keep_util_sent_;
         bool close_;
         FtpSessionContext context_;
+        FtpFileStream *pending_file_stream_cleanup_ = nullptr;
     };
 }
 

@@ -69,18 +69,40 @@ namespace yuan::net::ftp
             return false;
         }
 
-        timer::WheelTimerManager timerManager;
-        SelectPoller poller;
-        EventLoop evLoop(&poller, &timerManager);
+        // Allocate on heap to ensure objects remain alive
+        auto *timerManager = new timer::WheelTimerManager();
+        auto *poller = new SelectPoller();
+        auto *evLoop = new EventLoop(poller, timerManager);
 
-        impl_->ev_loop_ = &evLoop;
-        impl_->timer_manager_ = &timerManager;
+        impl_->ev_loop_ = evLoop;
+        impl_->timer_manager_ = timerManager;
         acceptor->set_event_handler(impl_->ev_loop_);
         acceptor->set_connection_handler(this);
 
         impl_->ev_loop_->loop();
 
+        // Cleanup after event loop exits.
+        // If quit() was called while the loop was running, the deferred
+        // callbacks already ran and cleaned up sessions/connections.
+        // Otherwise, we must clean up manually to prevent leaks.
+        {
+            auto sessions = impl_->session_manager_.get_sessions();
+            for (auto item : sessions) {
+                auto *conn = item.second->get_connection();
+                if (conn) {
+                    conn->set_connection_handler(nullptr);
+                    conn->close();
+                }
+            }
+        }
+        impl_->session_manager_.clear();
+        impl_->ev_loop_ = nullptr;
+        impl_->timer_manager_ = nullptr;
         acceptor->close();
+        delete acceptor;
+        delete evLoop;
+        delete poller;
+        delete timerManager;
 
         return true;
     }
@@ -92,7 +114,7 @@ namespace yuan::net::ftp
             std::cout << "internal error occured!!!\n";
             conn->close();
         } else {
-            auto newSessoion = new ServerFtpSession(conn, this);
+            auto newSessoion = std::make_shared<ServerFtpSession>(conn, this);
             impl_->session_manager_.add_session(conn, newSessoion);
             newSessoion->on_connected(conn);
         }
@@ -138,7 +160,9 @@ namespace yuan::net::ftp
         if (!session || impl_->closing_) {
             return;
         }
-        impl_->session_manager_.remove_session(session->get_connection());
+        // Use remove_by_session because conn_ may already be deleted
+        // when on_session_closed is called from a deferred cleanup callback
+        impl_->session_manager_.remove_by_session(session);
     }
 
     void FtpServer::quit()
@@ -148,11 +172,23 @@ namespace yuan::net::ftp
         }
 
         impl_->closing_ = true;
+
+        // Notify sessions to quit (this sets close_=true and closes connections).
+        // After this, on_close() -> delete this or deferred on_session_closed
+        // may destroy the sessions. Set closing_ first so on_session_closed
+        // skips the remove_by_session call (which would be a no-op anyway
+        // since we clear() below).
         auto sessions = impl_->session_manager_.get_sessions();
         for (auto item : sessions) {
             item.second->quit();
         }
 
+        // Clear the session manager: this releases all shared_ptrs.
+        // Sessions that called quit() above will have already been deleted
+        // via the close_=true path (on_close -> delete this) since quit()
+        // calls conn->close() which triggers ~TcpConnection -> on_close.
+        // For sessions still in the deferred-cleanup path (close_=false),
+        // they are destroyed here when the last shared_ptr is released.
         impl_->session_manager_.clear();
         impl_->timer_manager_ = nullptr;
 

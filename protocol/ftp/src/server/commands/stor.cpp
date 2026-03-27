@@ -1,33 +1,6 @@
 #include "server/commands/stor.h"
-#include "common/def.h"
 #include "common/response_code.h"
 #include "common/session.h"
-
-#include <iostream>
-
-namespace yuan::net::ftp 
-{
-    REGISTER_COMMAND_IMPL(CommandStor);
-
-    FtpCommandResponse CommandStor::execute(FtpSession *session, const std::string &args)
-    {
-        std::cout << "store file: D:/misc/" << args << '\n';
-        session->get_file_manager()->set_work_filepath("D:/misc/" + args);
-        auto file = session->get_file_manager()->get_next_file();
-        file->dest_name_ = file->origin_name_;
-        file->ready_ = true;
-        file->file_size_ = 393978331;
-        session->set_work_file(file);
-        return {FtpResponseCode::__200__, "start receiving file from client!!!"};
-    }
-
-    CommandType CommandStor::get_command_type()
-    {
-        return CommandType::cmd_stor;
-    }
-
-    std::string CommandStor::get_comand_name()
-    {
-        return "STOR";
-    }
-}
+#include "server/command_support.h"
+#include <filesystem>
+namespace yuan::net::ftp { REGISTER_COMMAND_IMPL(CommandStor); FtpCommandResponse CommandStor::execute(FtpSession *session, const std::string &args) { FtpCommandResponse denied{FtpResponseCode::invalid, ""}; if (!ensure_login(session, denied)) { return denied; } if (args.empty()) { return {FtpResponseCode::__501__, "File name is required."}; } if (!session->get_passive_addr().has_value()) { return {FtpResponseCode::__425__, "Use PASV before STOR."}; } const auto path = resolve_path(session, args); if (!path_within_root(session, path)) { return {FtpResponseCode::__550__, "Target path is not allowed."}; } std::error_code ec; std::filesystem::create_directories(path.parent_path(), ec); if (ec) { return {FtpResponseCode::__550__, "Cannot create target directory."}; } const auto offset = static_cast<std::size_t>(session->get_item_value<int32_t>("restart_offset")); const auto uploadSize = static_cast<std::size_t>(session->get_item_value<int32_t>("upload_file_size")); session->get_file_manager()->reset(); FtpFileInfo info; info.mode_ = StreamMode::Receiver; info.origin_name_ = path.filename().generic_string(); info.dest_name_ = path.generic_string(); info.file_size_ = offset + uploadSize; info.current_progress_ = offset; info.append_mode_ = offset > 0; info.ready_ = true; session->get_file_manager()->add_file(info); auto *file = session->get_file_manager()->get_next_file(); if (!file || !session->set_work_file(file)) { session->clear_passive_addr(); return {FtpResponseCode::__425__, "Passive data connection is not ready."}; } session->remove_item("restart_offset"); return {FtpResponseCode::__150__, "Ready to receive file data."}; } CommandType CommandStor::get_command_type() { return CommandType::cmd_stor; } std::string CommandStor::get_comand_name() { return "STOR"; } }

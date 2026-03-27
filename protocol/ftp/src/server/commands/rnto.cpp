@@ -1,0 +1,6 @@
+#include "server/commands/rnto.h"
+#include "common/response_code.h"
+#include "common/session.h"
+#include "server/command_support.h"
+#include <filesystem>
+namespace yuan::net::ftp { REGISTER_COMMAND_IMPL(CommandRnto); FtpCommandResponse CommandRnto::execute(FtpSession *session, const std::string &args) { FtpCommandResponse denied{FtpResponseCode::invalid, ""}; if (!ensure_login(session, denied)) { return denied; } auto *renameFrom = session->get_item_value<std::string *>("rename_from"); if (!renameFrom || renameFrom->empty()) { return {FtpResponseCode::__503__, "RNFR required before RNTO."}; } if (args.empty()) { return {FtpResponseCode::__501__, "Target path is required."}; } std::filesystem::path source(*renameFrom); auto target = resolve_path(session, args); if (!path_within_root(session, target)) { return {FtpResponseCode::__550__, "Target path is not allowed."}; } std::error_code ec; std::filesystem::rename(source, target, ec); session->remove_item("rename_from"); if (ec) { return {FtpResponseCode::__550__, "Rename failed."}; } return {FtpResponseCode::__250__, "Rename successful."}; } CommandType CommandRnto::get_command_type() { return CommandType::cmd_rnto; } std::string CommandRnto::get_comand_name() { return "RNTO"; } }

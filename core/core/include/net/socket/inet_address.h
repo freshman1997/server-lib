@@ -27,15 +27,16 @@ namespace yuan::net
         ~InetAddress() = default;
 
     public:
-        const InetAddress & operator=(const InetAddress &other);
+        // conventional assignment operator signatures
+        InetAddress & operator=(const InetAddress &other);
 
-        const InetAddress & operator=(const InetAddress &&other);
+        InetAddress & operator=(InetAddress &&other) noexcept;
 
         bool operator==(const InetAddress &other) const;
 
-        bool operator!=(const InetAddress &other);
+        bool operator!=(const InetAddress &other) const;
 
-        bool operator<(const InetAddress &other);
+        bool operator<(const InetAddress &other) const;
 
         void set_addr(const std::string &ip, int port)
         {
@@ -89,8 +90,9 @@ namespace std
         }
     };
 #else
+    // On Apple platforms ensure we specialize the same fully-qualified type
     template<>
-    struct hash<net::InetAddress>
+    struct hash<yuan::net::InetAddress>
     {
         size_t operator()(const yuan::net::InetAddress &address) const noexcept
         {

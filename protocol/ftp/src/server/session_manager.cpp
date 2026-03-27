@@ -2,6 +2,7 @@
 
 namespace yuan::net::ftp 
 {
+    /*
     void FtpSessionManager::add_session(Connection *conn, FtpSession *session)
     {
         if (conn) {
@@ -21,4 +22,5 @@ namespace yuan::net::ftp
             sessions_.erase(conn);
         }
     }
+    */
 }

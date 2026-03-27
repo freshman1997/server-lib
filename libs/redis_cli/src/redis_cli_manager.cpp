@@ -13,6 +13,12 @@ namespace yuan::redis
         for (const auto &opt : options)
         {
             auto redis_client = std::make_shared<RedisClient>(opt);
+            auto res = redis_client->ping();
+            if (redis_client->get_last_error() || !res)
+            {
+                continue;
+            }
+
             m_redis_cli_map.emplace_back(opt, redis_client);
         }
 

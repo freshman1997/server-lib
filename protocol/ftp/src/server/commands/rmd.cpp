@@ -1,0 +1,5 @@
+#include "server/commands/rmd.h"
+#include "common/response_code.h"
+#include "server/command_support.h"
+#include <filesystem>
+namespace yuan::net::ftp { REGISTER_COMMAND_IMPL(CommandRmd); FtpCommandResponse CommandRmd::execute(FtpSession *session, const std::string &args) { FtpCommandResponse denied{FtpResponseCode::invalid, ""}; if (!ensure_login(session, denied)) { return denied; } if (args.empty()) { return {FtpResponseCode::__501__, "Directory name is required."}; } auto path = resolve_path(session, args); if (!path_within_root(session, path) || !std::filesystem::is_directory(path)) { return {FtpResponseCode::__550__, "Directory is not available."}; } std::error_code ec; bool removed = std::filesystem::remove(path, ec); if (ec || !removed) { return {FtpResponseCode::__550__, "Cannot remove directory."}; } return {FtpResponseCode::__250__, "Directory removed."}; } CommandType CommandRmd::get_command_type() { return CommandType::cmd_rmd; } std::string CommandRmd::get_comand_name() { return "RMD"; } }

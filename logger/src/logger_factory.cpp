@@ -21,7 +21,8 @@ namespace yuan::log
 
     bool LoggerFactory::init()
     {
-        return false;
+        // TODO: 可从配置文件加载日志配置
+        return true;
     }
 
     std::shared_ptr<Logger> LoggerFactory::get_logger(LoggerType type)
@@ -40,10 +41,12 @@ namespace yuan::log
         }
         case LoggerType::file_: 
         {
+            // TODO: 实现文件日志器
             break;
         }
         case LoggerType::net_: 
         {
+            // TODO: 实现网络日志器
             break;
         }
         }

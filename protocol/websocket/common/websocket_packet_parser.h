@@ -36,7 +36,7 @@ namespace yuan::net::websocket
 
     private:
         bool use_mask_;
-        uint8_t mask_[4];
+        uint8_t mask_[7];
         buffer::Buffer *frame_buffer_;
     };
 }

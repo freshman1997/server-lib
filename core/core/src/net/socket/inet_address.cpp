@@ -42,9 +42,9 @@ namespace yuan::net
 
     InetAddress::InetAddress(InetAddress &&addr)
     {
-        this->ip_ = std::move(addr.get_ip());
-        this->port_ = std::move(addr.get_port());
-        this->net_ip_ = std::move(addr.get_net_ip());
+        this->ip_ = std::move(addr.ip_);
+        this->port_ = addr.port_;
+        this->net_ip_ = addr.net_ip_;
     }
 
     struct sockaddr_in InetAddress::to_ipv4_address() const
@@ -57,19 +57,23 @@ namespace yuan::net
         return addr;
     }
 
-    const InetAddress & InetAddress::operator=(const InetAddress &other)
+    InetAddress & InetAddress::operator=(const InetAddress &other)
     {
-        this->ip_ = other.get_ip();
-        this->port_ = other.get_port();
-        this->net_ip_ = other.get_net_ip();
+        if (this != &other) {
+            this->ip_ = other.ip_;
+            this->port_ = other.port_;
+            this->net_ip_ = other.net_ip_;
+        }
         return *this;
     }
 
-    const InetAddress & InetAddress::operator=(const InetAddress &&other)
+    InetAddress & InetAddress::operator=(InetAddress &&other) noexcept
     {
-        this->ip_ = std::move(other.get_ip());
-        this->port_ = std::move(other.get_port());
-        this->net_ip_ = std::move(other.get_net_ip());
+        if (this != &other) {
+            this->ip_ = std::move(other.ip_);
+            this->port_ = other.port_;
+            this->net_ip_ = other.net_ip_;
+        }
         return *this;
     }
 
@@ -78,12 +82,12 @@ namespace yuan::net
         return get_ip() == other.get_ip() && get_port() == other.get_port();
     }
 
-    bool InetAddress::operator!=(const InetAddress &other)
+    bool InetAddress::operator!=(const InetAddress &other) const
     {
         return !operator==(other);
     }
 
-    bool InetAddress::operator<(const InetAddress &other)
+    bool InetAddress::operator<(const InetAddress &other) const
     {
         if (ip_ != other.ip_) {
             return ip_ < other.ip_;

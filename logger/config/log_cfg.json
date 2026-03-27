@@ -1,3 +1,15 @@
 {
-    "version": "1.0"
+    "version": "1.0",
+    "log_path": "e:\\test\\log",
+    "log_level": "debug",
+    "log_file_name": "app_log",
+    "trans": {
+        "when": "D",
+        "interval": 1,
+        "backup_count": 7,
+        "encoding": "utf-8"
+    },
+    "fmt": "%[asctime]s - %[name]s - %[levelname]s - %[message]s",
+    "fmt_datefmt": "%Y-%m-%d %H:%M:%S",
+    "fmt_style": "%"
 }

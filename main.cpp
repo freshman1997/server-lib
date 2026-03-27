@@ -1,3 +1,4 @@
+#include "dns_client.h"
 #include "net/acceptor/udp_acceptor.h"
 #include "net/poller/select_poller.h"
 #include "dns_server.h"
@@ -180,8 +181,8 @@ int main()
         }
     }*/
 
-    net::dns::DnsServer server;
-    server.serve(9090);
+    net::dns::DnsClient server;
+    server.connect("10.88.4.6", 22002);
 
     //std::cout << base::util::base64_encode("hello:hello1") << std::endl;
     //std::cout << base::util::base64_decode("aGVsbG86aGVsbG8x") << std::endl;

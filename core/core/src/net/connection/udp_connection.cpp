@@ -2,6 +2,7 @@
 #include "buffer/pool.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
+#include "net/handler/event_handler.h"
 #include "net/socket/inet_address.h"
 #include "net/acceptor/udp/udp_instance.h"
 #include "net/acceptor/udp/adapter.h"
@@ -82,7 +83,7 @@ namespace yuan::net
         if (adapter_) {
             if (!proc_one_buff(buff)) {
                 connectionHandler_->on_error(this);
-                do_close();
+                abort();  // 改用 abort() 以使用延迟删除
                 return;
             }
         } else {
@@ -134,22 +135,41 @@ namespace yuan::net
         }
 
         if (output_buffer_.get_current_buffer()->empty() && closed_) {
-            closed_ = false;
-            do_close();
+            // 使用延迟删除，避免在事件回调中直接删除
+            if (eventHandler_) {
+                eventHandler_->queue_in_loop([this]() {
+                    delete this;
+                });
+            } else {
+                delete this;
+            }
         }
     }
 
     // 丢弃所有未发送的数据
     void UdpConnection::abort()
     {
+        if (closed_) {
+            return;  // 防止重复调用
+        }
         closed_ = true;
         state_ = ConnectionState::closed;
-        do_close();
+        // 使用延迟删除，避免在事件回调中直接删除
+        if (eventHandler_) {
+            eventHandler_->queue_in_loop([this]() {
+                delete this;
+            });
+        } else {
+            delete this;
+        }
     }
 
     // 发送完数据后返回
     void UdpConnection::close()
     {
+        if (closed_) {
+            return;  // 防止重复调用
+        }
         ConnectionState lastState = state_;
         state_ = ConnectionState::closing;
         closed_ = true;
@@ -157,7 +177,14 @@ namespace yuan::net
             flush();
             return;
         }
-        do_close();
+        // 使用延迟删除，避免在事件回调中直接删除
+        if (eventHandler_) {
+            eventHandler_->queue_in_loop([this]() {
+                delete this;
+            });
+        } else {
+            delete this;
+        }
     }
 
     ConnectionType UdpConnection::get_conn_type()
@@ -244,7 +271,7 @@ namespace yuan::net
     void UdpConnection::on_timer(timer::Timer *timer)
     {
         if (!active_) {
-            do_close();
+            abort();  // 改用 abort() 以使用延迟删除
             return;
         }
 

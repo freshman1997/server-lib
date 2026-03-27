@@ -1,6 +1,6 @@
 #include "server/command.h"
 
-namespace yuan::net::ftp 
+namespace yuan::net::ftp
 {
     CommandFactory::~CommandFactory()
     {
@@ -11,8 +11,9 @@ namespace yuan::net::ftp
         }
     }
 
-    Command * CommandFactory::find_command(const std::string &cmd)
+    Command *CommandFactory::find_command(const std::string &cmd)
     {
+        ensure_all_commands_registered();
         auto it = commands.find(cmd);
         return it == commands.end() ? nullptr : it->second;
     }
@@ -20,6 +21,10 @@ namespace yuan::net::ftp
     bool CommandFactory::register_command(Command *cmdImpl)
     {
         if (cmdImpl) {
+            if (commands.find(cmdImpl->get_comand_name()) != commands.end()) {
+                delete cmdImpl;
+                return false;
+            }
             commands[cmdImpl->get_comand_name()] = cmdImpl;
             return true;
         }

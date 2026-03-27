@@ -1,0 +1,104 @@
+{
+    "modes": [
+        {
+            "mode": 0,
+            "mode_name": "1v1_normal",
+            "player_count": 2,
+            "max_team_size": 1,
+            "pools": [
+                {"min_score": 0, "max_score": 86400},
+                {"min_score": 86400, "max_score": 259200},
+                {"min_score": 259200, "max_score": 604800},
+                {"min_score": 604800, "max_score": 2592000},
+                {"min_score": 2592000, "max_score": 7776000},
+                {"min_score": 7776000, "max_score": 4294967295}
+            ],
+            "expands": [
+                {"timeout_ms": 10000, "expand_pools": 1},
+                {"timeout_ms": 20000, "expand_pools": 2},
+                {"timeout_ms": 30000, "expand_pools": 3}
+            ],
+            "max_expand_pools": 3,
+            "enabled": true
+        },
+        {
+            "mode": 1,
+            "mode_name": "2v2_ranked",
+            "player_count": 4,
+            "max_team_size": 2,
+            "pools": [
+                {"min_score": 0, "max_score": 400},
+                {"min_score": 400, "max_score": 800},
+                {"min_score": 800, "max_score": 1200},
+                {"min_score": 1200, "max_score": 1600},
+                {"min_score": 1600, "max_score": 2000},
+                {"min_score": 2000, "max_score": 4294967295}
+            ],
+            "expands": [
+                {"timeout_ms": 15000, "expand_pools": 1},
+                {"timeout_ms": 30000, "expand_pools": 2},
+                {"timeout_ms": 45000, "expand_pools": 3}
+            ],
+            "max_expand_pools": 3,
+            "enabled": true
+        },
+        {
+            "mode": 2,
+            "mode_name": "5v5_team_1",
+            "player_count": 10,
+            "max_team_size": 5,
+            "pools": [
+                {"min_score": 0, "max_score": 5},
+                {"min_score": 5, "max_score": 10},
+                {"min_score": 10, "max_score": 15},
+                {"min_score": 15, "max_score": 4294967295}
+            ],
+            "expands": [
+                {"timeout_ms": 20000, "expand_pools": 1},
+                {"timeout_ms": 40000, "expand_pools": 2}
+            ],
+            "max_expand_pools": 2,
+            "enabled": true
+        },
+        {
+            "mode": 3,
+            "mode_name": "5v5_team_2",
+            "player_count": 10,
+            "max_team_size": 5,
+            "pools": [
+                {"min_score": 0, "max_score": 5},
+                {"min_score": 5, "max_score": 10},
+                {"min_score": 10, "max_score": 15},
+                {"min_score": 15, "max_score": 4294967295}
+            ],
+            "expands": [
+                {"timeout_ms": 20000, "expand_pools": 1},
+                {"timeout_ms": 40000, "expand_pools": 2}
+            ],
+            "max_expand_pools": 2,
+            "enabled": true
+        },
+        {
+            "mode": 4,
+            "mode_name": "5v5_team_3",
+            "player_count": 10,
+            "max_team_size": 5,
+            "pools": [
+                {"min_score": 0, "max_score": 5},
+                {"min_score": 5, "max_score": 10},
+                {"min_score": 10, "max_score": 15},
+                {"min_score": 15, "max_score": 4294967295}
+            ],
+            "expands": [
+                {"timeout_ms": 20000, "expand_pools": 1},
+                {"timeout_ms": 40000, "expand_pools": 2}
+            ],
+            "max_expand_pools": 2,
+            "enabled": true
+        }
+    ],
+    "server": {
+        "match_interval_ms": 1000,
+        "monitor_interval_ms": 20000
+    }
+}

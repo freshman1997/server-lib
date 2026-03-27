@@ -37,7 +37,7 @@ public:
 int main()
 {
     auto pluginManager = yuan::plugin::PluginManager::get_instance();
-    pluginManager->set_plugin_path("/home/yuan/code/test/server-lib/build/plugins");
+    pluginManager->set_plugin_path("E:/test/server-lib/build/plugins");
     auto dispatcher = yuan::message::MessageDispatcher::get_instance();
     if (!dispatcher->init()) {
         std::cerr<< "message dispatcher init failed!!! \n";

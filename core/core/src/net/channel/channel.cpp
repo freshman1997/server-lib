@@ -20,7 +20,6 @@ namespace yuan::net
     void Channel::on_event()
     {
         if (!handler_) {
-            delete this;
             return;
         }
 
@@ -30,18 +29,10 @@ namespace yuan::net
 
         if (revent_ & READ_EVENT && events_ & READ_EVENT) {
             handler_->on_read_event();
-            if (handler_ == nullptr) {
-                delete this;
-                return;
-            }
         }
 
         if (revent_ & WRITE_EVENT && events_ & WRITE_EVENT) {
             handler_->on_write_event();
-            if (handler_ == nullptr) {
-                delete this;
-                return;
-            }
         }
     }
 }

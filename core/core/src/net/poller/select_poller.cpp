@@ -56,7 +56,7 @@ namespace yuan::net
                 }
             }
 
-            if (i->second->get_events() & Channel::READ_EVENT) {
+            if (i->second->get_events() & Channel::WRITE_EVENT) {
                 FD_SET(i->first, &data_->writes_);
                 if (i->first > max_fd) {
                     max_fd = i->first;

@@ -3,6 +3,7 @@
 #include <condition_variable>
 #include <iostream>
 #include <mutex>
+#include <queue>
 #include <unordered_map>
 #include <vector>
 
@@ -39,6 +40,7 @@ namespace yuan::net
         std::mutex m;
         std::condition_variable cond;
         std::unordered_map<int, Channel *> channels_;
+        std::queue<std::function<void()>> pending_callbacks_;
     };
 
     EventLoop::EventLoop(Poller *poller, timer::TimerManager *timer_manager)
@@ -66,9 +68,21 @@ namespace yuan::net
             const uint64_t to = data_->poller_->poll(2, channels);
             if (!channels.empty()) {
                 for (const auto &channel : channels) {
-                    if (channel) {
+                    if (channel && data_->channels_.find(channel->get_fd()) != data_->channels_.end()) {
                         channel->on_event();
                     }
+                }
+            }
+
+            // Process pending callbacks
+            {
+                std::lock_guard<std::mutex> lock(data_->m);
+                while (!data_->pending_callbacks_.empty()) {
+                    auto cb = std::move(data_->pending_callbacks_.front());
+                    data_->pending_callbacks_.pop();
+                    lock.~lock_guard();
+                    cb();
+                    new (&lock) std::lock_guard<std::mutex>(data_->m);
                 }
             }
 
@@ -123,8 +137,11 @@ namespace yuan::net
 
         auto it = data_->channels_.find(channel->get_fd());
         if (it != data_->channels_.end()) {
+            std::cout << "channel closed, fd: " << channel->get_fd() << std::endl;
             data_->poller_->remove_channel(channel);
             data_->channels_.erase(it);
+        } else {
+            std::cout << "channel not found, fd: " << channel->get_fd() << std::endl;
         }
     }
 
@@ -144,5 +161,14 @@ namespace yuan::net
     void EventLoop::set_use_coroutine(bool use)
     {
         data_->use_coroutine_ = use;
+    }
+
+    void EventLoop::queue_in_loop(std::function<void()> cb)
+    {
+        {
+            std::lock_guard<std::mutex> lock(data_->m);
+            data_->pending_callbacks_.push(std::move(cb));
+        }
+        wakeup();
     }
 }

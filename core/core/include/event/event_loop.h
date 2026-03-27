@@ -36,6 +36,8 @@ namespace yuan::net
 
         void set_use_coroutine(bool use);
 
+        void queue_in_loop(std::function<void()> cb);
+
     public:
         void wakeup();
 

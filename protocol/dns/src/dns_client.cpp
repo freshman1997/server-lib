@@ -54,8 +54,10 @@ namespace yuan::net::dns
         //std::string daoke = R"({"MsgID":1080876021,"Cmd":24,"MsgBody":{"Uin":441882,"RoleID":"425986807601037850","GiftID":1}})";
 
 
-        std::string daoke = R"({"MsgID":943024804,"Cmd":22,"MsgBody":{"Uin":261281,"RoleID":"369691744731399841","GiftID":1}})";
+        //std::string daoke = R"({"MsgID":943024804,"Cmd":22,"MsgBody":{"Uin":261281,"RoleID":"369691744731399841","GiftID":1}})";
         //std::string daoke = R"({"MsgID":943024804,"Cmd":3,"MsgBody":{"TargetPlayer":{"Uin":261281,"RoleID":"369691744731399841","RoleName":"晗月叶树"},"TargetType":1,"TextMsg":"sl 20"}})";
+
+        std::string daoke = R"({"MsgID":943024804,"Cmd":23,"MsgBody":{"SysMailId":1,"Uin":881977,"RoleID":"369692343203267641","RoleName":"河宫粱唱"}})";
         buf->write_string(daoke);
         conn->write_and_flush(buf);
     }

@@ -7,3 +7,6 @@
 [submodule "third_party/openssl-3.4.0"]
 	path = third_party/openssl-3.4.0
 	url = https://github.com/openssl/openssl
+[submodule "third_party/fmt"]
+	path = third_party/fmt
+	url = https://github.com/fmtlib/fmt

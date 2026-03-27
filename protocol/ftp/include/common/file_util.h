@@ -10,11 +10,6 @@ namespace yuan::net::ftp
     {
     public:
         static void list_files(const std::string &filepath, std::vector<FtpFileInfo> &dest, bool recurve = true);
-
-        static std::vector<std::string> build_unix_file_infos(const std::vector<FileInfo> &infos);
-
-        static bool parse_unix_file_info(const char *begin, const char *end, std::vector<FileInfo> &res);
-
     };
 }
 

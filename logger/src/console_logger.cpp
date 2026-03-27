@@ -6,6 +6,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <ctime>
+#include <fmt/core.h>
 
 namespace yuan::log 
 {
@@ -42,14 +43,49 @@ namespace yuan::log
             color = CLR_PURPLE;
         }
 
-        color.append("[%s (%ld)] %s\n");
-
         if (written >= 0 && written < size) {
-            printf(color.c_str(), time_buffer, now, buf->peek());
+            fmt::print("[INFO {} ({})] {}\n{}", time_buffer, now, buf->peek(), CLR_CLR);
         } else {
-            printf("[%s(%ld)] Log message too long or error occurred.\n", time_buffer, now);
+            fmt::println("[ERROR {}({})] Log message too long or error occurred.\n", time_buffer, now);
         }
 
-        buf->reset();
+        buffer::BufferedPool::get_instance()->free(buf);
+    }
+
+    void ConsoleLogger::log_impl(Level level, const std::string& msg)
+    {
+        // 获取当前时间
+        time_t now = time(NULL);
+        struct tm *tm_info = localtime(&now);
+        char time_buffer[50];
+        strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", tm_info);
+
+        fmt::print("{}[{} {} ({})] {}{}\n", get_color(level), get_level_str(level), time_buffer, now, msg, CLR_CLR);
+    }
+
+    std::string ConsoleLogger::get_color(Level level)
+    {
+        switch (level) {
+            case Level::trace: return CLR_GREEN;
+            case Level::debug: return CLR_GREEN;
+            case Level::info:  return CLR_BLUE;
+            case Level::warn:  return CLR_YELLOW;
+            case Level::error: return CLR_RED;
+            case Level::fatal: return CLR_PURPLE;
+        }
+        return "";
+    }
+
+    std::string ConsoleLogger::get_level_str(Level level)
+    {
+        switch (level) {
+            case Level::trace: return "TRACE";
+            case Level::debug: return "DEBUG";
+            case Level::info:  return "INFO";
+            case Level::warn:  return "WARN";
+            case Level::error: return "ERROR";
+            case Level::fatal: return "FATAL";
+        }
+        return "";
     }
 }
