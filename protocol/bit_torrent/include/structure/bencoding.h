@@ -155,6 +155,11 @@ namespace yuan::net::bit_torrent
             return it == datas_.end() ? nullptr : it->second;
         }
 
+        std::vector<std::pair<std::string, BaseData *>> get_items() const
+        {
+            return std::vector<std::pair<std::string, BaseData *>>(datas_.begin(), datas_.end());
+        }
+
         std::string to_string();
 
     private:
@@ -164,12 +169,13 @@ namespace yuan::net::bit_torrent
     class BencodingDataConverter
     {
     public:
-        // 单个文件
+        // decode
         static BaseData * parse(const std::string &raw);
         static BaseData * parse(const char *begin, const char *end);
-
-        // 多个文件
         static std::vector<BaseData *> parse_datas(const char *begin, const char *end);
+
+        // encode
+        static std::string encode(const BaseData *data);
     };
 }
 

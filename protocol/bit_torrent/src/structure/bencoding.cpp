@@ -1,4 +1,5 @@
 #include <sstream>
+#include <algorithm>
 #include "structure/bencoding.h"
 
 namespace yuan::net::bit_torrent 
@@ -185,5 +186,52 @@ namespace yuan::net::bit_torrent
         }
 
         return res;
+    }
+
+    static std::string do_encode(const BaseData *data)
+    {
+        if (!data) return "";
+
+        switch (data->type_) {
+        case DataType::integer_: {
+            auto *d = static_cast<const IntegerData *>(data);
+            return "i" + std::to_string(d->get_data()) + "e";
+        }
+        case DataType::string_: {
+            auto *d = static_cast<const StringData *>(data);
+            const auto &s = d->get_data();
+            return std::to_string(s.size()) + ":" + s;
+        }
+        case DataType::list_: {
+            auto *d = static_cast<const Listdata *>(data);
+            std::string r = "l";
+            for (const auto &item : d->get_data()) {
+                r += do_encode(item);
+            }
+            r += "e";
+            return r;
+        }
+        case DataType::dictionary_: {
+            auto *d = static_cast<const DicttionaryData *>(data);
+            auto entries = d->get_items();
+            std::sort(entries.begin(), entries.end(),
+                [](const auto &a, const auto &b) { return a.first < b.first; });
+            std::string r = "d";
+            for (const auto &entry : entries) {
+                StringData key(entry.first);
+                r += do_encode(&key);
+                r += do_encode(entry.second);
+            }
+            r += "e";
+            return r;
+        }
+        default:
+            return "";
+        }
+    }
+
+    std::string BencodingDataConverter::encode(const BaseData *data)
+    {
+        return do_encode(data);
     }
 }

@@ -2,7 +2,6 @@
 #include "utils.h"
 #include "peer_wire/peer_connection.h"
 #include "net/poller/select_poller.h"
-#include "net/connection/connection.h"
 #include "timer/wheel_timer_manager.h"
 #include "timer/timer.h"
 #include "timer/timer_task.h"

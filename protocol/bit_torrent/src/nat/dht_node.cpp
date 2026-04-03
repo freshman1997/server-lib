@@ -412,21 +412,19 @@ void DhtNode::send_ping(const std::string &ip, uint16_t port)
 {
     std::string tid = next_tid();
 
-    // Build bencode: {"t":"<tid>", "y":"q", "q":"ping", "a":{"id":"<node_id>"}}
-    std::string msg = "d1:ad2:id20:";
-    msg += node_id_to_string(node_id_);
-    msg += "e1:q4:ping1:t";
-    msg += std::to_string(tid.size()) + ":" + tid;
-    msg += "1:y1:qe";
+    DicttionaryData dict;
+    dict.add("t", new StringData(tid));
+    dict.add("y", new StringData("q"));
+    dict.add("q", new StringData("ping"));
+    auto *a = new DicttionaryData;
+    a->add("id", new StringData(node_id_to_string(node_id_)));
+    dict.add("a", a);
 
+    std::string msg = BencodingDataConverter::encode(&dict);
     send_udp(ip, port, reinterpret_cast<const uint8_t *>(msg.data()), msg.size());
 
-    // Register pending query
     PendingQuery pq;
-    pq.callback = [this, ip, port]()
-    {
-        // ping response just updates the bucket
-    };
+    pq.callback = [this, ip, port]() {};
     auto now = std::chrono::steady_clock::now();
     pq.expire_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         now.time_since_epoch()).count() + 15000;
@@ -437,14 +435,16 @@ void DhtNode::send_find_node(const std::string &ip, uint16_t port, const DhtNode
 {
     std::string tid = next_tid();
 
-    std::string msg = "d1:ad2:id20:";
-    msg += node_id_to_string(node_id_);
-    msg += "6:target20:";
-    msg += node_id_to_string(target);
-    msg += "e1:q9:find_node1:t";
-    msg += std::to_string(tid.size()) + ":" + tid;
-    msg += "1:y1:qe";
+    DicttionaryData dict;
+    dict.add("t", new StringData(tid));
+    dict.add("y", new StringData("q"));
+    dict.add("q", new StringData("find_node"));
+    auto *a = new DicttionaryData;
+    a->add("id", new StringData(node_id_to_string(node_id_)));
+    a->add("target", new StringData(node_id_to_string(target)));
+    dict.add("a", a);
 
+    std::string msg = BencodingDataConverter::encode(&dict);
     send_udp(ip, port, reinterpret_cast<const uint8_t *>(msg.data()), msg.size());
 
     PendingQuery pq;
@@ -458,14 +458,18 @@ void DhtNode::send_get_peers(const std::string &ip, uint16_t port,
 {
     std::string tid = next_tid();
 
-    std::string msg = "d1:ad2:id20:";
-    msg += node_id_to_string(node_id_);
-    msg += "9:info_hash20:";
-    msg.append(reinterpret_cast<const char *>(info_hash.data()), 20);
-    msg += "e1:q9:get_peers1:t";
-    msg += std::to_string(tid.size()) + ":" + tid;
-    msg += "1:y1:qe";
+    DicttionaryData dict;
+    dict.add("t", new StringData(tid));
+    dict.add("y", new StringData("q"));
+    dict.add("q", new StringData("get_peers"));
+    auto *a = new DicttionaryData;
+    a->add("id", new StringData(node_id_to_string(node_id_)));
+    a->add("info_hash", new StringData(
+        reinterpret_cast<const char *>(info_hash.data()),
+        reinterpret_cast<const char *>(info_hash.data() + 20)));
+    dict.add("a", a);
 
+    std::string msg = BencodingDataConverter::encode(&dict);
     send_udp(ip, port, reinterpret_cast<const uint8_t *>(msg.data()), msg.size());
 
     PendingQuery pq;
@@ -480,16 +484,20 @@ void DhtNode::send_announce_peer(const std::string &ip, uint16_t port,
 {
     std::string tid = next_tid();
 
-    std::string msg = "d1:ad2:id20:";
-    msg += node_id_to_string(node_id_);
-    msg += "9:info_hash20:";
-    msg.append(reinterpret_cast<const char *>(info_hash.data()), 20);
-    msg += "4:porti" + std::to_string(peer_port) + "e5:token";
-    msg += std::to_string(token.size()) + ":" + token;
-    msg += "e1:q13:announce_peer1:t";
-    msg += std::to_string(tid.size()) + ":" + tid;
-    msg += "1:y1:qe";
+    DicttionaryData dict;
+    dict.add("t", new StringData(tid));
+    dict.add("y", new StringData("q"));
+    dict.add("q", new StringData("announce_peer"));
+    auto *a = new DicttionaryData;
+    a->add("id", new StringData(node_id_to_string(node_id_)));
+    a->add("info_hash", new StringData(
+        reinterpret_cast<const char *>(info_hash.data()),
+        reinterpret_cast<const char *>(info_hash.data() + 20)));
+    a->add("port", new IntegerData(peer_port));
+    a->add("token", new StringData(token));
+    dict.add("a", a);
 
+    std::string msg = BencodingDataConverter::encode(&dict);
     send_udp(ip, port, reinterpret_cast<const uint8_t *>(msg.data()), msg.size());
 }
 
@@ -621,13 +629,15 @@ void DhtNode::handle_ping_query(const std::string &ip, uint16_t port,
     update_bucket(node);
 
     // Build response: {"t":"<tid>", "y":"r", "r":{"id":"<our_id>"}}
-    std::string resp = "d1:rd2:id20:";
-    resp += node_id_to_string(node_id_);
-    resp += "e1:t";
-    resp += std::to_string(transaction_id.size()) + ":" + transaction_id;
-    resp += "1:y1:re";
+    DicttionaryData resp;
+    resp.add("t", new StringData(transaction_id));
+    resp.add("y", new StringData("r"));
+    auto *r = new DicttionaryData;
+    r->add("id", new StringData(node_id_to_string(node_id_)));
+    resp.add("r", r);
 
-    send_udp(ip, port, reinterpret_cast<const uint8_t *>(resp.data()), resp.size());
+    std::string msg = BencodingDataConverter::encode(&resp);
+    send_udp(ip, port, reinterpret_cast<const uint8_t *>(msg.data()), msg.size());
 }
 
 void DhtNode::handle_find_node_query(const std::string &ip, uint16_t port,
@@ -655,16 +665,16 @@ void DhtNode::handle_find_node_query(const std::string &ip, uint16_t port,
     }
 
     // Response
-    std::string resp = "d1:rd2:id20:";
-    resp += node_id_to_string(node_id_);
-    resp += "5:nodes";
-    resp += std::to_string(compact_nodes.size()) + ":";
-    resp += compact_nodes;
-    resp += "e1:t";
-    resp += std::to_string(transaction_id.size()) + ":" + transaction_id;
-    resp += "1:y1:re";
+    DicttionaryData resp;
+    resp.add("t", new StringData(transaction_id));
+    resp.add("y", new StringData("r"));
+    auto *r = new DicttionaryData;
+    r->add("id", new StringData(node_id_to_string(node_id_)));
+    r->add("nodes", new StringData(compact_nodes));
+    resp.add("r", r);
 
-    send_udp(ip, port, reinterpret_cast<const uint8_t *>(resp.data()), resp.size());
+    std::string msg = BencodingDataConverter::encode(&resp);
+    send_udp(ip, port, reinterpret_cast<const uint8_t *>(msg.data()), msg.size());
 }
 
 void DhtNode::handle_get_peers_query(const std::string &ip, uint16_t port,
@@ -718,30 +728,23 @@ void DhtNode::handle_get_peers_query(const std::string &ip, uint16_t port,
     }
 
     // Build response
-    std::string resp = "d1:rd2:id20:";
-    resp += node_id_to_string(node_id_);
-    resp += "5:token";
-    resp += std::to_string(token.size()) + ":" + token;
+    DicttionaryData resp;
+    resp.add("t", new StringData(transaction_id));
+    resp.add("y", new StringData("r"));
+    auto *r = new DicttionaryData;
+    r->add("id", new StringData(node_id_to_string(node_id_)));
+    r->add("token", new StringData(token));
 
     if (!compact_peers.empty())
-    {
-        resp += "6:values";
-        resp += std::to_string(compact_peers.size() / 6) + ":";
-        resp += compact_peers;
-    }
+        r->add("values", new StringData(compact_peers));
 
     if (!compact_nodes.empty())
-    {
-        resp += "5:nodes";
-        resp += std::to_string(compact_nodes.size()) + ":";
-        resp += compact_nodes;
-    }
+        r->add("nodes", new StringData(compact_nodes));
 
-    resp += "e1:t";
-    resp += std::to_string(transaction_id.size()) + ":" + transaction_id;
-    resp += "1:y1:re";
+    resp.add("r", r);
 
-    send_udp(ip, port, reinterpret_cast<const uint8_t *>(resp.data()), resp.size());
+    std::string msg = BencodingDataConverter::encode(&resp);
+    send_udp(ip, port, reinterpret_cast<const uint8_t *>(msg.data()), msg.size());
 }
 
 void DhtNode::handle_announce_peer_query(const std::string &ip, uint16_t port,
@@ -756,10 +759,16 @@ void DhtNode::handle_announce_peer_query(const std::string &ip, uint16_t port,
     if (tit == tokens_.end() || tit->second.first != token)
     {
         // Invalid token - send error
-        std::string resp = "d1:eli201e23:Bad announce peer token1:t";
-        resp += std::to_string(transaction_id.size()) + ":" + transaction_id;
-        resp += "1:y1:ee";
-        send_udp(ip, port, reinterpret_cast<const uint8_t *>(resp.data()), resp.size());
+        DicttionaryData resp;
+        resp.add("t", new StringData(transaction_id));
+        resp.add("y", new StringData("e"));
+        auto *err_list = new Listdata;
+        err_list->push(new IntegerData(201));
+        err_list->push(new StringData("Bad announce peer token"));
+        resp.add("e", err_list);
+
+        std::string msg = BencodingDataConverter::encode(&resp);
+        send_udp(ip, port, reinterpret_cast<const uint8_t *>(msg.data()), msg.size());
         return;
     }
 
@@ -774,13 +783,15 @@ void DhtNode::handle_announce_peer_query(const std::string &ip, uint16_t port,
     peer_store_[ih_key].push_back(sp);
 
     // Send response
-    std::string resp = "d1:rd2:id20:";
-    resp += node_id_to_string(node_id_);
-    resp += "e1:t";
-    resp += std::to_string(transaction_id.size()) + ":" + transaction_id;
-    resp += "1:y1:re";
+    DicttionaryData resp;
+    resp.add("t", new StringData(transaction_id));
+    resp.add("y", new StringData("r"));
+    auto *r = new DicttionaryData;
+    r->add("id", new StringData(node_id_to_string(node_id_)));
+    resp.add("r", r);
 
-    send_udp(ip, port, reinterpret_cast<const uint8_t *>(resp.data()), resp.size());
+    std::string msg = BencodingDataConverter::encode(&resp);
+    send_udp(ip, port, reinterpret_cast<const uint8_t *>(msg.data()), msg.size());
 }
 
 // ===== Message Parsing =====
