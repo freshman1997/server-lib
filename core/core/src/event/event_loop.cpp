@@ -58,6 +58,7 @@ namespace yuan::net
     {
         assert(data_->poller_);
 
+        data_->quit_ = false;
         data_->use_coroutine_ = false;
         
         uint64_t from = base::time::get_tick_count();

@@ -77,8 +77,8 @@ namespace
         ConnectionState get_connection_state() override { return state_; }
         bool is_connected() override { return state_ == ConnectionState::connected; }
         const InetAddress & get_remote_address() override { return remote_; }
-        void write(buffer::Buffer *buff) override { if (buff) { output_buffer_.append_buffer(buff); } }
-        void write_and_flush(buffer::Buffer *buff) override { write(buff); flush(); }
+        void write(::yuan::buffer::Buffer *buff) override { if (buff) { output_buffer_.append_buffer(buff); } }
+        void write_and_flush(::yuan::buffer::Buffer *buff) override { write(buff); flush(); }
         void flush() override {}
         void abort() override { output_buffer_.clear(); }
         void close() override { state_ = ConnectionState::closed; }
@@ -153,11 +153,11 @@ int main()
 
     resp = factory->find_command("REST")->execute(session, "128");
     require(resp.code_ == FtpResponseCode::__350__, "REST should accept restart offset");
-    require(session->template get_item_value<int32_t>("restart_offset") == 128, "REST should store restart offset");
+    require(session->get_item_value<int32_t>("restart_offset") == 128, "REST should store restart offset");
 
     resp = factory->find_command("ALLO")->execute(session, "256");
     require(resp.code_ == FtpResponseCode::__200__, "ALLO should accept allocation size");
-    require(session->template get_item_value<int32_t>("upload_file_size") == 256, "ALLO should store upload size");
+    require(session->get_item_value<int32_t>("upload_file_size") == 256, "ALLO should store upload size");
 
     resp = factory->find_command("RNFR")->execute(session, "rename.txt");
     require(resp.code_ == FtpResponseCode::__350__, "RNFR should mark rename source");

@@ -11,6 +11,12 @@ namespace yuan::buffer
 {
     class Buffer;
     class LinkedBuffer;
+    class BufferedPool;
+}
+
+namespace yuan::net
+{
+    namespace buffer { using ::yuan::buffer::Buffer; using ::yuan::buffer::LinkedBuffer; using ::yuan::buffer::BufferedPool; }
 }
 
 namespace yuan::net

@@ -99,21 +99,17 @@ namespace yuan::net
     #else
         socklen_t size = sizeof(peer_addr);
     #endif
-        ::memset(&peer_addr, 0, sizeof(peer_addr));
-        instance_->get_input_buff_list()->free_all_buffers();
-        auto buff = buffer::BufferedPool::get_instance()->allocate();
-        buff->reset();
-        if (buff->writable_size() < UDP_DATA_LIMIT) {
-            buff->resize(UDP_DATA_LIMIT);
-        }
-        
-        bool read = false;
-        int bytes = 0;
-        const struct sockaddr_in *address = (struct sockaddr_in*)(&peer_addr);
+
+        int bytes;
         do {
-            if (read && buff->writable_size() == 0) {
-                buff = buffer::BufferedPool::get_instance()->allocate();
+            ::memset(&peer_addr, 0, sizeof(peer_addr));
+
+            auto buff = buffer::BufferedPool::get_instance()->allocate();
+            buff->reset();
+            if (buff->writable_size() < UDP_DATA_LIMIT) {
+                buff->resize(UDP_DATA_LIMIT);
             }
+
         #ifdef __linux__
             bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
         #elif defined _WIN32
@@ -122,31 +118,34 @@ namespace yuan::net
             bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
         #endif
             if (bytes <= 0) {
+                buffer::BufferedPool::get_instance()->free(buff);
                 if (bytes == 0) {
                     break;
                 }
 
+#ifdef _WIN32
+                int err = WSAGetLastError();
+                if (err != WSAEINTR && err != WSAEWOULDBLOCK) {
+#else
                 if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
+#endif
                     break;
                 }
-                
+
                 channel_->enable_read();
                 channel_->enable_write();
                 handler_->update_channel(channel_);
                 break;
-            } else {
-                buff->fill(bytes);
-                read = true;
-                instance_->get_input_buff_list()->append_buffer(buff);
             }
-        } while (bytes > 0 && buff->writable_size() == 0);
 
-        if (buff && buff->empty()) {
-            buffer::BufferedPool::get_instance()->free(buff);
-        }
-
-        if (read) {
+            buff->fill(bytes);
+            const struct sockaddr_in *address = (struct sockaddr_in*)(&peer_addr);
             InetAddress addr = {::inet_ntoa(address->sin_addr), ntohs(address->sin_port)};
+
+            // Dispatch this datagram to the correct peer connection immediately
+            instance_->get_input_buff_list()->free_all_buffers();
+            instance_->get_input_buff_list()->append_buffer(buff);
+
             auto res = instance_->on_recv(addr);
             if (res.first && res.second) {
                 if (!res.second->is_connected()) {
@@ -157,17 +156,10 @@ namespace yuan::net
                     udpConn->set_connection_state(ConnectionState::connected);
                 }
                 res.second->on_read_event();
-            } else {
-                if (!res.first && res.second) {
-                    res.second->abort();
-                    return;
-                }
-
-                if (res.first && res.second) {
-                    res.second->on_read_event();
-                }
+            } else if (!res.first && res.second) {
+                res.second->abort();
             }
-        }
+        } while (bytes > 0);
     } 
 
     void UdpAcceptor::on_write_event()

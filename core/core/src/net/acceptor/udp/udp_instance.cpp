@@ -59,15 +59,16 @@ namespace yuan::net
 
     void UdpInstance::send()
     {
-        try_free_connections();
-        for (auto it = conns_.begin(); it != conns_.end(); ++it) {
-            if (it->second->is_connected()) {
-                it->second->on_write_event();
+        auto it = conns_.begin();
+        while (it != conns_.end()) {
+            auto current = it;
+            ++it;  // advance before processing, as on_write_event/flush may delete the connection
+            if (current->second->is_connected()) {
+                current->second->on_write_event();
             } else {
-                it->second->flush();
+                current->second->flush();
             }
         }
-        try_free_connections();
     }
 
     void UdpInstance::on_connection_close(Connection *conn)
@@ -77,10 +78,9 @@ namespace yuan::net
         }
 
         auto it = conns_.find(conn->get_remote_address());
-        if (it == conns_.end()) {
-            return;
+        if (it != conns_.end()) {
+            conns_.erase(it);
         }
-        free_addrs_.insert(it->first);
     }
 
     timer::TimerManager * UdpInstance::get_timer_manager()
@@ -94,19 +94,6 @@ namespace yuan::net
             acceptor_->get_channel()->enable_read();
             acceptor_->get_channel()->enable_write();
             acceptor_->update_channel();
-        }
-    }
-
-    void UdpInstance::try_free_connections()
-    {
-        if (!free_addrs_.empty()) {
-            for (const auto &addr : free_addrs_) {
-                auto it = conns_.find(addr);
-                if (it != conns_.end()) {
-                    conns_.erase(it);
-                }
-            }
-            free_addrs_.clear();
         }
     }
 }

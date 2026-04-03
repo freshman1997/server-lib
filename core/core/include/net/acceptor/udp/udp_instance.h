@@ -1,11 +1,23 @@
 #ifndef __NET_UDP_INSTANCE_H___
 #define __NET_UDP_INSTANCE_H___
 #include <unordered_map>
-#include <unordered_set>
+
+
 
 #include "buffer/linked_buffer.h"
 #include "net/socket/inet_address.h"
 #include "timer/timer_manager.h"
+
+namespace yuan::buffer
+{
+    class Buffer;
+    class LinkedBuffer;
+}
+
+namespace yuan::net
+{
+    namespace buffer { using ::yuan::buffer::Buffer; using ::yuan::buffer::LinkedBuffer; }
+}
 
 namespace yuan::net
 {
@@ -52,13 +64,12 @@ namespace yuan::net
 
         void enable_rw_events();
 
+        bool is_closing() const { return is_closing_; }
+
         void set_adapter_type(UdpAdapterType type)
         {
             adapter_type_ = type;
         }
-
-    private:
-        void try_free_connections();
 
     private:
         bool is_closing_;
@@ -66,7 +77,6 @@ namespace yuan::net
         UdpAcceptor *acceptor_;
         buffer::LinkedBuffer input_buffer_;
         std::unordered_map<InetAddress, Connection *> conns_;
-        std::unordered_set<InetAddress> free_addrs_;
     };
 }
 

@@ -2,7 +2,17 @@
 #define __NET_SECUITY_SSL_HANDLER_H__
 #include "buffer/buffer.h"
 
-namespace yuan::net 
+namespace yuan::buffer
+{
+    class Buffer;
+}
+
+namespace yuan::net
+{
+    namespace buffer { using ::yuan::buffer::Buffer; }
+}
+
+namespace yuan::net
 {
     class SSLHandler
     {

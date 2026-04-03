@@ -7,8 +7,11 @@
 #include "net/acceptor/udp/udp_instance.h"
 #include "net/acceptor/udp/adapter.h"
 #include <cassert>
+#include <cerrno>
 #ifndef _WIN32
 #include <unistd.h>
+#else
+#include <winsock2.h>
 #endif
 
 #include "net/connection/udp_connection.h"
@@ -19,7 +22,8 @@ namespace yuan::net
     {
         active_ = true;
         closed_ = false;
-        state_ = ConnectionState::closed;
+        is_closing_ = false;
+        state_ = ConnectionState::connecting;
         connectionHandler_ = nullptr;
         eventHandler_ = nullptr;
         instance_ = nullptr;
@@ -48,8 +52,11 @@ namespace yuan::net
             adapter_ = nullptr;
         }
 
-        if (instance_) {
+        // Guard against use-after-free: if UdpInstance is being destroyed,
+        // skip on_connection_close to avoid accessing a destroyed object
+        if (instance_ && !instance_->is_closing()) {
             instance_->on_connection_close(this);
+            instance_ = nullptr;
         }
 
         if (connectionHandler_) {
@@ -111,6 +118,13 @@ namespace yuan::net
     void UdpConnection::flush()
     {
         assert(connectionHandler_);
+
+        // Adapter mode: flush pending encoded data first
+        if (adapter_) {
+            process_pending_output_buffer();
+            if (is_closing_) return;
+        }
+
         if (!output_buffer_.get_current_buffer()->empty()) {
             std::size_t sz = output_buffer_.get_size();
             for (int i = 0; i < sz;) {
@@ -121,12 +135,20 @@ namespace yuan::net
                     if (buff->empty()) {
                         output_buffer_.free_current_buffer();
                     } else {
+                        instance_->enable_rw_events();
                         return;
                     }
                     ++i;
-                } else if (sent < 0 && EAGAIN != errno) {
-                    abort();
-                    return;
+                } else if (sent < 0) {
+#ifdef _WIN32
+                    int err = WSAGetLastError();
+                    if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
+#else
+                    if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINPROGRESS) {
+#endif
+                        abort();
+                        return;
+                    }
                 } else {
                     instance_->enable_rw_events();
                     break;
@@ -134,7 +156,8 @@ namespace yuan::net
             }
         }
 
-        if (output_buffer_.get_current_buffer()->empty() && closed_) {
+        if (output_buffer_.get_current_buffer()->empty() && closed_ && !is_closing_) {
+            is_closing_ = true;
             // 使用延迟删除，避免在事件回调中直接删除
             if (eventHandler_) {
                 eventHandler_->queue_in_loop([this]() {
@@ -146,12 +169,13 @@ namespace yuan::net
         }
     }
 
-    // 丢弃所有未发送的数据
+    // 丢弃所有未发送的数据，立即标记销毁
     void UdpConnection::abort()
     {
-        if (closed_) {
-            return;  // 防止重复调用
+        if (is_closing_) {
+            return;  // 防止重复销毁
         }
+        is_closing_ = true;
         closed_ = true;
         state_ = ConnectionState::closed;
         // 使用延迟删除，避免在事件回调中直接删除
@@ -167,7 +191,7 @@ namespace yuan::net
     // 发送完数据后返回
     void UdpConnection::close()
     {
-        if (closed_) {
+        if (is_closing_ || closed_) {
             return;  // 防止重复调用
         }
         ConnectionState lastState = state_;
@@ -177,6 +201,7 @@ namespace yuan::net
             flush();
             return;
         }
+        is_closing_ = true;
         // 使用延迟删除，避免在事件回调中直接删除
         if (eventHandler_) {
             eventHandler_->queue_in_loop([this]() {
@@ -239,9 +264,10 @@ namespace yuan::net
 
     void UdpConnection::do_close()
     {
-        if (closed_) {
+        if (is_closing_) {
             return;
         }
+        is_closing_ = true;
         delete this;
     }
 
@@ -270,8 +296,12 @@ namespace yuan::net
 
     void UdpConnection::on_timer(timer::Timer *timer)
     {
+        if (is_closing_) {
+            return;  // 已在销毁过程中，忽略 timer 回调
+        }
+
         if (!active_) {
-            abort();  // 改用 abort() 以使用延迟删除
+            abort();
             return;
         }
 
@@ -322,7 +352,7 @@ namespace yuan::net
             auto buff = pending_output_buffer_.get_current_buffer();
             if (!proc_one_buff(buff)) {
                 connectionHandler_->on_error(this);
-                do_close();
+                abort();  // 改用 abort() 以使用延迟删除，避免 use-after-free
                 return;
             }
 

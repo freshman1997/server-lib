@@ -2,12 +2,23 @@
 #define __NET_BASE_ACCEPTOR_UDP_ADAPTER_H__
 
 #include "buffer/buffer.h"
-namespace yuan::timer 
+
+namespace yuan::buffer
+{
+    class Buffer;
+}
+
+namespace yuan::timer
 {
     class TimerManager;
 }
 
-namespace yuan::net 
+namespace yuan::net
+{
+    namespace buffer { using ::yuan::buffer::Buffer; }
+}
+
+namespace yuan::net
 {
     class Connection;
 

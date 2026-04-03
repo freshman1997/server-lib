@@ -154,7 +154,7 @@ int main()
     signal(SIGPIPE, sigpipe_handler);
 #else
     WSADATA wsa;
-    if (const int iResult = WSAStartup(MAKEWORD(2, 2), &wsa);iResult != NO_ERROR) {
+    if (const int iResult = WSAStartup(MAKEWORD(2, 2), &wsa);iResult != 0) {
         wprintf(L"WSAStartup failed with error: %d\n", iResult);
         return 1;
     }

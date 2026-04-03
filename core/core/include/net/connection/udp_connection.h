@@ -77,6 +77,7 @@ namespace yuan::net
     private:
         bool active_;
         bool closed_;
+        bool is_closing_;
         ConnectionState state_;
         int idle_cnt_;
         InetAddress address_;
