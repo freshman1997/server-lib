@@ -1,5 +1,7 @@
 #ifndef __EVENT_LOOH_H__
 #define __EVENT_LOOH_H__
+#include <coroutine>
+#include <functional>
 #include <memory>
 
 #include "net/handler/event_handler.h"
@@ -17,6 +19,12 @@ namespace yuan::net
     class Connection;
     class Channel;
 
+    enum class EventLoopExitReason
+    {
+        quit_requested,
+        coroutine_resume_requested,
+    };
+
     class EventLoop : public EventHandler
     {
     public:
@@ -24,19 +32,21 @@ namespace yuan::net
         ~EventLoop();
 
     public:
-        void loop();
+        EventLoopExitReason loop();
 
-        virtual void on_new_connection(Connection *conn);
+        virtual void on_new_connection(Connection *conn) override;
 
-        virtual void close_channel(Channel *channel);
+        virtual void close_channel(Channel *channel) override;
 
-        virtual void update_channel(Channel *channel);
+        virtual void update_channel(Channel *channel) override;
 
-        virtual void quit();
+        virtual void quit() override;
 
-        void set_use_coroutine(bool use);
+        void request_coroutine_resume();
 
-        void queue_in_loop(std::function<void()> cb);
+        void queue_in_loop(std::function<void()> cb) override;
+
+        void post_coroutine(std::coroutine_handle<> handle) noexcept;
 
     public:
         void wakeup();

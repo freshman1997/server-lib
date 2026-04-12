@@ -1,179 +1,216 @@
 #ifndef __NET_HTTP_CONTENT_TYPES_H__
 #define __NET_HTTP_CONTENT_TYPES_H__
-#include <fstream>
-#include <iostream>
+
+#include <filesystem>
 #include <memory>
 #include <string>
-#include <type_traits>
 #include <unordered_map>
-#include <vector>
+#include <utility>
 
 #include "nlohmann/json.hpp"
 #include "content_type.h"
 
 namespace yuan::net::http 
 {
-    struct ContentData : std::enable_shared_from_this<ContentData>
+    // ============================================================
+    // 内容基类（轻量级）
+    // ============================================================
+    struct ContentData
     {
-        virtual ~ContentData() {}
-
-        template<typename T>
-        std::shared_ptr<T> as()
-        {
-            static_assert(std::is_base_of<ContentData, T>::value, "should be inherited from ContentData");
-            return std::dynamic_pointer_cast<T>(shared_from_this());
-        }
+        virtual ~ContentData() = default;
     };
 
-    struct TextContent : public ContentData
+    // ============================================================
+    // 纯文本内容
+    // ============================================================
+    struct TextContent : ContentData
     {
-        const char *begin   = nullptr;
-        const char *end     = nullptr;
-
-        std::string get_content() const
-        {
-            if (begin && end) {
-                return std::string(begin, end);
-            } else {
-            }
-            return {};
-        }
+        std::string data;  // 改为 string 存储，避免悬空指针
     };
 
-    struct JsonContent : public ContentData
+    // ============================================================
+    // JSON 内容
+    // ============================================================
+    struct JsonContent : ContentData
     {
-        nlohmann::json jval;
+        nlohmann::json value;
     };
 
-    enum class FormDataType
+    // ============================================================
+    // 表单数据类型枚举
+    // ============================================================
+    enum class FormDataType { string_, file_ };
+
+    // ============================================================
+    // 表单项基类
+    // ============================================================
+    struct FormDataItem
     {
-        string_,
-        stream_,
-        file_,
+        FormDataType type;
+        
+        explicit FormDataItem(FormDataType t) : type(t) {}
+        virtual ~FormDataItem() = default;
+
+        // 禁止拷贝/移动（通过指针管理）
+        FormDataItem(const FormDataItem&) = delete;
+        FormDataItem& operator=(const FormDataItem&) = delete;
     };
 
-    struct FormDataItem : public std::enable_shared_from_this<FormDataItem>
-    {
-        FormDataType item_type_;
-        virtual ~FormDataItem() {}
-    };
-
+    // ============================================================
+    // 字符串表单项（普通 form 字段）
+    // ============================================================
     struct FormDataStringItem : FormDataItem
     {
-        std::string value_;
-        FormDataStringItem(const std::string &val) : value_(std::move(val)) {
-            item_type_ = FormDataType::string_;
-        }
+        std::string value;
+
+        explicit FormDataStringItem(std::string val)
+            : FormDataItem(FormDataType::string_), value(std::move(val)) {}
     };
 
+    // ============================================================
+    // 文件表单项（合并原 FileItem + StreamItem）
+    //
+    // 当 config::form_data_upload_save=true 时:
+    //   数据保存到 tmp_file，begin/end 为空
+    // 当 config::form_data_upload_save=false 时:
+    //   数据保留在内存(buffer)中，begin/end 指向原始数据
+    // ============================================================
     struct FormDataFileItem : FormDataItem
     {
-        std::string origin_name_;
-        std::string tmp_file_name_;
-        std::unordered_map<std::string, std::string> content_type_;
-        FormDataFileItem(const std::string &origin, const std::string &tmpName, const std::unordered_map<std::string, std::string>&ctype) 
-            : origin_name_(std::move(origin)), tmp_file_name_(std::move(tmpName)),content_type_(std::move(ctype))  {
-            item_type_ = FormDataType::file_;
+        std::string origin_name;       // 原始文件名
+        std::string content_type;      // MIME type (如 "image/png")
+        std::string tmp_file;          // 临时文件路径（如果持久化到磁盘）
+
+        // 内存模式下的数据指针（指向原始 body buffer）
+        const char *data_begin = nullptr;
+        const char *data_end   = nullptr;
+
+        // 判断是否为内存模式（未落盘）
+        bool is_in_memory() const noexcept { return data_begin != nullptr; }
+
+        // 获取数据大小
+        size_t size() const noexcept 
+        {
+            if (is_in_memory() && data_end >= data_begin) 
+                return static_cast<size_t>(data_end - data_begin);
+            return 0;  // 文件模式用 filesystem 查询
         }
 
-        ~FormDataFileItem() {
-            if (!tmp_file_name_.empty()) {
-                std::remove(tmp_file_name_.c_str());
-                std::cout << "removed tmp file: " << tmp_file_name_ << std::endl;
+        FormDataFileItem(std::string origin, std::string ctype,
+                          const char *begin = nullptr, const char *end = nullptr,
+                          std::string tmpPath = {})
+            : FormDataItem(FormDataType::file_)
+            , origin_name(std::move(origin))
+            , content_type(std::move(ctype))
+            , tmp_file(std::move(tmpPath))
+            , data_begin(begin)
+            , data_end(end)
+        {}
+
+        // 析构时清理临时文件
+        ~FormDataFileItem() override
+        {
+            if (!tmp_file.empty()) {
+                std::error_code ec;
+                std::filesystem::remove(tmp_file, ec);
+                // 静默失败即可
             }
         }
     };
 
-    struct FormDataStreamItem : FormDataItem
+    // ============================================================
+    // Multipart Form Data 容器
+    // name -> FormDataItem
+    // ============================================================
+    struct FormDataContent : ContentData
     {
-        std::string origin_name_;
-        std::pair<std::string, std::unordered_map<std::string, std::string>> content_type_;
-        const char *begin_ = nullptr;
-        const char *end_ = nullptr;
+        // 按 name 存储所有字段
+        std::unordered_map<std::string, std::shared_ptr<FormDataItem>> fields;
 
-        explicit FormDataStreamItem(const std::string &name, 
-            const std::pair<std::string, std::unordered_map<std::string, std::string>> &type, 
-            const char *begin, const char *end) 
-            : origin_name_(std::move(name)), content_type_(std::move(type)), begin_(begin), end_(end) {
-
-            item_type_ = FormDataType::stream_;
+        // 便捷访问：获取字符串字段值（不存在返回空串）
+        std::string get_string(const std::string &name) const
+        {
+            auto it = fields.find(name);
+            if (it != fields.end() && it->second->type == FormDataType::string_)
+                return static_cast<FormDataStringItem*>(it->second.get())->value;
+            return {};
         }
 
-        std::size_t get_content_length()
+        // 便捷访问：获取文件项
+        FormDataFileItem *get_file(const std::string &name) const
         {
-            if (begin_ && end_) {
-                return end_ - begin_;
-            }
-
-            return 0;
-        }
-    };
-
-    struct FormDataContent : public ContentData
-    {
-        std::string type;
-        std::unordered_map<std::string, std::shared_ptr<FormDataItem>> properties;
-
-        template<typename T>
-        std::shared_ptr<T> get_item(const std::string &name) 
-        {
-            static_assert(std::is_base_of<FormDataItem, T>::value, "should be inherited from FormDataItem");
-
-            auto it = properties.find(name);
-            if (it != properties.end()) {
-                return std::dynamic_pointer_cast<T>(it->second);
-            }
-
+            auto it = fields.find(name);
+            if (it != fields.end() && it->second->type == FormDataType::file_)
+                return static_cast<FormDataFileItem*>(it->second.get());
             return nullptr;
         }
-    };
 
-    struct RangeDataItem
-    {
-        struct Chunk
+        // 便捷访问：是否有某字段
+        bool has(const std::string &name) const
         {
-            TextContent content;
-            uint32_t from;
-            uint32_t to;
-            uint32_t length;
-        } chunk;
-
-        std::pair<std::string, std::unordered_map<std::string, std::string>> content_type_;
+            return fields.find(name) != fields.end();
+        }
     };
 
-    struct RangeDataContent : public ContentData
+    // ============================================================
+    // Range (用于 byte-range 请求，保持兼容性但简化)
+    // ============================================================
+    struct RangeChunk
     {
-        std::vector<std::shared_ptr<RangeDataItem>> contents;
+        std::string data;             // 直接存数据，避免悬空指针
+        uint32_t from = 0;
+        uint32_t to   = 0;
+        uint32_t length = 0;
     };
 
+    struct RangeDataContent : ContentData
+    {
+        std::vector<RangeChunk> chunks;
+    };
+
+    // ============================================================
+    // Chunked 传输编码解析后的元数据
+    // ============================================================
+    struct ChunkedContent : ContentData
+    {
+        std::string tmp_file;          // 落盘文件路径（空表示纯内存）
+        std::size_t total_bytes = 0;   // 解析完成后的总字节数
+        std::string trailer_checksum;  // 可选的 trailer checksum
+    };
+
+    // ============================================================
+    // 统一内容包装器
+    // ============================================================
     struct Content
     {
-        ContentType type_ = ContentType::not_support;
-        std::shared_ptr<ContentData> content_data_ = nullptr;
+        ContentType type = ContentType::not_support;
+        std::unique_ptr<ContentData> data;  // unique_ptr 替代裸指针，RAII管理
 
-        struct FileInfo
+        Content() = default;
+        Content(ContentType t, ContentData *d) : type(t), data(d) {}
+        
+        // 移动语义
+        Content(Content&&) noexcept = default;
+        Content& operator=(Content&&) noexcept = default;
+
+        // 禁止拷贝
+        Content(const Content&) = delete;
+        Content& operator=(const Content&) = delete;
+
+        // 类型安全的获取
+        template<typename T>
+        T *as()
         {
-            std::string tmp_file_name_;
-            std::size_t file_size_ = 0;
-
-            ~FileInfo()
-            {
-                if (!tmp_file_name_.empty()) {
-                    std::remove(tmp_file_name_.c_str());
-                    std::cout << "removed tmp file: " << tmp_file_name_ << std::endl;
-                }
-            }
-
-        } file_info_;
-
-        Content(ContentType type, ContentData *data) : type_(type), content_data_(data) {}
+            return dynamic_cast<T*>(data.get());
+        }
 
         template<typename T>
-        std::shared_ptr<T> get_content_data()
+        const T *as() const
         {
-            static_assert(std::is_base_of<ContentData, T>::value, "should be inherited from ContentData");
-            return std::dynamic_pointer_cast<T>(content_data_);
+            return dynamic_cast<const T*>(data.get());
         }
+
+        bool is_valid() const noexcept { return data != nullptr && type != ContentType::not_support; }
     };
 }
 

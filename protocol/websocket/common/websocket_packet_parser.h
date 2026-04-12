@@ -1,6 +1,6 @@
 #ifndef __NET_WEBSOCKET_COMMON_PACKET_PARSER_H__
 #define __NET_WEBSOCKET_COMMON_PACKET_PARSER_H__
-#include "buffer/buffer.h"
+#include "buffer/byte_buffer.h"
 #include "websocket_protocol.h"
 
 namespace yuan::net::websocket 
@@ -15,29 +15,27 @@ namespace yuan::net::websocket
 
         bool unpack(WebSocketConnection *conn);
 
-        bool pack(WebSocketConnection *conn, buffer::Buffer *buff, uint8_t type);
+        bool pack(WebSocketConnection *conn, const ::yuan::buffer::ByteBuffer &buff, uint8_t type);
 
         void update_mask();
 
         void use_mask(bool use);
         
     private:
-        int read_chunk(ProtoChunk *chunk, buffer::Buffer *buff);
+        int read_chunk(ProtoChunk *chunk, ::yuan::buffer::ByteBuffer &buff);
 
-        void apply_mask(buffer::Buffer *buff, uint32_t buffSize, uint8_t *mask, uint32_t len);
+        void apply_mask(const ::yuan::buffer::ByteBuffer &data, ::yuan::buffer::ByteBuffer &buff, uint32_t buffSize);
 
-        void apply_mask(buffer::Buffer *data, buffer::Buffer *buff, uint32_t buffSize);
+        void apply_mask(::yuan::buffer::ByteBuffer &buff, uint32_t buffSize, uint8_t *mask, uint32_t len);
 
-        bool pack_header(buffer::Buffer *buff, uint8_t type, uint32_t buffSize, bool isEnd, bool isContinueFrame);
+        bool pack_header(::yuan::buffer::ByteBuffer &buff, uint8_t type, uint32_t buffSize, bool isEnd, bool isContinueFrame);
 
-        bool pack_frame(buffer::Buffer *data, buffer::Buffer *buff, uint32_t size);
-
-        buffer::Buffer * get_frame_buffer();
+        bool pack_frame(const ::yuan::buffer::ByteBuffer &data, ::yuan::buffer::ByteBuffer &buff, std::size_t offset, uint32_t size);
 
     private:
         bool use_mask_;
         uint8_t mask_[7];
-        buffer::Buffer *frame_buffer_;
+        ::yuan::buffer::ByteBuffer frame_buffer_;
     };
 }
 

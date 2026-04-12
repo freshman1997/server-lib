@@ -1,8 +1,8 @@
-#include "buffer/pool.h"
 #include "net/acceptor/udp/udp_instance.h"
+#include "logger.h"
 #include "net/channel/channel.h"
 #include "net/connection/connection.h"
-#include "net/connection/udp_connection.h"
+#include "net/connection/datagram_transport.h"
 #include "net/socket/inet_address.h"
 #include <cstring>
 #include <iostream>
@@ -28,10 +28,8 @@ namespace yuan::net
 {
     UdpAcceptor::UdpAcceptor(Socket *socket, timer::TimerManager *timerManager) : sock_(socket), timer_manager_(timerManager)
     {
-        channel_ = nullptr;
         handler_ = nullptr;
         conn_handler_ = nullptr;
-        instance_ = nullptr;
     }
 
     UdpAcceptor::~UdpAcceptor()
@@ -39,15 +37,15 @@ namespace yuan::net
         if (channel_) {
             channel_->disable_all();
             if (handler_) {
-                handler_->close_channel(channel_);
+                handler_->close_channel(channel_.get());
             }
             channel_->set_handler(nullptr);
-            channel_ = nullptr;
         }
 
-        delete sock_;
-        delete instance_;
-        std::cout << "udp acceptor close\n";
+        channel_.reset();
+        instance_.reset();
+        sock_.reset();
+        LOG_INFO("udp acceptor close");
     }
 
     bool UdpAcceptor::listen()
@@ -60,9 +58,9 @@ namespace yuan::net
             return false;
         }
 
-        instance_ = new UdpInstance(this);
+        instance_ = std::make_unique<UdpInstance>(this);
         //instance_->set_adapter_type(adapterType);
-        channel_ = new Channel;
+        channel_ = std::make_unique<Channel>();
         channel_->enable_read();
         channel_->enable_write();
         channel_->set_handler(this);
@@ -73,19 +71,21 @@ namespace yuan::net
 
     void UdpAcceptor::close()
     {
-        delete this;
-    }
+        if (handler_) {
+            handler_->queue_in_loop([this]() {
+                delete this;
+            });
+            return;
+        }
 
-    Channel * UdpAcceptor::get_channel()
-    {
-        return channel_;
+        delete this;
     }
 
     void UdpAcceptor::update_channel()
     {
         assert(channel_);
         if (handler_) {
-            handler_->update_channel(channel_);
+            handler_->update_channel(channel_.get());
         }
     }
 
@@ -103,22 +103,22 @@ namespace yuan::net
         int bytes;
         do {
             ::memset(&peer_addr, 0, sizeof(peer_addr));
+        #ifdef _WIN32
+            size = sizeof(peer_addr);
+        #else
+            size = sizeof(peer_addr);
+        #endif
 
-            auto buff = buffer::BufferedPool::get_instance()->allocate();
-            buff->reset();
-            if (buff->writable_size() < UDP_DATA_LIMIT) {
-                buff->resize(UDP_DATA_LIMIT);
-            }
+            ::yuan::buffer::ByteBuffer packet(UDP_DATA_LIMIT);
 
         #ifdef __linux__
-            bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
+            bytes = ::recvfrom(sock_->get_fd(), packet.write_ptr(), static_cast<int>(packet.writable_bytes()), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
         #elif defined _WIN32
-            bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), 0, (struct sockaddr *)&peer_addr, &size);
+            bytes = ::recvfrom(sock_->get_fd(), packet.write_ptr(), static_cast<int>(packet.writable_bytes()), 0, (struct sockaddr *)&peer_addr, &size);
         #elif defined __APPLE__
-            bytes = ::recvfrom(sock_->get_fd(), buff->buffer_begin(), buff->writable_size(), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
+            bytes = ::recvfrom(sock_->get_fd(), packet.write_ptr(), static_cast<int>(packet.writable_bytes()), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
         #endif
             if (bytes <= 0) {
-                buffer::BufferedPool::get_instance()->free(buff);
                 if (bytes == 0) {
                     break;
                 }
@@ -134,26 +134,29 @@ namespace yuan::net
 
                 channel_->enable_read();
                 channel_->enable_write();
-                handler_->update_channel(channel_);
+                handler_->update_channel(channel_.get());
                 break;
             }
 
-            buff->fill(bytes);
+            packet.commit(static_cast<std::size_t>(bytes));
             const struct sockaddr_in *address = (struct sockaddr_in*)(&peer_addr);
             InetAddress addr = {::inet_ntoa(address->sin_addr), ntohs(address->sin_port)};
 
             // Dispatch this datagram to the correct peer connection immediately
-            instance_->get_input_buff_list()->free_all_buffers();
-            instance_->get_input_buff_list()->append_buffer(buff);
+            instance_->set_input_packet(std::move(packet));
 
             auto res = instance_->on_recv(addr);
             if (res.first && res.second) {
                 if (!res.second->is_connected()) {
-                    UdpConnection *udpConn = static_cast<UdpConnection *>(res.second);
-                    udpConn->set_connection_handler(conn_handler_);
-                    udpConn->set_event_handler(handler_);
-                    handler_->on_new_connection(udpConn);
-                    udpConn->set_connection_state(ConnectionState::connected);
+                    auto *datagram = dynamic_cast<DatagramTransport *>(res.second);
+                    if (!datagram) {
+                        res.second->abort();
+                        break;
+                    }
+                    res.second->set_connection_handler(conn_handler_);
+                    res.second->set_event_handler(handler_);
+                    handler_->on_new_connection(res.second);
+                    datagram->set_datagram_state(ConnectionState::connected);
                 }
                 res.second->on_read_event();
             } else if (!res.first && res.second) {
@@ -167,31 +170,39 @@ namespace yuan::net
         instance_->send();
     }
 
-    int UdpAcceptor::send_to(Connection *conn, buffer::Buffer *buff)
+    int UdpAcceptor::send_to(Connection *conn, const ::yuan::buffer::ByteBuffer &buff)
     {
-        if (buff->readable_bytes() == 0) {
+        if (buff.readable_bytes() == 0) {
             return 0;
         }
 
         return send_to(conn->get_remote_address(), buff);
     }
 
-    int UdpAcceptor::send_to(const InetAddress &address, buffer::Buffer *buff)
+    int UdpAcceptor::send_to(const InetAddress &address, const ::yuan::buffer::ByteBuffer &buff)
     {
         sockaddr_in addr;
         memset(&addr, 0, sizeof(sockaddr));
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = address.get_net_ip();
         addr.sin_port = htons(address.get_port());
-        return ::sendto(sock_->get_fd(), buff->peek(), buff->readable_bytes() > UDP_DATA_LIMIT ? UDP_DATA_LIMIT : buff->readable_bytes(), 
+        const auto send_size = (std::min)(buff.readable_bytes(), static_cast<std::size_t>(UDP_DATA_LIMIT));
+        return ::sendto(sock_->get_fd(), buff.read_ptr(), static_cast<int>(send_size),
             0, (struct sockaddr *)&addr, sizeof(addr));
+    }
+
+    int UdpAcceptor::send_datagram(const InetAddress &address, const ::yuan::buffer::ByteBuffer &buff)
+    {
+        return send_to(address, buff);
     }
 
     void UdpAcceptor::set_event_handler(EventHandler *handler)
     {
         handler_ = handler;
         assert(channel_);
-        handler_->update_channel(channel_);
+        if (handler_) {
+            handler_->update_channel(channel_.get());
+        }
     }
 
     void UdpAcceptor::set_connection_handler(ConnectionHandler *connHandler)
@@ -199,3 +210,4 @@ namespace yuan::net
         conn_handler_ = connHandler;
     }
 }
+

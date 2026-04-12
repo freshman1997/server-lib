@@ -12,17 +12,10 @@ namespace yuan::net::http
 
     bool TextContentParser::parse(HttpPacket *packet)
     {
-        auto preContent = packet->get_body_content();
-        if (preContent && !preContent->file_info_.tmp_file_name_.empty()) {
-            preContent->type_ = packet->get_content_type();
-            return true;
-        }
-
-        TextContent *tc = new TextContent;
-        Content *content = new Content(packet->get_content_type(), tc);
-        tc->begin = packet->body_begin();
-        tc->end = packet->body_end();
-        packet->set_body_content(content);
+        // Text parser: 将 body 数据作为纯文本存储
+        auto tc = std::make_unique<TextContent>();
+        tc->data.assign(packet->body_begin(), packet->body_end());
+        packet->set_body_content(new Content(packet->get_content_type(), tc.release()));
         
         return true;
     }

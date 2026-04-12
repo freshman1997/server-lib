@@ -1,31 +1,43 @@
 #include "bit_torrent_client.h"
+#include "runtime/download_runtime_coordinator.h"
+#include "storage/piece_storage.h"
 #include "utils.h"
 #include "peer_wire/peer_connection.h"
 #include "net/poller/select_poller.h"
 #include "timer/wheel_timer_manager.h"
-#include "timer/timer.h"
-#include "timer/timer_task.h"
 #include <cstdio>
 #include <cstring>
 
 namespace yuan::net::bit_torrent
 {
 
-// TimerTask wrapper for lambda-based callbacks
-class FunctionTimerTask : public timer::TimerTask
+namespace
 {
-public:
-    explicit FunctionTimerTask(std::function<void(timer::Timer *)> fn) : fn_(std::move(fn)) {}
-    void on_timer(timer::Timer *timer) override { fn_(timer); }
-private:
-    std::function<void(timer::Timer *)> fn_;
-};
+
+size_t compute_max_active_pieces(const DownloadRuntimeCoordinator *runtime_coordinator)
+{
+    if (!runtime_coordinator)
+    {
+        return 2;
+    }
+
+    const auto active_peers = runtime_coordinator->get_active_peers().size();
+    if (active_peers <= 1)
+    {
+        return 2;
+    }
+
+    return std::min<size_t>(8, active_peers);
+}
+
+} // namespace
 
 BitTorrentClient::BitTorrentClient()
     : ev_loop_(nullptr),
       timer_manager_(nullptr),
       poller_(nullptr),
-      announce_timer_(nullptr),
+      piece_storage_(std::make_unique<PieceStorage>()),
+      runtime_coordinator_(std::make_unique<DownloadRuntimeCoordinator>()),
       running_(false)
 {
 }
@@ -35,15 +47,18 @@ BitTorrentClient::~BitTorrentClient()
     stop();
 }
 
+NatManager *BitTorrentClient::get_nat_manager()
+{
+    return runtime_coordinator_ ? runtime_coordinator_->get_nat_manager() : nullptr;
+}
+
 bool BitTorrentClient::load_torrent(const std::string &file_path)
 {
     meta_ = TorrentMeta::parse_file(file_path);
     if (meta_.info_hash_.empty()) return false;
 
-    pieces_have_.assign(meta_.info.piece_count(), false);
-    pieces_downloading_.assign(meta_.info.piece_count(), false);
-    stats_.total_bytes_ = meta_.info.total_length_;
-    stats_.total_pieces_ = meta_.info.piece_count();
+    piece_state_.reset(meta_.info.piece_count(), meta_.info.total_length_, meta_.info.piece_length_);
+    stats_tracker_.reset(meta_.info.total_length_, meta_.info.piece_count());
     return true;
 }
 
@@ -52,11 +67,144 @@ bool BitTorrentClient::load_torrent_data(const std::string &torrent_data)
     meta_ = TorrentMeta::parse(torrent_data);
     if (meta_.info_hash_.empty()) return false;
 
-    pieces_have_.assign(meta_.info.piece_count(), false);
-    pieces_downloading_.assign(meta_.info.piece_count(), false);
-    stats_.total_bytes_ = meta_.info.total_length_;
-    stats_.total_pieces_ = meta_.info.piece_count();
+    piece_state_.reset(meta_.info.piece_count(), meta_.info.total_length_, meta_.info.piece_length_);
+    stats_tracker_.reset(meta_.info.total_length_, meta_.info.piece_count());
     return true;
+}
+
+bool BitTorrentClient::init_runtime()
+{
+    if (ev_loop_ && timer_manager_) {
+        own_loop_ = false;
+        return true;
+    }
+
+    if (ev_loop_ || timer_manager_ || poller_) {
+        return false;
+    }
+
+    own_loop_ = true;
+    poller_ = new net::SelectPoller();
+    timer_manager_ = new timer::WheelTimerManager();
+    ev_loop_ = new net::EventLoop(poller_, timer_manager_);
+    return ev_loop_ && timer_manager_ && poller_;
+}
+
+bool BitTorrentClient::should_block_on_start() const
+{
+    return own_loop_ && ev_loop_ != nullptr;
+}
+
+void BitTorrentClient::preload_existing_pieces()
+{
+    if (!piece_storage_)
+    {
+        return;
+    }
+
+    auto mark_preloaded_piece = [this](uint32_t piece_index)
+    {
+        if (!piece_state_.mark_piece_completed(piece_index))
+        {
+            return;
+        }
+
+        const int64_t piece_offset = static_cast<int64_t>(piece_index) * meta_.info.piece_length_;
+        const auto piece_size = static_cast<uint32_t>(
+            std::min<int64_t>(meta_.info.piece_length_, meta_.info.total_length_ - piece_offset));
+        stats_tracker_.add_downloaded_bytes(piece_size);
+        stats_tracker_.set_piece_completed(piece_index);
+    };
+
+    for (const auto piece_index : piece_storage_->restore_verified_partial_pieces())
+    {
+        mark_preloaded_piece(piece_index);
+    }
+
+    for (const auto piece_index : piece_storage_->scan_committed_pieces())
+    {
+        mark_preloaded_piece(piece_index);
+    }
+}
+
+void BitTorrentClient::start_download_runtime()
+{
+    if (!runtime_coordinator_)
+    {
+        runtime_coordinator_ = std::make_unique<DownloadRuntimeCoordinator>();
+    }
+
+    DownloadRuntimeConfig runtime_config;
+    runtime_config.ev_loop_ = ev_loop_;
+    runtime_config.timer_manager_ = timer_manager_;
+    runtime_config.meta_ = &meta_;
+    runtime_config.peer_id_ = &peer_id_;
+    runtime_config.pieces_have_ = &piece_state_.pieces_have();
+    runtime_config.listen_port_ = &listen_port_;
+    runtime_config.max_peers_ = max_peers_;
+    runtime_config.nat_config_ = nat_config_;
+    runtime_config.stats_tracker_ = &stats_tracker_;
+    runtime_config.piece_data_handler_ = [this](PeerConnection *peer, uint32_t piece_index, uint32_t offset,
+                                                const uint8_t *data, uint32_t length)
+    {
+        on_piece_data(peer, piece_index, offset, data, length);
+    };
+    runtime_config.piece_request_handler_ = [this](uint32_t piece_index, uint32_t offset,
+                                                   uint32_t length, std::vector<uint8_t> &out)
+    {
+        return on_piece_request(piece_index, offset, length, out);
+    };
+    runtime_config.piece_served_handler_ = [this](uint32_t piece_index, uint32_t offset, uint32_t length)
+    {
+        on_piece_served(piece_index, offset, length);
+    };
+    runtime_config.peer_ready_handler_ = [this](PeerConnection *peer)
+    {
+        on_peer_connected(peer);
+    };
+    runtime_config.peer_lost_handler_ = [this](const std::vector<PieceBlockRequest> &requests)
+    {
+        on_peer_requests_lost(requests);
+    };
+    runtime_coordinator_->configure(std::move(runtime_config));
+    runtime_coordinator_->start(!own_loop_);
+}
+
+void BitTorrentClient::stop_download_runtime()
+{
+    if (runtime_coordinator_)
+    {
+        runtime_coordinator_->stop();
+    }
+    if (piece_storage_) {
+        piece_storage_->flush_all();
+        piece_storage_->close_all();
+    }
+}
+
+void BitTorrentClient::cleanup_runtime()
+{
+    if (!own_loop_) {
+        return;
+    }
+
+    if (ev_loop_) {
+        ev_loop_->quit();
+        delete ev_loop_;
+        ev_loop_ = nullptr;
+    }
+
+    if (timer_manager_) {
+        delete timer_manager_;
+        timer_manager_ = nullptr;
+    }
+
+    if (poller_) {
+        delete poller_;
+        poller_ = nullptr;
+    }
+
+    own_loop_ = false;
 }
 
 bool BitTorrentClient::start()
@@ -66,60 +214,21 @@ bool BitTorrentClient::start()
     peer_id_ = generate_peer_id();
     running_ = true;
 
-    // Create event loop if not provided
-    if (!ev_loop_)
-    {
-        own_loop_ = true;
-        poller_ = new net::SelectPoller();
-        timer_manager_ = new timer::WheelTimerManager();
-        ev_loop_ = new net::EventLoop(poller_, timer_manager_);
+    if (!init_runtime()) {
+        running_ = false;
+        return false;
     }
 
-    // Create temp file prefix
     if (save_path_.empty())
-        save_path_ = "./";
-    temp_file_prefix_ = save_path_ + "/" + meta_.info.name_ + ".partial.";
+        save_path_ = ".";
+    if (piece_storage_) {
+        piece_storage_->configure(&meta_, save_path_);
+        preload_existing_pieces();
+    }
 
-    // Start announce to trackers via event loop
-    ev_loop_->queue_in_loop([this]()
-    {
-        // Start NAT traversal (listening, UPnP, uTP, DHT, PEX)
-        nat_manager_ = std::make_unique<NatManager>();
-        nat_config_.listen_port = listen_port_;
-        nat_manager_->start(nat_config_, meta_, peer_id_, pieces_have_, ev_loop_, timer_manager_);
+    start_download_runtime();
 
-        // Set NAT callbacks
-        nat_manager_->set_peer_callback([this](PeerConnection *peer)
-        {
-            on_inbound_peer(peer);
-        });
-
-        nat_manager_->set_dht_peer_callback([this](const std::vector<PeerAddress> &peers)
-        {
-            connect_peers(peers);
-        });
-
-        // Use the effective external port for tracker announces
-        if (nat_manager_->is_upnp_mapped())
-        {
-            listen_port_ = nat_manager_->get_external_port();
-        }
-        else if (nat_manager_->is_listening())
-        {
-            listen_port_ = nat_manager_->get_external_port();
-        }
-
-        announce_to_trackers();
-    });
-
-    // Periodic stats update
-    timer_manager_->interval(5000, 5000, new FunctionTimerTask([this](timer::Timer *)
-    {
-        update_stats();
-    }));
-
-    if (own_loop_)
-    {
+    if (should_block_on_start()) {
         ev_loop_->loop();
     }
 
@@ -130,146 +239,13 @@ void BitTorrentClient::stop()
 {
     if (!running_.exchange(false)) return;
 
-    // Stop NAT manager before disconnecting peers
-    if (nat_manager_)
-    {
-        nat_manager_->stop();
-        nat_manager_.reset();
-    }
+    stop_download_runtime();
 
-    disconnect_all_peers();
-    flush_all();
-
-    if (announce_timer_)
-    {
-        announce_timer_->cancel();
-        announce_timer_ = nullptr;
-    }
-
-    // Close piece files
-    for (auto &pair : piece_files_)
-    {
-        if (pair.second) fclose(pair.second);
-    }
-    piece_files_.clear();
-
-    if (own_loop_ && ev_loop_)
-    {
+    if (own_loop_ && ev_loop_) {
         ev_loop_->quit();
-        delete ev_loop_;
-        ev_loop_ = nullptr;
-        delete timer_manager_;
-        timer_manager_ = nullptr;
-        delete poller_;
-        poller_ = nullptr;
-        own_loop_ = false;
-    }
-}
-
-void BitTorrentClient::announce_to_trackers()
-{
-    if (!running_.load()) return;
-
-    for (size_t tier = 0; tier < meta_.announce_list_.size(); tier++)
-    {
-        for (size_t i = 0; i < meta_.announce_list_[tier].size(); i++)
-        {
-            const auto &url = meta_.announce_list_[tier][i];
-            int64_t left = meta_.info.total_length_ - stats_.downloaded_bytes_;
-
-            if (url.substr(0, 4) == "http")
-            {
-                // HTTP/HTTPS tracker
-                TrackerResponse resp;
-                http_tracker_.announce(url, meta_, listen_port_,
-                    stats_.uploaded_bytes_, stats_.downloaded_bytes_, left, &resp);
-
-                if (!resp.peers_.empty())
-                {
-                    connect_peers(resp.peers_);
-                    if (announce_interval_ == 0 && resp.interval_ > 0)
-                        announce_interval_ = resp.interval_;
-                }
-
-                // Only try first tracker in each tier that works
-                break;
-            }
-            else if (url.substr(0, 3) == "udp")
-            {
-                // UDP tracker - parse host:port from udp://host:port
-                std::string host_port = url.substr(6); // remove "udp://"
-                auto colon = host_port.find(':');
-                if (colon != std::string::npos)
-                {
-                    std::string host = host_port.substr(0, colon);
-                    uint16_t port = static_cast<uint16_t>(std::atoi(host_port.substr(colon + 1).c_str()));
-
-                    UdpTracker udp_tracker;
-                    UdpTrackerResponse resp;
-                    udp_tracker.announce(host, port, meta_, listen_port_,
-                        stats_.uploaded_bytes_, stats_.downloaded_bytes_, left, &resp);
-
-                    if (!resp.peers_.empty())
-                    {
-                        connect_peers(resp.peers_);
-                        if (announce_interval_ == 0 && resp.interval_ > 0)
-                            announce_interval_ = resp.interval_;
-                    }
-                }
-                break;
-            }
-        }
     }
 
-    // Schedule next announce
-    if (announce_interval_ > 0 && running_.load())
-    {
-        timer_manager_->timeout(static_cast<uint32_t>(announce_interval_ * 1000),
-            new FunctionTimerTask([this](timer::Timer *)
-        {
-            announce_to_trackers();
-        }));
-    }
-}
-
-void BitTorrentClient::connect_peers(const std::vector<PeerAddress> &peer_list)
-{
-    if (!running_.load()) return;
-
-    std::lock_guard<std::mutex> lock(peers_mutex_);
-
-    for (const auto &addr : peer_list)
-    {
-        if (static_cast<int32_t>(peers_.size()) >= max_peers_) break;
-
-        std::string key = addr.ip_ + ":" + std::to_string(addr.port_);
-        if (peers_.count(key)) continue;
-
-        // Skip self
-        if (addr.ip_ == "0.0.0.0" || addr.ip_ == "127.0.0.1") continue;
-
-        auto *peer = new PeerConnection();
-        peer->set_piece_data_handler([this](uint32_t piece_index, uint32_t offset,
-                                            const uint8_t *data, uint32_t length)
-        {
-            on_piece_data(piece_index, offset, data, length);
-        });
-
-        peer->set_on_state_change([this](PeerConnection *p)
-        {
-            on_peer_connected(p);
-        });
-
-        // Connect peer - will send our bitfield after handshake
-        peer->connect(addr.ip_, addr.port_, meta_, peer_id_, timer_manager_, ev_loop_);
-        peers_[key] = peer;
-
-        // Register with NAT manager (for PEX)
-        if (nat_manager_)
-            nat_manager_->register_peer(peer, key);
-    }
-
-    stats_.total_peers_ = static_cast<int32_t>(peers_.size());
+    cleanup_runtime();
 }
 
 void BitTorrentClient::on_peer_connected(PeerConnection *peer)
@@ -278,162 +254,160 @@ void BitTorrentClient::on_peer_connected(PeerConnection *peer)
     {
         // Send our bitfield
         PeerState our_state;
-        our_state.pieces = pieces_have_;
+        our_state.pieces = piece_state_.pieces_have();
         auto bf = our_state.to_bitfield();
         if (!bf.empty())
             peer->send_bitfield(bf);
 
-        // Send interested
-        peer->send_interested();
+        peer->send_unchoke();
 
-        // Try to request a piece
-        peer->request_next_piece(pieces_have_);
+        if (!piece_state_.is_complete())
+        {
+            peer->send_interested();
+            request_next_block(peer);
+        }
+        else
+        {
+            peer->send_not_interested();
+        }
     }
 }
 
-void BitTorrentClient::on_inbound_peer(PeerConnection *peer)
-{
-    if (!running_.load()) return;
-
-    std::lock_guard<std::mutex> lock(peers_mutex_);
-    if (static_cast<int32_t>(peers_.size()) >= max_peers_) return;
-
-    std::string key = peer->get_peer_ip() + ":" + std::to_string(peer->get_peer_port());
-    if (peers_.count(key)) return;
-
-    peer->set_piece_data_handler([this](uint32_t piece_index, uint32_t offset,
-                                        const uint8_t *data, uint32_t length)
-    {
-        on_piece_data(piece_index, offset, data, length);
-    });
-
-    // Inbound peer is already connected, handle it immediately
-    on_peer_connected(peer);
-    peers_[key] = peer;
-
-    if (nat_manager_)
-        nat_manager_->register_peer(peer, key);
-}
-
-void BitTorrentClient::on_piece_data(uint32_t piece_index, uint32_t offset,
+void BitTorrentClient::on_piece_data(PeerConnection *peer, uint32_t piece_index, uint32_t offset,
                                       const uint8_t *data, uint32_t length)
 {
-    write_piece(static_cast<int32_t>(piece_index), offset, data, length);
-}
-
-void BitTorrentClient::disconnect_all_peers()
-{
-    std::lock_guard<std::mutex> lock(peers_mutex_);
-    for (auto &pair : peers_)
+    if (piece_storage_ &&
+        piece_storage_->write_piece(static_cast<int32_t>(piece_index), offset, data, length))
     {
-        pair.second->disconnect();
-        delete pair.second;
-    }
-    peers_.clear();
-}
-
-bool BitTorrentClient::write_piece(int32_t piece_index, uint32_t offset,
-                                   const uint8_t *data, uint32_t length)
-{
-    if (piece_index < 0 || piece_index >= meta_.info.piece_count()) return false;
-
-    // Open piece file
-    if (piece_files_.find(piece_index) == piece_files_.end())
-    {
-        std::string path = temp_file_prefix_ + std::to_string(piece_index);
-        piece_files_[piece_index] = fopen(path.c_str(), "wb");
-        if (!piece_files_[piece_index]) return false;
-    }
-
-    auto *f = piece_files_[piece_index];
-    fseek(f, offset, SEEK_SET);
-    size_t written = fwrite(data, 1, length, f);
-    fflush(f);
-
-    if (written == length)
-    {
-        stats_.downloaded_bytes_ += length;
-        pieces_downloading_[piece_index] = true;
-    }
-
-    return written == length;
-}
-
-bool BitTorrentClient::verify_piece(int32_t piece_index)
-{
-    if (piece_index < 0 || piece_index >= meta_.info.piece_count()) return false;
-
-    std::string expected_hash = meta_.info.piece_hash(piece_index);
-    if (expected_hash.empty()) return false;
-
-    // Read piece file and compute SHA-1
-    std::string path = temp_file_prefix_ + std::to_string(piece_index);
-    FILE *f = fopen(path.c_str(), "rb");
-    if (!f) return false;
-
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    std::vector<uint8_t> piece_data(size);
-    fread(piece_data.data(), 1, size, f);
-    fclose(f);
-
-    auto hash = sha1_hash(piece_data.data(), piece_data.size());
-    std::string hash_hex = to_hex(hash);
-
-    if (hash_hex == expected_hash)
-    {
-        pieces_have_[piece_index] = true;
-        pieces_downloading_[piece_index] = false;
-        stats_.pieces_downloaded_++;
-
-        // Send 'have' to all connected peers
-        for (auto &pair : peers_)
+        const auto accounted = piece_state_.mark_block_received(piece_index, offset, length);
+        if (accounted > 0)
         {
-            if (pair.second->is_connected())
-                pair.second->send_have(piece_index);
+            stats_tracker_.add_downloaded_bytes(accounted);
         }
 
-        // Notify NAT manager of piece change (for DHT re-announce)
-        if (nat_manager_)
-            nat_manager_->on_pieces_changed(pieces_have_);
+        if (piece_storage_->is_piece_complete(static_cast<int32_t>(piece_index)) &&
+            piece_storage_->verify_piece(static_cast<int32_t>(piece_index)) &&
+            piece_storage_->commit_piece(static_cast<int32_t>(piece_index)) &&
+            piece_state_.mark_piece_completed(piece_index))
+        {
+            stats_tracker_.set_piece_completed(piece_index);
+            if (runtime_coordinator_)
+            {
+                runtime_coordinator_->broadcast_have(piece_index);
+                if (piece_state_.is_complete())
+                {
+                    runtime_coordinator_->announce_now();
+                    for (auto *active_peer : runtime_coordinator_->get_active_peers())
+                    {
+                        if (active_peer)
+                        {
+                            active_peer->send_not_interested();
+                        }
+                    }
+                }
+            }
+            request_next_block(peer);
+            return;
+        }
 
-        return true;
+        if (piece_storage_->is_piece_complete(static_cast<int32_t>(piece_index)))
+        {
+            piece_state_.mark_piece_failed(piece_index);
+            return;
+        }
+
+        request_next_block(peer);
     }
-
-    return false;
 }
 
-void BitTorrentClient::flush_all()
+void BitTorrentClient::request_next_block(PeerConnection *peer)
 {
-    for (auto &pair : piece_files_)
+    if (!peer || !peer->can_download())
     {
-        if (pair.second)
+        return;
+    }
+
+    const auto piece_availability = build_piece_availability();
+    const auto max_active_pieces = compute_max_active_pieces(runtime_coordinator_.get());
+    while (peer->pending_request_count() < peer->request_window_size())
+    {
+        PieceBlockRequest request;
+        if (!piece_state_.select_next_request(peer->get_peer_state().pieces,
+                                              piece_availability.empty() ? nullptr : &piece_availability,
+                                              16 * 1024,
+                                              max_active_pieces,
+                                              request))
         {
-            fflush(pair.second);
-            fclose(pair.second);
-            pair.second = nullptr;
+            break;
+        }
+        peer->send_request(request.piece_index_, request.offset_, request.length_);
+    }
+}
+
+void BitTorrentClient::on_peer_requests_lost(const std::vector<PieceBlockRequest> &requests)
+{
+    for (const auto &request : requests)
+    {
+        piece_state_.requeue_block(request.piece_index_, request.offset_, request.length_);
+    }
+
+    if (!runtime_coordinator_)
+    {
+        return;
+    }
+
+    for (auto *peer : runtime_coordinator_->get_active_peers())
+    {
+        request_next_block(peer);
+    }
+}
+
+bool BitTorrentClient::on_piece_request(uint32_t piece_index, uint32_t offset,
+                                         uint32_t length, std::vector<uint8_t> &out)
+{
+    return piece_storage_ && piece_state_.pieces_have().size() > piece_index &&
+           piece_state_.pieces_have()[piece_index] &&
+           piece_storage_->read_block(piece_index, offset, length, out);
+}
+
+void BitTorrentClient::on_piece_served(uint32_t piece_index, uint32_t offset, uint32_t length)
+{
+    (void)piece_index;
+    (void)offset;
+    stats_tracker_.add_uploaded_bytes(length);
+}
+
+std::vector<uint32_t> BitTorrentClient::build_piece_availability() const
+{
+    if (!runtime_coordinator_)
+    {
+        return {};
+    }
+
+    std::vector<uint32_t> availability(meta_.info.piece_count(), 0);
+    for (const auto *peer : runtime_coordinator_->get_active_peers())
+    {
+        if (!peer)
+        {
+            continue;
+        }
+
+        const auto &pieces = peer->get_peer_state().pieces;
+        const size_t count = std::min(pieces.size(), availability.size());
+        for (size_t i = 0; i < count; ++i)
+        {
+            if (pieces[i])
+            {
+                ++availability[i];
+            }
         }
     }
-    piece_files_.clear();
+    return availability;
 }
 
-void BitTorrentClient::update_stats()
+int32_t BitTorrentClient::get_peer_count() const
 {
-    stats_.active_peers_ = 0;
-    std::lock_guard<std::mutex> lock(peers_mutex_);
-    for (const auto &pair : peers_)
-    {
-        if (pair.second->is_connected())
-            stats_.active_peers_++;
-    }
-
-    if (stats_.total_pieces_ > 0)
-        stats_.progress_ = static_cast<float>(stats_.pieces_downloaded_) / stats_.total_pieces_;
-
-    if (stats_callback_)
-        stats_callback_(stats_);
+    return runtime_coordinator_ ? runtime_coordinator_->get_peer_count() : 0;
 }
 
 } // namespace yuan::net::bit_torrent

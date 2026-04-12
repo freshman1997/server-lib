@@ -1,7 +1,6 @@
 #include "dns_packet.h"
 #include <sstream>
 #include <cstring>
-#include <iostream>
 
 namespace yuan::net::dns
 {
@@ -37,10 +36,10 @@ namespace yuan::net::dns
         additionals_.clear();
     }
 
-    void DnsPacket::encode_name(::yuan::buffer::Buffer &buffer, const std::string &name)
+    void DnsPacket::encode_name(::yuan::buffer::ByteBuffer &buffer, const std::string &name)
     {
         if (name.empty()) {
-            buffer.write_uint8(0);
+            buffer.append_u8(0);
             return;
         }
 
@@ -52,12 +51,12 @@ namespace yuan::net::dns
             }
 
             size_t length = dot_pos - start;
-            buffer.write_uint8(static_cast<uint8_t>(length));
-            buffer.write_string(name.c_str() + start, length);
+            buffer.append_u8(static_cast<uint8_t>(length));
+            buffer.append(name.c_str() + start, length);
             start = dot_pos + 1;
         }
 
-        buffer.write_uint8(0);
+        buffer.append_u8(0);
     }
 
     std::string DnsPacket::decode_name(const uint8_t *data, size_t size, size_t &pos)
@@ -111,19 +110,19 @@ namespace yuan::net::dns
         return result;
     }
 
-    void DnsQuestion::serialize(::yuan::buffer::Buffer &buffer) const
+    void DnsQuestion::serialize(::yuan::buffer::ByteBuffer &buffer) const
     {
         DnsPacket::encode_name(buffer, name);
-        buffer.write_uint16(static_cast<uint16_t>(type));
-        buffer.write_uint16(static_cast<uint16_t>(class_));
+        buffer.append_u16(static_cast<uint16_t>(type));
+        buffer.append_u16(static_cast<uint16_t>(class_));
     }
 
-    std::pair<bool, DnsQuestion> DnsQuestion::deserialize(::yuan::buffer::Buffer &buffer)
+    std::pair<bool, DnsQuestion> DnsQuestion::deserialize(::yuan::buffer::ByteBuffer &buffer)
     {
         DnsQuestion question;
 
-        size_t original_read_index = buffer.get_read_index();
-        const char *data = buffer.peek();
+        const size_t original_read_offset = buffer.read_offset();
+        const char *data = buffer.read_ptr();
         size_t size = buffer.readable_bytes();
         size_t pos = 0;
 
@@ -141,26 +140,26 @@ namespace yuan::net::dns
         question.class_ = static_cast<DnsClass>(ntohs(*reinterpret_cast<const uint16_t*>(data + pos)));
         pos += 2;
 
-        buffer.set_read_index(original_read_index + pos);
+        buffer.set_read_offset(original_read_offset + pos);
         return {true, question};
     }
 
-    void DnsResourceRecord::serialize(::yuan::buffer::Buffer &buffer) const
+    void DnsResourceRecord::serialize(::yuan::buffer::ByteBuffer &buffer) const
     {
         DnsPacket::encode_name(buffer, name);
-        buffer.write_uint16(static_cast<uint16_t>(type));
-        buffer.write_uint16(static_cast<uint16_t>(class_));
-        buffer.write_uint32(ttl);
-        buffer.write_uint16(static_cast<uint16_t>(rdata.size()));
-        buffer.write_string(reinterpret_cast<const char*>(rdata.data()), rdata.size());
+        buffer.append_u16(static_cast<uint16_t>(type));
+        buffer.append_u16(static_cast<uint16_t>(class_));
+        buffer.append_u32(ttl);
+        buffer.append_u16(static_cast<uint16_t>(rdata.size()));
+        buffer.append(rdata.data(), rdata.size());
     }
 
-    std::pair<bool, DnsResourceRecord> DnsResourceRecord::deserialize(::yuan::buffer::Buffer &buffer)
+    std::pair<bool, DnsResourceRecord> DnsResourceRecord::deserialize(::yuan::buffer::ByteBuffer &buffer)
     {
         DnsResourceRecord record;
 
-        size_t original_read_index = buffer.get_read_index();
-        const char *data = buffer.peek();
+        const size_t original_read_offset = buffer.read_offset();
+        const char *data = buffer.read_ptr();
         size_t size = buffer.readable_bytes();
         size_t pos = 0;
 
@@ -190,7 +189,7 @@ namespace yuan::net::dns
                           reinterpret_cast<const uint8_t*>(data + pos + rdlength));
         pos += rdlength;
 
-        buffer.set_read_index(original_read_index + pos);
+        buffer.set_read_offset(original_read_offset + pos);
         return {true, record};
     }
 
@@ -318,10 +317,10 @@ namespace yuan::net::dns
         }
     }
 
-    bool DnsPacket::serialize(::yuan::buffer::Buffer &buffer) const
+    bool DnsPacket::serialize(::yuan::buffer::ByteBuffer &buffer) const
     {
         // Write header
-        buffer.write_uint16(session_id_);
+        buffer.append_u16(session_id_);
 
         uint16_t flags = 0;
         if (is_response_) flags |= 0x8000;
@@ -331,12 +330,12 @@ namespace yuan::net::dns
         if (recursion_desired_) flags |= 0x0100;
         if (recursion_available_) flags |= 0x0080;
         flags |= static_cast<uint8_t>(response_code_) & 0x0F;
-        buffer.write_uint16(flags);
+        buffer.append_u16(flags);
 
-        buffer.write_uint16(static_cast<uint16_t>(questions_.size()));
-        buffer.write_uint16(static_cast<uint16_t>(answers_.size()));
-        buffer.write_uint16(static_cast<uint16_t>(authorities_.size()));
-        buffer.write_uint16(static_cast<uint16_t>(additionals_.size()));
+        buffer.append_u16(static_cast<uint16_t>(questions_.size()));
+        buffer.append_u16(static_cast<uint16_t>(answers_.size()));
+        buffer.append_u16(static_cast<uint16_t>(authorities_.size()));
+        buffer.append_u16(static_cast<uint16_t>(additionals_.size()));
 
         // Write questions
         for (const auto &question : questions_) {
@@ -359,10 +358,10 @@ namespace yuan::net::dns
         return true;
     }
 
-    bool DnsPacket::deserialize(::yuan::buffer::Buffer &buffer)
+    bool DnsPacket::deserialize(::yuan::buffer::ByteBuffer &buffer)
     {
-        size_t original_read_index = buffer.get_read_index();
-        const char *data = buffer.peek();
+        const size_t original_read_offset = buffer.read_offset();
+        const char *data = buffer.read_ptr();
         size_t size = buffer.readable_bytes();
 
         if (size < 12) {
@@ -395,7 +394,7 @@ namespace yuan::net::dns
         pos += 2;
 
         // Update buffer read index to after header
-        buffer.set_read_index(original_read_index + pos);
+        buffer.set_read_offset(original_read_offset + pos);
 
         // Read questions
         questions_.clear();

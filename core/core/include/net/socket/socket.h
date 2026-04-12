@@ -2,6 +2,7 @@
 #define __SOCKET_H__
 #include "net/secuity/ssl_handler.h"
 #include <memory>
+#include <string_view>
 
 namespace yuan::net
 {
@@ -10,8 +11,13 @@ namespace yuan::net
     class Socket
     {
     public:
-        explicit Socket(const char *ip, int port, bool udp = false, int fd = -1);
+        explicit Socket(std::string_view ip, int port, bool udp = false, int fd = -1);
         ~Socket();
+
+        Socket(const Socket &) = delete;
+        Socket & operator=(const Socket &) = delete;
+        Socket(Socket &&) = delete;
+        Socket & operator=(Socket &&) = delete;
 
         bool bind() const;
 
@@ -20,6 +26,8 @@ namespace yuan::net
         int accept(struct sockaddr_in &peer_addr) const;
 
         bool connect(const std::shared_ptr<SSLHandler> &sslModule = nullptr) const;
+
+        int last_error() const;
 
         void set_no_delay(bool on) const;
 
@@ -34,19 +42,19 @@ namespace yuan::net
             return fd_;
         }
 
-        bool valid()
+        bool valid() const
         {
-            return fd_ > 0;
+            return fd_ >= 0;
         }
 
         InetAddress * get_address() 
         {
-            return addr;
+            return addr_.get();
         }
 
     private:
         int fd_;
-        InetAddress *addr;
+        std::unique_ptr<InetAddress> addr_;
     };
 }
 #endif

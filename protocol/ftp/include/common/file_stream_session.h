@@ -2,7 +2,7 @@
 #define __NET_FTP_COMMON_FILE_STREAM_SESSION_H__
 #include "net/handler/connection_handler.h"
 #include "net/socket/inet_address.h"
-#include "timer/timer_task.h"
+#include "timer/timer.h"
 #include "def.h"
 
 namespace yuan::net
@@ -14,7 +14,7 @@ namespace yuan::net::ftp
 {
     class FtpSession;
 
-    class FtpFileStreamSession : public timer::TimerTask, public ConnectionHandler
+    class FtpFileStreamSession : public ConnectionHandler
     {
     public:
         FtpFileStreamSession(FtpSession *session);
@@ -32,7 +32,7 @@ namespace yuan::net::ftp
         virtual void on_close(Connection *conn);
 
     public:
-        virtual void on_timer(timer::Timer *timer);
+        void on_timer(timer::Timer *timer);
 
     public:
         Connection *get_connection();

@@ -41,6 +41,11 @@ namespace yuan::net::http
             return conn_;
         }
 
+        void set_connection(net::Connection *conn)
+        {
+            conn_ = conn;
+        }
+
         void set_session(HttpSession *session)
         {
             session_ = session;

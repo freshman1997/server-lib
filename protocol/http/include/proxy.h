@@ -1,107 +1,255 @@
 #ifndef __NET_HTTP_PROXY_H__
 #define __NET_HTTP_PROXY_H__
+
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <random>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "base/utils/compressed_trie.h"
+#include "common.h"
+#include "middleware.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
 #include "net/socket/inet_address.h"
-#include "common.h"
-#include "timer/timer_task.h"
+#include "timer/timer.h"
 
-namespace yuan::net::http 
+namespace yuan::timer
+{
+    class Timer;
+}
+
+namespace yuan::net::http
 {
     class HttpServer;
+    class HttpRequest;
+    class HttpResponse;
     class RemoteConnectTask;
     class HttpProxy;
 
-    class RemoteConnectTask : public timer::TimerTask
+    struct ProxyTarget
     {
-    public:
-        RemoteConnectTask(Connection *conn, HttpRequest *req, HttpResponse *resp, Connection *remoteConn,
-            HttpProxy *proxy, const std::string &url, const std::string &client_addr) 
-            : conn_(conn), req_(req), resp_(resp), remote_conn_(remoteConn), proxy_(proxy), url_(url), client_addr_(client_addr)
-        {}
+        std::string host;
+        uint16_t port = 0;
+        int weight = 1;
+        std::string prefix_rewrite;
 
-    public:
-        virtual void on_timer(timer::Timer *timer) override;
-
-        virtual bool need_free() override;
-
-    public:
-        Connection *conn_ = nullptr;
-        HttpRequest  *req_ = nullptr;
-        HttpResponse *resp_ = nullptr;
-        Connection *remote_conn_;
-        HttpProxy *proxy_ = nullptr;
-        std::string url_;
-        std::string client_addr_;
+        InetAddress address() const { return InetAddress(host, port); }
     };
 
-    class HttpProxy : public ConnectionHandler
+    struct ProxyRoute
+    {
+        std::string match_pattern;
+        std::vector<ProxyTarget> targets;
+
+        enum class BalanceStrategy : uint8_t
+        {
+            round_robin,
+            random,
+            least_connections,
+            weighted_round_robin
+        } balance = BalanceStrategy::round_robin;
+
+        bool strip_prefix = true;
+        std::string rewrite_prefix;
+        int connect_timeout_ms = 5000;
+        int read_timeout_ms = 30000;
+        int write_timeout_ms = 10000;
+        int max_retries = 2;
+        size_t max_pool_size_per_target = 8;
+        size_t idle_timeout_seconds = 60;
+    };
+
+    class RemoteConnectTask
     {
     public:
-        HttpProxy();
-        HttpProxy(HttpServer *server);
-        ~HttpProxy();
+        using Ptr = std::shared_ptr<RemoteConnectTask>;
 
-    public:
-        virtual void on_connected(Connection *conn);
+        RemoteConnectTask(
+            Connection* clientConn,
+            HttpRequest* req,
+            HttpResponse* resp,
+            HttpProxy* proxy,
+            const std::string& routeKey,
+            const ProxyTarget& target);
 
-        virtual void on_error(Connection *conn);
+        Connection* client_conn_ = nullptr;
+        HttpRequest* req_ = nullptr;
+        HttpResponse* resp_ = nullptr;
+        HttpProxy* proxy_ = nullptr;
+        std::string route_key_;
+        ProxyTarget target_;
+        int retry_count_ = 0;
+    };
 
-        virtual void on_read(Connection *conn);
+    struct PooledConnection
+    {
+        Connection* conn = nullptr;
+        std::atomic<bool> in_use {false};
+        std::atomic<int> ref_count {0};
+        uint64_t last_used_ms = 0;
+        uint64_t created_at_ms = 0;
 
-        virtual void on_write(Connection *conn);
-
-        virtual void on_close(Connection *conn);
-
-    public:
-        bool load_proxy_config_and_init();
-
-        void set_server(HttpServer *server)
+        PooledConnection() = default;
+        PooledConnection(PooledConnection&& other) noexcept
+            : conn(other.conn)
+            , in_use(other.in_use.load(std::memory_order_relaxed))
+            , ref_count(other.ref_count.load(std::memory_order_relaxed))
+            , last_used_ms(other.last_used_ms)
+            , created_at_ms(other.created_at_ms)
         {
-            server_ = server;
+            other.conn = nullptr;
         }
 
-        bool is_proxy(const std::string &url) const;
+        PooledConnection& operator=(PooledConnection&& other) noexcept
+        {
+            if (this != &other) {
+                conn = other.conn;
+                in_use.store(other.in_use.load(std::memory_order_relaxed), std::memory_order_relaxed);
+                ref_count.store(other.ref_count.load(std::memory_order_relaxed), std::memory_order_relaxed);
+                last_used_ms = other.last_used_ms;
+                created_at_ms = other.created_at_ms;
+                other.conn = nullptr;
+            }
+            return *this;
+        }
 
-        void on_client_close(Connection *conn);
+        PooledConnection(const PooledConnection&) = delete;
+        PooledConnection& operator=(const PooledConnection&) = delete;
 
-        void serve_proxy(HttpRequest *req, HttpResponse *resp);
+        bool is_expired(uint64_t max_idle_ms) const;
+        void mark_used();
+    };
 
-        void on_connection_timeout(RemoteConnectTask *task);
+    class TargetConnectionPool
+    {
+    public:
+        explicit TargetConnectionPool(
+            const ProxyTarget& target,
+            size_t max_size = 8,
+            std::chrono::seconds idle_timeout = std::chrono::seconds(60));
 
-        void check_response_timer(Connection *conn);
+        ~TargetConnectionPool();
+
+        Connection* acquire(HttpProxy* proxy, HttpServer* server);
+        void release(Connection* conn);
+        void remove(Connection* conn);
+        size_t cleanup_idle();
+        void close_all();
+
+        size_t active_count() const;
+        size_t total_count() const;
+        size_t available_count() const;
+
+        const ProxyTarget& target() const { return target_; }
 
     private:
-        Connection * init_proxy_connection(const std::string &ip, short port);
+        Connection* create_new_connection(HttpProxy* proxy, HttpServer* server);
 
-        void put_conncetion(Connection *conn);
-        
     private:
-        // <url, <ip, port>>
-        std::unordered_map<std::string, std::vector<InetAddress>> proxy_configs_;
+        ProxyTarget target_;
+        size_t max_size_;
+        std::chrono::seconds idle_timeout_;
+        mutable std::mutex mutex_;
+        std::vector<PooledConnection> connections_;
+        std::atomic<size_t> rr_index_ {0};
+    };
 
-        // <server conn, <url, client conn>>
-        std::unordered_map<Connection *, Connection *> sc_connection_mapping_;
+    class HttpProxy : public ConnectionHandler, public std::enable_shared_from_this<HttpProxy>
+    {
+    public:
+        struct Stats
+        {
+            std::atomic<uint64_t> total_requests {0};
+            std::atomic<uint64_t> active_connections {0};
+            std::atomic<uint64_t> failed_requests {0};
+            std::atomic<uint64_t> pool_hits {0};
+            std::atomic<uint64_t> pool_misses {0};
+        };
 
-        // <client conn, server conn>
-        std::unordered_map<Connection *, Connection *> cs_connection_mapping_;
+        HttpProxy();
+        explicit HttpProxy(HttpServer* server);
+        ~HttpProxy();
 
-        // server instance
-        HttpServer *server_;
+        HttpProxy(const HttpProxy&) = delete;
+        HttpProxy& operator=(const HttpProxy&) = delete;
 
-        // for url
+        void on_connected(Connection* conn) override;
+        void on_error(Connection* conn) override;
+        void on_read(Connection* conn) override;
+        void on_write(Connection* conn) override;
+        void on_close(Connection* conn) override;
+
+        bool load_proxy_config_and_init();
+        void add_route(const ProxyRoute& route);
+
+        void set_server(HttpServer* server) { server_ = server; }
+        HttpServer* get_server() const { return server_; }
+
+        std::string find_proxy_route(const std::string& url) const;
+        bool is_proxy_url(const std::string& url) const;
+
+        void serve_proxy(HttpRequest* req, HttpResponse* resp);
+        void on_client_close(Connection* conn);
+
+        void on_connection_established(RemoteConnectTask::Ptr task, Connection* remoteConn);
+        void on_connection_timeout(RemoteConnectTask::Ptr task);
+        void check_response_timer(Connection* conn);
+
+        void cleanup_idle_connections();
+        std::shared_ptr<TargetConnectionPool> get_or_create_pool(const ProxyTarget& target, const ProxyRoute& route);
+
+        const Stats& stats() const { return stats_; }
+
+    private:
+        ProxyTarget select_target(const ProxyRoute& route);
+        ProxyTarget select_weighted_random(const std::vector<ProxyTarget>& targets);
+        ProxyTarget select_least_connections(const ProxyRoute& route);
+
+        void build_forward_request(HttpRequest* orig_req, const ProxyRoute& route, const ProxyTarget& target);
+        Connection* create_remote_connection(const ProxyTarget& target, int timeout_ms);
+        void map_connections(Connection* clientConn, Connection* serverConn, const std::string& routeKey);
+        void unmap_and_close_peer(Connection* conn, bool is_client);
+        void forward_data(Connection* src, Connection* dst);
+
+        bool handle_websocket_upgrade(HttpRequest* req, HttpResponse* resp, const ProxyRoute& route, const ProxyTarget& target);
+        timer::Timer* take_timer(Connection* conn);
+        void bind_timer(Connection* conn, timer::Timer* timer);
+        void remove_connection_from_pools(Connection* conn);
+
+    private:
+        HttpServer* server_ = nullptr;
+        std::unordered_map<std::string, ProxyRoute> routes_;
         base::CompressTrie url_trie_;
 
-        // <taskId, conn timer>
-        std::unordered_map<Connection *, timer::Timer *> conn_tasks_;
+        struct ServerMapping
+        {
+            Connection* client_conn = nullptr;
+            std::string route_key;
+        };
 
-        // pending requests after the connect task
-        std::unordered_map<Connection *, int> pending_requests_;
+        std::unordered_map<Connection*, ServerMapping> sc_mapping_;
+        std::unordered_map<Connection*, Connection*> cs_mapping_;
+        mutable std::mutex mapping_mutex_;
+
+        std::unordered_map<std::string, std::shared_ptr<TargetConnectionPool>> pools_;
+        mutable std::mutex pools_mutex_;
+
+        std::unordered_map<Connection*, RemoteConnectTask::Ptr> pending_tasks_;
+        std::unordered_map<Connection*, RemoteConnectTask::Ptr> pending_server_tasks_;
+
+        std::unordered_map<Connection*, timer::Timer*> conn_timers_;
+        mutable std::mutex timer_mutex_;
+
+        std::unordered_map<Connection*, int> pending_requests_;
+        mutable std::mt19937 rng_ {std::random_device {}()};
+        std::unordered_map<std::string, std::atomic<size_t>> rr_indices_;
+        Stats stats_;
     };
 }
 

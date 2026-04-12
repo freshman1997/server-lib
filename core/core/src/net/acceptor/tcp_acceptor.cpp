@@ -11,11 +11,11 @@
 #include <windows.h>
 #include <io.h>
 #endif
-#include <iostream>
 
+#include "logger.h"
+#include "net/connection/connection_factory.h"
 #include "net/acceptor/tcp_acceptor.h"
 #include "net/connection/connection.h"
-#include "net/connection/tcp_connection.h"
 #include "net/handler/event_handler.h"
 #include "net/channel/channel.h"
 #include "net/socket/socket.h"
@@ -23,28 +23,38 @@
 
 namespace yuan::net
 {
+    namespace
+    {
+        void close_socket_fd(int fd)
+        {
+    #ifdef _WIN32
+            ::closesocket(fd);
+    #else
+            ::close(fd);
+    #endif
+        }
+    }
+
     TcpAcceptor::TcpAcceptor(Socket *socket) : handler_(nullptr), socket_(socket)
     {
         assert(socket_);
-        channel_ = new Channel;
+        channel_ = std::make_unique<Channel>();
         ssl_module_ = nullptr;
+        conn_handler_ = nullptr;
     }
 
     TcpAcceptor::~TcpAcceptor()
     {
         if (handler_) {
             channel_->disable_all();
-            handler_->close_channel(channel_);
+            handler_->close_channel(channel_.get());
             channel_->set_handler(nullptr);
-            channel_ = nullptr;
-        }
-        
-        if (socket_) {
-            delete socket_;
-            socket_ = nullptr;
         }
 
-        std::cout << "tcp acceptor close\n";
+        channel_.reset();
+        socket_.reset();
+
+        LOG_INFO("tcp acceptor close");
     }
 
     bool TcpAcceptor::listen()
@@ -64,6 +74,13 @@ namespace yuan::net
 
     void TcpAcceptor::close()
     {
+        if (handler_) {
+            handler_->queue_in_loop([this]() {
+                delete this;
+            });
+            return;
+        }
+
         delete this;
     }
 
@@ -71,7 +88,7 @@ namespace yuan::net
     {
         assert(channel_);
         if (handler_) {
-            handler_->update_channel(channel_);
+            handler_->update_channel(channel_.get());
         }
     }
 
@@ -86,7 +103,7 @@ namespace yuan::net
             if (conn_fd < 0) {
             #ifdef _DEBUG
                 if (errno != EAGAIN && errno != ECONNABORTED && errno != EPROTO && errno != EINTR) {
-                    std::cerr << "error connection " << errno << std::endl;
+                    LOG_ERROR("error connection {}", errno);
                 }
             #endif
                 break;
@@ -97,15 +114,15 @@ namespace yuan::net
                 sslHandler = ssl_module_->create_handler(conn_fd, SSLHandler::SSLMode::acceptor_);
                 if (!sslHandler || sslHandler->ssl_init_action() <= 0) {
                     if (auto msg = ssl_module_->get_error_message()) {
-                        std::cerr << "ssl error: " << msg->c_str() << std::endl;
+                        LOG_ERROR("ssl error: {}", msg->c_str());
                     }
-                    ::close(conn_fd);
-                    return;
+                    close_socket_fd(conn_fd);
+                    continue;
                 }
             }
 
-            Connection *conn = new TcpConnection(::inet_ntoa(peer_addr.sin_addr),
-                                                 ntohs(peer_addr.sin_port), conn_fd);
+            Connection *conn = create_stream_connection(::inet_ntoa(peer_addr.sin_addr),
+                                                        ntohs(peer_addr.sin_port), conn_fd);
 
             conn->set_event_handler(handler_);
             conn->set_connection_handler(conn_handler_);
@@ -127,7 +144,9 @@ namespace yuan::net
     {
         handler_ = handler;
         assert(channel_);
-        handler_->update_channel(channel_);
+        if (handler_) {
+            handler_->update_channel(channel_.get());
+        }
     }
 
     void TcpAcceptor::set_connection_handler(ConnectionHandler *connHandler)

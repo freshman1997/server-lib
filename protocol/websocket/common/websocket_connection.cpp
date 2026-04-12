@@ -1,6 +1,5 @@
 #include "websocket_connection.h"
 #include "base/time.h"
-#include "buffer/pool.h"
 #include "context.h"
 #include "handshake.h"
 #include "net/connection/connection.h"
@@ -15,7 +14,7 @@
 #include "handler.h"
 
 #include <cassert>
-#include <iostream>
+#include "logger.h"
 #include <memory>
 #include <vector>
 
@@ -41,17 +40,8 @@ namespace yuan::net::websocket
                 session_ = nullptr;
             }
 
-            for (auto &item : input_chunks_) {
-                if (item.body_) {
-                    buffer::BufferedPool::get_instance()->free(item.body_);
-                    item.body_ = nullptr;
-                }
-            }
             input_chunks_.clear();
 
-            for (const auto &item : output_chunks_) {
-                buffer::BufferedPool::get_instance()->free(item);
-            }
             output_chunks_.clear();
         }
 
@@ -59,7 +49,7 @@ namespace yuan::net::websocket
         virtual void on_connected(Connection *conn)
         {
             if (conn_) {
-                std::cout << "repeat handshaking!!!\n";
+                LOG_WARN("repeat handshaking!");
                 conn->close();
                 return;
             }
@@ -85,7 +75,7 @@ namespace yuan::net::websocket
                 auto context = session_->get_context();
                 context->get_request()->set_raw_url(url_);
                 if (!handshaker_.on_handshake(context->get_request(), context->get_response(), WorkMode::client_)) {
-                    std::cout << "cant handshake!!!\n";
+                    LOG_WARN("cant handshake!");
                     conn->close();
                 }
             }
@@ -110,25 +100,20 @@ namespace yuan::net::websocket
                             } else if (chunk->head_.is_pong_frame()) {
                                 on_pong_frame();
                             } else {
-                                if (chunk->body_) {
-                                    assert(chunk->head_.extend_pay_load_len_ == chunk->body_->readable_bytes());
+                                if (!chunk->body_.empty() || chunk->head_.extend_pay_load_len_ == 0) {
+                                    assert(chunk->head_.extend_pay_load_len_ == chunk->body_.readable_bytes());
                                     handler_->on_receive_packet(self_, chunk->body_);
                                 } else {
-                                    std::cout << "internal error occured !!\n";
+                                    LOG_ERROR("ws internal error: null body");
                                     close = true;
                                     break;
                                 }
                             }
                         } else {
-                            std::cout << "internal error occured !!\n";
+                            LOG_ERROR("ws internal error: incomplete chunk");
                             close = true;
                             break;
                         }
-                    }
-
-                    for (int i = 0; i < input_chunks_.size(); ++i) {
-                        buffer::BufferedPool::get_instance()->free(input_chunks_[i].body_);
-                        input_chunks_[i].body_ = nullptr;
                     }
 
                     input_chunks_.clear();
@@ -171,14 +156,14 @@ namespace yuan::net::websocket
                     if (mode_ == WorkMode::client_) {
                         handshaker_.on_handshake(context->get_request(), context->get_response(), WorkMode::client_, true);
                         if (!handshaker_.is_handshake_done()) {
-                            std::cout << "cant handshake!!!\n";
+                            LOG_WARN("cant handshake!");
                             conn->close();
                             return;
                         }
                     } else {
                         handshaker_.on_handshake(context->get_request(), context->get_response(), WorkMode::server_);
                         if (!handshaker_.is_handshake_done()) {
-                            std::cout << "cant handshake!!!\n";
+                            LOG_WARN("cant handshake!");
                             context->process_error(http::ResponseCode::forbidden);
                             return;
                         }
@@ -207,7 +192,7 @@ namespace yuan::net::websocket
         }
 
     public:
-        bool send(buffer::Buffer *buff, PacketType pktType)
+        bool send(const yuan::buffer::ByteBuffer &buff, PacketType pktType)
         {
             if (state_ != State::connected_) {
                 return false;
@@ -227,12 +212,10 @@ namespace yuan::net::websocket
 
                 // flush
                 conn_->flush();
-                buffer::BufferedPool::get_instance()->free(buff);
 
                 return true;
             } else {
-                buffer::BufferedPool::get_instance()->free(buff);
-                std::cerr << "cant pack ws frame!!\n";
+                LOG_ERROR("cant pack ws frame!");
                 conn_->close();
                 return false;
             }
@@ -245,30 +228,30 @@ namespace yuan::net::websocket
 
         void send_ping_frame()
         {
-            buffer::Buffer *buf = buffer::BufferedPool::get_instance()->allocate(2);
-            buf->write_uint8(0x89);
-            buf->write_uint8(0x00);
+            yuan::buffer::ByteBuffer buf(2);
+            buf.append_u8(0x89);
+            buf.append_u8(0x00);
             send(buf, PacketType::ping_);
         }
 
         void send_pong_frame()
         {
-            buffer::Buffer *buf = buffer::BufferedPool::get_instance()->allocate(2);
-            buf->write_uint8(0x8a);
-            buf->write_uint8(0x00);
+            yuan::buffer::ByteBuffer buf(2);
+            buf.append_u8(0x8a);
+            buf.append_u8(0x00);
             send(buf, PacketType::pong_);
             state_ = State::closing_;
         }
 
         void send_close_frame(uint16_t code)
         {
-            buffer::Buffer *buf = buffer::BufferedPool::get_instance()->allocate(4);
-            buf->write_uint8(0x88);
-            buf->write_uint8(0x02);
+            yuan::buffer::ByteBuffer buf(4);
+            buf.append_u8(0x88);
+            buf.append_u8(0x02);
 
             // 这里表示关闭连接的原因码为 1000
-            buf->write_uint8(uint8_t((code >> 8) & 0xff));
-            buf->write_uint8(uint8_t(code & 0xff));
+            buf.append_u8(uint8_t((code >> 8) & 0xff));
+            buf.append_u8(uint8_t(code & 0xff));
             send(buf, PacketType::close_);
         }
 
@@ -296,7 +279,7 @@ namespace yuan::net::websocket
         WebSocketHandshaker handshaker_;
         WebSocketPacketParser pkt_parser_;
         std::vector<ProtoChunk> input_chunks_;
-        std::vector<buffer::Buffer *> output_chunks_;
+        std::vector<yuan::buffer::ByteBuffer> output_chunks_;
         uint32_t last_active_time_;
     };
 
@@ -322,9 +305,9 @@ namespace yuan::net::websocket
         data_->on_connected(conn);
     }
 
-    bool WebSocketConnection::send(buffer::Buffer *buf, PacketType pktType)
+    bool WebSocketConnection::send(const yuan::buffer::ByteBuffer &buf, PacketType pktType)
     {
-        assert(data_->conn_ && buf);
+        assert(data_->conn_);
         return data_->send(buf, pktType);
     }
 
@@ -334,15 +317,7 @@ namespace yuan::net::websocket
             return false;
         }
         
-        buffer::Buffer *buff = buffer::BufferedPool::get_instance()->allocate(len);
-        buff->write_string(data, len);
-
-        bool res = send(buff, pktType);
-        if (!res) {
-            buffer::BufferedPool::get_instance()->free(buff);
-        }
-
-        return res;
+        return send(yuan::buffer::ByteBuffer(data, len), pktType);
     }
 
     void WebSocketConnection::close(WebSocketCloseCode code)
@@ -368,7 +343,7 @@ namespace yuan::net::websocket
         return data_->conn_;
     }
 
-    std::vector<buffer::Buffer *> * WebSocketConnection::get_output_buffers()
+    std::vector<yuan::buffer::ByteBuffer> * WebSocketConnection::get_output_buffers()
     {
         return &data_->output_chunks_;
     }

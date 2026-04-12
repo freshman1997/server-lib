@@ -1,21 +1,11 @@
 #ifndef __NET_BASE_ACCEPTOR_UDP_ADAPTER_H__
 #define __NET_BASE_ACCEPTOR_UDP_ADAPTER_H__
 
-#include "buffer/buffer.h"
-
-namespace yuan::buffer
-{
-    class Buffer;
-}
+#include "buffer/byte_buffer.h"
 
 namespace yuan::timer
 {
     class TimerManager;
-}
-
-namespace yuan::net
-{
-    namespace buffer { using ::yuan::buffer::Buffer; }
 }
 
 namespace yuan::net
@@ -38,13 +28,13 @@ namespace yuan::net
         /**
          * @brief 收到原始数据包时被调用
          */
-        virtual int on_recv(buffer::Buffer *buff) = 0;
+        virtual int on_recv(yuan::buffer::ByteBuffer &buff) = 0;
 
         /**
          * @brief 发送原始数据包时被调用
          * @return int 发送的数量
          */
-        virtual int on_write(buffer::Buffer *buff) = 0;
+        virtual int on_write(const yuan::buffer::ByteBuffer &buff) = 0;
 
         /**
          * @brief 需要释放时被调用

@@ -46,25 +46,24 @@ namespace yuan::net
                     data_->fds_.erase(std::remove_if(data_->fds_.begin(), data_->fds_.end(), 
                     [fd](struct pollfd pfd) -> bool {
                         return fd == pfd.fd;
-                    }));
+                    }), data_->fds_.end());
                 }
             }
 
             data_->removed_fds_.clear();
         }
 
-        int ret = ::poll(&*data_->fds_.begin(), data_->fds_.size(), timeout);
+        if (data_->fds_.empty()) {
+            return tm;
+        }
+
+        int ret = ::poll(data_->fds_.data(), static_cast<nfds_t>(data_->fds_.size()), timeout);
         if (ret < 0) {
             // TODO
             return tm;
         }
 
-        if (channels.size() != data_->fds_.size()) {
-            channels.reserve(data_->fds_.size());
-        }
-
-        for (int i = 0; i < data_->fds_.size(); ++i) {
-            channels[i] = nullptr;
+        for (std::size_t i = 0; i < data_->fds_.size(); ++i) {
             int ev = Channel::NONE_EVENT;
             if (data_->fds_[i].revents & POLLRDHUP || data_->fds_[i].revents & POLLERR 
                 || data_->fds_[i].revents & POLLIN) {
@@ -89,12 +88,14 @@ namespace yuan::net
     {
         data_->channels_[channel->get_fd()] = channel;
         struct pollfd pfd;
+        pfd.fd = channel->get_fd();
+        pfd.events = 0;
         pfd.revents = 0;
         if (channel->get_events() & Channel::READ_EVENT) {
             pfd.events |= POLLIN | POLLERR;
         }
 
-        if (channel->get_events() & Channel::READ_EVENT) {
+        if (channel->get_events() & Channel::WRITE_EVENT) {
             pfd.events |= POLLOUT;
         }
 
@@ -103,9 +104,15 @@ namespace yuan::net
 
     void PollPoller::update_channel(Channel *channel)
     {
+        if (!channel) {
+            return;
+        }
+
         auto it = data_->channels_.find(channel->get_fd());
         if (it == data_->channels_.end()) {
-            do_add_channel(channel);
+            if (channel->has_events()) {
+                do_add_channel(channel);
+            }
         } else {
             if (!channel->has_events()) {
                 remove_channel(channel);
@@ -118,11 +125,13 @@ namespace yuan::net
                 data_->channels_[channel->get_fd()] = channel;
                 if (it != data_->fds_.end()) {
                     data_->channels_[channel->get_fd()] = channel;
+                    it->events = 0;
+                    it->revents = 0;
                     if (channel->get_events() & Channel::READ_EVENT) {
                         it->events |= POLLIN | POLLERR;
                     }
 
-                    if (channel->get_events() & Channel::READ_EVENT) {
+                    if (channel->get_events() & Channel::WRITE_EVENT) {
                         it->events |= POLLOUT;
                     }
                 } else {
@@ -134,6 +143,10 @@ namespace yuan::net
 
     void PollPoller::remove_channel(Channel *channel)
     {
+        if (!channel) {
+            return;
+        }
+
         data_->removed_fds_.push_back(channel->get_fd());
         data_->channels_[channel->get_fd()] = nullptr;
     }

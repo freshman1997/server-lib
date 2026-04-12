@@ -19,11 +19,11 @@ namespace yuan::net::http
         ~ContentParserFactory();
 
         bool parse_content(HttpPacket *packet);
-
         bool can_parse(ContentType type);
 
     private:
-        std::unordered_map<ContentType, ContentParser *> parsers;
+        std::unordered_map<ContentType, ContentParser*> parsers_;
+        ContentParser* text_parser_instance = nullptr;
     };
 }
 

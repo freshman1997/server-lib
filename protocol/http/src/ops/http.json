@@ -12,8 +12,11 @@
     "playable_types": [".mp4", ".ogg"],
     "proxies": [
         {
-            "root": "/game",
-            "target": ["127.0.0.1", 12334]
+            "root": "/baidu",
+            "weight": 1,
+            "target": [
+                ["www.baidu.com", 80]
+            ]
         }
     ]
 }

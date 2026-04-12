@@ -2,12 +2,16 @@
 
 #include "net/acceptor/udp/kcp_adapter.h"
 #include "base/time.h"
-#include "buffer/buffer.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
 
 namespace yuan::net 
 {
+    namespace
+    {
+        constexpr std::size_t kKcpDecodeBufferSize = 1472;
+    }
+
     KcpAdapter::KcpAdapter()
     {
         conv = 0x23fedacd;
@@ -40,27 +44,28 @@ namespace yuan::net
         return true;
     }
 
-    int KcpAdapter::on_recv(buffer::Buffer *buff)
+    int KcpAdapter::on_recv(yuan::buffer::ByteBuffer &buff)
     {
-        int ret = ikcp_input(kcp_, buff->peek(), buff->readable_bytes());
+        int ret = ikcp_input(kcp_, buff.read_ptr(), static_cast<long>(buff.readable_bytes()));
         if (ret < 0) {
             return ret;
         }
 
-        buff->reset();
-        ret = ikcp_recv(kcp_, buff->begin(), buff->writable_size());
+        buff.clear();
+        buff.ensure_writable(kKcpDecodeBufferSize);
+        ret = ikcp_recv(kcp_, buff.write_ptr(), static_cast<int>(buff.writable_bytes()));
         if (ret < 0) {
             return ret;
         }
 
-        buff->fill(ret);
+        buff.commit(static_cast<std::size_t>(ret));
 
         return ret;
     }
 
-    int KcpAdapter::on_write(buffer::Buffer *buff)
+    int KcpAdapter::on_write(const yuan::buffer::ByteBuffer &buff)
     {
-        return ikcp_send(kcp_, buff->peek(), buff->readable_bytes());
+        return ikcp_send(kcp_, buff.read_ptr(), static_cast<int>(buff.readable_bytes()));
     }
 
     void KcpAdapter::on_release()
@@ -72,7 +77,7 @@ namespace yuan::net
     {
         assert(user && len > 0);
         Connection *conn = static_cast<Connection *>(user);
-        conn->get_output_linked_buffer()->get_current_buffer()->write_string(buf, len);
+        conn->append_output(buf, len);
         conn->flush();
         return len;
     }

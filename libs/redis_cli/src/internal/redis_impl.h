@@ -1,8 +1,9 @@
 #ifndef __YUAN_REDIS_CLIENT_INTERNAL_IMPL_H__
 #define __YUAN_REDIS_CLIENT_INTERNAL_IMPL_H__
-#include "buffer/buffer_reader.h"
+#include "buffer/byte_buffer_reader.h"
 #include "cmd/multi_cmd.h"
 #include "cmd/subcribe_cmd.h"
+#include "coroutine/completion_event.h"
 #include "internal/coroutine.h"
 #include "option.h"
 #include "redis_client.h"
@@ -44,6 +45,7 @@ namespace yuan::redis
         {
             conn_ = nullptr;
             set_mask(RedisState::closed);
+            completion_event_.notify();
         }
 
         void on_read(net::Connection *conn) override;
@@ -54,6 +56,7 @@ namespace yuan::redis
         {
             conn_ = nullptr;
             set_mask(RedisState::closed, true);
+            completion_event_.notify();
         }
 
     public:
@@ -114,7 +117,7 @@ namespace yuan::redis
 
         std::shared_ptr<RedisValue> execute_command(std::shared_ptr<Command> cmd);
 
-        buffer::BufferReader * get_reader()
+        buffer::ByteBufferReader * get_reader()
         {
             return &reader_;
         }
@@ -132,10 +135,10 @@ namespace yuan::redis
         std::shared_ptr<SubcribeCmd> subcribe_cmd;
         std::shared_ptr<RedisValue> last_error_;
         time_t last_check_time_ = 0;
-        buffer::BufferReader reader_;
+        buffer::ByteBufferReader reader_;
+        yuan::coroutine::CompletionEvent completion_event_;
     };
 
-    SimpleTask<std::shared_ptr<RedisValue>> do_execute_command(std::shared_ptr<Command> cmd);
 }
 
 #endif // __YUAN_REDIS_CLIENT_INTERNAL_IMPL_H__

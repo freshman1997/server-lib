@@ -13,11 +13,11 @@ namespace yuan::net::http
         HttpRequestParser(HttpPacket *packet) : HttpPacketParser(packet)
         {}
 
-        virtual bool parse_header(buffer::Buffer &buff);
+        virtual bool parse_header(::yuan::buffer::ByteBuffer &buff);
 
     private:
-        bool parse_method(buffer::Buffer &buff);
-        bool parse_url(buffer::Buffer &buff);
+        bool parse_method(::yuan::buffer::ByteBuffer &buff);
+        bool parse_url(::yuan::buffer::ByteBuffer &buff);
     };
 }
 

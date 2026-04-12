@@ -2,7 +2,6 @@
 #include "net/poller/select_poller.h"
 #include "event/event_loop.h"
 #include "timer/wheel_timer_manager.h"
-#include "redis_cli_manager.h"
 
 namespace yuan::redis
 {
@@ -15,20 +14,18 @@ namespace yuan::redis
 
     RedisRegistry::~RedisRegistry()
     {
-        RedisCliManager::get_instance()->release_all();
-
         delete event_loop_;
         delete poller_;
         delete timer_manager_;
     }
 
+    yuan::coroutine::RuntimeView RedisRegistry::get_coroutine_runtime() const
+    {
+        return {event_loop_, timer_manager_};
+    }
+
     void RedisRegistry::run()
     {
         event_loop_->loop();
-    }
-
-    void RedisRegistry::use_corutine()
-    {
-        event_loop_->set_use_coroutine(true);
     }
 }

@@ -20,10 +20,12 @@ namespace yuan::net::http
 
     request_function HttpRequestDispatcher::get_handler(const std::string &url) const
     {
-        int prefixIdx = compress_trie_.find_prefix(url, true);
+        auto result = compress_trie_.find_prefix(url);
         std::string prefix;
-        if (prefixIdx < 0) {
-            prefix = url.substr(0, -prefixIdx);
+        
+        // is_registered=true 表示匹配到被 insert(..., is_prefix=true) 标记过的前缀节点
+        if (result && result.is_registered) {
+            prefix = url.substr(0, static_cast<size_t>(result.match_length));
         }
 
         auto it = mappings_.find(prefix.empty() ? url : prefix);

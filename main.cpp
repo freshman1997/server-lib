@@ -1,198 +1,122 @@
-#include "dns_client.h"
-#include "net/acceptor/udp_acceptor.h"
-#include "net/poller/select_poller.h"
-#include "dns_server.h"
-#include "server/ftp_server.h"
+#include "application.h"
+#include "bootstrap.h"
+#include "dns_service.h"
+#include "logger.h"
+
+#include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <iostream>
-#include <string>
-#include <ctime>
-#include <cstdlib>
+#include <memory>
+#include <thread>
 
-#ifndef _WIN32
-#include <signal.h>
-#else
-#include <winsock2.h>
+#ifdef _WIN32
 #include <WS2tcpip.h>
-#include <windows.h>
+#include <winsock2.h>
 #endif
 
-#include "base/utils/compressed_trie.h"
-#include "net/acceptor/acceptor.h"
-#include "net/acceptor/tcp_acceptor.h"
-#include "http_server.h"
-#include "net/poller/poller.h"
-#include "thread/runnable.h"
-#include "thread/thread_pool.h"
-#include "net/socket/socket.h"
-
-#include "timer/timer_task.h"
-#include "timer/timer.h"
-#include "timer/wheel_timer_manager.h"
-
-#include "event/event_loop.h"
-#include "net/connection/connection.h"
-
-using namespace yuan;
-
-class PrintTask : public thread::Runnable
+namespace
 {
-protected:
-    virtual void run_internal()
-    {
-        std::cout << "printing...\n";
-    }
-};
 
-using namespace std;
-class PrintTask1 : public timer::TimerTask
+volatile std::sig_atomic_t g_should_exit = 0;
+
+void signal_handler(int)
 {
-    int idx = 0;
-public:
-    virtual void on_timer(timer::Timer *timer)
-    {
-        std::cout << " timer task printing ==> " << idx <<  std::endl;
-        ++idx;
-    }
-};
-
-void test_evloop()
-{
-    net::Socket *sock = new net::Socket("127.0.0.1", 12333);
-    if (!sock->valid()) {
-        cout << "create socket fail!!\n";
-        return;
-    }
-
-    sock->set_reuse(true);
-    sock->set_none_block(true);
-    if (!sock->bind()) {
-        std::cout << " bind failed " << std::endl;
-        return;
-    }
-
-    net::Acceptor *acceptor = new net::TcpAcceptor(sock);
-    if (!acceptor->listen()) {
-        std::cout << " listen failed " << std::endl;
-        return;
-    }
-
-    net::Poller *poller = new net::SelectPoller;
-    timer::WheelTimerManager *manager = new timer::WheelTimerManager;
-    timer::TimerTask *t = new PrintTask1;
-    timer::Timer *timer = manager->interval(2000, 2000, t, 100);
-
-    net::EventLoop loop(poller, manager);
-    acceptor->set_event_handler(&loop);
-    loop.loop();
+    g_should_exit = 1;
 }
 
-void test_url()
+#ifdef _WIN32
+bool init_winsock()
 {
-    base::CompressTrie trie;
-    trie.insert("/.cache/clangd/");
-    trie.insert("/include");
-
-    trie.insert("/static", true);
-
-    if (trie.find_prefix("/static/cz", true) < 0) {
-        std::cout << "start with\n";
-    }
+    WSADATA wsa;
+    return WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
 }
+#endif
 
-void test_udp()
-{
-    net::Socket *sock = new net::Socket("127.0.0.1", 12333, true);
-    if (!sock->valid()) {
-        cout << "create socket fail!!\n";
-        return;
-    }
-
-    sock->set_reuse(true);
-    sock->set_none_block(true);
-    if (!sock->bind()) {
-        std::cout << " bind failed " << std::endl;
-        return;
-    }
-
-    timer::WheelTimerManager manager;
-    net::Acceptor *acceptor = new net::UdpAcceptor(sock, &manager);
-    if (!acceptor->listen()) {
-        std::cout << " listen failed " << std::endl;
-        return;
-    }
-
-    net::SelectPoller poller;
-    net::EventLoop loop(&poller, &manager);
-    loop.loop();
-}
-
-void sigpipe_handler(int signum) 
-{
-    std::cout << "Caught SIGPIPE signal: " << signum << '\n';
-}
-
-void test_args()
-{
-    cout << '\n';
-}
-
-template <typename T, typename ...Args>
-void test_args(T arg, Args ...args)
-{
-    cout << arg << ", ";
-    if (sizeof ...(args) > 0) {
-        test_args(args...);
-    }
-}
+} // namespace
 
 int main()
 {
-    test_args(1, 2, 3, 4, 5);
 #ifndef _WIN32
-    // 注册SIGPIPE信号处理函数
-    signal(SIGPIPE, sigpipe_handler);
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
+    std::signal(SIGPIPE, SIG_IGN);
 #else
-    WSADATA wsa;
-    if (const int iResult = WSAStartup(MAKEWORD(2, 2), &wsa);iResult != 0) {
-        wprintf(L"WSAStartup failed with error: %d\n", iResult);
+    if (!init_winsock()) {
+        std::cerr << "winsock init failed\n";
         return 1;
     }
 #endif
-    
-    //test_http_client();
-    //return 0;
-    srand(time(nullptr));
 
-    /*std::fstream file(UTF8ToGBEx("E:/迅雷下载/EE7E7F2648291605782E3CB59033DE7BED4A9E65.torrent"), std::ios_base::in);
-    if (file.good()) {
-        file.seekg(0, std::ios_base::end);
-        std::size_t len = file.tellg();
-        file.seekg(0, std::ios_base::beg);
-        Buffer buf(len);
-        file.read(buf.buffer_begin(), len);
-        buf.fill(len);
+    yuan::app::RuntimeContext context;
+    context.app_name = "webserver-example";
+    context.run_mode = yuan::app::RunMode::single_thread;
+    context.worker_threads = 1;
 
-        const auto &data = net::bit_torrent::BencodingDataConverter::parse(buf.peek(), buf.peek() + buf.readable_bytes());
-        if (data) {
-            std:: cout << data->to_string() << std::endl;
-        } else {
-            std:: cout << "parse failed!" << std::endl;
+    yuan::app::Application application(context);
+    if (!application.add_typed_service<yuan::server::DnsService>(
+            "dns",
+            std::make_shared<yuan::server::DnsService>(22002),
+            "server.dns",
+            1)) {
+        std::cerr << "failed to register dns service\n";
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return 1;
+    }
+
+    yuan::app::Bootstrap bootstrap(application);
+    if (!bootstrap.run()) {
+        std::cerr << "application bootstrap failed\n";
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return 1;
+    }
+
+    const auto snapshot = bootstrap.supervisor_snapshot();
+
+    LOG_INFO("application '{}' started with {} service(s), role={}, supervisor_state={}, worker_index={}, is_worker_process={}, owns_runtime={}",
+             application.context().app_name,
+             application.services().size(),
+             yuan::app::to_string(bootstrap.process_role()),
+             yuan::app::to_string(snapshot.state),
+             application.context().worker_index,
+             application.context().is_worker_process,
+             bootstrap.owns_runtime());
+    LOG_INFO("runtime identity: worker_index={}, is_worker_process={}",
+             application.context().worker_index,
+             application.context().is_worker_process);
+    LOG_INFO("supervisor snapshot: reason={}, running_workers={}, recovering_workers={}, suppressed_workers={}, failed_workers={}, total_restarts={}, shutdown_started={}",
+             yuan::app::to_string(snapshot.reason),
+             snapshot.running_workers,
+             snapshot.recovering_workers,
+             snapshot.suppressed_workers,
+             snapshot.failed_workers,
+             snapshot.total_restarts,
+             snapshot.shutdown_started);
+
+    while (!g_should_exit) {
+        bootstrap.poll_workers();
+        if (bootstrap.process_role() == yuan::app::ProcessRole::supervisor &&
+            (bootstrap.has_failed_workers() ||
+             (!bootstrap.has_running_workers() && !bootstrap.has_recovering_workers()))) {
+            if (bootstrap.has_failed_workers()) {
+                LOG_WARN("supervisor detected worker failure");
+            } else {
+                LOG_WARN("all worker processes have exited and no worker is recovering");
+            }
+            break;
         }
-    }*/
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
 
-    net::dns::DnsClient server;
-    server.connect("10.88.4.6", 22002);
+    bootstrap.shutdown();
 
-    //std::cout << base::util::base64_encode("hello:hello1") << std::endl;
-    //std::cout << base::util::base64_decode("aGVsbG86aGVsbG8x") << std::endl;
 #ifdef _WIN32
     WSACleanup();
 #endif
-    //thread::ThreadPool pool;
-    //pool.push_task(new PrintTask);
-    //pool.push_task(new PrintTask);
-    //pool.start();
 
     return 0;
 }

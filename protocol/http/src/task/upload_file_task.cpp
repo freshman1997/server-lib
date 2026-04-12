@@ -1,5 +1,5 @@
 #include "task/upload_file_task.h"
-#include <iostream>
+#include "logger.h"
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
@@ -32,7 +32,7 @@ namespace yuan::net::http
             return false;
         }
         
-        // 检查文件大小是否合理
+        // 检查文件大小是否合法
         std::error_code ec;
         if (const auto file_size = std::filesystem::file_size(file_path, ec); ec || file_size > attachment_info_->length_) {
             return false;
@@ -47,7 +47,7 @@ namespace yuan::net::http
         return file_stream_.good();
     }
 
-    bool HttpUploadFileTask::on_data(buffer::Buffer *buf)
+    bool HttpUploadFileTask::on_data(yuan::buffer::ByteBuffer *buf)
     {
         // 参数验证
         if (!attachment_info_ || !buf) {
@@ -60,7 +60,7 @@ namespace yuan::net::http
         }
 
         // 检查缓冲区大小
-        if (buf->writable_size() == 0) {
+        if (buf->writable_bytes() == 0) {
             return false;
         }
 
@@ -72,28 +72,29 @@ namespace yuan::net::http
         try {
             // Write the data to the file
             // and update the offset
-            std::size_t bytes_to_write = std::min<std::size_t>(buf->writable_size(), attachment_info_->length_ - attachment_info_->offset_);
+            std::size_t bytes_to_write = std::min<std::size_t>(buf->writable_bytes(), attachment_info_->length_ - attachment_info_->offset_);
             if (bytes_to_write == 0) {
                 return false;
             }
             
-            file_stream_.read(buf->buffer_begin(), bytes_to_write);
+            buf->ensure_writable(bytes_to_write);
+            file_stream_.read(buf->write_ptr(), bytes_to_write);
             
             std::size_t read_bytes = file_stream_.gcount();
             if (read_bytes > 0) {
                 attachment_info_->offset_ += read_bytes;
-                buf->fill(read_bytes);
+                buf->commit(read_bytes);
             }
 
         #ifdef _DEBUG
-            std::cout << "Uploaded " << attachment_info_->offset_ << " bytes of " << attachment_info_->length_ << " bytes. " << ((attachment_info_->offset_ * 1.0) / (attachment_info_->length_ * 1.0) * 100) << "%" << std::endl;
+            LOG_DEBUG("Uploaded {}/{} bytes {:.0f}%", attachment_info_->offset_, attachment_info_->length_, (attachment_info_->offset_ * 100.0) / attachment_info_->length_);
         #endif
 
             return check_completed();
 
         } catch (const std::exception& e) {
             // 处理文件读取过程中的异常
-            std::cerr << "File read exception: " << e.what() << std::endl;
+            LOG_ERROR("File read exception: {}", e.what());
             if (file_stream_.is_open()) {
                 file_stream_.close();
             }
@@ -110,7 +111,7 @@ namespace yuan::net::http
             return false;
         }
         
-        // 检查是否已完成上传或达到文件大小
+        // 检查是否已完成上传或达到文件大�?
         return attachment_info_->offset_ >= attachment_info_->length_;
     }
 
@@ -138,7 +139,7 @@ namespace yuan::net::http
                     return true;
                 } catch (const std::exception& e) {
                     // 记录回调异常但不中断流程
-                    std::cerr << "Callback exception: " << e.what() << std::endl;
+                    LOG_ERROR("Callback exception: {}", e.what());
                 }
             }
         }
@@ -146,3 +147,5 @@ namespace yuan::net::http
         return false;
     }
 }
+
+

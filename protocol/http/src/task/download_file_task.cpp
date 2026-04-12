@@ -1,6 +1,6 @@
 #include "task/download_file_task.h"
+#include "logger.h"
 #include <cstdio>
-#include <iostream>
 #include <filesystem>
 #include <cerrno>
 #include <cstring>
@@ -22,7 +22,7 @@ namespace yuan::net::http
             return false;
         }
         
-        // 验证文件路径安全性
+        // 验证文件路径安全性，确保不会写入到不安全的位置
         const auto tmp_path = std::filesystem::path(std::filesystem::u8path(attachment_info_->tmp_file_name_));
         if (tmp_path.is_relative() || tmp_path.string().find("..") != std::string::npos) {
             return false;
@@ -37,9 +37,9 @@ namespace yuan::net::http
         return file_stream_.good();
     }
 
-    bool HttpDownloadFileTask::on_data(buffer::Buffer *buf)
+    bool HttpDownloadFileTask::on_data(const yuan::buffer::ByteBuffer &buf)
     {
-        if (!attachment_info_ || !buf) {
+        if (!attachment_info_) {
             return false;
         }
 
@@ -48,17 +48,17 @@ namespace yuan::net::http
         }
 
         if (file_stream_.is_open() && file_stream_.good()) {
-            std::size_t bytes_to_write = buf->readable_bytes();
+            std::size_t bytes_to_write = buf.readable_bytes();
             if (bytes_to_write == 0) {
                 return check_completed();
             }
 
-            file_stream_.write(buf->peek(), bytes_to_write);
+            file_stream_.write(buf.read_ptr(), bytes_to_write);
             file_stream_.flush();
             attachment_info_->offset_ += bytes_to_write;
 
         #ifndef _DEBUG
-            std::cout << "Downloaded " << attachment_info_->offset_ << " bytes of " << attachment_info_->length_ << " bytes. " << ((attachment_info_->offset_ * 1.0) / (attachment_info_->length_ * 1.0) * 100) << "%" << std::endl;
+            LOG_DEBUG("Downloaded {}/{} bytes {:.0f}%", attachment_info_->offset_, attachment_info_->length_, (attachment_info_->offset_ * 100.0) / attachment_info_->length_);
         #endif
 
             return check_completed();
@@ -75,7 +75,7 @@ namespace yuan::net::http
     void HttpDownloadFileTask::on_connection_close()
     {
         if (attachment_info_->offset_ < attachment_info_->length_) {
-            std::cerr << "Download interrupted, closing file stream." << std::endl;
+            LOG_WARN("Download interrupted, closing file stream.");
             if (file_stream_.is_open()) {
                 file_stream_.close();
             }
@@ -92,19 +92,19 @@ namespace yuan::net::http
                 try {
                     completed_callback_();
                 } catch (const std::exception& e) {
-                    std::cerr << "Callback exception: " << e.what() << std::endl;
+                    LOG_ERROR("Callback exception: {}", e.what());
                     return false;
                 }
             }
 
             try {
                 if (std::rename(attachment_info_->tmp_file_name_.c_str(), attachment_info_->origin_file_name_.c_str()) != 0) {
-                    std::cerr << "Failed to rename file: " << strerror(errno) << std::endl;
+                    LOG_ERROR("Failed to rename file: {}", strerror(errno));
                     return false;
                 }
                 return true;
             } catch (const std::exception& e) {
-                std::cerr << "File rename exception: " << e.what() << std::endl;
+                LOG_ERROR("File rename exception: {}", e.what());
             }
         }
         

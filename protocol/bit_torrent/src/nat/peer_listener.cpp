@@ -1,26 +1,19 @@
 #include "nat/peer_listener.h"
 #include "nat/nat_config.h"
-#include "net/acceptor/tcp_acceptor.h"
+#include "buffer/byte_buffer.h"
+#include "net/acceptor/acceptor_factory.h"
+#include "net/acceptor/stream_acceptor.h"
+#include "net/acceptor/stream_listener.h"
 #include "net/socket/socket.h"
 #include "net/connection/connection.h"
 #include "net/socket/inet_address.h"
 #include "event/event_loop.h"
-#include "buffer/buffer.h"
-#include "buffer/pool.h"
 #include "torrent_meta.h"
 #include <cstring>
 #include <algorithm>
 
 namespace yuan::net::bit_torrent
 {
-
-// Helper: create a Buffer from raw data for writing to Connection
-static buffer::Buffer *make_write_buffer(const uint8_t *data, size_t len)
-{
-    auto *buf = buffer::BufferedPool::get_instance()->allocate(len);
-    buf->write_string(reinterpret_cast<const char *>(data), len);
-    return buf;
-}
 
 PeerListener::PeerListener()
     : listening_(false),
@@ -87,7 +80,7 @@ bool PeerListener::try_bind_and_listen(int32_t port)
         return false;
     }
 
-    auto *acceptor = new net::TcpAcceptor(sock);
+    net::StreamAcceptor *acceptor = net::create_stream_acceptor(sock);
     if (!acceptor->listen())
     {
         delete acceptor;
@@ -96,7 +89,7 @@ bool PeerListener::try_bind_and_listen(int32_t port)
 
     acceptor->set_connection_handler(this);
     acceptor->set_event_handler(ev_loop_);
-    ev_loop_->update_channel(acceptor->get_channel());
+    ev_loop_->update_channel(acceptor->listener_channel());
 
     acceptor_ = acceptor;
     listen_socket_ = sock;
@@ -118,7 +111,6 @@ void PeerListener::stop()
     if (acceptor_)
     {
         acceptor_->close();
-        delete acceptor_;
         acceptor_ = nullptr;
     }
 
@@ -135,7 +127,6 @@ void PeerListener::on_connected(net::Connection *conn)
     PendingInbound pending;
     pending.conn = conn;
     pending.peer = peer;
-    pending.handshake_received = 0;
     pending_.push_back(pending);
 }
 
@@ -155,8 +146,8 @@ void PeerListener::on_error(net::Connection *conn)
 
 void PeerListener::on_read(net::Connection *conn)
 {
-    auto *buf = conn->get_input_buff();
-    if (!buf || buf->readable_bytes() == 0) return;
+    auto byte_buffer = conn->take_input_byte_buffer();
+    if (byte_buffer.readable_bytes() == 0) return;
 
     PendingInbound *entry = nullptr;
     for (auto &p : pending_)
@@ -169,16 +160,10 @@ void PeerListener::on_read(net::Connection *conn)
     }
     if (!entry) return;
 
-    const uint8_t *data = reinterpret_cast<const uint8_t *>(buf->peek());
-    size_t len = buf->readable_bytes();
+    const auto span = byte_buffer.readable_span();
+    entry->inbound_buffer.append(span.data(), span.size());
 
-    size_t need = HandshakeMessage::HANDSHAKE_SIZE - entry->handshake_received;
-    size_t avail = std::min(len, need);
-    std::memcpy(entry->handshake_recv + entry->handshake_received, data, avail);
-    entry->handshake_received += avail;
-    buf->add_read_index(avail);
-
-    if (entry->handshake_received >= HandshakeMessage::HANDSHAKE_SIZE)
+    if (entry->inbound_buffer.readable_bytes() >= HandshakeMessage::HANDSHAKE_SIZE)
     {
         handle_inbound_handshake(conn, entry->peer);
     }
@@ -208,7 +193,7 @@ void PeerListener::handle_inbound_handshake(net::Connection *conn, PeerConnectio
     {
         if (it->conn == conn && it->peer == peer)
         {
-            std::memcpy(hs_data, it->handshake_recv, 68);
+            std::memcpy(hs_data, it->inbound_buffer.read_ptr(), HandshakeMessage::HANDSHAKE_SIZE);
             it->peer = nullptr; // prevent double-delete
             pending_.erase(it);
             found = true;
@@ -243,8 +228,7 @@ void PeerListener::handle_inbound_handshake(net::Connection *conn, PeerConnectio
     reply.set_info_hash(info_hash_.data());
     reply.set_peer_id(local_peer_id_);
     auto reply_data = reply.serialize();
-    auto *write_buf = make_write_buffer(reply_data.data(), reply_data.size());
-    conn->write(write_buf);
+    conn->write(yuan::buffer::ByteBuffer(reply_data.data(), reply_data.size()));
 
     // Extract remote peer info
     const auto &remote_addr = conn->get_remote_address();

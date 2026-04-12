@@ -1,4 +1,5 @@
 #include "client/client_session.h"
+#include "client/ftp_client.h"
 #include "client/client_file_stream.h"
 #include "common/def.h"
 #include "common/file_stream_session.h"
@@ -6,7 +7,7 @@
 #include "net/socket/inet_address.h"
 
 #include <filesystem>
-#include <iostream>
+#include "logger.h"
 #include <sstream>
 #include <vector>
 
@@ -39,10 +40,17 @@ namespace yuan::net::ftp
     ClientFtpSession::ClientFtpSession(Connection *conn, FtpApp *app, bool keepUtilSent) : FtpSession(conn, app, WorkMode::client, keepUtilSent) {}
     ClientFtpSession::~ClientFtpSession() {}
 
+    void ClientFtpSession::on_connected(Connection *conn)
+    {
+        FtpSession::on_connected(conn);
+        if (auto *client = dynamic_cast<FtpClient *>(get_app())) {
+            client->notify_connected_state(true);
+        }
+    }
+
     void ClientFtpSession::on_opened(FtpFileStreamSession *fs)
     {
-        std::cout << "client data opened action=" << static_cast<int>(client_context_.pending_action_)
-                  << " stage=" << static_cast<int>(client_context_.transfer_stage_) << "\n";
+        LOG_DEBUG("client data opened action={} stage={}", static_cast<int>(client_context_.pending_action_), static_cast<int>(client_context_.transfer_stage_));
         FtpSession::on_opened(fs);
         bool prepared = false;
         if (client_context_.pending_action_ == ClientPendingAction::list || client_context_.pending_action_ == ClientPendingAction::nlist) {
@@ -53,9 +61,12 @@ namespace yuan::net::ftp
             prepared = prepare_upload_file();
         }
 
-        std::cout << "client data prepared=" << prepared << " action=" << static_cast<int>(client_context_.pending_action_) << "\n";
+        LOG_DEBUG("client data prepared={} action={}", prepared, static_cast<int>(client_context_.pending_action_));
         if (!prepared) {
             client_context_.reset_transfer_state();
+            if (auto *client = dynamic_cast<FtpClient *>(get_app())) {
+                client->notify_client_context(client_context_);
+            }
             return;
         }
 
@@ -71,21 +82,30 @@ namespace yuan::net::ftp
         } else if (client_context_.pending_action_ == ClientPendingAction::append) {
             sent = send_command("APPE " + client_context_.pending_path_ + "\r\n");
         }
-        std::cout << "client transfer command sent=" << sent << " action=" << static_cast<int>(client_context_.pending_action_) << "\n";
+        LOG_DEBUG("client transfer cmd sent={} action={}", sent, static_cast<int>(client_context_.pending_action_));
         if (!sent) {
             client_context_.reset_transfer_state();
+            if (auto *client = dynamic_cast<FtpClient *>(get_app())) {
+                client->notify_client_context(client_context_);
+            }
             return;
         }
         client_context_.transfer_stage_ = ClientTransferStage::wait_transfer;
+        if (auto *client = dynamic_cast<FtpClient *>(get_app())) {
+            client->notify_client_context(client_context_);
+        }
     }
 
     void ClientFtpSession::on_read(Connection *conn)
     {
-        auto buff = conn->get_input_buff(true);
+        auto buff = conn->take_input_byte_buffer();
         response_parser_.set_buff(buff);
         for (const auto &response : response_parser_.split_responses()) {
             client_context_.responses_.push_back(response);
             handle_response(response);
+            if (auto *client = dynamic_cast<FtpClient *>(get_app())) {
+                client->notify_client_context(client_context_);
+            }
         }
     }
 
@@ -98,6 +118,9 @@ namespace yuan::net::ftp
         }
         remove_item("active_transfer_file");
         FtpSession::on_completed(fs);
+        if (auto *client = dynamic_cast<FtpClient *>(get_app())) {
+            client->notify_client_context(client_context_);
+        }
     }
 
     bool ClientFtpSession::login(const std::string &username, const std::string &password)
@@ -157,9 +180,7 @@ namespace yuan::net::ftp
 
     void ClientFtpSession::handle_response(const FtpClientResponse &response)
     {
-        std::cout << "client response code=" << response.code_ << " body=" << response.body_
-                  << " action=" << static_cast<int>(client_context_.pending_action_)
-                  << " stage=" << static_cast<int>(client_context_.transfer_stage_) << "\n";
+        LOG_DEBUG("client response code={} body={} action={} stage={}", response.code_, response.body_, static_cast<int>(client_context_.pending_action_), static_cast<int>(client_context_.transfer_stage_));
 
         if (response.code_ == 350 && client_context_.pending_action_ == ClientPendingAction::download && client_context_.transfer_stage_ == ClientTransferStage::wait_rest) {
             client_context_.transfer_stage_ = ClientTransferStage::wait_size;

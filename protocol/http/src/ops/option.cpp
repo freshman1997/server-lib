@@ -1166,12 +1166,11 @@ R"(
                 return new Promise((resolve, reject) => {
                     const formData = new FormData();
                     formData.append('file', chunk);
-                    formData.append('chunkIndex', chunkIndex);
-                    formData.append('totalChunks', uploadState.totalChunks);
-                    formData.append('uploadId', uploadState.uploadId);
-                    formData.append('fileName', uploadState.file.name);
-                    formData.append('fileSize', uploadState.file.size);
-                    formData.append('chunkSize', chunk.size);
+                    formData.append('chunkindex', chunkIndex);
+                    formData.append('totalchunks', uploadState.totalChunks);
+                    formData.append('uploadid', uploadState.uploadId);
+                    formData.append('filename', uploadState.file.name);
+                    formData.append('filesize', uploadState.file.size);
                     
                     uploadState.xhr = new XMLHttpRequest();
                     

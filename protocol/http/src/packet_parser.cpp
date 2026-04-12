@@ -19,7 +19,7 @@ namespace yuan::net::http
         return std::atoi(length->c_str());
     }
 
-    bool HttpPacketParser::parse_version(buffer::Buffer &buff, char ending, char next)
+    bool HttpPacketParser::parse_version(::yuan::buffer::ByteBuffer &buff, char ending, char next)
     {
         if ((header_state != HeaderState::url_gap && header_state != HeaderState::init) || buff.readable_bytes() == 0) {
             return false;
@@ -28,16 +28,16 @@ namespace yuan::net::http
         header_state = HeaderState::version;
 
         std::string version;
-        char ch = buff.read_int8();
+        char ch = buff.read_i8();
         version.push_back(ch);
         while (ch != ending && buff.readable_bytes()) {
-            ch = buff.read_int8();
+            ch = buff.read_i8();
             if (ch != ending) {
                 version.push_back(ch);
             }
         }
 
-        if (next && buff.read_int8() != next) {
+        if (next && buff.read_i8() != next) {
             return false;
         }
 
@@ -75,7 +75,7 @@ namespace yuan::net::http
         return true; 
     }
 
-    bool HttpPacketParser::parse_header_keys(buffer::Buffer &buff)
+    bool HttpPacketParser::parse_header_keys(::yuan::buffer::ByteBuffer &buff)
     {
         if (buff.readable_bytes() == 0 || (header_state != HeaderState::version_newline && header_state != HeaderState::header_status_desc_gap)) {
             return false;
@@ -84,7 +84,7 @@ namespace yuan::net::http
         while (buff.readable_bytes()) {
             header_state = HeaderState::header_key;
             std::string key;
-            char ch = buff.read_int8();
+            char ch = buff.read_i8();
             if (ch == '\r') {
                 break;
             }
@@ -92,10 +92,10 @@ namespace yuan::net::http
             while (ch != ':' && buff.readable_bytes()) {
                 key.push_back(std::tolower(ch));
                 if (ch != ':') {
-                    ch = buff.read_int8();
+                    ch = buff.read_i8();
                 }
 
-                if (buff.get_read_index() > config::max_header_length) {
+                if (buff.read_offset() > config::max_header_length) {
                     header_state = HeaderState::too_long;
                     return false;
                 }
@@ -107,38 +107,38 @@ namespace yuan::net::http
 
             header_state = HeaderState::header_value;
             std::string val;
-            ch = buff.read_int8();
+            ch = buff.read_i8();
             if (!std::isblank(ch)) {
                 val.push_back(ch);
             }
 
             while (ch != '\r' && buff.readable_bytes()) {
-                ch = buff.read_int8();
+                ch = buff.read_i8();
                 if (ch != '\r') {
                     val.push_back(ch);
                 }
 
-                if (buff.get_read_index() > config::max_header_length) {
+                if (buff.read_offset() > config::max_header_length) {
                     header_state = HeaderState::too_long;
                     return false;
                 }
             }
 
-            if (buff.read_int8() != '\n') {
+            if (buff.read_i8() != '\n') {
                 return false;
             }
 
             packet_->add_header(key, val);
         }
 
-        if (buff.read_int8() != '\n') {
+        if (buff.read_i8() != '\n') {
             return false;
         }
 
         return true;
     }
 
-    int HttpPacketParser::parse_body(buffer::Buffer &buff, uint32_t length)
+    int HttpPacketParser::parse_body(::yuan::buffer::ByteBuffer &buff, uint32_t length)
     {
         if (!is_header_done()) {
             return 0; 
@@ -155,14 +155,14 @@ namespace yuan::net::http
         return 1;
     }
 
-    bool HttpPacketParser::parse_new_line(buffer::Buffer &buff)
+    bool HttpPacketParser::parse_new_line(::yuan::buffer::ByteBuffer &buff)
     {
-        char ch = buff.read_int8();
+        char ch = buff.read_i8();
         if (ch != '\r') {
             return false;
         }
 
-        ch = buff.read_int8();
+        ch = buff.read_i8();
         if (ch != '\n') {
             return false;
         }
@@ -170,7 +170,7 @@ namespace yuan::net::http
         return true;
     }
 
-    int HttpPacketParser::parse(buffer::Buffer &buff)
+    int HttpPacketParser::parse(::yuan::buffer::ByteBuffer &buff)
     {
         if (done()) {
             body_state = BodyState::too_long;

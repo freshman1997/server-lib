@@ -18,13 +18,35 @@
 
 namespace yuan::net
 {
-    Socket::Socket(const char *ip, int port, bool udp, int fd)
+    namespace
+    {
+        bool is_connect_in_progress_error()
+        {
+#ifdef _WIN32
+            const auto err = WSAGetLastError();
+            return err == WSAEWOULDBLOCK || err == WSAEINPROGRESS || err == WSAEALREADY || err == WSAEINVAL;
+#else
+            return errno == EINPROGRESS || errno == EALREADY || errno == EWOULDBLOCK;
+#endif
+        }
+
+        bool is_connect_success_error()
+        {
+#ifdef _WIN32
+            return WSAGetLastError() == WSAEISCONN;
+#else
+            return errno == EISCONN;
+#endif
+        }
+    } // namespace
+
+    Socket::Socket(std::string_view ip, int port, bool udp, int fd)
     {
         fd_ = fd;
-        addr = nullptr;
-        
-        const std::string &realIp = !*ip ? "" : InetAddress::get_address_by_host(ip);
-        addr = new InetAddress(realIp.c_str(), port);
+
+        const std::string input_ip = ip.empty() ? "" : std::string(ip);
+        const std::string realIp = input_ip.empty() ? "" : InetAddress::normalize_host(input_ip);
+        addr_ = std::make_unique<InetAddress>(realIp.empty() ? input_ip : realIp, port);
         if (fd < 0) {
             if (!udp) {
                 fd_ = socket::create_ipv4_tcp_socket(true);
@@ -36,19 +58,15 @@ namespace yuan::net
 
     Socket::~Socket()
     {
-        if (fd_ > 0) {
+        if (fd_ >= 0) {
             socket::close_fd(fd_);
-        }
-
-        if (addr) {
-            delete addr;
-            addr = nullptr;
+            fd_ = -1;
         }
     }
 
     bool Socket::bind() const
     {
-        return socket::bind(fd_, *addr) == 0;
+        return socket::bind(fd_, *addr_) == 0;
     }
 
     bool Socket::listen() const
@@ -72,21 +90,21 @@ namespace yuan::net
         if (sslModule) {
             res = sslModule->ssl_init_action();
         } else {
-            res = socket::connect(fd_, *addr);
+            res = socket::connect(fd_, *addr_);
         }
         if (res < 0) {
-        #ifdef _WIN32
-            if (WSAEWOULDBLOCK == WSAGetLastError()) {
+            if (is_connect_in_progress_error() || is_connect_success_error()) {
                 return true;
             }
-        #endif
-            if (errno != EINPROGRESS) {
-                return false;
-            }
-            return true;
+            return false;
         }
 
         return res == 0;
+    }
+
+    int Socket::last_error() const
+    {
+        return socket::get_last_error();
     }
 
     void Socket::set_no_delay(const bool on) const

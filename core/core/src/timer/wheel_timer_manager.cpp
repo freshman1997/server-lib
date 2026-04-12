@@ -10,19 +10,13 @@ namespace yuan::timer
     {
         count_ = 1000;
         time_unit_ = 10;
-        helper_item_ = new WheelTimerItem;
+        helper_item_ = std::make_unique<WheelTimerItem>();
 
         base::time::init_time(time_unit_);
     }
 
     WheelTimerManager::~WheelTimerManager() 
     {
-        delete helper_item_;
-        for (auto it = wheels_.begin(); it != wheels_.end(); ++it) {
-            delete *it;
-        }
-
-        wheels_.clear();
     }
 
     Timer * WheelTimerManager::timeout(uint32_t milliseconds, TimerTask *task)
@@ -73,16 +67,17 @@ namespace yuan::timer
         }
 
         while (true) {
-            Wheel *wheel = new Wheel(count_, time_unit);
-            wheels_.push_back(wheel);
+            auto wheel = std::make_unique<Wheel>(count_, time_unit);
+            auto *wheel_ptr = wheel.get();
+            wheels_.push_back(std::move(wheel));
 
             uint64_t remain = timer->get_remain();
-            time_unit = wheel->unit_max_time();
+            time_unit = wheel_ptr->unit_max_time();
             if (remain < time_unit) {
-                wheel->place_timer(remain / wheel->time_unit(), timer);
+                wheel_ptr->place_timer(remain / wheel_ptr->time_unit(), timer);
                 return;
             } else {
-                timer->set_remain(timer->get_remain() + wheel->get_passed_time());
+                timer->set_remain(timer->get_remain() + wheel_ptr->get_passed_time());
             }
         }
     }
@@ -91,9 +86,15 @@ namespace yuan::timer
     {
         uint32_t click = base::time::get_passed_time();
         for (uint32_t time = 0; time < click; ++time) {
-            for (auto it = wheels_.begin(); it != wheels_.end(); ++it) {
-                uint64_t unit = (*it)->time_unit();
-                helper_item_ = (*it)->tick(helper_item_);
+            const std::size_t wheel_count = wheels_.size();
+            for (std::size_t i = 0; i < wheel_count; ++i) {
+                Wheel *wheel = wheels_[i].get();
+                if (!wheel) {
+                    continue;
+                }
+
+                uint64_t unit = wheel->time_unit();
+                helper_item_.reset(wheel->tick(helper_item_.release()));
 
                 while (helper_item_->begin() != helper_item_->end()) {
                     WheelTimer *timer = helper_item_->pop();
@@ -113,7 +114,7 @@ namespace yuan::timer
 
                 helper_item_->reset();
                 
-                if ((*it)->get_passed_time() != 0) {
+                if (wheel->get_passed_time() != 0) {
                     break;
                 }
             }

@@ -154,7 +154,8 @@ namespace yuan::timer
         state_ = TimerState::init;
         interval_ = interval;
         remain_ = timeout;
-        task_ = task;
+        task_ = nullptr;
+        bind_task(task);
         prev_ = nullptr;
         next_ = nullptr;
         item_ = nullptr;
@@ -181,7 +182,13 @@ namespace yuan::timer
     void WheelTimer::cancel()
     {
         state_ = TimerState::cancal;
-        if (task_ && task_->need_free()) {
+        if (item_) {
+            item_->on_delete(this);
+            item_ = nullptr;
+        }
+        prev_ = nullptr;
+        next_ = nullptr;
+        if (owned_task_) {
             return;
         }
         task_ = nullptr;
@@ -254,6 +261,10 @@ namespace yuan::timer
             task_->on_timer(this);
         }
 
+        if (state_ == TimerState::cancal) {
+            return;
+        }
+
         state_ = TimerState::done;
         if (period_ != 0) {
             if (interval_ != 0 && task_) {
@@ -274,5 +285,23 @@ namespace yuan::timer
     TimerTask * WheelTimer::get_task()
     {
         return task_;
+    }
+
+    void WheelTimer::bind_task(TimerTask *task)
+    {
+        if (!task) {
+            owned_task_.reset();
+            task_ = nullptr;
+            return;
+        }
+
+        if (task->need_free()) {
+            owned_task_.reset(task);
+            task_ = owned_task_.get();
+            return;
+        }
+
+        owned_task_.reset();
+        task_ = task;
     }
 }

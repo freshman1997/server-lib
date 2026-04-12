@@ -6,7 +6,7 @@
 #include "common/session.h"
 #include "handler/ftp_app.h"
 #include <cassert>
-#include <iostream>
+#include "logger.h"
 
 namespace yuan::net::ftp
 {
@@ -24,7 +24,7 @@ namespace yuan::net::ftp
 
     void FtpFileStream::on_connected(Connection *conn)
     {
-        std::cout << "data stream connected, ip: " << conn->get_remote_address().get_ip() << '\n';
+        LOG_DEBUG("data stream connected ip: {}", conn->get_remote_address().get_ip());
         assert(session_);
         auto *stream_session = new FtpFileStreamSession(session_);
         const auto ip = conn->get_remote_address().get_ip();
@@ -47,22 +47,22 @@ namespace yuan::net::ftp
 
     void FtpFileStream::on_error(Connection *conn)
     {
-        std::cout << "file stream handler on_error ip=" << (conn ? conn->get_remote_address().get_ip() : std::string()) << "\n";
+        LOG_WARN("file stream on_error ip={}", conn ? conn->get_remote_address().get_ip() : "null");
     }
 
     void FtpFileStream::on_read(Connection *conn)
     {
-        std::cout << "file stream handler on_read ip=" << (conn ? conn->get_remote_address().get_ip() : std::string()) << "\n";
+        LOG_DEBUG("file stream on_read ip={}", conn ? conn->get_remote_address().get_ip() : "null");
     }
 
     void FtpFileStream::on_write(Connection *conn)
     {
-        std::cout << "file stream handler on_write ip=" << (conn ? conn->get_remote_address().get_ip() : std::string()) << "\n";
+        LOG_DEBUG("file stream on_write ip={}", conn ? conn->get_remote_address().get_ip() : "null");
     }
 
     void FtpFileStream::on_close(Connection *conn)
     {
-        std::cout << "file stream handler on_close ip=" << (conn ? conn->get_remote_address().get_ip() : std::string()) << "\n";
+        LOG_DEBUG("file stream on_close ip={}", conn ? conn->get_remote_address().get_ip() : "null");
     }
 
     void FtpFileStream::quit(const InetAddress &addr)

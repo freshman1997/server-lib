@@ -1,16 +1,16 @@
 #include "server/server_file_stream.h"
 #include "common/file_stream.h"
+#include "net/connection/connection_factory.h"
 #include "net/acceptor/tcp_acceptor.h"
 #include "event/event_loop.h"
 #include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
-#include "net/connection/tcp_connection.h"
 #include "common/session.h"
 #include "handler/ftp_app.h"
 
 #include <cassert>
 #include <cstring>
-#include <iostream>
+#include "logger.h"
 
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -44,7 +44,7 @@ namespace yuan::net::ftp
                     if (conn_fd < 0) {
                     #ifdef _DEBUG
                         if (errno != EAGAIN && errno != ECONNABORTED && errno != EPROTO && errno != EINTR) {
-                            std::cerr << "error connection " << errno << std::endl;
+                            LOG_WARN("error connection {}", errno);
                         }
                     #endif
                         break;
@@ -55,14 +55,14 @@ namespace yuan::net::ftp
                         sslHandler = ssl_module_->create_handler(conn_fd, SSLHandler::SSLMode::acceptor_);
                         if (!sslHandler || sslHandler->ssl_init_action() <= 0) {
                             if (auto msg = ssl_module_->get_error_message()) {
-                                std::cerr << "ssl error: " << msg->c_str() << std::endl;
+                                LOG_ERROR("ssl error: {}", msg->c_str());
                             }
                             ::close(conn_fd);
                             return;
                         }
                     }
 
-                    auto *conn = new TcpConnection(::inet_ntoa(peer_addr.sin_addr), ntohs(peer_addr.sin_port), conn_fd);
+                    auto *conn = create_stream_connection(::inet_ntoa(peer_addr.sin_addr), ntohs(peer_addr.sin_port), conn_fd);
                     conn->set_event_handler(handler_);
                     conn->set_connection_handler(conn_handler_);
                     if (sslHandler) {
@@ -101,20 +101,20 @@ namespace yuan::net::ftp
 
         Socket *sock = new Socket("", addr.get_port());
         if (!sock->valid()) {
-            std::cerr << "cant create socket file descriptor!\n";
+            LOG_ERROR("cant create socket file descriptor!");
             delete sock;
             return false;
         }
 
         if (!sock->bind()) {
-            std::cerr << "cant bind port: " << addr.get_port() << "!\n";
+            LOG_ERROR("cant bind port: {}!", addr.get_port());
             delete sock;
             return false;
         }
 
         acceptor_ = new PassiveTcpAcceptor(sock);
         if (!acceptor_->listen()) {
-            std::cout << "cant listen on port: " << addr.get_port() << "!\n";
+            LOG_ERROR("cant listen on port: {}!", addr.get_port());
             delete acceptor_;
             acceptor_ = nullptr;
             return false;

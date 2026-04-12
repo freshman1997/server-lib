@@ -6,7 +6,6 @@
 #include "common.h"
 #include "timer/timer.h"
 #include "timer/timer_manager.h"
-#include "timer/timer_task.h"
 
 namespace yuan::net::http 
 {
@@ -36,11 +35,11 @@ namespace yuan::net::http
 
     class HttpSessionContext;
 
-    class HttpSession : public timer::TimerTask
+    class HttpSession
     {
     public:
         HttpSession(uint64_t id, HttpSessionContext *context, timer::TimerManager *timer_manager);
-        ~HttpSession() override;
+        ~HttpSession();
         
         void add_session_value(const std::string &key, int ival);
         void add_session_value(const std::string &key, std::size_t sz);
@@ -78,7 +77,7 @@ namespace yuan::net::http
         }
 
     public:
-        void on_timer(timer::Timer *timer) override;
+        void on_timer(timer::Timer *timer);
 
     public:
         void reset_timer();

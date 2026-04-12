@@ -1,4 +1,5 @@
 #include "redis_cli_manager.h"
+#include "base/time.h"
 #include <cstdlib>
 
 namespace yuan::redis 
@@ -32,7 +33,7 @@ namespace yuan::redis
             return nullptr;
         }
 
-        srand(time(nullptr));
+        srand(static_cast<unsigned>(yuan::base::time::system_now_seconds()));
 
         int idx = rand() % m_redis_cli_map.size();
         return m_redis_cli_map[idx].second;

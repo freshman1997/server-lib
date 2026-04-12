@@ -1,14 +1,15 @@
 #ifndef __TCP_ACCEPTOR_H__
 #define __TCP_ACCEPTOR_H__
-#include "acceptor.h"
+#include "stream_acceptor.h"
 #include "../handler/select_handler.h"
 #include "../channel/channel.h"
+#include <memory>
 
 namespace yuan::net
 {
     class Socket;
 
-    class TcpAcceptor : public Acceptor
+    class TcpAcceptor : public StreamAcceptor
     {
     public:
         TcpAcceptor(Socket *socket);
@@ -20,9 +21,9 @@ namespace yuan::net
 
         virtual void close();
 
-        virtual Channel * get_channel()
+        virtual Channel *listener_channel() override
         {
-            return channel_;
+            return channel_.get();
         }
 
         virtual void update_channel();
@@ -38,8 +39,8 @@ namespace yuan::net
         virtual void set_ssl_module(std::shared_ptr<SSLModule> module);
 
     protected:
-        Channel *channel_;
-        Socket *socket_;
+        std::unique_ptr<Channel> channel_;
+        std::unique_ptr<Socket> socket_;
         EventHandler *handler_;
         ConnectionHandler *conn_handler_;
         std::shared_ptr<SSLModule> ssl_module_;

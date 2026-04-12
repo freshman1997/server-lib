@@ -21,6 +21,8 @@ namespace yuan::net::socket
 
     int connect(int fd, const InetAddress &addr);
 
+    int get_last_error();
+
     bool set_reuse(int fd, bool on, bool exclude = false);
 
     void set_no_delay(int fd, bool on);

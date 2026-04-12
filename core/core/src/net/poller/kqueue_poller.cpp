@@ -1,4 +1,4 @@
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #include <signal.h>
 #include <unistd.h>
 #include <sys/event.h>
@@ -26,7 +26,7 @@ namespace yuan::net
     {
         signal(SIGPIPE, SIG_IGN);
         data_->kqueuefd_ = ::kqueue();
-        data_->fds_.resize(10);
+        data_->kqueue_events_.resize(10);
     }
 
     KQueuePoller::~KQueuePoller()
@@ -43,31 +43,43 @@ namespace yuan::net
 
     uint64_t KQueuePoller::poll(uint32_t timeout, std::vector<Channel *> &channels)
     {
-        uint64_t tm = base::time::get_tick_count();
         timespec time;
-        time.tv_sec = 0;
-        time.tv_nsec = timeout * 1000 * 1000;
-        int count = kevent(data_->kqueuefd_, NULL, 0, &*data_->kqueue_events_.begin(), data_->kqueue_events_.size(), &time);
+        time.tv_sec = timeout / 1000;
+        time.tv_nsec = static_cast<long>((timeout % 1000) * 1000 * 1000);
+
+        int count = kevent(data_->kqueuefd_,
+                           nullptr,
+                           0,
+                           data_->kqueue_events_.data(),
+                           static_cast<int>(data_->kqueue_events_.size()),
+                           &time);
+        uint64_t tm = base::time::get_tick_count();
+        if (count < 0) {
+            return tm;
+        }
+
         if (count > 0) {
             for (int i = 0; i < count; ++i) {
                 int ev = Channel::NONE_EVENT;
-                if (data_->kqueue_events_[i].filter == EVFILT_READ) {
+                const auto &event = data_->kqueue_events_[i];
+                if (event.filter == EVFILT_READ) {
                     ev |= Channel::READ_EVENT;
                 }
 
-                if (data_->kqueue_events_[i].filter == EVFILT_WRITE) {
+                if (event.filter == EVFILT_WRITE) {
                     ev |= Channel::WRITE_EVENT;
                 }
 
-                Channel *channel = static_cast<Channel *>(data_->kqueue_events_[i].udata);
+                Channel *channel = static_cast<Channel *>(event.udata);
                 if (ev != Channel::NONE_EVENT && channel) {
                     channel->set_revent(ev);
                     channels.push_back(channel);
                 }
             }
 
-            if (count == (int)data_->kqueue_events_.size() && (int)data_->kqueue_events_.size() < MAX_EVENT) {
-                data_->kqueue_events_.resize(data_->kqueue_events_.size() * 2 >= MAX_EVENT ? MAX_EVENT : data_->kqueue_events_.size() * 2);
+            if (count == static_cast<int>(data_->kqueue_events_.size()) && static_cast<int>(data_->kqueue_events_.size()) < MAX_EVENT) {
+                const auto next_size = static_cast<int>(data_->kqueue_events_.size()) * 2;
+                data_->kqueue_events_.resize(next_size >= MAX_EVENT ? MAX_EVENT : next_size);
             }
         }
         
@@ -76,43 +88,49 @@ namespace yuan::net
 
     void KQueuePoller::update_channel(Channel *channel)
     {
-        if (fds_.find(channel->get_fd())) {
-            remove_channel();
-        }
-
-        struct kevent event;
         auto it = data_->fds_.find(channel->get_fd());
-        if (it != data_->fds_.end()) {
-            if (!channel->has_events()) {
+        if (!channel->has_events()) {
+            if (it != data_->fds_.end()) {
                 remove_channel(channel);
-            } else {
-                if (channel->get_events() & Channel::READ_EVENT) {
-                    EV_SET(&event, channel->get_fd(), EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, (void *) channel);
-                    kevent(data_->kqueuefd_, &event, 1, NULL, 0, NULL);
-                }
-
-                if (channel->get_events() & Channel::READ_EVENT) {
-                    EV_SET(&event, channel->get_fd(), EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, (void *) channel);
-                    kevent(data_->kqueuefd_, &event, 1, NULL, 0, NULL);
-                }
             }
-        } else {
-            EV_SET(&event, channel->get_fd(), EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, (void *) channel);
-            kevent(data_->kqueuefd_, &event, 1, NULL, 0, NULL);
-            EV_SET(&event, channel->get_fd(), EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, (void *) channel);
-            kevent(data_->kqueuefd_, &event, 1, NULL, 0, NULL);
+            return;
         }
+
+        struct kevent events[2];
+        int count = 0;
+
+        if (channel->get_events() & Channel::READ_EVENT) {
+            EV_SET(&events[count++], channel->get_fd(), EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, channel);
+        } else if (it != data_->fds_.end()) {
+            EV_SET(&events[count++], channel->get_fd(), EVFILT_READ, EV_DELETE, 0, 0, channel);
+        }
+
+        if (channel->get_events() & Channel::WRITE_EVENT) {
+            EV_SET(&events[count++], channel->get_fd(), EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, channel);
+        } else if (it != data_->fds_.end()) {
+            EV_SET(&events[count++], channel->get_fd(), EVFILT_WRITE, EV_DELETE, 0, 0, channel);
+        }
+
+        if (count > 0) {
+            kevent(data_->kqueuefd_, events, count, nullptr, 0, nullptr);
+        }
+
+        data_->fds_.insert(channel->get_fd());
     }
 
     void KQueuePoller::remove_channel(Channel *channel)
     {
-        data_->fd.remove(channel->get_fd());
+        auto it = data_->fds_.find(channel->get_fd());
+        if (it == data_->fds_.end()) {
+            return;
+        }
 
-        struct kevent event;
-        EV_SET(&event, channel->get_fd(), EVFILT_READ, EV_DELETE, 0, 0, (void *) channel);
-        kevent(data_->kqueuefd_, &event, 1, NULL, 0, NULL);
-        EV_SET(&event, channel->get_fd(), EVFILT_WRITE, EV_DELETE, 0, 0, (void *) channel);
-        kevent(data_->kqueuefd_, &event, 1, NULL, 0, NULL);
+        data_->fds_.erase(it);
+
+        struct kevent events[2];
+        EV_SET(&events[0], channel->get_fd(), EVFILT_READ, EV_DELETE, 0, 0, channel);
+        EV_SET(&events[1], channel->get_fd(), EVFILT_WRITE, EV_DELETE, 0, 0, channel);
+        kevent(data_->kqueuefd_, events, 2, nullptr, 0, nullptr);
     }
 }
 

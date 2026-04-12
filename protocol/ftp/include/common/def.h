@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-#include "buffer/buffer.h"
+#include "buffer/byte_buffer.h"
 #include "response_code.h"
 
 namespace yuan::net::ftp 
@@ -45,8 +45,8 @@ namespace yuan::net::ftp
         std::fstream *fstream_ = nullptr;
 
         ~FtpFileInfo();
-        int read_file(std::size_t size, buffer::Buffer *buff);
-        int write_file(buffer::Buffer *buff);
+        int read_file(std::size_t size, ::yuan::buffer::ByteBuffer &buff);
+        int write_file(::yuan::buffer::ByteBuffer &buff);
         bool is_completed() { return state_ == FileState::processed; }
         std::string build_cmd_args();
     };

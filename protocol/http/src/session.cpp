@@ -2,36 +2,49 @@
 #include "context.h"
 #include "ops/option.h"
 #include "net/connection/connection.h"
-
-#include <iostream>
+#include "timer/timer_util.hpp"
 
 namespace yuan::net::http 
 {
-    HttpSession::HttpSession(uint64_t id, HttpSessionContext *context, timer::TimerManager *timer_manager) : session_id_(id), context_(context), timer_manager_(timer_manager)
+    HttpSession::HttpSession(uint64_t id, HttpSessionContext *context, timer::TimerManager *timer_manager)
+        : session_id_(id), context_(context), timer_manager_(timer_manager)
+        , conn_timer_(nullptr), close_cb_(nullptr)
     {
         context_->set_session(this);
-        
-        conn_timer_ = nullptr;
-        if (config::close_idle_connection) {
-            conn_timer_ = timer_manager_->timeout(config::connection_idle_timeout, this);
-        }
 
-        close_cb_ = nullptr;
+        if (config::close_idle_connection && timer_manager_) {
+            conn_timer_ = timer::TimerUtil::build_timeout_timer(
+                timer_manager_, config::connection_idle_timeout, this, &HttpSession::on_timer);
+        }
     }
 
     HttpSession::~HttpSession()
     {
+        // 先调用关闭回调（清理文件句柄等资源）
         if (close_cb_) {
             close_cb_(this);
             close_cb_ = nullptr;
         }
 
-        if (context_) {
-            delete context_;
-        }
-        
+        // 取消空闲定时器
         if (conn_timer_) {
             conn_timer_->cancel();
+            conn_timer_ = nullptr;
+        }
+
+        // 清理所有 pval 类型资源（ifstream 等）
+        for (auto &item : session_items_) {
+            if (item.second.type == SessionItemType::pval && item.second.number.pval) {
+                item.second.number.pval = nullptr;  // 外部已通过 close_cb 释放
+            }
+            item.second.type = SessionItemType::invalid;
+        }
+        session_items_.clear();
+
+        // 最后删除 context
+        if (context_) {
+            delete context_;
+            context_ = nullptr;
         }
     }
 
@@ -58,7 +71,7 @@ namespace yuan::net::http
 
     void HttpSession::add_session_value(const std::string &key, const std::string &sval)
     {
-        session_items_[key] = { SessionItemType::sval, 0, sval };
+        session_items_[key] = { SessionItemType::sval, {}, sval };
     }
 
     void HttpSession::add_session_value(const std::string &key, void *pval)
@@ -85,15 +98,18 @@ namespace yuan::net::http
 
     void HttpSession::on_timer(timer::Timer *timer)
     {
-        std::cout << "connection idle timeout !!\n";
-        context_->get_connection()->close();
+        if (context_ && context_->get_connection()) {
+            context_->get_connection()->close();
+        }
     }
 
     void HttpSession::reset_timer()
     {
-        if (config::close_idle_connection) {
-            conn_timer_->cancel();
-            conn_timer_ = timer_manager_->timeout(config::connection_idle_timeout, this);
+        if (!conn_timer_ || !timer_manager_ || !config::close_idle_connection) {
+            return;
         }
+        conn_timer_->cancel();
+        conn_timer_ = timer::TimerUtil::build_timeout_timer(
+            timer_manager_, config::connection_idle_timeout, this, &HttpSession::on_timer);
     }
 }

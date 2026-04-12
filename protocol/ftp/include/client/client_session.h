@@ -14,6 +14,7 @@ namespace yuan::net::ftp
         ClientFtpSession(Connection *conn, FtpApp *entry, bool keepUtilSent = false);
         ~ClientFtpSession();
 
+        virtual void on_connected(Connection *conn);
         virtual void on_opened(FtpFileStreamSession *fs);
         virtual void on_read(Connection *conn);
         virtual void on_completed(FtpFileStreamSession *fs);

@@ -1,7 +1,7 @@
 #include "ops/config_manager.h"
 #include "ops/option.h"
 #include <fstream>
-#include <iostream>
+#include "logger.h"
 
 namespace yuan::net::http 
 {
@@ -100,13 +100,13 @@ namespace yuan::net::http
         std::ifstream input(config::config_file_name);
         try {
             if (!input.good()) {
-                std::cout << "no `" << config::config_file_name << "` configuration file found in cwd!\n";
+                LOG_WARN("no `{}` configuration file found in cwd!", config::config_file_name);
                 return false;
             }
 
             const nlohmann::json &jval = nlohmann::json::parse(input);
             if (jval.is_discarded()) {
-                std::cout << config::config_file_name << " is not json config file!\n";
+                LOG_WARN("{} is not json config file!", config::config_file_name);
                 return false;
             }
 
@@ -114,7 +114,7 @@ namespace yuan::net::http
 
             return true;
         } catch (...) {
-            std::cout << "parse " << config::config_file_name << " config file failed!\n";
+            LOG_ERROR("parse {} config file failed!", config::config_file_name);
             return false;
         }
     }

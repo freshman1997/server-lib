@@ -1,11 +1,13 @@
 #include "net/socket/inet_address.h"
 #include "endian/endian.hpp"
 
+#include <array>
 #include <cstring>
 
 #ifdef _WIN32
 #include <inaddr.h>
 #include <winsock.h>
+#include <ws2tcpip.h>
 #else
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -29,8 +31,11 @@ namespace yuan::net
     InetAddress::InetAddress(const struct sockaddr_in &addr)
     {
         this->port_ = endian::networkToHost16(addr.sin_port);
-        this->ip_ = ::inet_ntoa(addr.sin_addr);
         this->net_ip_ = addr.sin_addr.s_addr;
+        std::array<char, INET_ADDRSTRLEN> ip_buf {};
+        if (::inet_ntop(AF_INET, &addr.sin_addr, ip_buf.data(), static_cast<socklen_t>(ip_buf.size())) != nullptr) {
+            this->ip_ = ip_buf.data();
+        }
     }
 
     InetAddress::InetAddress(const InetAddress &addr)
@@ -53,7 +58,7 @@ namespace yuan::net
         ::memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port_);
-        addr.sin_addr.s_addr = ip_.empty() ? htonl(INADDR_ANY) : inet_addr(ip_.c_str());
+        addr.sin_addr.s_addr = ip_.empty() ? htonl(INADDR_ANY) : net_ip_;
         return addr;
     }
 
@@ -95,39 +100,67 @@ namespace yuan::net
         return port_ < other.port_;
     }
 
-    std::string InetAddress::get_address_by_host(const std::string &host)
+    std::string InetAddress::normalize_host(const std::string &host)
     {
-#ifndef _WIN32
-        struct hostent *h = ::gethostbyname(host.c_str());
-        if(h) {
-            struct sockaddr_in addr_in;
-            memcpy(&addr_in.sin_addr.s_addr, h->h_addr,4);
-            return ::inet_ntoa(addr_in.sin_addr);
-        } else {
+        if (host.empty()) {
             return "";
         }
-#else
 
-    char *pstr;
-    hostent *phost = gethostbyname(host.c_str());
-    if (phost == nullptr) {
-        return "";
+        in_addr addr {};
+        if (::inet_pton(AF_INET, host.c_str(), &addr) == 1) {
+            return host;
+        }
+
+        return get_address_by_host(host);
     }
-    
-    int i = 0;
-    for (pstr = phost->h_addr_list[0]; pstr != nullptr; pstr = phost->h_addr_list[++i]) {
-        u_long tmp = *(u_long *)pstr;
-        in_addr addr;
-        addr.S_un.S_addr = tmp;
-        return ::inet_ntoa(addr);
-    }
-    return "";
-#endif
+
+    std::string InetAddress::get_address_by_host(const std::string &host)
+    {
+        if (host.empty()) {
+            return "";
+        }
+
+        addrinfo hints {};
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+
+        addrinfo *result = nullptr;
+        if (::getaddrinfo(host.c_str(), nullptr, &hints, &result) != 0 || result == nullptr) {
+            return "";
+        }
+
+        std::array<char, INET_ADDRSTRLEN> ip_buf {};
+        const auto *sock_addr = reinterpret_cast<sockaddr_in *>(result->ai_addr);
+        std::string resolved_ip;
+        if (::inet_ntop(AF_INET, &sock_addr->sin_addr, ip_buf.data(), static_cast<socklen_t>(ip_buf.size())) != nullptr) {
+            resolved_ip = ip_buf.data();
+        }
+
+        ::freeaddrinfo(result);
+        return resolved_ip;
     }
 
     void InetAddress::set_net_ip()
     {
-        net_ip_ = ip_.empty() ? htonl(INADDR_ANY) : inet_addr(ip_.c_str());
+        if (ip_.empty()) {
+            net_ip_ = htonl(INADDR_ANY);
+            return;
+        }
+
+        in_addr addr {};
+        if (::inet_pton(AF_INET, ip_.c_str(), &addr) == 1) {
+            net_ip_ = addr.s_addr;
+            return;
+        }
+
+        const auto normalized = normalize_host(ip_);
+        if (!normalized.empty() && ::inet_pton(AF_INET, normalized.c_str(), &addr) == 1) {
+            ip_ = normalized;
+            net_ip_ = addr.s_addr;
+            return;
+        }
+
+        net_ip_ = 0;
     }
 
     uint32_t InetAddress::get_net_ip() const

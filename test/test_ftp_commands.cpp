@@ -77,16 +77,13 @@ namespace
         ConnectionState get_connection_state() override { return state_; }
         bool is_connected() override { return state_ == ConnectionState::connected; }
         const InetAddress & get_remote_address() override { return remote_; }
-        void write(::yuan::buffer::Buffer *buff) override { if (buff) { output_buffer_.append_buffer(buff); } }
-        void write_and_flush(::yuan::buffer::Buffer *buff) override { write(buff); flush(); }
+        void write(const ::yuan::buffer::ByteBuffer &buffer) override { if (!buffer.empty()) { append_output(buffer); } }
+        void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer) override { write(buffer); flush(); }
         void flush() override {}
         void abort() override { output_buffer_.clear(); }
         void close() override { state_ = ConnectionState::closed; }
-        ConnectionType get_conn_type() override { return ConnectionType::TCP; }
-        Channel * get_channel() override { return nullptr; }
         void set_connection_handler(ConnectionHandler *handler) override { handler_ = handler; }
         ConnectionHandler * get_connection_handler() override { return handler_; }
-        void forward(Connection *conn) override { (void)conn; }
         void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler) override { (void)sslHandler; }
         void on_read_event() override {}
         void on_write_event() override {}

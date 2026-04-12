@@ -1,5 +1,3 @@
-#include "buffer/buffer.h"
-#include "buffer/pool.h"
 #include "websocket.h"
 #include <iostream>
 
@@ -16,14 +14,13 @@ class TestClient : public net::websocket::WebSocketDataHandler
 public:
     virtual void on_connected(net::websocket::WebSocketConnection *wsConn)
     {
-        buffer::Buffer *buf = buffer::BufferedPool::get_instance()->allocate();
-        buf->write_string("hello world!!!");
+        ::yuan::buffer::ByteBuffer buf(std::string_view("hello world!!!"));
         wsConn->send(buf);
     }
 
-    virtual void on_data(net::websocket::WebSocketConnection *wsConn, const buffer::Buffer *buff)
+    virtual void on_data(net::websocket::WebSocketConnection *wsConn, const ::yuan::buffer::ByteBuffer &buff)
     {
-        std::string str(buff->peek(), buff->peek_end());
+        std::string str(buff.read_ptr(), buff.readable_bytes());
         std::cout << "recv: " << str << '\n';
     }
 

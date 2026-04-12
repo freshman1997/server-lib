@@ -1,14 +1,17 @@
 #include "nat/dht_node.h"
 #include "nat/nat_config.h"
+#include "base/time.h"
+#include "buffer/byte_buffer.h"
 #include "structure/bencoding.h"
-#include "net/acceptor/udp_acceptor.h"
+#include "net/acceptor/acceptor_factory.h"
+#include "net/acceptor/datagram_acceptor.h"
+#include "net/acceptor/datagram_endpoint.h"
 #include "net/socket/socket.h"
 #include "net/socket/inet_address.h"
 #include "net/connection/connection.h"
 #include "timer/timer.h"
 #include "timer/timer_task.h"
-#include "buffer/buffer.h"
-#include "buffer/pool.h"
+#include "timer/timer_util.hpp"
 #include "utils.h"
 #ifdef _WIN32
 #include <winsock2.h>
@@ -20,21 +23,9 @@
 #include <cstring>
 #include <algorithm>
 #include <random>
-#include <chrono>
 
 namespace yuan::net::bit_torrent
 {
-
-// Local timer task adapter
-class DhtTimerTask : public timer::TimerTask
-{
-public:
-    explicit DhtTimerTask(std::function<void(timer::Timer *)> fn) : fn_(std::move(fn)) {}
-    void on_timer(timer::Timer *t) override { fn_(t); }
-private:
-    std::function<void(timer::Timer *)> fn_;
-};
-
 // ===== DhtCompactNode =====
 
 std::string DhtCompactNode::ip_string() const
@@ -196,7 +187,7 @@ bool DhtNode::start(const NatConfig &config,
     sock->set_reuse(true);
     sock->set_none_block(true);
 
-    acceptor_ = new net::UdpAcceptor(sock, timer_mgr);
+    acceptor_ = net::create_datagram_acceptor(sock, timer_mgr);
     if (!acceptor_->listen())
     {
         delete acceptor_;
@@ -207,7 +198,7 @@ bool DhtNode::start(const NatConfig &config,
 
     acceptor_->set_connection_handler(this);
     acceptor_->set_event_handler(ev_loop_);
-    ev_loop_->update_channel(acceptor_->get_channel());
+    ev_loop_->update_channel(acceptor_->endpoint_channel());
 
     port_ = bind_port;
     running_ = true;
@@ -218,10 +209,13 @@ bool DhtNode::start(const NatConfig &config,
     // Start periodic refresh
     if (timer_manager_)
     {
-        refresh_timer_ = timer_manager_->interval(
+        refresh_timer_ = timer::TimerUtil::build_period_timer(
+            timer_manager_,
             config.dht_refresh_interval_s * 1000,
             config.dht_refresh_interval_s * 1000,
-            new DhtTimerTask([this](timer::Timer *) { periodic_refresh(); }),
+            [this](timer::Timer *) {
+                periodic_refresh();
+            },
             -1);
     }
 
@@ -425,9 +419,7 @@ void DhtNode::send_ping(const std::string &ip, uint16_t port)
 
     PendingQuery pq;
     pq.callback = [this, ip, port]() {};
-    auto now = std::chrono::steady_clock::now();
-    pq.expire_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()).count() + 15000;
+    pq.expire_time_ms = static_cast<int64_t>(base::time::steady_now_ms() + 15000);
     pending_queries_[tid] = pq;
 }
 
@@ -448,8 +440,7 @@ void DhtNode::send_find_node(const std::string &ip, uint16_t port, const DhtNode
     send_udp(ip, port, reinterpret_cast<const uint8_t *>(msg.data()), msg.size());
 
     PendingQuery pq;
-    pq.expire_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count() + 15000;
+    pq.expire_time_ms = static_cast<int64_t>(base::time::steady_now_ms() + 15000);
     pending_queries_[tid] = pq;
 }
 
@@ -473,8 +464,7 @@ void DhtNode::send_get_peers(const std::string &ip, uint16_t port,
     send_udp(ip, port, reinterpret_cast<const uint8_t *>(msg.data()), msg.size());
 
     PendingQuery pq;
-    pq.expire_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count() + 15000;
+    pq.expire_time_ms = static_cast<int64_t>(base::time::steady_now_ms() + 15000);
     pending_queries_[tid] = pq;
 }
 
@@ -582,9 +572,7 @@ void DhtNode::handle_get_peers_response(const std::string &ip, uint16_t port,
 
     // Store the token for this node (for announce_peer)
     std::string key = ip + ":" + std::to_string(port);
-    auto now = std::chrono::steady_clock::now();
-    auto expire_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()).count() + 600000; // 10 minutes
+    auto expire_ms = static_cast<int64_t>(base::time::steady_now_ms() + 600000); // 10 minutes
     tokens_[key] = {token, expire_ms};
 
     // Process discovered peers
@@ -694,9 +682,7 @@ void DhtNode::handle_get_peers_query(const std::string &ip, uint16_t port,
     // Generate a token for this node
     std::string token_key = ip + ":" + std::to_string(port);
     std::string token = std::to_string(next_transaction_id_++);
-    auto now = std::chrono::steady_clock::now();
-    auto expire_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()).count() + 600000;
+    auto expire_ms = static_cast<int64_t>(base::time::steady_now_ms() + 600000);
     tokens_[token_key] = {token, expire_ms};
 
     // Check if we have peers for this info_hash
@@ -777,9 +763,7 @@ void DhtNode::handle_announce_peer_query(const std::string &ip, uint16_t port,
     StoredPeer sp;
     sp.ip = ip;
     sp.port = peer_port;
-    auto now = std::chrono::steady_clock::now();
-    sp.expire_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()).count() + 3600000; // 1 hour
+    sp.expire_ms = static_cast<int64_t>(base::time::steady_now_ms() + 3600000); // 1 hour
     peer_store_[ih_key].push_back(sp);
 
     // Send response
@@ -1031,9 +1015,7 @@ void DhtNode::on_udp_data(const uint8_t *data, size_t len,
     }
 
     // Clean up expired pending queries
-    auto now = std::chrono::steady_clock::now();
-    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()).count();
+    auto now_ms = static_cast<int64_t>(base::time::steady_now_ms());
     for (auto it = pending_queries_.begin(); it != pending_queries_.end();)
     {
         if (it->second.expire_time_ms < now_ms)
@@ -1075,11 +1057,10 @@ void DhtNode::send_udp(const std::string &ip, uint16_t port,
 {
     if (!acceptor_) return;
 
-    auto *buf = buffer::BufferedPool::get_instance()->allocate(len);
-    buf->write_string(reinterpret_cast<const char *>(data), len);
-
     net::InetAddress addr(ip, port);
-    acceptor_->send_to(addr, buf);
+    yuan::buffer::ByteBuffer packet(len);
+    packet.append(data, len);
+    acceptor_->send_datagram(addr, packet);
 }
 
 DhtNodeId DhtNode::generate_node_id()
@@ -1142,3 +1123,4 @@ void DhtNode::on_write(net::Connection *conn) {}
 void DhtNode::on_close(net::Connection *conn) {}
 
 } // namespace yuan::net::bit_torrent
+

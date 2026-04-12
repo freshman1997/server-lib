@@ -15,14 +15,13 @@ namespace yuan::net::ftp
         if (fstream_) { fstream_->close(); delete fstream_; fstream_ = nullptr; }
     }
 
-    int FtpFileInfo::read_file(std::size_t size, buffer::Buffer *buff)
+    int FtpFileInfo::read_file(std::size_t size, ::yuan::buffer::ByteBuffer &buff)
     {
         if (in_memory_) {
             if (current_progress_ >= memory_content_.size()) { state_ = FileState::processed; return 0; }
             const std::size_t left = memory_content_.size() - current_progress_;
             const std::size_t chunk = std::min(left, size);
-            if (buff->writable_size() < chunk) { buff->resize_copy(buff->readable_bytes() + chunk); }
-            buff->write_string(memory_content_.data() + current_progress_, chunk);
+            buff.append(memory_content_.data() + current_progress_, chunk);
             current_progress_ += chunk;
             if (current_progress_ >= memory_content_.size()) { state_ = FileState::processed; }
             return static_cast<int>(chunk);
@@ -34,22 +33,26 @@ namespace yuan::net::ftp
             if (!fstream_->good()) { delete fstream_; fstream_ = nullptr; return -1; }
             state_ = FileState::processing;
         }
+
         fstream_->seekg(static_cast<std::streamoff>(current_progress_), std::ios::beg);
-        if (buff->writable_size() < size) { buff->resize_copy(buff->readable_bytes() + size); }
-        fstream_->read(buff->buffer_begin(), static_cast<std::streamsize>(size));
+        buff.ensure_writable(size);
+        fstream_->read(buff.write_ptr(), static_cast<std::streamsize>(size));
         std::size_t read = static_cast<std::size_t>(fstream_->gcount());
-        buff->fill(read);
+        buff.commit(read);
         current_progress_ += read;
         if (current_progress_ >= file_size_) { state_ = FileState::processed; fstream_->close(); delete fstream_; fstream_ = nullptr; }
         return static_cast<int>(read);
     }
 
-    int FtpFileInfo::write_file(buffer::Buffer *buff)
+    int FtpFileInfo::write_file(::yuan::buffer::ByteBuffer &buff)
     {
         if (in_memory_) {
-            const std::size_t sz = buff->readable_bytes();
-            if (sz > 0) { memory_content_.append(buff->peek(), sz); current_progress_ += sz; }
-            buff->reset();
+            const std::size_t sz = buff.readable_bytes();
+            if (sz > 0) {
+                memory_content_.append(buff.read_ptr(), sz);
+                current_progress_ += sz;
+            }
+            buff.clear();
             if (file_size_ > 0 && current_progress_ >= file_size_) { state_ = FileState::processed; }
             return static_cast<int>(sz);
         }
@@ -62,11 +65,12 @@ namespace yuan::net::ftp
             if (!fstream_->good()) { delete fstream_; fstream_ = nullptr; return -1; }
             state_ = FileState::processing;
         }
-        std::size_t sz = buff->readable_bytes();
-        fstream_->write(buff->peek(), static_cast<std::streamsize>(sz));
+
+        std::size_t sz = buff.readable_bytes();
+        fstream_->write(buff.read_ptr(), static_cast<std::streamsize>(sz));
         if (!fstream_->good()) { return -1; }
         current_progress_ += sz;
-        buff->reset();
+        buff.clear();
         if (file_size_ > 0 && current_progress_ >= file_size_) { fstream_->flush(); fstream_->close(); delete fstream_; fstream_ = nullptr; state_ = FileState::processed; }
         return static_cast<int>(sz);
     }

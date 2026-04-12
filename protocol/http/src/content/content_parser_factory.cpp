@@ -12,33 +12,58 @@ namespace yuan::net::http
 {
     ContentParserFactory::ContentParserFactory()
     {
-        parsers[ContentType::text_plain] = new TextContentParser;
-        parsers[ContentType::text_html] = new TextContentParser;
-        parsers[ContentType::text_javascript] = new TextContentParser;
-        parsers[ContentType::text_style_sheet] = new TextContentParser;
+        // Text parser 处理所有 text/* 类型，共享单例
+        auto text = std::make_unique<TextContentParser>();
+        text_parser_instance = text.get();
 
-        parsers[ContentType::multpart_form_data] = new MultipartFormDataParser;
-        parsers[ContentType::multpart_byte_ranges] = new MultipartByterangesParser;
-        parsers[ContentType::application_json] = new JsonContentParser;
-        parsers[ContentType::x_www_form_urlencoded] = new UrlEncodedContentParser;
+        parsers_[ContentType::text_plain]       = text.release();
+        parsers_[ContentType::text_html]        = text_parser_instance;
+        parsers_[ContentType::text_javascript]  = text_parser_instance;
+        parsers_[ContentType::text_style_sheet] = text_parser_instance;
+
+        parsers_[ContentType::multpart_form_data]     = new MultipartFormDataParser;
+        parsers_[ContentType::multpart_byte_ranges]   = new MultipartByterangesParser;
+        parsers_[ContentType::application_json]       = new JsonContentParser;
+        parsers_[ContentType::x_www_form_urlencoded]  = new UrlEncodedContentParser;
+
+        // shared_text_parser 指向的对象由 parsers[text_plain] 管理
+        // 析构时只 delete map 中每个 value，shared_text_parser 不单独 delete
     }
 
     ContentParserFactory::~ContentParserFactory()
     {
-        for (auto &item : parsers) {
-            delete item.second;
+        // shared_text_parser 指向的对象由 parsers map（text_plain条目）管理
+        // 避免双重释放：跳过重复引用的指针
+        for (auto it = parsers_.begin(); it != parsers_.end(); ) {
+            if (it->second == text_parser_instance && it->first != ContentType::text_plain) {
+                ++it;
+                continue;
+            }
+            delete it->second;
+            it = parsers_.erase(it);
         }
     }
 
     bool ContentParserFactory::parse_content(HttpPacket *packet)
     {
         if (packet->is_chunked()) {
-            ContentParser *chunked_parser = packet->get_pre_content_parser();
-            if (!chunked_parser) {
-                chunked_parser = new ChunkedContentParser;
-                packet->set_pre_content_parser(chunked_parser);
+            ChunkedContentParser *chunked_parser = nullptr;
+
+            auto *raw_parser = packet->get_pre_content_parser();
+            if (!raw_parser) {
+                auto owned = std::make_unique<ChunkedContentParser>();
+                chunked_parser = owned.get();
+                packet->set_pre_content_parser(owned.release());
+            } else {
+                chunked_parser = dynamic_cast<ChunkedContentParser*>(raw_parser);
+                if (!chunked_parser) {
+                    delete raw_parser;
+                    auto owned = std::make_unique<ChunkedContentParser>();
+                    chunked_parser = owned.get();
+                    packet->set_pre_content_parser(owned.release());
+                }
             }
-            
+
             if (!chunked_parser->parse(packet)) {
                 return false;
             }
@@ -53,11 +78,14 @@ namespace yuan::net::http
 
             packet->set_body_length(chunked_parser->get_content_length());
 
+            // chunked 解析完成，清理 parser 生命周期
             chunked_parser->reset();
+            delete chunked_parser;
+            packet->set_pre_content_parser(nullptr);
         }
 
-        auto it = parsers.find(packet->get_content_type());
-        if (it == parsers.end() || !it->second->can_parse(packet->get_content_type())) {
+        auto it = parsers_.find(packet->get_content_type());
+        if (it == parsers_.end() || !it->second->can_parse(packet->get_content_type())) {
             return false;
         }
 
@@ -66,7 +94,7 @@ namespace yuan::net::http
 
     bool ContentParserFactory::can_parse(ContentType type)
     {
-        auto it = parsers.find(type);
-        return it != parsers.end() && it->second->can_parse(type);
+        auto it = parsers_.find(type);
+        return it != parsers_.end() && it->second->can_parse(type);
     }
 }

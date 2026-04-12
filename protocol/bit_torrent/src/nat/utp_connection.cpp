@@ -1,13 +1,15 @@
 #include "nat/utp_connection.h"
 #include "nat/nat_config.h"
-#include "net/acceptor/udp_acceptor.h"
+#include "base/time.h"
+#include "buffer/byte_buffer.h"
+#include "net/acceptor/acceptor_factory.h"
+#include "net/acceptor/datagram_acceptor.h"
+#include "net/acceptor/datagram_endpoint.h"
 #include "net/socket/socket.h"
 #include "net/connection/connection.h"
 #include "net/socket/inet_address.h"
 #include "event/event_loop.h"
 #include "timer/timer.h"
-#include "buffer/buffer.h"
-#include "buffer/pool.h"
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -21,7 +23,6 @@
 
 namespace yuan::net::bit_torrent
 {
-
 // ===== UtpConnection =====
 
 UtpConnection::UtpConnection(const std::string &remote_ip, uint16_t remote_port,
@@ -29,7 +30,7 @@ UtpConnection::UtpConnection(const std::string &remote_ip, uint16_t remote_port,
                              const std::string &peer_id,
                              uint32_t recv_conn_id,
                              uint32_t send_conn_id,
-                             net::UdpAcceptor *acceptor,
+                             net::DatagramEndpoint *acceptor,
                              net::EventLoop *loop,
                              timer::TimerManager *timer_mgr)
     : state_(State::idle),
@@ -99,7 +100,7 @@ void UtpConnection::send_data(const uint8_t *data, size_t len)
         SentPacket pkt;
         pkt.seq_nr = seq_nr_++;
         pkt.data.assign(data + offset, data + offset + chunk_size);
-        pkt.sent_time = std::chrono::steady_clock::now();
+        pkt.sent_time_us = base::time::steady_now_us();
         pkt.timestamp = current_timestamp_us();
         pkt.acked = false;
 
@@ -454,7 +455,7 @@ void UtpConnection::retransmit_timeout()
     if (state_ != State::syn_sent && state_ != State::connected && state_ != State::syn_recv)
         return;
 
-    auto now = std::chrono::steady_clock::now();
+    const auto now_us = base::time::steady_now_us();
 
     // Retransmit unacked packets
     for (auto &pair : sent_packets_)
@@ -462,10 +463,9 @@ void UtpConnection::retransmit_timeout()
         SentPacket &pkt = pair.second;
         if (pkt.acked) continue;
 
-        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-            now - pkt.sent_time).count();
+        const auto elapsed = now_us > pkt.sent_time_us ? now_us - pkt.sent_time_us : 0;
 
-        if (elapsed > static_cast<int64_t>(rtt_us_ + rtt_var_us_ * 4))
+        if (elapsed > static_cast<uint64_t>(rtt_us_ + rtt_var_us_ * 4))
         {
             // Retransmit
             if (pair.first == seq_nr_ - 1 && state_ == State::syn_sent)
@@ -476,7 +476,7 @@ void UtpConnection::retransmit_timeout()
             else
             {
                 send_data_packet(pkt.seq_nr, pkt.data.data(), pkt.data.size());
-                pkt.sent_time = now;
+                pkt.sent_time_us = now_us;
                 pkt.timestamp = current_timestamp_us();
             }
 
@@ -488,21 +488,17 @@ void UtpConnection::retransmit_timeout()
 
 uint32_t UtpConnection::current_timestamp_us() const
 {
-    auto now = std::chrono::steady_clock::now();
-    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
-        now.time_since_epoch()).count();
-    return static_cast<uint32_t>(us & 0xFFFFFFFF);
+    return static_cast<uint32_t>(base::time::steady_now_us() & 0xFFFFFFFF);
 }
 
 void UtpConnection::send_raw(const uint8_t *data, size_t len)
 {
     if (!acceptor_) return;
 
-    auto *buf = buffer::BufferedPool::get_instance()->allocate(len);
-    buf->write_string(reinterpret_cast<const char *>(data), len);
-
     net::InetAddress addr(remote_ip_, remote_port_);
-    acceptor_->send_to(addr, buf);
+    yuan::buffer::ByteBuffer packet(len);
+    packet.append(data, len);
+    acceptor_->send_datagram(addr, packet);
 }
 
 void UtpConnection::flush_send_queue()
@@ -513,7 +509,7 @@ void UtpConnection::flush_send_queue()
     {
         SentPacket &pkt = send_queue_.front();
         send_data_packet(pkt.seq_nr, pkt.data.data(), pkt.data.size());
-        pkt.sent_time = std::chrono::steady_clock::now();
+        pkt.sent_time_us = base::time::steady_now_us();
         bytes_in_flight_ += pkt.data.size();
         send_queue_.pop();
     }
@@ -557,7 +553,7 @@ bool UtpManager::start(const NatConfig &config,
     sock->set_reuse(true);
     sock->set_none_block(true);
 
-    acceptor_ = new net::UdpAcceptor(sock, timer_mgr);
+    acceptor_ = net::create_datagram_acceptor(sock, timer_mgr);
     if (!acceptor_->listen())
     {
         delete acceptor_;
@@ -569,7 +565,7 @@ bool UtpManager::start(const NatConfig &config,
     // Set connection handler for incoming UDP packets
     acceptor_->set_connection_handler(this);
     acceptor_->set_event_handler(ev_loop_);
-    ev_loop_->update_channel(acceptor_->get_channel());
+    ev_loop_->update_channel(acceptor_->endpoint_channel());
 
     port_ = bind_port;
     running_ = true;
@@ -758,3 +754,4 @@ void UtpManager::on_write(net::Connection *conn) {}
 void UtpManager::on_close(net::Connection *conn) {}
 
 } // namespace yuan::net::bit_torrent
+

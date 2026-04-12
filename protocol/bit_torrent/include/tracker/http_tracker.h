@@ -1,6 +1,7 @@
 #ifndef __BIT_TORRENT_TRACKER_HTTP_TRACKER_H__
 #define __BIT_TORRENT_TRACKER_HTTP_TRACKER_H__
 
+#include "tracker/announce_event.h"
 #include "torrent_meta.h"
 #include <string>
 #include <vector>
@@ -37,6 +38,7 @@ public:
                   int64_t uploaded = 0,
                   int64_t downloaded = 0,
                   int64_t left = -1,
+                  TrackerAnnounceEvent event = TrackerAnnounceEvent::started,
                   TrackerResponse *out = nullptr);
 
     void announce_async(const std::string &tracker_url,
@@ -45,7 +47,8 @@ public:
                         TrackerResponseHandler handler,
                         int64_t uploaded = 0,
                         int64_t downloaded = 0,
-                        int64_t left = -1);
+                        int64_t left = -1,
+                        TrackerAnnounceEvent event = TrackerAnnounceEvent::started);
 
 private:
     std::string build_announce_url(const std::string &tracker_url,
@@ -53,7 +56,8 @@ private:
                                    int32_t port,
                                    int64_t uploaded,
                                    int64_t downloaded,
-                                   int64_t left);
+                                   int64_t left,
+                                   TrackerAnnounceEvent event);
 
     bool parse_response(const std::string &body, TrackerResponse &out);
 

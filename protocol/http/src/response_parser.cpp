@@ -5,12 +5,12 @@
 
 namespace yuan::net::http 
 {
-    bool HttpResponseParser::parse_header(buffer::Buffer &buff)
+    bool HttpResponseParser::parse_header(::yuan::buffer::ByteBuffer &buff)
     {
-        int from = buff.get_read_index();
+        auto from = buff.read_offset();
         if (header_state == HeaderState::init) {
             if (!parse_version(buff, ' ', 0)) {
-                buff.reset_read_index(from);
+                buff.set_read_offset(from);
                 header_state = HeaderState::init;
                 return false;
             }
@@ -18,10 +18,10 @@ namespace yuan::net::http
             header_state = HeaderState::version_gap;
         }
 
-        from = buff.get_read_index();
+        from = buff.read_offset();
         if (header_state == HeaderState::version_gap) {
             if (!parse_status(buff)) {
-                buff.reset_read_index(from);
+                buff.set_read_offset(from);
                 header_state = HeaderState::version_gap;
                 return false;
             }
@@ -29,10 +29,10 @@ namespace yuan::net::http
             header_state = HeaderState::header_status_gap;
         }
 
-        from = buff.get_read_index();
+        from = buff.read_offset();
         if (header_state == HeaderState::header_status_gap) {
             if (!parse_status_desc(buff)) {
-                buff.reset_read_index(from);
+                buff.set_read_offset(from);
                 header_state = HeaderState::header_status_gap;
                 return false;
             }
@@ -40,10 +40,10 @@ namespace yuan::net::http
             header_state = HeaderState::header_status_desc_gap;
         }
 
-        from = buff.get_read_index();
+        from = buff.read_offset();
         if (header_state == HeaderState::header_status_desc_gap) {
             if (!parse_header_keys(buff)) {
-                buff.reset_read_index(from);
+                buff.set_read_offset(from);
                 header_state = HeaderState::header_status_desc_gap;
                 packet_->clear_header();
                 return false;
@@ -61,17 +61,17 @@ namespace yuan::net::http
             return false; \
         }
     
-    bool HttpResponseParser::parse_status(buffer::Buffer &buff)
+    bool HttpResponseParser::parse_status(::yuan::buffer::ByteBuffer &buff)
     {
         PRE_CHECK(HeaderState::version_gap)
 
         header_state = HeaderState::header_status;
 
         std::string status;
-        char ch = buff.read_int8();
+        char ch = buff.read_i8();
         status.push_back(ch);
         while (ch != ' ' && buff.readable_bytes()) {
-            ch = buff.read_int8();
+            ch = buff.read_i8();
             if (ch != ' ') {
                 status.push_back(ch);
             }
@@ -87,22 +87,22 @@ namespace yuan::net::http
         return true;
     }
 
-    bool HttpResponseParser::parse_status_desc(buffer::Buffer &buff)
+    bool HttpResponseParser::parse_status_desc(::yuan::buffer::ByteBuffer &buff)
     {
         PRE_CHECK(HeaderState::header_status_gap)
 
         std::string data;
-        char ch = buff.read_int8();
+        char ch = buff.read_i8();
         data.push_back(ch);
         while (ch != '\r' && ch != '\n' && buff.readable_bytes()) {
-            ch = buff.read_int8();
+            ch = buff.read_i8();
             if (ch != '\r' && ch != '\n') {
                 data.push_back(ch);
             }
         }
         
         // last /n
-        buff.read_int8();
+        buff.read_i8();
 
         return true;
     }

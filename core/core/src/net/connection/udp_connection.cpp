@@ -1,5 +1,3 @@
-#include "buffer/buffer.h"
-#include "buffer/pool.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
 #include "net/handler/event_handler.h"
@@ -20,6 +18,7 @@ namespace yuan::net
 {
     UdpConnection::UdpConnection(const InetAddress &addr) : address_(std::move(addr)), Connection()
     {
+        set_max_packet_size(UDP_DATA_LIMIT);
         active_ = true;
         closed_ = false;
         is_closing_ = false;
@@ -28,13 +27,12 @@ namespace yuan::net
         eventHandler_ = nullptr;
         instance_ = nullptr;
         alive_timer_ = nullptr;
-        adapter_ = nullptr;
         idle_cnt_ = 0;
     }
 
     UdpConnection::UdpConnection(const InetAddress &addr, UdpAdapter *adapter) : UdpConnection(addr)
     {
-        adapter_ = adapter;
+        adapter_.reset(adapter);
     }
 
     UdpConnection::~UdpConnection()
@@ -49,7 +47,7 @@ namespace yuan::net
 
         if (adapter_) {
             adapter_->on_release();
-            adapter_ = nullptr;
+            adapter_.reset();
         }
 
         // Guard against use-after-free: if UdpInstance is being destroyed,
@@ -79,42 +77,43 @@ namespace yuan::net
     {
         return address_;
     }
-    
-    void UdpConnection::write(buffer::Buffer * buff)
+
+    const InetAddress &UdpConnection::peer_address() const
     {
-        if (!buff || closed_) {
-            buffer::BufferedPool::get_instance()->free(buff);
+        return address_;
+    }
+    
+    void UdpConnection::write(const ::yuan::buffer::ByteBuffer &buffer)
+    {
+        if (buffer.empty() || closed_) {
             return;
         }
 
         if (adapter_) {
-            if (!proc_one_buff(buff)) {
+            if (!proc_one_buffer(buffer)) {
                 connectionHandler_->on_error(this);
-                abort();  // 改用 abort() 以使用延迟删除
+                abort();
                 return;
             }
         } else {
-            output_buffer_.append_buffer(buff);
-            if (output_buffer_.get_current_buffer()->empty()) {
-                output_buffer_.get_current_buffer()->reset();
-                output_buffer_.free_current_buffer();
+            auto chunk = std::make_unique<::yuan::buffer::ByteBuffer>(buffer.copy_readable());
+            if (!chunk->empty()) {
+                output_buffer_.push_back(std::move(chunk));
             }
         }
 
         active_ = true;
     }
 
-    void UdpConnection::write_and_flush(buffer::Buffer *buff)
+    void UdpConnection::write_and_flush(const ::yuan::buffer::ByteBuffer &buffer)
     {
-        if (!buff || closed_) {
-            buffer::BufferedPool::get_instance()->free(buff);
+        if (buffer.empty() || closed_) {
             return;
         }
 
-        write(buff);
+        write(buffer);
         flush();
     }
-
     void UdpConnection::flush()
     {
         assert(connectionHandler_);
@@ -125,15 +124,20 @@ namespace yuan::net
             if (is_closing_) return;
         }
 
-        if (!output_buffer_.get_current_buffer()->empty()) {
-            std::size_t sz = output_buffer_.get_size();
+        auto *front = output_buffer_.front();
+        if (front && !front->empty()) {
+            std::size_t sz = output_buffer_.size();
             for (int i = 0; i < sz;) {
-                auto buff = output_buffer_.get_current_buffer();
-                int sent = instance_->on_send(this, buff);
+                front = output_buffer_.front();
+                if (!front || front->empty()) {
+                    break;
+                }
+                const auto packet = front->copy_readable();
+                int sent = instance_->on_send(this, packet);
                 if (sent > 0) {
-                    buff->add_read_index(sent);
-                    if (buff->empty()) {
-                        output_buffer_.free_current_buffer();
+                    front->consume(static_cast<std::size_t>(sent));
+                    if (front->empty()) {
+                        output_buffer_.pop_front();
                     } else {
                         instance_->enable_rw_events();
                         return;
@@ -156,9 +160,10 @@ namespace yuan::net
             }
         }
 
-        if (output_buffer_.get_current_buffer()->empty() && closed_ && !is_closing_) {
+        front = output_buffer_.front();
+        if ((!front || front->empty()) && closed_ && !is_closing_) {
             is_closing_ = true;
-            // 使用延迟删除，避免在事件回调中直接删除
+            // 使用延迟删除，避免在事件回调中直接删�?
             if (eventHandler_) {
                 eventHandler_->queue_in_loop([this]() {
                     delete this;
@@ -169,16 +174,16 @@ namespace yuan::net
         }
     }
 
-    // 丢弃所有未发送的数据，立即标记销毁
+    // 丢弃所有未发送的数据，立即标记销�?
     void UdpConnection::abort()
     {
         if (is_closing_) {
-            return;  // 防止重复销毁
+            return;  // 防止重复销�?
         }
         is_closing_ = true;
         closed_ = true;
         state_ = ConnectionState::closed;
-        // 使用延迟删除，避免在事件回调中直接删除
+        // 使用延迟删除，避免在事件回调中直接删�?
         if (eventHandler_) {
             eventHandler_->queue_in_loop([this]() {
                 delete this;
@@ -188,7 +193,7 @@ namespace yuan::net
         }
     }
 
-    // 发送完数据后返回
+    // 发送完数据后返�?
     void UdpConnection::close()
     {
         if (is_closing_ || closed_) {
@@ -197,12 +202,13 @@ namespace yuan::net
         ConnectionState lastState = state_;
         state_ = ConnectionState::closing;
         closed_ = true;
-        if (lastState == ConnectionState::connecting || output_buffer_.get_current_buffer()->readable_bytes() > 0) {
+        auto *front = output_buffer_.front();
+        if (lastState == ConnectionState::connecting || (front && front->readable_bytes() > 0)) {
             flush();
             return;
         }
         is_closing_ = true;
-        // 使用延迟删除，避免在事件回调中直接删除
+        // 使用延迟删除，避免在事件回调中直接删�?
         if (eventHandler_) {
             eventHandler_->queue_in_loop([this]() {
                 delete this;
@@ -210,16 +216,6 @@ namespace yuan::net
         } else {
             delete this;
         }
-    }
-
-    ConnectionType UdpConnection::get_conn_type()
-    {
-        return ConnectionType::UDP;
-    }
-
-    Channel * UdpConnection::get_channel()
-    {
-        return nullptr;
     }
 
     void UdpConnection::set_connection_handler(ConnectionHandler *handler)
@@ -229,17 +225,17 @@ namespace yuan::net
 
     void UdpConnection::on_read_event()
     {
-        assert(state_ == ConnectionState::connected && connectionHandler_ && input_buffer_);
-        auto *list = instance_->get_input_buff_list();
-        const auto& buffers = list->to_vector();
+        assert(state_ == ConnectionState::connected && connectionHandler_);
+        replace_input_buffer(instance_->take_input_packet());
 
-        for (auto buf : buffers) {
-            input_buffer_->append_buffer(*buf);
+        bool ok = true;
+        if (adapter_) {
+            auto decoded = get_input_byte_buffer();
+            ok = adapter_->on_recv(decoded) > 0;
+            if (ok) {
+                replace_input_buffer(std::move(decoded));
+            }
         }
-
-        list->free_all_buffers();
-
-        bool ok = adapter_ ? adapter_->on_recv(input_buffer_) > 0 : true;
         if (ok) {
             active_ = true;
             connectionHandler_->on_read(this);
@@ -252,7 +248,8 @@ namespace yuan::net
     {
         connectionHandler_->on_write(this);
         process_pending_output_buffer();
-        if (!output_buffer_.get_current_buffer()->empty()) {
+        auto *front = output_buffer_.front();
+        if (front && !front->empty()) {
             flush();
         }
     }
@@ -276,12 +273,12 @@ namespace yuan::net
         return connectionHandler_;
     }
 
-    void UdpConnection::set_instance_handler(UdpInstance *instance)
+    void UdpConnection::attach_datagram_instance(UdpInstance *instance)
     {
         instance_ = instance;
     }
 
-    void UdpConnection::set_connection_state(ConnectionState state)
+    void UdpConnection::set_datagram_state(ConnectionState state)
     {
         if (state_ == ConnectionState::connected) {
             return;
@@ -297,7 +294,7 @@ namespace yuan::net
     void UdpConnection::on_timer(timer::Timer *timer)
     {
         if (is_closing_) {
-            return;  // 已在销毁过程中，忽略 timer 回调
+            return;  // 已在销毁过程中，忽�?timer 回调
         }
 
         if (!active_) {
@@ -305,19 +302,15 @@ namespace yuan::net
             return;
         }
 
-        if (output_buffer_.get_current_buffer()->empty()) {
+        auto *front = output_buffer_.front();
+        if (!front || front->empty()) {
             ++idle_cnt_;
         }
 
-        // 第三次释放
+        // 第三次释�?
         if (idle_cnt_ >= 2) {
             active_ = false;
         }
-    }
-
-    void UdpConnection::forward(Connection *conn)
-    {
-        conn->write(get_input_buff(true));
     }
 
     void UdpConnection::set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler)
@@ -325,42 +318,44 @@ namespace yuan::net
         assert(false);
     }
 
-    bool UdpConnection::proc_one_buff(buffer::Buffer *buff)
+    bool UdpConnection::proc_one_buffer(const ::yuan::buffer::ByteBuffer &buffer)
     {
-        int ret = adapter_->on_write(buff);
+        auto packet = buffer.copy_readable();
+        int ret = adapter_->on_write(packet);
         if (ret < 0) {
             return false;
-        } else {
-            if (ret < buff->readable_bytes()) {
-                buff->add_read_index(ret);
-                pending_output_buffer_.append_buffer(buff);
-            } else {
-                buffer::BufferedPool::get_instance()->free(buff);
-            }
-            return true;
         }
+
+        if (ret < static_cast<int>(buffer.readable_bytes())) {
+            auto remaining = buffer.copy_readable();
+            remaining.consume(static_cast<std::size_t>(ret));
+            pending_output_buffer_.push_back(std::make_unique<::yuan::buffer::ByteBuffer>(std::move(remaining)));
+        }
+        return true;
     }
 
     void UdpConnection::process_pending_output_buffer()
     {
-        if (pending_output_buffer_.get_current_buffer()->empty()) {
+        auto *front = pending_output_buffer_.front();
+        if (!front || front->empty()) {
             return;
         }
 
-        std::size_t sz = pending_output_buffer_.get_size();
+        std::size_t sz = pending_output_buffer_.size();
         for (int i = 0; i < sz; ++i) {
-            auto buff = pending_output_buffer_.get_current_buffer();
-            if (!proc_one_buff(buff)) {
-                connectionHandler_->on_error(this);
-                abort();  // 改用 abort() 以使用延迟删除，避免 use-after-free
+            front = pending_output_buffer_.front();
+            if (!front || front->empty()) {
                 return;
             }
 
-            if (buff->empty()) {
-                pending_output_buffer_.free_current_buffer();
-            } else {
+            if (!proc_one_buffer(front->copy_readable())) {
+                connectionHandler_->on_error(this);
+                abort();
                 return;
             }
+
+            pending_output_buffer_.pop_front();
         }
     }
 }
+

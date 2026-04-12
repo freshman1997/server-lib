@@ -37,9 +37,9 @@ namespace yuan::net
     public:
         virtual int ssl_init_action();
 
-        virtual int ssl_write(buffer::Buffer *buff);
+        virtual int ssl_write(const char *data, std::size_t size);
 
-        virtual int ssl_read(buffer::Buffer *buff);
+        virtual int ssl_read(char *buffer, std::size_t size);
 
     private:
         void set_ssl_data(OpenSSLModule *module, void *ssl, SSLMode mode);

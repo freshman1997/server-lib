@@ -15,37 +15,45 @@ namespace yuan::net::http
 
     bool JsonContentParser::parse(HttpPacket *packet)
     {
-        auto preContent = packet->get_body_content();
-        if (!preContent) {
-            const nlohmann::json &jval = nlohmann::json::parse(packet->body_begin(), packet->body_end());
+        try {
+            auto preContent = packet->get_body_content();
+            nlohmann::json jval;
+
+            if (!preContent) {
+                // 从内存 buffer 解析
+                jval = nlohmann::json::parse(packet->body_begin(), packet->body_end());
+            } else {
+                // 从临时文件解析（chunked 落盘场景）
+                auto *chunked_data = preContent->as<ChunkedContent>();
+                if (!chunked_data || chunked_data->tmp_file.empty()) {
+                    return false;
+                }
+                std::ifstream file(chunked_data->tmp_file, std::ios::binary);
+                if (!file.is_open()) {
+                    return false;
+                }
+                jval = nlohmann::json::parse(file);
+            }
+
             if (jval.is_discarded()) {
                 return false;
             }
 
-            JsonContent *jc = new JsonContent;
-            jc->jval = std::move(jval);
-            packet->set_body_content(new Content(ContentType::application_json, jc));
-        } else {
-            if (!preContent->file_info_.tmp_file_name_.empty()) {
-                return false;
+            // 统一使用 make_unique + release 模式，保持一致
+            auto jc = std::make_unique<JsonContent>();
+            jc->value = std::move(jval);
+
+            if (preContent) {
+                preContent->data.reset(static_cast<ContentData*>(jc.release()));
+            } else {
+                packet->set_body_content(new Content(ContentType::application_json, jc.release()));
             }
 
-            std::ifstream file(preContent->file_info_.tmp_file_name_, std::ios::binary);
-            if (!file.is_open()) {
-                return false;
-            }
-
-            const nlohmann::json &jval = nlohmann::json::parse(file);
-            if (jval.is_discarded()) {
-                return false;
-            }
-
-            auto jc = std::make_shared<JsonContent>();
-            jc->jval = std::move(jval);
-            preContent->type_ = ContentType::application_json;
-            preContent->content_data_ = jc;
+            return true;
+        } catch (const nlohmann::json::exception&) {
+            return false;
+        } catch (const std::exception&) {
+            return false;
         }
-        
-        return true;
     }
 }

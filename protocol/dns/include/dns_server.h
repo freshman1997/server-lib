@@ -14,17 +14,7 @@
 namespace yuan::net
 {
     class Connection;
-}
-
-namespace yuan::buffer
-{
-    class Buffer;
-    class LinkedBuffer;
-}
-
-namespace yuan::net
-{
-    namespace buffer { using ::yuan::buffer::Buffer; }
+    class DatagramAcceptor;
 }
 
 namespace yuan::net::dns
@@ -53,7 +43,10 @@ namespace yuan::net::dns
         void add_record(const std::string &name, const std::string &ip, DnsType type = DnsType::A);
 
     private:
-        void handle_dns_query(Connection *conn, ::yuan::buffer::Buffer *buffer);
+        bool init_runtime(timer::TimerManager *timer_manager, Poller *poller, EventLoop *ev_loop);
+        bool init_udp_server();
+        void cleanup_runtime();
+        void handle_dns_query(Connection *conn, const ::yuan::buffer::ByteBuffer &buffer);
         void create_response(const DnsPacket &query, DnsPacket &response);
         DnsResourceRecord find_record(const std::string &name, DnsType type);
 
@@ -65,6 +58,8 @@ namespace yuan::net::dns
         timer::TimerManager *timer_manager_;
         Poller *poller_;
         EventLoop *ev_loop_;
+        DatagramAcceptor *acceptor_;
+        bool own_loop_;
     };
 }
 

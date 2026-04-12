@@ -1,52 +1,47 @@
 #include "client/response_parser.h"
-#include "buffer/pool.h"
 
 #include <algorithm>
 #include <cctype>
 
 namespace yuan::net::ftp
 {
-    FtpResponseParser::FtpResponseParser() : buff_(nullptr) {}
+    FtpResponseParser::FtpResponseParser() = default;
 
-    FtpResponseParser::~FtpResponseParser()
+    FtpResponseParser::~FtpResponseParser() = default;
+
+    void FtpResponseParser::set_buff(const ::yuan::buffer::ByteBuffer &buff)
     {
-        if (buff_) {
-            buffer::BufferedPool::get_instance()->free(buff_);
-            buff_ = nullptr;
+        if (buff.readable_bytes() > 0) {
+            buff_.append(buff);
         }
     }
 
-    void FtpResponseParser::set_buff(buffer::Buffer *buff)
+    void FtpResponseParser::set_buff(::yuan::buffer::ByteBuffer &&buff)
     {
-        if (!buff) {
-            return;
-        }
-        if (buff_) {
-            buff_->append_buffer(*buff);
-            buffer::BufferedPool::get_instance()->free(buff);
-        } else {
-            buff_ = buff;
+        if (buff.readable_bytes() > 0) {
+            buff_.append(buff);
+            buff.clear();
         }
     }
 
     std::vector<FtpClientResponse> FtpResponseParser::split_responses(const std::string_view &end_with)
     {
         std::vector<FtpClientResponse> responses;
-        if (!buff_ || buff_->readable_bytes() == 0) {
+        if (buff_.readable_bytes() == 0) {
             return responses;
         }
 
-        while (buff_->readable_bytes() >= end_with.size()) {
-            const char *begin = buff_->peek();
-            const char *end = buff_->peek_end();
+        while (buff_.readable_bytes() >= end_with.size()) {
+            const char *begin = buff_.read_ptr();
+            const char *end = buff_.read_ptr() + buff_.readable_bytes();
             const char *line_end = std::search(begin, end, end_with.begin(), end_with.end());
             if (line_end == end) {
                 break;
             }
 
             std::string line(begin, line_end);
-            buff_->add_read_index(static_cast<size_t>((line_end - begin) + end_with.size()));
-            buff_->shink_to_fit();
+            buff_.consume(static_cast<size_t>((line_end - begin) + end_with.size()));
+            buff_.compact();
             if (line.size() < 3) {
                 continue;
             }

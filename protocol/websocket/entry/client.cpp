@@ -18,6 +18,7 @@
 #endif
 
 #include <cassert>
+#include "logger.h"
 
 namespace yuan::net::websocket
 {
@@ -49,7 +50,7 @@ namespace yuan::net::websocket
             ssl_module_ = std::make_shared<OpenSSLModule>();
             if (!ssl_module_->init("./ssl/ca.crt")) {
                 if (auto msg = ssl_module_->get_error_message()) {
-                    std::cerr << msg->c_str() << '\n';
+                    LOG_ERROR("{}", msg->c_str());
                 }
                 return false;
             }
@@ -128,7 +129,7 @@ namespace yuan::net::websocket
             }
         }
 
-        void on_receive_packet(WebSocketConnection *conn, buffer::Buffer *buff)
+        void on_receive_packet(WebSocketConnection *conn, const ::yuan::buffer::ByteBuffer &buff)
         {
             if (data_handler_) {
                 data_handler_->on_data(conn, buff);

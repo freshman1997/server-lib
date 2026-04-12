@@ -2,10 +2,12 @@
 #define __BIT_TORRENT_PEER_WIRE_PEER_CONNECTION_H__
 
 #include "peer_wire_message.h"
+#include "state/piece_download_state.h"
 #include "torrent_meta.h"
+#include "buffer/byte_buffer.h"
 #include "net/handler/connection_handler.h"
+#include "timer/timer.h"
 #include "timer/timer_manager.h"
-#include "timer/timer_task.h"
 #include <string>
 #include <functional>
 #include <vector>
@@ -30,17 +32,25 @@ class PeerConnection;
 class PeerConnectorHandler;
 
 // Callbacks for piece data received from a peer
-using PieceDataHandler = std::function<void(uint32_t piece_index,
+using PieceDataHandler = std::function<void(PeerConnection *peer,
+                                            uint32_t piece_index,
                                             uint32_t offset,
                                             const uint8_t *data,
                                             uint32_t length)>;
+using PieceRequestHandler = std::function<bool(uint32_t piece_index,
+                                               uint32_t offset,
+                                               uint32_t length,
+                                               std::vector<uint8_t> &out)>;
+using PieceServedHandler = std::function<void(uint32_t piece_index,
+                                              uint32_t offset,
+                                              uint32_t length)>;
 
 using PeerConnectionHandler = std::function<void(PeerConnection *peer)>;
 
 // Represents a single TCP connection to a BitTorrent peer
 // Handles the full Peer Wire Protocol (BEP 3) lifecycle:
 // handshake -> bitfield -> request/piece exchange -> keepalive
-class PeerConnection : public ConnectionHandler, public timer::TimerTask
+class PeerConnection : public ConnectionHandler
 {
     friend class PeerConnectorHandler;
 public:
@@ -65,10 +75,6 @@ public:
     void on_read(net::Connection *conn) override;
     void on_write(net::Connection *conn) override;
     void on_close(net::Connection *conn) override;
-
-public:
-    // TimerTask interface
-    void on_timer(timer::Timer *timer) override;
 
 public:
     // Initiate outbound connection to a peer
@@ -103,10 +109,8 @@ public:
     void send_have(uint32_t piece_index);
     void send_bitfield(const std::vector<uint8_t> &bits);
     void send_request(uint32_t piece_index, uint32_t offset, uint32_t length);
+    void send_piece(uint32_t piece_index, uint32_t offset, const uint8_t *data, uint32_t length);
     void send_cancel(uint32_t piece_index, uint32_t offset, uint32_t length);
-
-    // Request the next block we need from this peer (rarest-first heuristic)
-    bool request_next_piece(const std::vector<bool> &we_have);
 
     State get_state() const { return state_; }
     const PeerState &get_peer_state() const { return peer_state_; }
@@ -116,6 +120,8 @@ public:
     const std::string &get_peer_id() const { return remote_peer_id_; }
 
     void set_piece_data_handler(PieceDataHandler handler) { piece_data_handler_ = std::move(handler); }
+    void set_piece_request_handler(PieceRequestHandler handler) { piece_request_handler_ = std::move(handler); }
+    void set_piece_served_handler(PieceServedHandler handler) { piece_served_handler_ = std::move(handler); }
     void set_on_state_change(PeerConnectionHandler handler) { on_state_change_ = std::move(handler); }
 
     bool is_connected() const { return state_ == State::connected; }
@@ -123,8 +129,12 @@ public:
     {
         return state_ == State::connected && !peer_state_.peer_choking && peer_state_.am_interested;
     }
+    uint32_t pending_request_count() const { return pending_request_count_; }
+    uint32_t request_window_size() const { return request_window_size_; }
+    std::vector<PieceBlockRequest> take_pending_requests();
 
 private:
+    void on_keepalive_timer(timer::Timer *timer);
     void handle_handshake(const uint8_t *data, size_t len);
     void handle_message(const uint8_t *data, size_t len);
 
@@ -142,14 +152,18 @@ private:
     timer::Timer *keepalive_timer_;
 
     PeerState peer_state_;
-    uint8_t handshake_recv_[68];
-    size_t handshake_received_;
+    yuan::buffer::ByteBuffer inbound_buffer_;
 
     PieceDataHandler piece_data_handler_;
+    PieceRequestHandler piece_request_handler_;
+    PieceServedHandler piece_served_handler_;
     PeerConnectionHandler on_state_change_;
+    std::vector<PieceBlockRequest> pending_requests_;
 
     int32_t total_pieces_;
     uint32_t default_request_size_;
+    uint32_t pending_request_count_ = 0;
+    uint32_t request_window_size_ = 4;
 };
 
 } // namespace yuan::net::bit_torrent

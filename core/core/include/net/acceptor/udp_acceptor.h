@@ -1,10 +1,12 @@
 #ifndef __NET_BASE_UDP_ACCEPTOR_H__
 #define __NET_BASE_UDP_ACCEPTOR_H__
-#include "../../buffer/buffer.h"
-#include "acceptor.h"
+#include "../../buffer/byte_buffer.h"
+#include "datagram_acceptor.h"
+#include "datagram_endpoint.h"
 #include "udp/udp_instance.h"
 #include "../channel/channel.h"
 #include "../socket/inet_address.h"
+#include <memory>
 
 namespace yuan::timer 
 {
@@ -15,7 +17,7 @@ namespace yuan::net
 {
     class Socket;
 
-    class UdpAcceptor : public Acceptor
+    class UdpAcceptor : public DatagramAcceptor
     {
     public:
         explicit UdpAcceptor(Socket *socket, timer::TimerManager *timerManager);
@@ -26,7 +28,10 @@ namespace yuan::net
 
         virtual void close();
 
-        virtual Channel * get_channel();
+        virtual Channel *endpoint_channel() override
+        {
+            return channel_.get();
+        }
 
         virtual void update_channel();
 
@@ -42,27 +47,44 @@ namespace yuan::net
         virtual void set_ssl_module(std::shared_ptr<SSLModule> module) {}
 
     public:
-        int send_to(Connection *conn, buffer::Buffer *buff);
+        int send_to(Connection *conn, const ::yuan::buffer::ByteBuffer &buff);
 
-        int send_to(const InetAddress &addr, buffer::Buffer *buff);
+        int send_to(const InetAddress &addr, const ::yuan::buffer::ByteBuffer &buff);
+
+        virtual int send_datagram(Connection *conn, const ::yuan::buffer::ByteBuffer &buff) override
+        {
+            return send_to(conn, buff);
+        }
+
+        virtual int send_datagram(const InetAddress &addr, const ::yuan::buffer::ByteBuffer &buff) override;
+
+        virtual void update_endpoint_channel() override
+        {
+            update_channel();
+        }
 
         timer::TimerManager * get_timer_manager()
         {
             return timer_manager_;
         }
 
-        UdpInstance * get_udp_instance()
+        virtual timer::TimerManager *endpoint_timer_manager() override
         {
-            return instance_;
+            return timer_manager_;
+        }
+
+        UdpInstance * get_udp_instance() override
+        {
+            return instance_.get();
         }
 
     private:
-        Channel *channel_;
-        Socket *sock_;
+        std::unique_ptr<Channel> channel_;
+        std::unique_ptr<Socket> sock_;
         EventHandler *handler_;
         ConnectionHandler *conn_handler_;
         timer::TimerManager *timer_manager_;
-        UdpInstance *instance_;
+        std::unique_ptr<UdpInstance> instance_;
     };
 }
 

@@ -1,3 +1,6 @@
+#ifndef __YUAN_TIMER_TIMER_UTIL_HPP__
+#define __YUAN_TIMER_TIMER_UTIL_HPP__
+
 #include "timer_task.h"
 #include "timer.h"
 #include "timer_manager.h"
@@ -12,7 +15,7 @@ namespace yuan::timer
     {
     public:
         template<typename T>
-        static Timer * build_period_timer(TimerManager *manager, uint32_t timeout, uint32_t interval, T *object, void (T::*func)(Timer *));
+        static Timer * build_period_timer(TimerManager *manager, uint32_t timeout, uint32_t interval, T *object, void (T::*func)(Timer *), int period = -1);
 
         template<typename T>
         static Timer * build_timeout_timer(TimerManager *manager, uint32_t timeout, T *object, void (T::*func)(Timer *));
@@ -40,7 +43,6 @@ namespace yuan::timer
 
         virtual void on_finished(Timer *timer)
         {
-            delete this;
         }
 
         virtual bool need_free()
@@ -68,7 +70,6 @@ namespace yuan::timer
 
         virtual void on_finished(Timer *timer)
         {
-            delete this;
         }
 
         virtual bool need_free()
@@ -81,9 +82,9 @@ namespace yuan::timer
     };
     
     template<typename T>
-    Timer * TimerUtil::build_period_timer(TimerManager *manager, uint32_t timeout, uint32_t interval, T *object, void (T::*func)(Timer *))
+    Timer * TimerUtil::build_period_timer(TimerManager *manager, uint32_t timeout, uint32_t interval, T *object, void (T::*func)(Timer *), int period)
     {
-        return manager->interval(timeout, interval, new DefaultTimerTask<T>(object, func), -1);
+        return manager->interval(timeout, interval, new DefaultTimerTask<T>(object, func), period);
     }
 
     template<typename T>
@@ -102,3 +103,5 @@ namespace yuan::timer
         return manager->interval(timeout, interval, new NoObjectTimerTask(func), period);
     }
 }
+
+#endif

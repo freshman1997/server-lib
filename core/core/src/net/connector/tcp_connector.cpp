@@ -1,7 +1,9 @@
 #include "net/connector/tcp_connector.h"
 
+#include "net/connection/connection.h"
+#include "net/connection/connection_factory.h"
 #include "net/channel/channel.h"
-#include "net/connection/tcp_connection.h"
+#include "net/connection/stream_transport.h"
 #include "net/handler/connector_handler.h"
 #include "net/handler/event_handler.h"
 #include "net/socket/socket.h"
@@ -18,13 +20,23 @@ namespace yuan::net
     public:
         ~TcpConnectorData()
         {
+            cancel_timer();
+        }
+
+    public:
+        void cancel_timer()
+        {
             if (conn_timer_) {
                 conn_timer_->cancel();
                 conn_timer_ = nullptr;
             }
         }
 
-    public:
+        void reset_connection_state()
+        {
+            conn_ = nullptr;
+        }
+
         int timeout_ = 10 * 1000;
         int retry_count_ = 0;
         InetAddress address_;
@@ -33,8 +45,9 @@ namespace yuan::net
         ConnectorHandler *connector_handler_ = nullptr;
         std::shared_ptr<SSLModule> ssl_module = nullptr;
         Connection *conn_ = nullptr;
-        Socket *sock_ = nullptr;
         timer::Timer *conn_timer_ = nullptr;
+        bool suppress_failure_callback_ = false;
+        bool connected_ = false;
     };
 
     TcpConnector::TcpConnector() : data_(std::make_unique<TcpConnectorData>())
@@ -45,14 +58,25 @@ namespace yuan::net
 
     void TcpConnector::on_connected(Connection *conn)
     {
+        data_->conn_ = conn;
         if (data_->ssl_module) {
-            const auto sslHandler = data_->ssl_module->create_handler(conn->get_channel()->get_fd(), SSLHandler::SSLMode::connector_);
+            auto *stream = dynamic_cast<StreamTransport *>(conn);
+            auto *channel = stream ? stream->stream_channel() : nullptr;
+            if (!channel) {
+                data_->reset_connection_state();
+                data_->connector_handler_->on_connect_failed(conn);
+                return;
+            }
+
+            const auto sslHandler = data_->ssl_module->create_handler(channel->get_fd(), SSLHandler::SSLMode::connector_);
             if (!sslHandler) {
+                data_->reset_connection_state();
                 data_->connector_handler_->on_connect_failed(conn);
                 return;
             }
 
             if (!sslHandler->ssl_init_action()) {
+                data_->reset_connection_state();
                 data_->connector_handler_->on_connect_failed(conn);
                 return;
             }
@@ -60,15 +84,16 @@ namespace yuan::net
             conn->set_ssl_handler(sslHandler);
         }
 
-        if (data_->conn_timer_) {
-            data_->conn_timer_->cancel();
-            data_->conn_timer_ = nullptr;
-        }
+        data_->cancel_timer();
+        data_->connected_ = true;
 
         data_->connector_handler_->on_connected_success(conn);
     }
 
-    void TcpConnector::on_error(Connection *conn) {}
+    void TcpConnector::on_error(Connection *conn)
+    {
+        data_->reset_connection_state();
+    }
 
     void TcpConnector::on_read(Connection *conn) {}
 
@@ -76,6 +101,17 @@ namespace yuan::net
 
     void TcpConnector::on_close(Connection *conn) 
     {
+        data_->reset_connection_state();
+        if (data_->suppress_failure_callback_) {
+            data_->suppress_failure_callback_ = false;
+            return;
+        }
+
+        if (data_->connected_) {
+            data_->connected_ = false;
+            return;
+        }
+
         data_->connector_handler_->on_connect_failed(conn);
     }
 
@@ -86,26 +122,25 @@ namespace yuan::net
         data_->address_ = address;
         data_->timeout_ = timeout;
         data_->retry_count_ = retryCount;
+        data_->cancel_timer();
+        data_->reset_connection_state();
+        data_->connected_ = false;
+        data_->suppress_failure_callback_ = false;
 
-        Socket *sock = new Socket(address.get_ip().c_str(), address.get_port());
+        auto sock = std::make_unique<Socket>(data_->address_.get_ip(), data_->address_.get_port());
         sock->set_none_block(true);
         if (!sock->valid()) {
-            delete sock;
             return false;
         }
 
-        sock->set_none_block(true);
         if (!sock->connect()) {
-            delete sock;
             return false;
         }
 
-        Connection *conn = new TcpConnection(sock);
+        auto conn = create_stream_connection(sock.release());
         conn->set_connection_handler(this);
         conn->set_event_handler(data_->event_handler_);
         data_->conn_ = conn;
-        data_->sock_ = sock;
-
         data_->conn_timer_ = timer::TimerUtil::build_timeout_timer(data_->timer_manager_, data_->timeout_, this, &TcpConnector::on_connect_timeout);
 
         return true;
@@ -130,24 +165,47 @@ namespace yuan::net
 
     void TcpConnector::cancel()
     {
-        if (data_->conn_timer_) {
-            data_->conn_timer_->cancel();
-            data_->conn_timer_ = nullptr;
+        data_->cancel_timer();
+        if (data_->conn_) {
+            data_->suppress_failure_callback_ = true;
+            data_->conn_->close();
+            data_->conn_ = nullptr;
         }
     }
 
     void TcpConnector::on_connect_timeout(timer::Timer *timer)
     {
-        data_->conn_timer_->cancel();
+        data_->cancel_timer();
         if (data_->retry_count_ > 0) {
             --data_->retry_count_;
-            if (!data_->sock_->connect()) {
+            if (data_->conn_) {
+                data_->suppress_failure_callback_ = true;
+                data_->conn_->close();
+                data_->conn_ = nullptr;
+            }
+
+            auto sock = std::make_unique<Socket>(data_->address_.get_ip(), data_->address_.get_port());
+            sock->set_none_block(true);
+            if (!sock->valid() || !sock->connect()) {
                 data_->connector_handler_->on_connect_failed(data_->conn_);
                 return;
             }
+
+            auto conn = create_stream_connection(sock.release());
+            conn->set_connection_handler(this);
+            conn->set_event_handler(data_->event_handler_);
+            data_->conn_ = conn;
+            data_->connected_ = false;
+            data_->suppress_failure_callback_ = false;
             data_->conn_timer_ = timer::TimerUtil::build_timeout_timer(data_->timer_manager_, data_->timeout_, this, &TcpConnector::on_connect_timeout);
         } else {
-            data_->connector_handler_->on_connect_timeout(data_->conn_);
+            Connection *timed_out_conn = data_->conn_;
+            if (data_->conn_) {
+                data_->suppress_failure_callback_ = true;
+                data_->conn_ = nullptr;
+                timed_out_conn->close();
+            }
+            data_->connector_handler_->on_connect_timeout(timed_out_conn);
         }
     }
 }

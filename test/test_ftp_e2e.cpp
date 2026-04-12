@@ -82,16 +82,14 @@ int main()
     FtpClient client;
     std::thread clientThread([&]() { client.connect("127.0.0.1", 12123); });
 
-    require(wait_until([&]() { return client.is_ok(); }, 10000), "client did not connect to server");
+    require(client.wait_until_connected(10000), "client did not connect to server");
     require(client.login("tester", "secret"), "login command send failed");
-    require(wait_until([&]() {
-        const auto *ctx = client.get_client_context();
-        return ctx && !ctx->responses_.empty() && ctx->responses_.back().code_ == 230;
-    }), "login did not complete");
+    require(client.wait_for_response_code(230, 10000), "login did not complete");
 
     const auto resumeFile = downloadDir / "downloaded.txt";
     require(client.download("sample.txt", resumeFile.generic_string()), "download send failed");
-    require(wait_until([&]() { return fs::exists(resumeFile) && read_file(resumeFile) == "0123456789abcdef"; }, 15000), "download did not complete correctly");
+    require(client.wait_for_local_file(resumeFile, 15000), "download target file was not created");
+    require(wait_until([&]() { return read_file(resumeFile) == "0123456789abcdef"; }, 5000), "download did not complete correctly");
 
     const auto uploaded = root / "uploaded.txt";
     require(client.upload((downloadDir / "upload_source.txt").generic_string(), "uploaded.txt"), "upload send failed");
@@ -100,10 +98,12 @@ int main()
         std::string content = exists ? read_file(uploaded) : "";
         return exists && content == "client-upload";
     }, 20000), "upload did not complete correctly");
+    require(client.wait_for_transfer_idle(5000), "upload transfer not completed");
 
     const auto appendTarget = root / "append_target.txt";
     require(client.append((downloadDir / "append_source.txt").generic_string(), "append_target.txt"), "append send failed");
     require(wait_until([&]() { return fs::exists(appendTarget); }, 15000), "append file was not created");
+    require(client.wait_for_transfer_idle(5000), "append transfer not completed");
     // 检查文件是否包含预期的内容，忽略可能的换行符差异
     std::string appendContent = read_file(appendTarget);
     bool containsTail = appendContent.find("tail") != std::string::npos;

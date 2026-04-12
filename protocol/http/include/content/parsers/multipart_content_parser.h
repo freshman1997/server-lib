@@ -1,49 +1,55 @@
 #ifndef __NET_HTTP_FORM_DATA_PARSER_H__
 #define __NET_HTTP_FORM_DATA_PARSER_H__
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 #include <utility>
+
 #include "content/content_parser.h"
 
 namespace yuan::net::http 
 {
-    typedef std::pair<uint32_t, std::pair<std::string, std::unordered_map<std::string, std::string>>> ContentDisposition;
-
     class MultipartFormDataParser final : public ContentParser
     {
     public:
-        // 检查是否可以解析
         bool can_parse(ContentType contentType) override;
-
-        // 解析
         bool parse(HttpPacket *packet) override;
 
     private:
-        struct StreamResult
-        {
-            std::string type_;
-            std::unordered_map<std::string, std::string> extra_;
-            uint32_t len_;
-            const char * stream_begin_;
-            const char * stream_end_;
-        };
+        // 解析 Content-Disposition 头部行
+        // 返回 {已解析字节数, {disposition_type, {key->value参数}}}
+        using DispositionResult = std::pair<uint32_t, 
+            std::pair<std::string, std::unordered_map<std::string, std::string>>>;
+        DispositionResult parse_content_disposition(const char *begin, const char *end);
 
-        ContentDisposition parse_content_disposition(const char *begin, const char *end);
-        std::pair<uint32_t, std::string> parse_part_value(const char *begin, const char *end);
-        int parse_part_file_content(StreamResult &result, HttpPacket *packet, const char *begin, const char *end, const std::string &originName);
+        // 解析普通字段值（非文件）
+        std::pair<uint32_t, std::string> parse_text_part(const char *begin, const char *end);
+
+        // 解析文件部分内容
+        struct FilePartResult
+        {
+            std::string content_type;      // 文件的 Content-Type
+            std::unordered_map<std::string, std::string> content_type_params;
+            uint32_t parsed_bytes = 0;     // 此part总共消耗的字节数
+            const char *data_begin = nullptr;
+            const char *data_end   = nullptr;
+            std::string tmp_file_path;     // 如果落盘，临时文件路径；否则为空
+        };
+        
+        int parse_file_part(FilePartResult &result, HttpPacket *packet,
+                            const char *begin, const char *end, const std::string &filename);
     };
 
     class MultipartByterangesParser : public ContentParser
     {
     public:
-        // 检查是否可以解析
         bool can_parse(ContentType contentType) override;
-
-        // 解析
         bool parse(HttpPacket *packet) override;
     
     private:
-        std::tuple<bool, uint32_t, uint32_t, uint32_t, uint32_t> parse_content_range(const char *begin, const char *end);
+        using RangeParseResult = std::tuple<bool /*ok*/, uint32_t/*from*/, uint32_t/*to*/, 
+                                            uint32_t/*length*/, uint32_t/*consumed_bytes*/>;
+        RangeParseResult parse_content_range(const char *begin, const char *end);
     };
 }
 

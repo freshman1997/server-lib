@@ -11,18 +11,32 @@
 #include "internal/utils.h"
 
 #include <memory>
-#include <sstream>
 #include <string>
 #include <vector>
 
 namespace yuan::redis 
 {
+    namespace
+    {
+        void append_bulk_string(std::string &out, std::string_view value)
+        {
+            out.push_back('$');
+            out.append(std::to_string(value.size()));
+            out.append("\r\n");
+            out.append(value.data(), value.size());
+            out.append("\r\n");
+        }
+    }
+
     void DefaultCmd::set_args(const std::string &cmd_name, const std::vector<std::shared_ptr<RedisValue>> &args)
     {
         result_ = nullptr;
         cmd_string_ = cmd_name;
         args_.clear();
-        args_ = args;
+        args_.reserve(args.size());
+        for (const auto &arg : args) {
+            args_.push_back(arg ? arg->to_string() : std::string());
+        }
     }
 
     std::string DefaultCmd::get_cmd_name() const
@@ -37,21 +51,26 @@ namespace yuan::redis
     
     std::string DefaultCmd::pack() const
     {
-        std::stringstream ss;
-        ss << "*" << (args_.size() + 1) << "\r\n";
-        ss << "$" << cmd_string_.size() << "\r\n";
-        ss << cmd_string_ << "\r\n";
-        for (auto &arg : args_)
-        {
-            const auto &tmp = arg->to_string();
-            ss << "$" << tmp.size() << "\r\n";
-            ss << tmp << "\r\n";
+        std::size_t estimated_size = 16 + cmd_string_.size();
+
+        for (const auto &arg : args_) {
+            estimated_size += 16 + arg.size();
         }
-        
-        return ss.str();
+
+        std::string out;
+        out.reserve(estimated_size);
+        out.push_back('*');
+        out.append(std::to_string(args_.size() + 1));
+        out.append("\r\n");
+        append_bulk_string(out, cmd_string_);
+        for (const auto &arg : args_) {
+            append_bulk_string(out, arg);
+        }
+
+        return out;
     }
 
-    int DefaultCmd::unpack(buffer::BufferReader& reader)
+    int DefaultCmd::unpack(buffer::ByteBufferReader& reader)
     {
         int ret = DefaultCmd::unpack_result(result_, reader, unpack_to_map_);
         if (ret >= 0) {
@@ -79,7 +98,7 @@ namespace yuan::redis
         return ret;
     }
 
-    int DefaultCmd::unpack_result(std::shared_ptr<RedisValue> &result, buffer::BufferReader& reader, bool toMap)
+    static int unpack_result_impl(std::shared_ptr<RedisValue> &result, buffer::ByteBufferReader& reader, bool toMap)
     {
         if (reader.get_remain_bytes() < 2)
         {
@@ -87,6 +106,7 @@ namespace yuan::redis
         }
         
         char type = reader.read_char();
+        const bool array_as_map = toMap && type == resp_array;
         if (toMap && type == resp_array)
         {
             type = resp_map;
@@ -134,9 +154,15 @@ namespace yuan::redis
             }
 
             int len = std::atoi(str_value.c_str());
-            if (len < 0 || reader.get_remain_bytes() < len)
+            if (len < 0)
             {
+                result = ErrorValue::from_string("null");
                 return 0;
+            }
+
+            if (reader.get_remain_bytes() < static_cast<std::size_t>(len) + 2)
+            {
+                return UnpackCode::need_more_bytes;
             }
 
             auto pstr = std::make_shared<StringValue>(str_value);
@@ -150,9 +176,12 @@ namespace yuan::redis
 
             result = pstr;
 
-            // skip \r\n
-            str_value.clear();
-            reader.read_line(str_value);
+            const char cr = reader.read_char();
+            const char lf = reader.read_char();
+            if (cr != '\r' || lf != '\n')
+            {
+                return UnpackCode::format_error;
+            }
 
             return 0;
         }
@@ -238,7 +267,7 @@ namespace yuan::redis
             for (int i = 0; i < len; ++i)
             {
                 std::shared_ptr<RedisValue> res = nullptr;
-                int ret = unpack_result(res, reader, toMap);
+                int ret = DefaultCmd::unpack_result(res, reader, toMap);
                 if (ret < 0)
                 {
                     return ret;
@@ -261,21 +290,31 @@ namespace yuan::redis
             }
 
             int len = std::atoi(str_value.c_str());
-            if (len < 0 || len % 2 != 0)
+            if (len < 0)
             {
                 return UnpackCode::format_error;
             }
 
-            std::unordered_map<std::string, std::shared_ptr<RedisValue>> res;
-            while (reader.get_remain_bytes() > 0)
+            if (array_as_map && len % 2 != 0)
             {
+                return UnpackCode::format_error;
+            }
+
+            const int pair_count = array_as_map ? len / 2 : len;
+            std::unordered_map<std::string, std::shared_ptr<RedisValue>> res;
+            for (int i = 0; i < pair_count; ++i)
+            {
+                if (reader.get_remain_bytes() <= 0) {
+                    return UnpackCode::need_more_bytes;
+                }
+
                 char subType = reader.peek_char();
                 if (subType != resp_string) {
                     return UnpackCode::format_error;
                 }
 
                 std::shared_ptr<RedisValue> key = nullptr;
-                ret = unpack_result(key, reader);
+                ret = DefaultCmd::unpack_result(key, reader);
                 if (ret < 0)
                 {
                     return ret;
@@ -286,7 +325,7 @@ namespace yuan::redis
                 }
 
                 std::shared_ptr<RedisValue> value = nullptr;
-                ret = unpack_result(value, reader);
+                ret = DefaultCmd::unpack_result(value, reader);
                 if (ret < 0)
                 {
                     return ret;
@@ -304,7 +343,7 @@ namespace yuan::redis
                 res[key_str] = value;
             }
 
-            if (len / 2 != res.size()) {
+            if (static_cast<std::size_t>(pair_count) != res.size()) {
                 return UnpackCode::format_error;
             }
             
@@ -320,5 +359,17 @@ namespace yuan::redis
         }
 
         return 0;
+    }
+
+    int DefaultCmd::unpack_result(std::shared_ptr<RedisValue> &result, buffer::ByteBufferReader& reader, bool toMap)
+    {
+        const auto checkpoint = reader.position();
+        int ret = unpack_result_impl(result, reader, toMap);
+        if (ret == UnpackCode::need_more_bytes)
+        {
+            reader.restore(checkpoint);
+            result = nullptr;
+        }
+        return ret;
     }
 }

@@ -2,6 +2,7 @@
 #define __BIT_TORRENT_NAT_PEER_LISTENER_H__
 
 #include "peer_wire/peer_connection.h"
+#include "buffer/byte_buffer.h"
 #include "net/handler/connection_handler.h"
 #include "event/event_loop.h"
 #include "timer/timer_manager.h"
@@ -12,7 +13,7 @@
 
 namespace yuan::net
 {
-    class TcpAcceptor;
+    class StreamAcceptor;
     class Socket;
     class Connection;
 }
@@ -26,7 +27,7 @@ struct NatConfig;
 
 // Accepts inbound BitTorrent peer connections on a TCP port.
 // Handles the BT handshake (receiving peer's handshake first, then replying).
-// Implements ConnectionHandler to receive events from TcpAcceptor.
+// Implements ConnectionHandler to receive events from the stream listener.
 class PeerListener : public net::ConnectionHandler
 {
 public:
@@ -65,7 +66,7 @@ private:
     bool listening_ = false;
     int32_t actual_port_ = 0;
 
-    net::TcpAcceptor *acceptor_ = nullptr;
+    net::StreamAcceptor *acceptor_ = nullptr;
     net::Socket *listen_socket_ = nullptr;
 
     net::EventLoop *ev_loop_ = nullptr;
@@ -82,8 +83,7 @@ private:
     {
         net::Connection *conn;
         PeerConnection *peer;
-        uint8_t handshake_recv[68];
-        size_t handshake_received;
+        yuan::buffer::ByteBuffer inbound_buffer;
     };
     std::vector<PendingInbound> pending_;
 };

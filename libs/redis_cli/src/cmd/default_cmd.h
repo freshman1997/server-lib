@@ -1,10 +1,10 @@
 #ifndef __YUAN_REDIS_DEFAULT_CMD_H__
 #define __YUAN_REDIS_DEFAULT_CMD_H__
 #include "../command.h"
-#include "buffer/buffer_reader.h"
 #include "redis_value.h"
 
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace yuan::redis 
@@ -40,14 +40,19 @@ namespace yuan::redis
         
         virtual std::string pack() const;
 
-        virtual int unpack(buffer::BufferReader& reader);
+        virtual int unpack(buffer::ByteBufferReader& reader);
 
-        static int unpack_result(std::shared_ptr<RedisValue> &result, buffer::BufferReader& reader, bool unpack_to_map = false);
+        static int unpack_result(std::shared_ptr<RedisValue> &result, buffer::ByteBufferReader& reader, bool unpack_to_map = false);
 
     public:
         void add_arg(std::shared_ptr<RedisValue> arg)
         {
-            args_.push_back(arg);
+            args_.push_back(arg ? arg->to_string() : std::string());
+        }
+
+        void add_arg(std::string arg)
+        {
+            args_.push_back(std::move(arg));
         }
 
         void set_unpack_to_map(bool unpack_to_map)
@@ -58,7 +63,7 @@ namespace yuan::redis
     protected:
         bool unpack_to_map_ = false;
         std::string cmd_string_;
-        std::vector<std::shared_ptr<RedisValue>> args_;
+        std::vector<std::string> args_;
         std::shared_ptr<RedisValue> result_;
     };
 

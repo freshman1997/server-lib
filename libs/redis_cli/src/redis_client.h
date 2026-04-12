@@ -60,12 +60,41 @@ namespace yuan::redis
         void unsubscibe_channel(const std::string &channel);
 
     public: // common commands
+        // key
+        std::shared_ptr<RedisValue> del(const std::vector<std::string> &keys);
+        std::shared_ptr<RedisValue> unlink(const std::vector<std::string> &keys);
+        std::shared_ptr<RedisValue> exists(const std::vector<std::string> &keys);
+        std::shared_ptr<RedisValue> expire(std::string key, int seconds);
+        std::shared_ptr<RedisValue> expireat(std::string key, int64_t unix_time_seconds);
+        std::shared_ptr<RedisValue> pexpire(std::string key, int64_t milliseconds);
+        std::shared_ptr<RedisValue> pexpireat(std::string key, int64_t unix_time_milliseconds);
+        std::shared_ptr<RedisValue> ttl(std::string key);
+        std::shared_ptr<RedisValue> pttl(std::string key);
+        std::shared_ptr<RedisValue> expiretime(std::string key);
+        std::shared_ptr<RedisValue> pexpiretime(std::string key);
+        std::shared_ptr<RedisValue> persist(std::string key);
+        std::shared_ptr<RedisValue> touch(const std::vector<std::string> &keys);
+        std::shared_ptr<RedisValue> randomkey();
+        std::shared_ptr<RedisValue> move(std::string key, int db);
+        std::shared_ptr<RedisValue> rename(std::string key, std::string new_key);
+        std::shared_ptr<RedisValue> renamenx(std::string key, std::string new_key);
+        std::shared_ptr<RedisValue> key_type(std::string key);
+        std::shared_ptr<RedisValue> keys(std::string pattern);
+        std::shared_ptr<RedisValue> scan(int64_t cursor, const std::string &match_pattern = "", int64_t count = 10);
+
         // string
         std::shared_ptr<RedisValue> get(std::string key);
+        std::shared_ptr<RedisValue> mget(const std::vector<std::string> &keys);
         std::shared_ptr<RedisValue> set(std::string key, std::string value);
+        std::shared_ptr<RedisValue> mset(const std::unordered_map<std::string, std::string> &key_values);
+        std::shared_ptr<RedisValue> msetnx(const std::unordered_map<std::string, std::string> &key_values);
         std::shared_ptr<RedisValue> set(std::string key, std::string value, int expire);
         std::shared_ptr<RedisValue> set(std::string key, std::string value, int expire, int nx);
         std::shared_ptr<RedisValue> set(std::string key, std::string value, int expire, int nx, int xx);
+        std::shared_ptr<RedisValue> incr(std::string key);
+        std::shared_ptr<RedisValue> decr(std::string key);
+        std::shared_ptr<RedisValue> incrby(std::string key, int64_t increment);
+        std::shared_ptr<RedisValue> decrby(std::string key, int64_t decrement);
 
         // hash
         std::shared_ptr<RedisValue> hget(std::string key, std::string field);
@@ -81,6 +110,8 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> hincrby(std::string key, std::string field, int64_t increment);
         std::shared_ptr<RedisValue> hincrbyfloat(std::string key, std::string field, double increment);
         std::shared_ptr<RedisValue> hexists(std::string key, std::string field);
+        std::shared_ptr<RedisValue> hscan(std::string key, int64_t cursor, const std::string &match_pattern = "", int64_t count = 10);
+        std::shared_ptr<RedisValue> hscan(std::string key, int64_t cursor, const std::vector<std::string> &match_patterns, int64_t count = 10);
 
         // list
         std::shared_ptr<RedisValue> lpush(std::string key, const std::vector<std::string> &values);
@@ -123,8 +154,8 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> zrem(std::string key, const std::vector<std::string> &members);
         std::shared_ptr<RedisValue> zrange(std::string key, int64_t start, int64_t stop, bool with_scores = false);
         std::shared_ptr<RedisValue> zrevrange(std::string key, int64_t start, int64_t stop, bool with_scores = false);
-        std::shared_ptr<RedisValue> zrangebyscore(std::string key, double min, double max, bool with_scores = false, bool min_open = false, bool max_open = false, int64_t offset = 0, int64_t count = 10);
-        std::shared_ptr<RedisValue> zrevrangebyscore(std::string key, double max, double min, bool with_scores = false, bool min_open = false, bool max_open = false, int64_t offset = 0, int64_t count = 10);
+        std::shared_ptr<RedisValue> zrangebyscore(std::string key, double min, double max, bool with_scores = false, bool min_open = false, bool max_open = false, int64_t offset = 0, int64_t count = -1);
+        std::shared_ptr<RedisValue> zrevrangebyscore(std::string key, double max, double min, bool with_scores = false, bool min_open = false, bool max_open = false, int64_t offset = 0, int64_t count = -1);
         std::shared_ptr<RedisValue> zrank(std::string key, std::string member);
         std::shared_ptr<RedisValue> zrevrank(std::string key, std::string member);
         std::shared_ptr<RedisValue> zcard(std::string key);
@@ -137,13 +168,17 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> zinterstore(std::string destination, const std::vector<std::string> &keys, const std::vector<double> &weights, const std::string &aggregate = "sum");
         std::shared_ptr<RedisValue> zscan(std::string key, int64_t cursor, const std::string &match_pattern = "", int64_t count = 10);
         std::shared_ptr<RedisValue> zscan(std::string key, int64_t cursor, const std::vector<std::string> &match_patterns, int64_t count = 10);
-        std::shared_ptr<RedisValue> zrangebylex(std::string key, std::string min, std::string max, bool min_open = false, bool max_open = false, int64_t offset = 0, int64_t count = 10);
-        std::shared_ptr<RedisValue> zrevrangebylex(std::string key, std::string max, std::string min, bool min_open = false, bool max_open = false, int64_t offset = 0, int64_t count = 10);
+        std::shared_ptr<RedisValue> zrangebylex(std::string key, std::string min, std::string max, bool min_open = false, bool max_open = false, int64_t offset = 0, int64_t count = -1);
+        std::shared_ptr<RedisValue> zrevrangebylex(std::string key, std::string max, std::string min, bool min_open = false, bool max_open = false, int64_t offset = 0, int64_t count = -1);
         std::shared_ptr<RedisValue> zlexcount(std::string key, std::string min, std::string max, bool min_open = false, bool max_open = false);
         std::shared_ptr<RedisValue> zremrangebylex(std::string key, std::string min, std::string max, bool min_open = false, bool max_open = false);
+        std::shared_ptr<RedisValue> zpopmin(std::string key);
         std::shared_ptr<RedisValue> zpopmin(std::string key, int64_t count);
+        std::shared_ptr<RedisValue> zpopmax(std::string key);
         std::shared_ptr<RedisValue> zpopmax(std::string key, int64_t count);
+        std::shared_ptr<RedisValue> bzpopmin(std::string key, int timeout);
         std::shared_ptr<RedisValue> bzpopmin(std::string key, int timeout, int64_t count);
+        std::shared_ptr<RedisValue> bzpopmax(std::string key, int timeout);
         std::shared_ptr<RedisValue> bzpopmax(std::string key, int timeout, int64_t count);
         std::shared_ptr<RedisValue> zrandmember(std::string key, int count, bool with_scores = false);
 
@@ -160,8 +195,8 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> bitfield_ro(std::string key, const std::vector<std::string> &subcommands);
         std::shared_ptr<RedisValue> bitfield_rw(std::string key, const std::vector<std::string> &subcommands);
         std::shared_ptr<RedisValue> bitfield_incrby(std::string key, int64_t offset, int64_t increment);
-        std::shared_ptr<RedisValue> bitfield_overflow(std::string key, int64_t offset, std::string overflow);
-        std::shared_ptr<RedisValue> bitfield_append(std::string key, int64_t offset, std::string value);
+        std::shared_ptr<RedisValue> bitfield_incrby_i64_with_overflow(std::string key, int64_t offset, int64_t increment, std::string overflow);
+        std::shared_ptr<RedisValue> bitfield_set_i64(std::string key, int64_t offset, std::string value);
         std::shared_ptr<RedisValue> bitfield_get(std::string key, int64_t offset, int64_t length);
         std::shared_ptr<RedisValue> bitfield_set(std::string key, int64_t offset, std::string value);
 
@@ -170,8 +205,8 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> geodist(std::string key, std::string member1, std::string member2, const std::string &unit = "m");
         std::shared_ptr<RedisValue> geohash(std::string key, const std::vector<std::string> &members);
         std::shared_ptr<RedisValue> geopos(std::string key, const std::vector<std::string> &members);
-        std::shared_ptr<RedisValue> georadius(std::string key, double longitude, double latitude, double radius, const std::string &unit = "m", int64_t count = 10, bool with_coord = false, bool with_dist = false, bool with_hash = false, const std::string &sort = "");
-        std::shared_ptr<RedisValue> georadiusbymember(std::string key, std::string member, double radius, const std::string &unit = "m", int64_t count = 10, bool with_coord = false, bool with_dist = false, bool with_hash = false, const std::string &sort = "");
+        std::shared_ptr<RedisValue> georadius(std::string key, double longitude, double latitude, double radius, const std::string &unit = "m", int64_t count = -1, bool with_coord = false, bool with_dist = false, bool with_hash = false, const std::string &sort = "");
+        std::shared_ptr<RedisValue> georadiusbymember(std::string key, std::string member, double radius, const std::string &unit = "m", int64_t count = -1, bool with_coord = false, bool with_dist = false, bool with_hash = false, const std::string &sort = "");
         std::shared_ptr<RedisValue> georadiusbymember(std::string key, std::string member, double radius, const std::string &unit, int64_t count, bool with_coord, bool with_dist, bool with_hash, const std::string &sort, std::string store_key);
         std::shared_ptr<RedisValue> georadius(std::string key, double longitude, double latitude, double radius, const std::string &unit, int64_t count, bool with_coord, bool with_dist, bool with_hash, const std::string &sort, std::string store_key);
 
@@ -181,10 +216,13 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> psubscribe(const std::vector<std::string> &patterns, std::function<void(const std::vector<PSubMessage> &messages)> pmsg_callback);
         std::shared_ptr<RedisValue> unsubscribe(const std::vector<std::string> &channels);
         std::shared_ptr<RedisValue> punsubscribe(const std::vector<std::string> &patterns);
-        std::shared_ptr<RedisValue> psubscribe(const std::vector<std::string> &patterns, const std::vector<std::string> &channels);
-        std::shared_ptr<RedisValue> unsubscribe(const std::vector<std::string> &channels, const std::vector<std::string> &patterns);
-        std::shared_ptr<RedisValue> psubscribe(const std::vector<std::string> &patterns, const std::vector<std::string> &channels, const std::vector<std::string> &unsubscribe_patterns);
-        std::shared_ptr<RedisValue> unsubscribe(const std::vector<std::string> &channels, const std::vector<std::string> &patterns, const std::vector<std::string> &unsubscribe_channels);
+        std::shared_ptr<RedisValue> subscribe_mixed(const std::vector<std::string> &channels, const std::vector<std::string> &patterns);
+        std::shared_ptr<RedisValue> unsubscribe_mixed(const std::vector<std::string> &channels, const std::vector<std::string> &patterns);
+        std::shared_ptr<RedisValue> update_subscriptions(
+            const std::vector<std::string> &subscribe_channels,
+            const std::vector<std::string> &subscribe_patterns,
+            const std::vector<std::string> &unsubscribe_channels,
+            const std::vector<std::string> &unsubscribe_patterns);
 
         // transaction
         bool multi();
@@ -204,7 +242,7 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> script_exists(const std::vector<std::string> &sha1s);
         std::shared_ptr<RedisValue> script_flush();
         std::shared_ptr<RedisValue> script_kill();
-        std::shared_ptr<RedisValue> script_flush(const std::vector<std::string> &keys);
+        std::shared_ptr<RedisValue> script_flush_with_args(const std::vector<std::string> &args);
         
     public: // special command
         // auth
@@ -235,6 +273,7 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> command();
         std::shared_ptr<RedisValue> command_count();
         std::shared_ptr<RedisValue> command_getkeys();
+        std::shared_ptr<RedisValue> command_getkeys(const std::vector<std::string> &command_args);
         std::shared_ptr<RedisValue> command_info(const std::vector<std::string> &commands);
         std::shared_ptr<RedisValue> config_get(std::string parameter);
         std::shared_ptr<RedisValue> config_rewrite();

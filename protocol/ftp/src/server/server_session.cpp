@@ -2,7 +2,7 @@
 #include "common/def.h"
 #include "server/command.h"
 
-#include <iostream>
+#include "logger.h"
 
 namespace yuan::net::ftp
 {
@@ -11,27 +11,26 @@ namespace yuan::net::ftp
 
     void ServerFtpSession::on_read(Connection *conn)
     {
-        auto buff = conn->get_input_buff(true);
+        auto buff = conn->take_input_byte_buffer();
         command_parser_.set_buff(buff);
         const auto &cmds = command_parser_.split_cmds(delimiter, " ");
         for (const auto &item : cmds) {
-            std::cout << "server command cmd=" << item.cmd_ << " args=" << item.args_ << "\n";
+            LOG_DEBUG("ftp server cmd={} args={}", item.cmd_, item.args_);
             auto command = CommandFactory::get_instance()->find_command(item.cmd_);
-            auto outBuff = conn->get_output_linked_buffer()->get_current_buffer();
             if (!command) {
-                outBuff->write_string("500 Unsupported command.\r\n");
+                conn->append_output("500 Unsupported command.\r\n");
                 conn->flush();
                 continue;
             }
             const auto &res = command->execute(this, item.args_);
-            std::cout << "server response code=" << static_cast<int>(res.code_) << " body=" << res.body_ << "\n";
+            LOG_DEBUG("ftp server response code={} body={}", static_cast<int>(res.code_), res.body_);
             if (res.code_ == FtpResponseCode::invalid) {
                 continue;
             }
-            outBuff->write_string(std::to_string((int)res.code_));
-            outBuff->write_string(" ");
-            outBuff->write_string(res.body_);
-            outBuff->write_string("\r\n");
+            conn->append_output(std::to_string((int)res.code_));
+            conn->append_output(" ");
+            conn->append_output(res.body_);
+            conn->append_output("\r\n");
             conn->flush();
             if (res.close_) {
                 quit();

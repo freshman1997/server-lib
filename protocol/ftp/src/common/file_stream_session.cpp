@@ -1,14 +1,16 @@
 #include "common/file_stream_session.h"
 #include "base/time.h"
-#include "buffer/pool.h"
+#include "buffer/byte_buffer.h"
 #include "common/session.h"
 #include "net/channel/channel.h"
+#include "net/connection/stream_transport.h"
 #include "handler/ftp_app.h"
 #include "timer/timer.h"
 #include "timer/timer_manager.h"
+#include "timer/timer_util.hpp"
+#include "logger.h"
 
 #include <cassert>
-#include <iostream>
 
 namespace yuan::net::ftp
 {
@@ -22,7 +24,8 @@ namespace yuan::net::ftp
         session_ = session;
         auto timerManager = session_->get_app()->get_timer_manager();
         assert(timerManager);
-        conn_timer_ = timerManager->interval(2 * 1000, 10 * 1000, this, -1);
+        conn_timer_ = timer::TimerUtil::build_period_timer(
+            timerManager, 2 * 1000, 10 * 1000, this, &FtpFileStreamSession::on_timer, -1);
         last_active_time_ = 0;
         write_buff_size_ = default_write_buff_size;
     }
@@ -51,7 +54,7 @@ namespace yuan::net::ftp
         state_ = FileSteamState::connected;
         conn_ = conn;
         remote_addr_ = conn->get_remote_address();
-        std::cout << "file session connected remote=" << remote_addr_.get_ip() << ":" << remote_addr_.get_port() << "\n";
+        LOG_DEBUG("file session connected remote={}:{}", remote_addr_.get_ip(), remote_addr_.get_port());
         session_->on_opened(this);
         last_active_time_ = base::time::now();
     }
@@ -72,12 +75,12 @@ namespace yuan::net::ftp
     void FtpFileStreamSession::on_read(Connection *conn)
     {
         if (!current_file_info_ || current_file_info_->mode_ != StreamMode::Receiver || !current_file_info_->ready_) {
-            std::cout << "file session read skipped\n";
+            LOG_DEBUG("file session read skipped");
             return;
         }
         state_ = FileSteamState::processing;
-        auto buff = conn->get_input_buff();
-        std::cout << "file session read bytes=" << buff->readable_bytes() << " dest=" << current_file_info_->dest_name_ << "\n";
+        auto buff = conn->take_input_byte_buffer();
+        LOG_DEBUG("file session read bytes={} dest={}", buff.readable_bytes(), current_file_info_->dest_name_);
         int ret = current_file_info_->write_file(buff);
         if (ret < 0) {
             state_ = FileSteamState::file_error;
@@ -112,27 +115,16 @@ namespace yuan::net::ftp
     void FtpFileStreamSession::on_write(Connection *conn)
     {
         if (!current_file_info_ || current_file_info_->mode_ != StreamMode::Sender || !current_file_info_->ready_) {
-            std::cout << "file session write skipped\n";
+            LOG_DEBUG("file session write skipped");
             return;
         }
         state_ = FileSteamState::processing;
-        auto buff = conn->get_output_linked_buffer()->get_current_buffer();
-        bool newBuff = false;
-        if (buff->readable_bytes() > 0) {
-            newBuff = true;
-            buff = buffer::BufferedPool::get_instance()->allocate(write_buff_size_);
-        } else {
-            buff->reset();
-        }
+        yuan::buffer::ByteBuffer buff(write_buff_size_);
         int ret = current_file_info_->read_file(write_buff_size_, buff);
-        std::cout << "file session write ret=" << ret << " source=" << current_file_info_->origin_name_
-                  << " progress=" << current_file_info_->current_progress_ << "/" << current_file_info_->file_size_ << "\n";
+        LOG_DEBUG("file session write ret={} source={} progress={}/{}", ret, current_file_info_->origin_name_, current_file_info_->current_progress_, current_file_info_->file_size_);
         if (ret < 0) {
             state_ = FileSteamState::file_error;
             session_->on_error(this);
-            if (newBuff) {
-                buffer::BufferedPool::get_instance()->free(buff);
-            }
             // Defer close to avoid use-after-free (see on_read above)
             if (conn_) {
                 auto *c = conn_;
@@ -141,7 +133,7 @@ namespace yuan::net::ftp
             }
             return;
         }
-        if (newBuff) {
+        if (buff.readable_bytes() > 0) {
             conn->write(buff);
         }
         if (current_file_info_->is_completed()) {
@@ -165,7 +157,7 @@ namespace yuan::net::ftp
     void FtpFileStreamSession::on_close(Connection *conn)
     {
         (void)conn;
-        std::cout << "file session close remote=" << remote_addr_.get_ip() << ":" << remote_addr_.get_port() << "\n";
+        LOG_DEBUG("file session close remote={}:{}", remote_addr_.get_ip(), remote_addr_.get_port());
         if (state_ == FileSteamState::disconnected) {
             return;
         }
@@ -202,11 +194,14 @@ namespace yuan::net::ftp
     void FtpFileStreamSession::set_work_file(FtpFileInfo *info)
     {
         current_file_info_ = info;
-        std::cout << "set work file mode=" << (info ? static_cast<int>(info->mode_) : -1)
-                  << " origin=" << (info ? info->origin_name_ : std::string())
-                  << " dest=" << (info ? info->dest_name_ : std::string()) << "\n";
+        LOG_DEBUG("set work file mode={} origin={} dest={}", info ? static_cast<int>(info->mode_) : -1,
+                  info ? info->origin_name_ : std::string(), info ? info->dest_name_ : std::string());
         if (conn_ && info) {
-            auto *channel = conn_->get_channel();
+            auto *stream = dynamic_cast<StreamTransport *>(conn_);
+            auto *channel = stream ? stream->stream_channel() : nullptr;
+            if (!channel) {
+                return;
+            }
             if (info->mode_ == StreamMode::Receiver) {
                 channel->disable_write();
                 channel->enable_read();

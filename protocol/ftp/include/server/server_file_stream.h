@@ -4,7 +4,7 @@
 
 namespace yuan::net 
 {
-    class Acceptor;
+    class StreamAcceptor;
 }
 
 namespace yuan::net::ftp 
@@ -25,7 +25,7 @@ namespace yuan::net::ftp
         virtual void quit(const InetAddress &addr);
 
     private:
-        Acceptor *acceptor_;
+        StreamAcceptor *acceptor_;
     };
 }
 

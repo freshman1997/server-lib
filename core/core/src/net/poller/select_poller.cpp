@@ -3,6 +3,7 @@
 #include "net/poller/select_poller.h"
 
 #include <map>
+#include <mutex>
 #include <vector>
 
 namespace yuan::net
@@ -14,7 +15,7 @@ namespace yuan::net
         fd_set writes_;
 		fd_set excepts_;
         std::map<int, net::Channel *> sockets_;
-        std::vector<int> removed_fds_;
+        std::mutex mutex_;
     };
 
     SelectPoller::SelectPoller() : data_(std::make_unique<HelperData>())
@@ -35,13 +36,7 @@ namespace yuan::net
     uint64_t SelectPoller::poll(uint32_t timeout, std::vector<Channel *> &channels)
     {
         uint64_t tm = base::time::get_tick_count();
-
-        if (!data_->removed_fds_.empty()) {
-            for (auto &fd : data_->removed_fds_) {
-                data_->sockets_.erase(fd);
-            }
-            data_->removed_fds_.clear();
-        }
+        std::lock_guard<std::mutex> lock(data_->mutex_);
 
         FD_ZERO(&data_->reads_);
         FD_ZERO(&data_->writes_);
@@ -49,6 +44,10 @@ namespace yuan::net
 
         int max_fd = 0;
         for (auto i = data_->sockets_.begin(); i != data_->sockets_.end(); ++i) {
+            if (!i->second) {
+                continue;
+            }
+
             if (i->second->get_events() & Channel::READ_EVENT) {
                 FD_SET(i->first, &data_->reads_);
                 if (i->first > max_fd) {
@@ -113,17 +112,25 @@ namespace yuan::net
 
     void SelectPoller::update_channel(Channel *channel)
     {
+        if (!channel) {
+            return;
+        }
+
         if (!channel->has_events()) {
-            data_->removed_fds_.push_back(channel->get_fd());
-            data_->sockets_[channel->get_fd()] = nullptr;
+            remove_channel(channel);
         } else {
+            std::lock_guard<std::mutex> lock(data_->mutex_);
             data_->sockets_[channel->get_fd()] = channel;
         }
     }
 
     void SelectPoller::remove_channel(Channel *channel)
     {
-        data_->removed_fds_.push_back(channel->get_fd());
-        data_->sockets_[channel->get_fd()] = nullptr;
+        if (!channel) {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(data_->mutex_);
+        data_->sockets_.erase(channel->get_fd());
     }
 }

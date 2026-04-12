@@ -1,5 +1,4 @@
 #include "packet.h"
-#include "buffer/pool.h"
 #include "content/content_parser.h"
 #include "content/content_parser_factory.h"
 #include "context.h"
@@ -8,7 +7,7 @@
 #include "net/socket/inet_address.h"
 #include "ops/option.h"
 #include "packet_parser.h"
-
+#include "logger.h"
 namespace yuan::net::http 
 {
     static const char* http_version_descs[4] = {
@@ -22,9 +21,10 @@ namespace yuan::net::http
     {
         body_content_ = nullptr;
         parser_ = nullptr;
-        buffer_ = nullptr;
+
         body_length_ = 0;
-        buffer_ = buffer::BufferedPool::get_instance()->allocate();
+        is_good_ = false;
+
         pre_content_parser_ = nullptr;
         task_ = nullptr;
     }
@@ -32,18 +32,10 @@ namespace yuan::net::http
     HttpPacket::~HttpPacket()
     {
         reset();
-        if (body_content_) {
-            delete body_content_;
-            body_content_ = nullptr;
-        }
-
         if (parser_) {
             delete parser_;
             parser_ = nullptr;
         }
-
-        buffer::BufferedPool::get_instance()->free(buffer_);
-        buffer_ = nullptr;
     }
 
     void HttpPacket::reset()
@@ -54,42 +46,41 @@ namespace yuan::net::http
         params_.clear();
         headers_.clear();
         content_type_text_.clear();
-        parser_->reset();
+        if (parser_) {
+            parser_->reset();
+        }
         content_type_ = ContentType::not_support;
         error_code_ = ResponseCode::bad_request;
-
-        if (body_content_) {
-            delete body_content_;
-        }
-
-        body_content_ = nullptr;
-
+        body_content_.reset();
         content_type_extra_.clear();
         error_code_ = ResponseCode::internal_server_error;
-        buffer_->reset();
-        buffer_->shink_to_fit();
-
+        buffer_.clear();
+        buffer_.shrink_to_fit();
+        input_cache_.clear();
         if (pre_content_parser_) {
             delete pre_content_parser_;
+            pre_content_parser_ = nullptr;
         }
-
-        pre_content_parser_ = nullptr;
         chunked_checksum_.clear();
-
+        chunked_checksum_.shrink_to_fit();
         is_download_file_ = false;
         is_upload_file_ = false;
         if (task_) {
             delete task_;
             task_ = nullptr;
         }
-
         original_file_name_.clear();
+        original_file_name_.shrink_to_fit();
     }
 
-    const std::string * HttpPacket::get_header(const std::string &key)
+    const std::string * HttpPacket::get_header(std::string_view key) const
     {
-        auto it = headers_.find(key);
-        return it != headers_.end() ? &it->second : nullptr;
+        for (const auto &item : headers_) {
+            if (std::string_view(item.first) == key) {
+                return &item.second;
+            }
+        }
+        return nullptr;
     }
 
     void HttpPacket::add_header(const std::string &k, const std::string &v)
@@ -97,14 +88,33 @@ namespace yuan::net::http
         headers_[k] = v;
     }
 
-    void HttpPacket::remove_header(const std::string &k)
+    void HttpPacket::add_header(std::string &&k, std::string &&v)
     {
-        headers_.erase(k);
+        headers_[std::move(k)] = std::move(v);
+    }
+
+    void HttpPacket::add_header(const char *k, const char *v)
+    {
+        headers_.emplace(k, v);
+    }
+
+    void HttpPacket::remove_header(std::string_view k)
+    {
+        auto it = headers_.begin();
+        while (it != headers_.end()) {
+            if (std::string_view(it->first) == k) {
+                it = headers_.erase(it);
+                return;
+            }
+            ++it;
+        }
     }
 
     void HttpPacket::clear_header()
     {
         headers_.clear();
+        std::unordered_map<std::string, std::string> empty;
+        headers_.swap(empty);
     }
 
     void HttpPacket::set_body_length(uint32_t len)
@@ -112,9 +122,9 @@ namespace yuan::net::http
         body_length_ = len;
     }
 
-    bool HttpPacket::is_ok() const 
+    bool HttpPacket::is_ok() const
     {
-        return parser_->done();
+        return parser_ ? parser_->done() : false;
     }
 
     void HttpPacket::set_version(HttpVersion ver)
@@ -122,44 +132,56 @@ namespace yuan::net::http
         version_ = ver;
     }
 
-    HttpVersion HttpPacket::get_version() const
-    {
-        return this->version_;
-    }
+    HttpVersion HttpPacket::get_version() const { return version_; }
 
     std::string HttpPacket::get_raw_version() const
     {
-        if (!is_ok()) {
-            return {};
-        }
-
-        return http_version_descs[(uint32_t)version_];
+        if (!is_ok()) return {};
+        
+        int idx = static_cast<int>(version_);
+        if (idx < 0 || idx > 3) return {};
+        return http_version_descs[idx];
     }
 
     const char * HttpPacket::body_begin()
     {
-        auto buff = get_context()->get_connection()->get_input_buff();
-        return body_length_ == 0 ? nullptr : buff->peek();
+        if (body_length_ == 0) return nullptr;
+
+        return input_cache_.readable_bytes() > 0 ? input_cache_.read_ptr() : nullptr;
     }
 
     const char * HttpPacket::body_end()
     {
-        auto buff = get_context()->get_connection()->get_input_buff();
-        return body_length_ == 0 ? nullptr : 
-            buff->readable_bytes() > 0 
-            ? buff->peek() + body_length_ : nullptr;
+        if (body_length_ == 0) return nullptr;
+
+        return input_cache_.readable_bytes() >= body_length_ ? input_cache_.read_ptr() + body_length_ : nullptr;
     }
     
+    yuan::buffer::ByteBuffer HttpPacket::take_body_buffer()
+    {
+        auto body = input_cache_.copy_readable();
+        input_cache_.clear();
+        return body;
+    }
+
+    void HttpPacket::replace_body_buffer(yuan::buffer::ByteBuffer buffer)
+    {
+        input_cache_ = std::move(buffer);
+        input_cache_.compact();
+    }
+
     std::pair<bool, uint32_t> HttpPacket::parse_content_type(const char *begin, const char *end, std::string &ctype, std::unordered_map<std::string, std::string> &extra)
     {
         const char *p = begin;
         if (!begin) {
-            return {true, 0};;
+            return {true, 0};
         }
 
         if (!end || end - begin == 0) {
-            return {false, 0};;
+            return {false, 0};
         }
+
+        ctype.reserve(64);  // 预分配减少rehash
 
         for (; begin != end; ++begin) {
             char ch = *begin;
@@ -175,10 +197,12 @@ namespace yuan::net::http
                 break;
             }
 
-            ctype.push_back(std::tolower(ch));
+            ctype.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
         }
 
-        if (begin != end) {
+        if (begin != end && ctype.size() < 256) {
+            extra.reserve(4);  // 通常只有charset等少量extra参数
+            
             while (begin != end) {
                 char ch = *begin;
                 if (ch == ' ') {
@@ -191,25 +215,27 @@ namespace yuan::net::http
                 }
 
                 std::string k;
+                k.reserve(16);
                 for (; begin != end; ++begin) {
                     ch = *begin;
                     if (ch == '=') {
                         ++begin;
                         break;
                     }
-                    k.push_back(std::tolower(ch));
+                    k.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
                 }
 
                 std::string v;
+                v.reserve(32);
                 for (; begin != end; ++begin) {
                     ch = *begin;
                     if (ch == ';' || ch == '\r') {
                         break;
                     }
-                    v.push_back(std::tolower(ch));
+                    v.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
                 }
 
-                extra[k] = v;
+                extra[std::move(k)] = std::move(v);
 
                 if (*begin == ';') {
                     ++begin;
@@ -217,57 +243,50 @@ namespace yuan::net::http
                 }
             }
         }
-        return {true, begin - p};
+        return {true, static_cast<uint32_t>(begin - p)};
     }
 
     bool HttpPacket::parse_content()
     {
-        if (!is_good_) {
-            return false;
-        }
+        if (!is_good_) return false;
 
         const std::string *ctype = get_header(http_header_key::content_type);
-        if (!ctype) {
-            return true;
-        }
+        if (!ctype) return true;
 
         is_good_ = ContentParserFactory::get_instance()->parse_content(this);
 
         return is_good_;
     }
 
-    bool HttpPacket::parse(buffer::Buffer &buff)
+    bool HttpPacket::parse(const yuan::buffer::ByteBuffer &buff)
     {
         if (is_ok() && !is_downloading()) {
             return true;
         }
 
         if (is_downloading()) {
-            if (!task_) {
-                return false;
-            }
+            if (!task_) return false;
 
-            task_->on_data(&buff);
+            task_->on_data(buff);
             if (!task_->is_good()) {
                 is_good_ = false;
                 return false;
             }
-
             return true;
         }
 
-        buffer::Buffer *buf = &buff;
-        if (buffer_->readable_bytes() > 0) {
-            buffer_->append_buffer(buff);
-            buf = buffer_;
+        if (!buff.empty()) {
+            input_cache_.append(buff);
         }
 
-        if (buf->readable_bytes() > get_max_packet_size()) {
-            std::cerr << "too large packet!!" << std::endl;
+        if (input_cache_.readable_bytes() > get_max_packet_size()) {
+            LOG_ERROR("too large packet!");
             return false;
         }
 
-        const int res = parser_->parse(*buf);
+        const int res = parser_->parse(input_cache_);
+        input_cache_.compact();
+
         if (res < 0) {
             is_good_ = false;
             return false;
@@ -283,15 +302,11 @@ namespace yuan::net::http
             return true;
         }
 
-        if (res == 0) {
-            buffer_->append_buffer(buff);
-        }
-
         is_good_ = true;
         return false;
     }
 
-    bool HttpPacket::write(buffer::Buffer &buff)
+    bool HttpPacket::write(yuan::buffer::ByteBuffer &buff)
     {
         if (is_uploading()) {
             if (task_) {
@@ -307,35 +322,6 @@ namespace yuan::net::http
         pack_and_send(context_->get_connection());
     }
 
-    buffer::Buffer * HttpPacket::get_buff(bool take, bool reset)
-    {
-        if (!take) {
-            return buffer_;
-        }
-
-        buffer::Buffer *buf = buffer_;
-        buffer_ = buffer::BufferedPool::get_instance()->allocate();
-        if (reset)
-        {
-            buf->reset_read_index(0);
-        }
-        
-        return buf;
-    }
-
-    void HttpPacket::pack_and_send(Connection *conn)
-    {
-        assert(conn);
-        if (pack_header(conn)) {
-            if (!buffer_->empty()) {
-                conn->write(buffer_);
-                buffer_ = buffer::BufferedPool::get_instance()->allocate();
-            }
-        } else {
-            is_good_ = false;
-        }
-        conn->flush();
-    }
 
     bool HttpPacket::is_chunked() const
     {
@@ -363,18 +349,9 @@ namespace yuan::net::http
 
     void HttpPacket::set_body_state(BodyState state)
     {
-        parser_->set_body_state(state);
+        if (parser_) parser_->set_body_state(state);
     }
 
-    void HttpPacket::swap_buffer(buffer::Buffer *buf)
-    {
-        if (buf) {
-            buffer::BufferedPool::get_instance()->free(buffer_);
-            buffer_ = buf;
-        } else {
-            buffer_ = buffer::BufferedPool::get_instance()->allocate();
-        }
-    }
 
     std::string HttpPacket::get_peer_ip() const
     {
@@ -391,4 +368,47 @@ namespace yuan::net::http
         return config::max_header_length + config::client_max_content_length;
     }
 
+    void HttpPacket::reserve_body_buffer(std::size_t size)
+    {
+        buffer_.reserve(size);
+    }
+
+    char *HttpPacket::body_write_ptr()
+    {
+        return buffer_.write_ptr();
+    }
+
+    void HttpPacket::commit_body_bytes(std::size_t size)
+    {
+        if (size > 0) {
+            buffer_.commit(size);
+        }
+    }
+
+    void HttpPacket::append_body(std::string_view text)
+    {
+        if (!text.empty()) {
+            reserve_body_buffer(buffer_.readable_bytes() + text.size());
+            buffer_.append(text);
+        }
+    }
+
+    std::size_t HttpPacket::body_buffer_size() const
+    {
+        return buffer_.readable_bytes();
+    }
+
+    void HttpPacket::pack_and_send(Connection *conn)
+    {
+        assert(conn);
+        if (pack_header(conn)) {
+            if (!buffer_.empty()) {
+                conn->write(buffer_);
+                buffer_.clear();
+            }
+        } else {
+            is_good_ = false;
+        }
+        conn->flush();
+    }
 }

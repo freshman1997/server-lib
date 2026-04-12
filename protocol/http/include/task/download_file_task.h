@@ -22,7 +22,7 @@ namespace yuan::net::http
     public:
         virtual bool init() override;
 
-        virtual bool on_data(buffer::Buffer *buf) override;
+        virtual bool on_data(const ::yuan::buffer::ByteBuffer &buf) override;
 
         virtual HttpTaskType get_task_type() const override
         {

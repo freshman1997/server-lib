@@ -2,10 +2,9 @@
 #define __BIT_TORRENT_BIT_TORRENT_CLIENT_H__
 
 #include "torrent_meta.h"
-#include "tracker/http_tracker.h"
-#include "tracker/udp_tracker.h"
-#include "peer_wire/peer_connection.h"
-#include "nat/nat_manager.h"
+#include "nat/nat_config.h"
+#include "stats/download_stats_tracker.h"
+#include "state/piece_download_state.h"
 #include "net/poller/poller.h"
 #include "event/event_loop.h"
 #include "timer/timer_manager.h"
@@ -13,28 +12,16 @@
 #include <vector>
 #include <memory>
 #include <functional>
-#include <unordered_map>
-#include <mutex>
 #include <atomic>
 #include <cstdint>
 
 namespace yuan::net::bit_torrent
 {
 
-struct DownloadStats
-{
-    int64_t total_bytes_ = 0;
-    int64_t downloaded_bytes_ = 0;
-    int64_t uploaded_bytes_ = 0;
-    int32_t active_peers_ = 0;
-    int32_t total_peers_ = 0;
-    int32_t pieces_downloaded_ = 0;
-    int32_t total_pieces_ = 0;
-    float download_speed_ = 0.0f;  // bytes per second
-    float progress_ = 0.0f;         // 0.0 ~ 1.0
-};
-
-using StatsCallback = std::function<void(const DownloadStats &)>;
+class NatManager;
+class PeerConnection;
+class PieceStorage;
+class DownloadRuntimeCoordinator;
 
 // Main BitTorrent client - integrates tracker discovery + peer wire protocol
 // Reference design: aria2's BT download engine
@@ -70,14 +57,22 @@ public:
     void set_nat_config(const NatConfig &config) { nat_config_ = config; }
 
     // Get NAT manager (for advanced usage)
-    NatManager *get_nat_manager() { return nat_manager_.get(); }
+    NatManager *get_nat_manager();
+
+    // Inject a shared runtime. If not set, start() creates and owns one.
+    void set_runtime(net::EventLoop *loop, timer::TimerManager *tm)
+    {
+        ev_loop_ = loop;
+        timer_manager_ = tm;
+        own_loop_ = false;
+    }
 
     // Set the EventLoop (if not set, creates own loop in start())
     void set_event_loop(net::EventLoop *loop) { ev_loop_ = loop; }
     void set_timer_manager(timer::TimerManager *tm) { timer_manager_ = tm; }
 
     // Stats callback (called periodically)
-    void set_stats_callback(StatsCallback cb) { stats_callback_ = std::move(cb); }
+    void set_stats_callback(StatsCallback cb) { stats_tracker_.set_callback(std::move(cb)); }
 
     // Start download (blocking if no external event loop set)
     bool start();
@@ -85,31 +80,28 @@ public:
 
     // Query current state
     bool is_running() const { return running_.load(); }
-    const DownloadStats &get_stats() const { return stats_; }
+    bool is_complete() const { return piece_state_.is_complete(); }
+    const DownloadStats &get_stats() const { return stats_tracker_.stats(); }
     const TorrentMeta &get_meta() const { return meta_; }
-    int32_t get_peer_count() const { return static_cast<int32_t>(peers_.size()); }
+    int32_t get_peer_count() const;
 
 private:
-    // Tracker phase
-    void announce_to_trackers();
-    void on_tracker_http_response(const TrackerResponse &resp);
-    void on_tracker_udp_response(const UdpTrackerResponse &resp);
+    bool init_runtime();
+    bool should_block_on_start() const;
+    void preload_existing_pieces();
+    void start_download_runtime();
+    void stop_download_runtime();
+    void cleanup_runtime();
 
-    // Peer management
-    void connect_peers(const std::vector<PeerAddress> &peer_list);
+    // Peer events
     void on_peer_connected(PeerConnection *peer);
-    void on_inbound_peer(PeerConnection *peer);
-    void on_peer_disconnected(const std::string &key);
-    void on_piece_data(uint32_t piece_index, uint32_t offset, const uint8_t *data, uint32_t length);
-    void disconnect_all_peers();
-
-    // File I/O
-    bool write_piece(int32_t piece_index, uint32_t offset, const uint8_t *data, uint32_t length);
-    bool verify_piece(int32_t piece_index);
-    void flush_all();
-
-    // Stats
-    void update_stats();
+    void on_piece_data(PeerConnection *peer, uint32_t piece_index, uint32_t offset,
+                       const uint8_t *data, uint32_t length);
+    bool on_piece_request(uint32_t piece_index, uint32_t offset, uint32_t length, std::vector<uint8_t> &out);
+    void on_piece_served(uint32_t piece_index, uint32_t offset, uint32_t length);
+    void on_peer_requests_lost(const std::vector<PieceBlockRequest> &requests);
+    std::vector<uint32_t> build_piece_availability() const;
+    void request_next_block(PeerConnection *peer);
 
 private:
     TorrentMeta meta_;
@@ -119,9 +111,8 @@ private:
     std::string peer_id_;
 
     // Download state
-    std::vector<bool> pieces_have_;
-    std::vector<bool> pieces_downloading_;
-    DownloadStats stats_;
+    PieceDownloadState piece_state_;
+    DownloadStatsTracker stats_tracker_;
 
     // Event loop (owned or borrowed)
     net::EventLoop *ev_loop_;
@@ -129,28 +120,14 @@ private:
     net::Poller *poller_;
     bool own_loop_ = false;
 
-    // Trackers
-    HttpTracker http_tracker_;
-    int32_t announce_interval_ = 0;
-    timer::Timer *announce_timer_ = nullptr;
-
-    // Peer connections
-    std::unordered_map<std::string, PeerConnection *> peers_;
-    std::mutex peers_mutex_;
-
-    // File handles (simplified: one file per piece for now)
-    std::unordered_map<int32_t, FILE *> piece_files_;
-    std::string temp_file_prefix_;
-
-    // Callbacks
-    StatsCallback stats_callback_;
+    std::unique_ptr<PieceStorage> piece_storage_;
 
     // State
     std::atomic<bool> running_;
 
-    // NAT traversal
+    // NAT/runtime orchestration
     NatConfig nat_config_;
-    std::unique_ptr<NatManager> nat_manager_;
+    std::unique_ptr<DownloadRuntimeCoordinator> runtime_coordinator_;
 };
 
 } // namespace yuan::net::bit_torrent

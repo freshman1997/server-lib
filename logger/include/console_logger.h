@@ -1,29 +1,26 @@
 #ifndef __LOG_CONSOLE_LOGGER_H__
 #define __LOG_CONSOLE_LOGGER_H__
+
 #include "log.h"
-#include <fmt/core.h>
-#include <fmt/chrono.h>
-#include <ctime>
 #include <string>
 
 namespace yuan::log
 {
-    class ConsoleLogger : public Logger
-    {
-    public:
-        ConsoleLogger() = default;
-        ~ConsoleLogger();
 
-    public:
-        virtual void log(Level level, const char *fmt, ...) override;
+class ConsoleLogger : public Logger
+{
+public:
+    explicit ConsoleLogger(const std::string& name = "console");
+    ~ConsoleLogger() override;
 
-    protected:
-        virtual void log_impl(Level level, const std::string& msg) override;
+    void log(Level level, const char *fmt, ...) override;
+    void flush() override;
 
-    private:
-        std::string get_color(Level level);
-        std::string get_level_str(Level level);
-    };
-}
+protected:
+    void log_impl(Level level, const std::string& msg) override;
+    void log_impl(Level level, const std::string& msg, const char* file, int line, const char* func) override;
+};
+
+} // namespace yuan::log
 
 #endif // __LOG_CONSOLE_LOGGER_H__

@@ -25,7 +25,7 @@ void test_dns_packet_serialization()
     question.class_ = DnsClass::IN;
     packet.add_question(question);
 
-    Buffer buffer;
+    ByteBuffer buffer;
     packet.serialize(buffer);
 
     DnsPacket parsed_packet;
@@ -69,7 +69,7 @@ void test_dns_response()
     answer.set_rdata_from_string("93.184.216.34");
     response.add_answer(answer);
 
-    Buffer buffer;
+    ByteBuffer buffer;
     response.serialize(buffer);
 
     DnsPacket parsed_response;
@@ -126,7 +126,7 @@ void test_multiple_answers()
     answer2.set_rdata_from_string("142.250.185.47");
     response.add_answer(answer2);
 
-    Buffer buffer;
+    ByteBuffer buffer;
     response.serialize(buffer);
 
     DnsPacket parsed_response;
@@ -178,7 +178,7 @@ void test_different_record_types()
     txt_record.set_rdata_from_string("v=spf1 include:_spf.example.com ~all");
     response.add_answer(txt_record);
 
-    Buffer buffer;
+    ByteBuffer buffer;
     response.serialize(buffer);
 
     DnsPacket parsed_response;

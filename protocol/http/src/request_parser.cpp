@@ -6,7 +6,7 @@
 
 namespace yuan::net::http 
 {
-    bool HttpRequestParser::parse_method(buffer::Buffer &buff)
+    bool HttpRequestParser::parse_method(::yuan::buffer::ByteBuffer &buff)
     {
         if (buff.readable_bytes() == 0) {
             return false;
@@ -18,13 +18,13 @@ namespace yuan::net::http
         }
 
         header_state = HeaderState::metohd;
-        char ch = std::tolower(buff.read_int8());
+        char ch = std::tolower(buff.read_i8());
         std::string method;
         method.push_back(ch);
         switch (ch) {
             case 'g': {
                 for (int i = 0; i < 2 && buff.readable_bytes(); ++i) {
-                    method.push_back(std::tolower(buff.read_int8()));
+                    method.push_back(std::tolower(buff.read_i8()));
                 }
 
                 if (method != "get") {
@@ -36,7 +36,7 @@ namespace yuan::net::http
             }
             case 'p': {
                 for (int i = 0; i < 2 && buff.readable_bytes(); ++i) {
-                    method.push_back(std::tolower(buff.read_int8()));
+                    method.push_back(std::tolower(buff.read_i8()));
                 }
 
                 if (method == "put") {
@@ -44,23 +44,23 @@ namespace yuan::net::http
                     break;
                 }
 
-                method.push_back(std::tolower(buff.read_int8()));
+                method.push_back(std::tolower(buff.read_i8()));
                 if (method == "post") {
                     req->method_ = HttpMethod::post_;
                     break;
                 }
 
-                method.push_back(std::tolower(buff.read_int8()));
+                method.push_back(std::tolower(buff.read_i8()));
                 if (method != "patch") {
                     return false;
                 }
 
-                req->method_ = HttpMethod::post_;
+                req->method_ = HttpMethod::patch_;
                 break;
             }
             case 'd': {
                 for (int i = 0; i < 6 && buff.readable_bytes(); ++i) {
-                    method.push_back(std::tolower(buff.read_int8()));
+                    method.push_back(std::tolower(buff.read_i8()));
                 }
 
                 if (method != "delete") {
@@ -72,7 +72,7 @@ namespace yuan::net::http
             }
             case 'o': {
                 for (int i = 0; i < 6 && buff.readable_bytes(); ++i) {
-                    method.push_back(std::tolower(buff.read_int8()));
+                    method.push_back(std::tolower(buff.read_i8()));
                 }
 
                 if (method != "options") {
@@ -84,7 +84,7 @@ namespace yuan::net::http
             }
             case 'h': {
                 for (int i = 0; i < 4 && buff.readable_bytes(); ++i) {
-                    method.push_back(std::tolower(buff.read_int8()));
+                    method.push_back(std::tolower(buff.read_i8()));
                 }
 
                 if (method != "head") {
@@ -96,7 +96,7 @@ namespace yuan::net::http
             }
             case 'c': {
                 for (int i = 0; i < 7 && buff.readable_bytes(); ++i) {
-                    method.push_back(std::tolower(buff.read_int8()));
+                    method.push_back(std::tolower(buff.read_i8()));
                 }
 
                 if (method != "comment") {
@@ -108,7 +108,7 @@ namespace yuan::net::http
             }
             case 't': {
                 for (int i = 0; i < 5 && buff.readable_bytes(); ++i) {
-                    method.push_back(std::tolower(buff.read_int8()));
+                    method.push_back(std::tolower(buff.read_i8()));
                 }
 
                 if (method != "trace") {
@@ -126,14 +126,14 @@ namespace yuan::net::http
             return false;
         }
 
-        if (buff.read_int8() != ' ') {
+        if (buff.read_i8() != ' ') {
             return false;
         }
 
         return true;
     }
 
-    bool HttpRequestParser::parse_url(buffer::Buffer &buff)
+    bool HttpRequestParser::parse_url(::yuan::buffer::ByteBuffer &buff)
     {
         HttpRequest * req = dynamic_cast<HttpRequest *>(packet_);
         if (!req) {
@@ -146,15 +146,15 @@ namespace yuan::net::http
 
         header_state = HeaderState::url;
         std::string url;
-        char ch = buff.read_int8();
+        char ch = buff.read_i8();
         url.push_back(ch);
         while (ch != ' ' && buff.readable_bytes()) {
-            ch = buff.read_int8();
+            ch = buff.read_i8();
             if (ch != ' ') {
                 url.push_back(ch);
             }
 
-            if (buff.get_read_index() > config::client_max_content_length) {
+            if (buff.read_offset() > config::client_max_content_length) {
                 header_state = HeaderState::too_long;
                 return false;
             }
@@ -179,12 +179,12 @@ namespace yuan::net::http
         return true;
     }
 
-    bool HttpRequestParser::parse_header(buffer::Buffer &buff)
+    bool HttpRequestParser::parse_header(::yuan::buffer::ByteBuffer &buff)
     {
-        int from = buff.get_read_index();
+        auto from = buff.read_offset();
         if (header_state == HeaderState::init) {
             if (!parse_method(buff)) {
-                buff.reset_read_index(from);
+                buff.set_read_offset(from);
                 header_state = HeaderState::init;
                 return false;
             }
@@ -192,15 +192,15 @@ namespace yuan::net::http
             header_state = HeaderState::method_gap;
         }
 
-        if (buff.get_read_index() > config::max_header_length) {
+        if (buff.read_offset() > config::max_header_length) {
             header_state = HeaderState::too_long;
             return false;
         }
 
-        from = buff.get_read_index();
+        from = buff.read_offset();
         if (header_state == HeaderState::method_gap) {
             if (!parse_url(buff)) {
-                buff.reset_read_index(from);
+                buff.set_read_offset(from);
                 header_state = HeaderState::method_gap;
                 return false;
             }
@@ -208,15 +208,15 @@ namespace yuan::net::http
             header_state = HeaderState::url_gap;
         }
 
-        if (buff.get_read_index() > config::max_header_length) {
+        if (buff.read_offset() > config::max_header_length) {
             header_state = HeaderState::too_long;
             return false;
         }
 
-        from = buff.get_read_index();
+        from = buff.read_offset();
         if (header_state == HeaderState::url_gap) {
             if (!parse_version(buff)) {
-                buff.reset_read_index(from);
+                buff.set_read_offset(from);
                 header_state = HeaderState::url_gap;
                 return false;
             }
@@ -224,15 +224,15 @@ namespace yuan::net::http
             header_state = HeaderState::version_newline;
         }
 
-        if (buff.get_read_index() > config::max_header_length) {
+        if (buff.read_offset() > config::max_header_length) {
             header_state = HeaderState::too_long;
             return false;
         }
 
-        from = buff.get_read_index();
+        from = buff.read_offset();
         if (header_state == HeaderState::version_newline) {
             if (!parse_header_keys(buff)) {
-                buff.reset_read_index(from);
+                buff.set_read_offset(from);
                 header_state = HeaderState::version_newline;
                 packet_->clear_header();
                 return false;
@@ -241,7 +241,7 @@ namespace yuan::net::http
             header_state = HeaderState::header_end_lines;
         }
 
-        if (buff.get_read_index() > config::max_header_length) {
+        if (buff.read_offset() > config::max_header_length) {
             header_state = HeaderState::too_long;
             return false;
         }

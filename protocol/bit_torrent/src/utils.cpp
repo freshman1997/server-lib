@@ -1,8 +1,8 @@
 #include "utils.h"
+#include "base/time.h"
 #include "openssl/sha.h"
 #include <cstring>
 #include <random>
-#include <chrono>
 
 namespace yuan::net::bit_torrent
 {
@@ -87,8 +87,7 @@ std::string generate_peer_id()
 
 int64_t current_timestamp_ms()
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    return static_cast<int64_t>(base::time::system_now_ms());
 }
 
 } // namespace yuan::net::bit_torrent

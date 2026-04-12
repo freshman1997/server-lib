@@ -12,16 +12,6 @@
 namespace yuan::net::bit_torrent
 {
 
-// Lambda timer task adapter
-class LambdaTimerTask : public timer::TimerTask
-{
-public:
-    explicit LambdaTimerTask(std::function<void(timer::Timer *)> fn) : fn_(std::move(fn)) {}
-    void on_timer(timer::Timer *t) override { fn_(t); }
-private:
-    std::function<void(timer::Timer *)> fn_;
-};
-
 NatManager::NatManager() {}
 
 NatManager::~NatManager()

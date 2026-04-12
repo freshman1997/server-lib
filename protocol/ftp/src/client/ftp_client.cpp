@@ -1,12 +1,14 @@
 #include "client/ftp_client.h"
 #include "client/client_session.h"
 #include "net/connection/connection.h"
-#include "net/connection/tcp_connection.h"
+#include "net/connection/connection_factory.h"
 #include "net/poller/select_poller.h"
 #include "net/socket/socket.h"
 #include "timer/wheel_timer_manager.h"
 
-#include <iostream>
+#include "logger.h"
+
+#include <chrono>
 
 namespace yuan::net::ftp
 {
@@ -15,7 +17,7 @@ namespace yuan::net::ftp
 
     FtpClient::~FtpClient()
     {
-        std::cout << "ftp client exit now!\n";
+        LOG_INFO("ftp client exiting");
         if (owned_ev_loop_) {
             delete owned_ev_loop_;
             owned_ev_loop_ = nullptr;
@@ -36,7 +38,8 @@ namespace yuan::net::ftp
         // On the server side, deletion is handled by shared_ptr in session_manager.
         delete session;
         session_ = nullptr;
-        std::cout << "FTP session closed by server or connection lost" << std::endl;
+        notify_connected_state(false);
+        LOG_INFO("FTP session closed by server or connection lost");
         // Quit the event loop so connect() returns and the thread finishes.
         // This allows the user to reconnect from the same process.
         if (ev_loop_) {
@@ -55,6 +58,81 @@ namespace yuan::net::ftp
             session_->quit();
         }
         // If session_ is null, on_session_closed already ran and quit the loop.
+    }
+
+    void FtpClient::notify_connected_state(bool connected)
+    {
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            connected_ = connected;
+            if (!connected) {
+                pending_action_ = ClientPendingAction::none;
+                transfer_stage_ = ClientTransferStage::idle;
+                last_list_output_.clear();
+            }
+        }
+        state_cv_.notify_all();
+    }
+
+    void FtpClient::notify_client_context(const ClientContext &context)
+    {
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            pending_action_ = context.pending_action_;
+            transfer_stage_ = context.transfer_stage_;
+            last_list_output_ = context.list_output_;
+            if (!context.responses_.empty()) {
+                last_response_code_ = context.responses_.back().code_;
+            }
+        }
+        state_cv_.notify_all();
+    }
+
+    bool FtpClient::wait_until_connected(uint32_t timeout_ms) const
+    {
+        std::unique_lock<std::mutex> lock(state_mutex_);
+        return state_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this]() {
+            return connected_;
+        });
+    }
+
+    bool FtpClient::wait_for_response_code(int code, uint32_t timeout_ms) const
+    {
+        std::unique_lock<std::mutex> lock(state_mutex_);
+        return state_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this, code]() {
+            return last_response_code_ == code;
+        });
+    }
+
+    bool FtpClient::wait_for_transfer_idle(uint32_t timeout_ms) const
+    {
+        std::unique_lock<std::mutex> lock(state_mutex_);
+        return state_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this]() {
+            return pending_action_ == ClientPendingAction::none
+                && transfer_stage_ == ClientTransferStage::idle;
+        });
+    }
+
+    bool FtpClient::wait_for_list_output(std::string *output, uint32_t timeout_ms) const
+    {
+        std::unique_lock<std::mutex> lock(state_mutex_);
+        const bool ready = state_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this]() {
+            return !last_list_output_.empty();
+        });
+        if (ready && output) {
+            *output = last_list_output_;
+        }
+        return ready;
+    }
+
+    bool FtpClient::wait_for_local_file(const std::filesystem::path &path, uint32_t timeout_ms) const
+    {
+        std::unique_lock<std::mutex> lock(state_mutex_);
+        return state_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this, &path]() {
+            return pending_action_ == ClientPendingAction::none
+                && transfer_stage_ == ClientTransferStage::idle
+                && std::filesystem::exists(path);
+        });
     }
 
     bool FtpClient::connect(const std::string &ip, short port)
@@ -80,16 +158,25 @@ namespace yuan::net::ftp
         }
         timer_manager_ = nullptr;
         ev_loop_ = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            connected_ = false;
+            last_response_code_ = 0;
+            pending_action_ = ClientPendingAction::none;
+            transfer_stage_ = ClientTransferStage::idle;
+            last_list_output_.clear();
+        }
+        state_cv_.notify_all();
 
         addr_.set_addr(ip, port);
         net::Socket *sock = new net::Socket(addr_.get_ip().c_str(), addr_.get_port());
         if (!sock->valid()) {
-            std::cout << "create socket fail!!\n";
+            LOG_ERROR("create socket fail!");
             return false;
         }
         sock->set_none_block(true);
         if (!sock->connect()) {
-            std::cout << " connect failed \n";
+            LOG_WARN("connect failed");
             delete sock;
             return false;
         }
@@ -100,7 +187,7 @@ namespace yuan::net::ftp
         timer_manager_ = owned_timer_manager_;
         ev_loop_ = owned_ev_loop_;
 
-        auto *conn = new TcpConnection(sock);
+        auto *conn = create_stream_connection(sock);
         session_ = new ClientFtpSession(conn, this);
         conn->set_event_handler(ev_loop_);
         ev_loop_->loop();
@@ -126,16 +213,28 @@ namespace yuan::net::ftp
     bool FtpClient::send_command(const std::string &cmd) { return session_ ? session_->send_command(cmd) : false; }
     bool FtpClient::login(const std::string &username, const std::string &password)
     {
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            last_response_code_ = 0;
+        }
         auto *session = dynamic_cast<ClientFtpSession *>(session_);
         return session ? session->login(username, password) : false;
     }
     bool FtpClient::list(const std::string &path)
     {
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            last_list_output_.clear();
+        }
         auto *session = dynamic_cast<ClientFtpSession *>(session_);
         return session ? session->list(path) : false;
     }
     bool FtpClient::nlist(const std::string &path)
     {
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            last_list_output_.clear();
+        }
         auto *session = dynamic_cast<ClientFtpSession *>(session_);
         return session ? session->nlist(path) : false;
     }

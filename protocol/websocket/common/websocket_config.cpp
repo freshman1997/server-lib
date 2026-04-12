@@ -2,7 +2,7 @@
 #include "nlohmann/json.hpp"
 #include "websocket_utils.h"
 #include <ctime>
-#include <iostream>
+#include "logger.h"
 #include <fstream>
 #include <memory>
 #include <string>
@@ -32,13 +32,13 @@ namespace yuan::net::websocket
             std::ifstream input(config_file_path_.data());
             try {
                 if (!input.good()) {
-                    std::cout << "not found config file: " << config_file_path_ << "\n";
+                    LOG_WARN("not found config file: {}", config_file_path_);
                     return true;
                 }
 
                 const nlohmann::json &jval = nlohmann::json::parse(input);
                 if (jval.is_discarded()) {
-                    std::cout << config_file_path_ << " is not json config file!\n";
+                    LOG_WARN("{} is not json config file!", config_file_path_);
                     return false;
                 }
 
@@ -62,7 +62,7 @@ namespace yuan::net::websocket
 
                 return true;
             } catch (...) {
-                std::cout << "parse " << config_file_path_ << " config file failed!\n";
+                LOG_ERROR("parse {} config file failed!", config_file_path_);
                 return false;
             }
         }

@@ -1,13 +1,14 @@
 #ifndef __TCP_CONNECTION_H__
 #define __TCP_CONNECTION_H__
 
-#include "buffer/linked_buffer.h"
 #include "connection.h"
+#include "stream_transport.h"
 #include "net/handler/select_handler.h"
+#include <memory>
 
 namespace yuan::net
 {
-    class TcpConnection : public Connection
+    class TcpConnection : public Connection, public StreamTransport
     {
     public:
         TcpConnection(std::string ip, int port, int fd);
@@ -22,9 +23,9 @@ namespace yuan::net
 
         virtual const InetAddress & get_remote_address();
 
-        virtual void write(buffer::Buffer * buff);
+        virtual void write(const ::yuan::buffer::ByteBuffer &buffer);
 
-        virtual void write_and_flush(buffer::Buffer *buff);
+        virtual void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer);
 
         virtual void flush();
 
@@ -34,15 +35,11 @@ namespace yuan::net
         // 发送完数据后返回
         virtual void close();
 
-        virtual ConnectionType get_conn_type();
-
-        virtual Channel * get_channel();
+        Channel *stream_channel() override;
 
         virtual void set_connection_handler(ConnectionHandler *connectionHandler);
 
         virtual ConnectionHandler * get_connection_handler();
-
-        virtual void forward(Connection *conn);
 
         virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler);
 
@@ -60,8 +57,8 @@ namespace yuan::net
 
     protected:
         ConnectionState state_;
-        Channel *channel_;
-        Socket *socket_;
+        std::unique_ptr<Channel> channel_;
+        std::unique_ptr<Socket> socket_;
         ConnectionHandler *connectionHandler_;
         EventHandler *eventHandler_;
         std::shared_ptr<SSLHandler> ssl_handler_;

@@ -5,26 +5,30 @@
 #include "value/error_value.h"
 #include "value/status_value.h"
 #include <memory>
-#include <sstream>
 
 namespace yuan::redis 
 {
     std::string MultiCmd::pack() const
     {
-        std::stringstream ss;
-
-        ss << DefaultCmd::pack();
-
-        for (auto &cmd : cmds_)
-        {
-            ss << cmd->pack();
+        std::string out = DefaultCmd::pack();
+        for (const auto &cmd : cmds_) {
+            if (!cmd) {
+                continue;
+            }
+            out.append(cmd->pack());
         }
-
-        return ss.str();
+        return out;
     }
 
-    int MultiCmd::unpack(buffer::BufferReader& reader)
+    int MultiCmd::unpack(buffer::ByteBufferReader& reader)
     {
+        const auto checkpoint = reader.position();
+        auto need_more = [&]() {
+            reader.restore(checkpoint);
+            result_ = nullptr;
+            return UnpackCode::need_more_bytes;
+        };
+
         if (cmds_.empty())
         {
             result_ = ErrorValue::from_string("ERR: EXEC without MULTI");
@@ -37,9 +41,13 @@ namespace yuan::redis
         {
             std::shared_ptr<RedisValue> cmdResult;
             int ret = DefaultCmd::unpack_result(cmdResult, reader);
+            if (ret == UnpackCode::need_more_bytes)
+            {
+                return need_more();
+            }
             if (ret < 0 || !cmdResult)
             {
-                result_ = ErrorValue::from_string("ERR: run multi cmd failed, cmdName: " + cmds_[idx]->get_cmd_name() + ", idx: " + std::to_string(idx - 1));
+                result_ = ErrorValue::from_string("ERR: run multi cmd failed, cmdName: " + cmds_[idx]->get_cmd_name() + ", idx: " + std::to_string(idx));
                 return -1;
             }
 
@@ -60,14 +68,19 @@ namespace yuan::redis
         }
 
         if (reader.get_remain_bytes() <= 0) {
-            return UnpackCode::need_more_bytes;
+            return need_more();
         }
 
         std::shared_ptr<RedisValue> resultList;
         int ret = DefaultCmd::unpack_result(resultList, reader);
+        if (ret == UnpackCode::need_more_bytes)
+        {
+            return need_more();
+        }
         if (ret < 0 || !resultList)
         {
-            result_ = ErrorValue::from_string("ERR: run multi cmd failed, cmdName: " + cmds_[idx]->get_cmd_name() + ", idx: " + std::to_string(idx - 1));
+            const auto cmd_idx = idx < cmd_size ? idx : cmd_size - 1;
+            result_ = ErrorValue::from_string("ERR: run multi cmd failed, cmdName: " + cmds_[cmd_idx]->get_cmd_name() + ", idx: " + std::to_string(idx));
             return -1;
         }
 

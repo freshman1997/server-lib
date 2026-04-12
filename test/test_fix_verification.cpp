@@ -78,15 +78,13 @@ int main()
     FtpClient client;
     std::thread clientThread([&]() { client.connect("127.0.0.1", 12124); });
 
-    require(wait_until([&]() { return client.is_ok(); }, 10000), "client did not connect to server");
+    require(client.wait_until_connected(10000), "client did not connect to server");
     require(client.login("tester", "secret"), "login command send failed");
-    require(wait_until([&]() {
-        const auto *ctx = client.get_client_context();
-        return ctx && !ctx->responses_.empty() && ctx->responses_.back().code_ == 230;
-    }), "login did not complete");
+    require(client.wait_for_response_code(230, 10000), "login did not complete");
 
     const auto resumeFile = downloadDir / "downloaded.txt";
     require(client.download("sample.txt", resumeFile.generic_string()), "download send failed");
+    require(client.wait_for_local_file(resumeFile, 15000), "downloaded file was not created");
     require(wait_until([&]() { return fs::exists(resumeFile) && read_file(resumeFile) == "Hello FTP Test!"; }, 15000), "download did not complete correctly");
 
     std::cout << "✓ FTP download test passed (no crash!)\n";

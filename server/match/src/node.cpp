@@ -1,4 +1,7 @@
 #include "node.h"
+
+#include "base/time.h"
+
 #include <algorithm>
 
 namespace match
@@ -9,7 +12,7 @@ namespace match
         , state_(NodeState::IDLE)
         , match_range_(0)
         , current_pool_index_(-1)
-        , enter_time_(std::chrono::steady_clock::now())
+        , enter_time_ms_(yuan::base::time::steady_now_ms())
     {
     }
 
@@ -83,9 +86,7 @@ namespace match
 
     uint32_t MatchNode::get_wait_time_ms() const
     {
-        auto now = std::chrono::steady_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - enter_time_);
-        return static_cast<uint32_t>(duration.count());
+        return static_cast<uint32_t>(yuan::base::time::steady_now_ms() - enter_time_ms_);
     }
 
     void MatchNode::reset()
@@ -93,11 +94,11 @@ namespace match
         state_ = NodeState::IDLE;
         match_range_ = 0;
         current_pool_index_ = -1;
-        enter_time_ = std::chrono::steady_clock::now();
+        enter_time_ms_ = yuan::base::time::steady_now_ms();
     }
 
     void MatchNode::refresh_enter_time()
     {
-        enter_time_ = std::chrono::steady_clock::now();
+        enter_time_ms_ = yuan::base::time::steady_now_ms();
     }
 }

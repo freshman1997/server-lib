@@ -1,6 +1,6 @@
 #include "../redis_impl.h"
-#include "cmd/default_cmd.h"
 #include "cmd/multi_cmd.h"
+#include "internal/cmd_builder.h"
 #include "redis_client.h"
 #include "value/error_value.h"
 
@@ -13,7 +13,7 @@ namespace yuan::redis
         }
 
         auto cmd = std::make_shared<MultiCmd>();
-        cmd->set_args("multi", {});
+        cmd->set_args("multi", make_args());
        
         impl_->multi_cmd_ = cmd;
 
@@ -26,9 +26,7 @@ namespace yuan::redis
             return ErrorValue::from_string("ERR: EXEC without MULTI");
         }
 
-        auto cmd = std::make_shared<DefaultCmd>();
-        cmd->set_args("exec", {});
-        impl_->multi_cmd_->add_command(cmd);
+        impl_->multi_cmd_->add_command(make_cmd("exec"));
         auto tmp = impl_->multi_cmd_;
         impl_->multi_cmd_ = nullptr;
         return impl_->execute_command(tmp);

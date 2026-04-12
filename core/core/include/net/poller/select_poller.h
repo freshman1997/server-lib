@@ -12,6 +12,7 @@
 #endif
 
 #include <memory>
+#include <mutex>
 
 namespace yuan::net 
 {

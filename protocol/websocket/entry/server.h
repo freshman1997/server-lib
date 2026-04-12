@@ -18,6 +18,8 @@ namespace yuan::net::websocket
 
         void serve();
 
+        void stop();
+
     private:
         class ServerData;
         std::unique_ptr<ServerData> data_;

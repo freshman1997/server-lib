@@ -67,6 +67,8 @@ namespace yuan::net
         }
 
     public:
+        static std::string normalize_host(const std::string &host);
+
         static std::string get_address_by_host(const std::string &host);
 
     private:

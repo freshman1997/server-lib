@@ -1,6 +1,7 @@
 #ifndef __YUAN_REDIS_REGISTERY_H__
 #define __YUAN_REDIS_REGISTERY_H__
 
+#include "coroutine/runtime.h"
 #include "singleton/singleton.h"
 
 namespace yuan::net 
@@ -29,9 +30,9 @@ namespace yuan::redis
 
         timer::TimerManager *get_timer_manager() const { return timer_manager_; }
 
-        void run();
+        yuan::coroutine::RuntimeView get_coroutine_runtime() const;
 
-        void use_corutine();
+        void run();
 
     private:
         net::EventLoop *event_loop_;

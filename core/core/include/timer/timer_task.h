@@ -8,7 +8,7 @@ namespace yuan::timer
     class TimerTask
     {
     public:
-        virtual ~TimerTask() {}
+        virtual ~TimerTask() = default;
         
         virtual void on_timer(Timer *timer) = 0;
 

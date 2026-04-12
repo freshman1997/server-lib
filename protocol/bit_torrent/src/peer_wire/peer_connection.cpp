@@ -1,23 +1,18 @@
 #include "peer_wire/peer_connection.h"
+#include "buffer/byte_buffer.h"
+#include "event/event_loop.h"
 #include "net/connector/tcp_connector.h"
 #include "net/socket/inet_address.h"
 #include "net/connection/connection.h"
 #include "net/handler/connector_handler.h"
 #include "timer/timer.h"
-#include "buffer/buffer.h"
-#include "buffer/pool.h"
+#include "timer/timer_util.hpp"
+
+#include <algorithm>
 #include <cstring>
 
 namespace yuan::net::bit_torrent
 {
-
-// Helper: create a Buffer from raw data for writing to Connection
-static buffer::Buffer *make_write_buffer(const uint8_t *data, size_t len)
-{
-    auto *buf = buffer::BufferedPool::get_instance()->allocate(len);
-    buf->write_string(reinterpret_cast<const char *>(data), len);
-    return buf;
-}
 
 // Connector handler for peer TCP connections
 class PeerConnectorHandler : public net::ConnectorHandler
@@ -52,13 +47,12 @@ public:
         hs.set_info_hash(parent_->info_hash_.data());
         hs.set_peer_id(parent_->local_peer_id_);
         auto hs_data = hs.serialize();
-        auto *buf = make_write_buffer(hs_data.data(), hs_data.size());
-        conn->write(buf);
+        conn->write(yuan::buffer::ByteBuffer(hs_data.data(), hs_data.size()));
 
         if (parent_->timer_manager_)
         {
-            parent_->keepalive_timer_ = parent_->timer_manager_->interval(
-                120000, 120000, parent_, -1);
+            parent_->keepalive_timer_ = timer::TimerUtil::build_period_timer(
+                parent_->timer_manager_, 120000, 120000, parent_, &PeerConnection::on_keepalive_timer, -1);
         }
 
         delete addr_;
@@ -79,9 +73,11 @@ PeerConnection::PeerConnection()
       timer_manager_(nullptr),
       ev_loop_(nullptr),
       keepalive_timer_(nullptr),
-      handshake_received_(0),
+      inbound_buffer_(HandshakeMessage::HANDSHAKE_SIZE * 2),
       total_pieces_(0),
-      default_request_size_(16 * 1024)
+      default_request_size_(16 * 1024),
+      pending_request_count_(0),
+      request_window_size_(4)
 {
 }
 
@@ -103,13 +99,15 @@ void PeerConnection::connect(const std::string &peer_ip,
     ev_loop_ = loop;
 
     state_ = State::connecting;
-    handshake_received_ = 0;
+    inbound_buffer_.clear();
+    pending_request_count_ = 0;
+    pending_requests_.clear();
 
     auto *connector = new net::TcpConnector();
     auto *addr = new net::InetAddress(peer_ip, peer_port);
     auto *handler = new PeerConnectorHandler(this, addr, connector);
 
-    connector->set_data(timer_mgr, handler, nullptr);
+    connector->set_data(timer_mgr, handler, loop);
     connector->connect(*addr);
 }
 
@@ -136,12 +134,14 @@ void PeerConnection::accept_inbound(net::Connection *conn,
     ev_loop_ = loop;
 
     state_ = State::connected;
-    handshake_received_ = HandshakeMessage::HANDSHAKE_SIZE; // skip handshake parsing
+    inbound_buffer_.clear();
+    pending_request_count_ = 0;
+    pending_requests_.clear();
 
     if (timer_manager_)
     {
-        keepalive_timer_ = timer_manager_->interval(
-            120000, 120000, this, -1);
+        keepalive_timer_ = timer::TimerUtil::build_period_timer(
+            timer_manager_, 120000, 120000, this, &PeerConnection::on_keepalive_timer, -1);
     }
 
     if (on_state_change_)
@@ -162,8 +162,14 @@ void PeerConnection::disconnect()
 
     if (conn_)
     {
+        conn_->set_connection_handler(nullptr);
         conn_->close();
         conn_ = nullptr;
+    }
+
+    if (on_state_change_)
+    {
+        on_state_change_(this);
     }
 }
 
@@ -172,44 +178,56 @@ void PeerConnection::on_connected(net::Connection *conn) {}
 void PeerConnection::on_error(net::Connection *conn)
 {
     state_ = State::error;
+    pending_request_count_ = 0;
+    if (on_state_change_)
+        on_state_change_(this);
 }
 
 void PeerConnection::on_close(net::Connection *conn)
 {
     state_ = State::closed;
+    pending_request_count_ = 0;
+    if (on_state_change_)
+        on_state_change_(this);
 }
 
 void PeerConnection::on_write(net::Connection *conn) {}
 
-void PeerConnection::on_timer(timer::Timer *timer) {}
+void PeerConnection::on_keepalive_timer(timer::Timer *timer)
+{
+    (void)timer;
+    send_keepalive();
+}
 
 void PeerConnection::on_read(net::Connection *conn)
 {
-    auto *buf = conn->get_input_buff();
-    if (!buf || buf->readable_bytes() == 0) return;
+    auto byte_buffer = conn->take_input_byte_buffer();
+    if (byte_buffer.readable_bytes() == 0) return;
 
-    const uint8_t *data = reinterpret_cast<const uint8_t *>(buf->peek());
-    size_t len = buf->readable_bytes();
+    const auto span = byte_buffer.readable_span();
+    inbound_buffer_.append(span.data(), span.size());
 
     if (state_ == State::handshaking)
     {
-        size_t need = HandshakeMessage::HANDSHAKE_SIZE - handshake_received_;
-        size_t avail = std::min(len, need);
-        std::memcpy(handshake_recv_ + handshake_received_, data, avail);
-        handshake_received_ += avail;
-        buf->add_read_index(avail);
-
-        if (handshake_received_ >= HandshakeMessage::HANDSHAKE_SIZE)
+        if (inbound_buffer_.readable_bytes() < HandshakeMessage::HANDSHAKE_SIZE)
         {
-            handle_handshake(handshake_recv_, HandshakeMessage::HANDSHAKE_SIZE);
+            return;
         }
-        return;
+
+        handle_handshake(reinterpret_cast<const uint8_t *>(inbound_buffer_.read_ptr()), HandshakeMessage::HANDSHAKE_SIZE);
+        inbound_buffer_.consume(HandshakeMessage::HANDSHAKE_SIZE);
+        inbound_buffer_.compact();
+
+        if (state_ != State::connected)
+        {
+            return;
+        }
     }
 
     if (state_ == State::connected)
     {
-        handle_message(data, len);
-        buf->reset();
+        handle_message(reinterpret_cast<const uint8_t *>(inbound_buffer_.read_ptr()), inbound_buffer_.readable_bytes());
+        inbound_buffer_.compact();
     }
 }
 
@@ -269,6 +287,10 @@ void PeerConnection::handle_message(const uint8_t *data, size_t len)
             break;
         case PeerMessageId::unchoke:
             peer_state_.peer_choking = false;
+            if (on_state_change_)
+            {
+                on_state_change_(this);
+            }
             break;
         case PeerMessageId::interested:
             peer_state_.peer_interested = true;
@@ -280,19 +302,58 @@ void PeerConnection::handle_message(const uint8_t *data, size_t len)
         {
             uint32_t piece = msg.have_piece_index();
             peer_state_.set_have_piece(piece, total_pieces_);
+            if (on_state_change_)
+            {
+                on_state_change_(this);
+            }
             break;
         }
         case PeerMessageId::bitfield:
             peer_state_.set_bitfield(msg.payload_, total_pieces_);
+            if (on_state_change_)
+            {
+                on_state_change_(this);
+            }
             break;
         case PeerMessageId::piece:
+            pending_requests_.erase(
+                std::remove_if(
+                    pending_requests_.begin(),
+                    pending_requests_.end(),
+                    [&msg](const PieceBlockRequest &request) {
+                        return request.piece_index_ == msg.piece_block_index() &&
+                               request.offset_ == msg.piece_block_offset();
+                    }),
+                pending_requests_.end());
+            if (pending_request_count_ > 0)
+            {
+                --pending_request_count_;
+            }
             if (piece_data_handler_)
             {
                 piece_data_handler_(
+                    this,
                     msg.piece_block_index(),
                     msg.piece_block_offset(),
                     msg.piece_block_data(),
                     msg.piece_block_size());
+            }
+            break;
+        case PeerMessageId::request:
+            if (piece_request_handler_)
+            {
+                std::vector<uint8_t> block;
+                const auto piece = msg.request_piece_index();
+                const auto offset = msg.request_offset();
+                const auto length = msg.request_length();
+                if (piece_request_handler_(piece, offset, length, block) && !block.empty())
+                {
+                    send_piece(piece, offset, block.data(), static_cast<uint32_t>(block.size()));
+                    if (piece_served_handler_)
+                    {
+                        piece_served_handler_(piece, offset, static_cast<uint32_t>(block.size()));
+                    }
+                }
             }
             break;
         default:
@@ -302,14 +363,15 @@ void PeerConnection::handle_message(const uint8_t *data, size_t len)
         ptr += consumed;
         remaining -= consumed;
     }
+
+    inbound_buffer_.consume(len - remaining);
 }
 
 void PeerConnection::send_keepalive()
 {
     if (!conn_ || state_ != State::connected) return;
     auto msg = PeerMessage::keepalive().serialize();
-    auto *buf = make_write_buffer(msg.data(), msg.size());
-    conn_->write(buf);
+    conn_->write(yuan::buffer::ByteBuffer(msg.data(), msg.size()));
 }
 
 void PeerConnection::send_choke()
@@ -317,8 +379,7 @@ void PeerConnection::send_choke()
     if (!conn_ || state_ != State::connected) return;
     peer_state_.am_choking = true;
     auto msg = PeerMessage::choke().serialize();
-    auto *buf = make_write_buffer(msg.data(), msg.size());
-    conn_->write(buf);
+    conn_->write(yuan::buffer::ByteBuffer(msg.data(), msg.size()));
 }
 
 void PeerConnection::send_unchoke()
@@ -326,8 +387,7 @@ void PeerConnection::send_unchoke()
     if (!conn_ || state_ != State::connected) return;
     peer_state_.am_choking = false;
     auto msg = PeerMessage::unchoke().serialize();
-    auto *buf = make_write_buffer(msg.data(), msg.size());
-    conn_->write(buf);
+    conn_->write(yuan::buffer::ByteBuffer(msg.data(), msg.size()));
 }
 
 void PeerConnection::send_interested()
@@ -335,8 +395,7 @@ void PeerConnection::send_interested()
     if (!conn_ || state_ != State::connected) return;
     peer_state_.am_interested = true;
     auto msg = PeerMessage::interested().serialize();
-    auto *buf = make_write_buffer(msg.data(), msg.size());
-    conn_->write(buf);
+    conn_->write(yuan::buffer::ByteBuffer(msg.data(), msg.size()));
 }
 
 void PeerConnection::send_not_interested()
@@ -344,56 +403,52 @@ void PeerConnection::send_not_interested()
     if (!conn_ || state_ != State::connected) return;
     peer_state_.am_interested = false;
     auto msg = PeerMessage::not_interested().serialize();
-    auto *buf = make_write_buffer(msg.data(), msg.size());
-    conn_->write(buf);
+    conn_->write(yuan::buffer::ByteBuffer(msg.data(), msg.size()));
 }
 
 void PeerConnection::send_have(uint32_t piece_index)
 {
     if (!conn_ || state_ != State::connected) return;
     auto msg = PeerMessage::have(piece_index).serialize();
-    auto *buf = make_write_buffer(msg.data(), msg.size());
-    conn_->write(buf);
+    conn_->write(yuan::buffer::ByteBuffer(msg.data(), msg.size()));
 }
 
 void PeerConnection::send_bitfield(const std::vector<uint8_t> &bits)
 {
     if (!conn_ || state_ != State::connected) return;
     auto msg = PeerMessage::bitfield(bits).serialize();
-    auto *buf = make_write_buffer(msg.data(), msg.size());
-    conn_->write(buf);
+    conn_->write(yuan::buffer::ByteBuffer(msg.data(), msg.size()));
 }
 
 void PeerConnection::send_request(uint32_t piece_index, uint32_t offset, uint32_t length)
 {
     if (!conn_ || state_ != State::connected) return;
     auto msg = PeerMessage::request(piece_index, offset, length).serialize();
-    auto *buf = make_write_buffer(msg.data(), msg.size());
-    conn_->write(buf);
+    conn_->write(yuan::buffer::ByteBuffer(msg.data(), msg.size()));
+    pending_requests_.push_back(PieceBlockRequest{piece_index, offset, length});
+    ++pending_request_count_;
+}
+
+void PeerConnection::send_piece(uint32_t piece_index, uint32_t offset, const uint8_t *data, uint32_t length)
+{
+    if (!conn_ || state_ != State::connected || !data || length == 0) return;
+    auto msg = PeerMessage::piece(piece_index, offset, data, length).serialize();
+    conn_->write(yuan::buffer::ByteBuffer(msg.data(), msg.size()));
 }
 
 void PeerConnection::send_cancel(uint32_t piece_index, uint32_t offset, uint32_t length)
 {
     if (!conn_ || state_ != State::connected) return;
     auto msg = PeerMessage::cancel(piece_index, offset, length).serialize();
-    auto *buf = make_write_buffer(msg.data(), msg.size());
-    conn_->write(buf);
+    conn_->write(yuan::buffer::ByteBuffer(msg.data(), msg.size()));
 }
 
-bool PeerConnection::request_next_piece(const std::vector<bool> &we_have)
+std::vector<PieceBlockRequest> PeerConnection::take_pending_requests()
 {
-    if (!can_download()) return false;
-
-    for (int32_t i = 0; i < total_pieces_; i++)
-    {
-        if (!we_have[i] && peer_state_.has_piece(i))
-        {
-            send_request(i, 0, default_request_size_);
-            return true;
-        }
-    }
-
-    return false;
+    pending_request_count_ = 0;
+    auto pending = std::move(pending_requests_);
+    pending_requests_.clear();
+    return pending;
 }
 
 } // namespace yuan::net::bit_torrent

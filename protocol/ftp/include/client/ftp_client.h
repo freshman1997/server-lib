@@ -7,6 +7,10 @@
 #include "event/event_loop.h"
 #include "net/socket/inet_address.h"
 
+#include <filesystem>
+#include <condition_variable>
+#include <mutex>
+
 namespace yuan::net::ftp
 {
     class FtpClient : public FtpApp
@@ -31,6 +35,14 @@ namespace yuan::net::ftp
         bool append(const std::string &local_path, const std::string &remote_path);
         const ClientContext * get_client_context() const;
         bool is_transfer_in_progress() const;
+        bool wait_until_connected(uint32_t timeout_ms = 10000) const;
+        bool wait_for_response_code(int code, uint32_t timeout_ms = 10000) const;
+        bool wait_for_transfer_idle(uint32_t timeout_ms = 15000) const;
+        bool wait_for_list_output(std::string *output = nullptr, uint32_t timeout_ms = 10000) const;
+        bool wait_for_local_file(const std::filesystem::path &path, uint32_t timeout_ms = 15000) const;
+
+        void notify_connected_state(bool connected);
+        void notify_client_context(const ClientContext &context);
 
     private:
         InetAddress addr_;
@@ -41,6 +53,14 @@ namespace yuan::net::ftp
         // Owned objects to prevent them from being destroyed while in use
         timer::TimerManager *owned_timer_manager_;
         EventLoop *owned_ev_loop_;
+
+        mutable std::mutex state_mutex_;
+        mutable std::condition_variable state_cv_;
+        bool connected_ = false;
+        int last_response_code_ = 0;
+        ClientPendingAction pending_action_ = ClientPendingAction::none;
+        ClientTransferStage transfer_stage_ = ClientTransferStage::idle;
+        std::string last_list_output_;
     };
 }
 

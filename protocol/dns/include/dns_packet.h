@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "buffer/buffer.h"
+#include "buffer/byte_buffer.h"
 
 #ifdef IN
 #undef IN
@@ -55,8 +55,8 @@ namespace yuan::net::dns
         DnsType type;
         DnsClass class_;
 
-        void serialize(::yuan::buffer::Buffer &buffer) const;
-        static std::pair<bool, DnsQuestion> deserialize(::yuan::buffer::Buffer &buffer);
+        void serialize(::yuan::buffer::ByteBuffer &buffer) const;
+        static std::pair<bool, DnsQuestion> deserialize(::yuan::buffer::ByteBuffer &buffer);
     };
 
     struct DnsResourceRecord
@@ -67,8 +67,8 @@ namespace yuan::net::dns
         uint32_t ttl;
         std::vector<uint8_t> rdata;
 
-        void serialize(::yuan::buffer::Buffer &buffer) const;
-        static std::pair<bool, DnsResourceRecord> deserialize(::yuan::buffer::Buffer &buffer);
+        void serialize(::yuan::buffer::ByteBuffer &buffer) const;
+        static std::pair<bool, DnsResourceRecord> deserialize(::yuan::buffer::ByteBuffer &buffer);
 
         std::string get_rdata_as_string() const;
         void set_rdata_from_string(const std::string &data);
@@ -80,8 +80,8 @@ namespace yuan::net::dns
         DnsPacket();
         ~DnsPacket();
 
-        bool serialize(::yuan::buffer::Buffer &buffer) const;
-        bool deserialize(::yuan::buffer::Buffer &buffer);
+        bool serialize(::yuan::buffer::ByteBuffer &buffer) const;
+        bool deserialize(::yuan::buffer::ByteBuffer &buffer);
         void reset();
 
         uint16_t get_session_id() const { return session_id_; }
@@ -122,7 +122,7 @@ namespace yuan::net::dns
 
         std::string to_string() const;
 
-        static void encode_name(::yuan::buffer::Buffer &buffer, const std::string &name);
+        static void encode_name(::yuan::buffer::ByteBuffer &buffer, const std::string &name);
         static std::string decode_name(const uint8_t *data, size_t size, size_t &pos);
 
     private:

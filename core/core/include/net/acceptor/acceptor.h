@@ -18,8 +18,6 @@ namespace yuan::net
 
         virtual void close() = 0;
 
-        virtual Channel * get_channel() = 0;
-
         virtual void update_channel() = 0;
 
         virtual void set_connection_handler(ConnectionHandler *connHandler) = 0;

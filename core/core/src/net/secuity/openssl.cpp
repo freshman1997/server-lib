@@ -1,6 +1,7 @@
 #include "net/secuity/openssl.h"
 #include "net/secuity/ssl_handler.h"
 
+#include <cerrno>
 #include <cstring>
 #include <memory>
 #include "openssl/ssl.h"
@@ -22,20 +23,12 @@ namespace yuan::net
         {
             if (ctx_) {
                 SSL_CTX_free(ctx_);
-                ERR_free_strings();
-                EVP_cleanup();
-                CRYPTO_cleanup_all_ex_data();
                 ctx_ = nullptr;
-            }
-
-            if (errmsg_) {
-                delete errmsg_;
-                errmsg_ = nullptr;
             }
         }
 
     public:
-        std::string *errmsg_ = nullptr;
+        std::string errmsg_;
         SSL_CTX *ctx_ = nullptr;
     };
 
@@ -53,7 +46,12 @@ namespace yuan::net
         ERR_load_crypto_strings();
         OpenSSL_add_all_algorithms();
 
-        data_->ctx_ = nullptr;
+        data_->errmsg_.clear();
+        if (data_->ctx_) {
+            SSL_CTX_free(data_->ctx_);
+            data_->ctx_ = nullptr;
+        }
+
         if (mode == SSLHandler::SSLMode::acceptor_) {
             data_->ctx_ = SSL_CTX_new(TLS_server_method());
         } else {
@@ -92,7 +90,7 @@ namespace yuan::net
 
     const std::string * OpenSSLModule::get_error_message()
     {
-        return data_->errmsg_;
+        return data_->errmsg_.empty() ? nullptr : &data_->errmsg_;
     }
 
     std::shared_ptr<SSLHandler> OpenSSLModule::create_handler(int fd, SSLHandler::SSLMode mode)
@@ -110,6 +108,7 @@ namespace yuan::net
        
         if (!SSL_set_fd(ssl, fd)) {
             ERR_print_errors_cb(set_err_msg, this);
+            SSL_free(ssl);
             return nullptr;
         }
 
@@ -121,12 +120,7 @@ namespace yuan::net
 
     void OpenSSLModule::set_error_msg(const char *msg, size_t len)
     {
-        if (data_->errmsg_) {
-            data_->errmsg_->clear();
-            data_->errmsg_->append(msg, len);
-            return;
-        }
-        data_->errmsg_ = new std::string(msg, len);
+        data_->errmsg_.assign(msg, len);
     }
 
     class OpenSSLHandler::HandlerData
@@ -138,8 +132,6 @@ namespace yuan::net
             if (ssl_) {
                 SSL_shutdown(ssl_);
                 SSL_free(ssl_);
-                ERR_free_strings();
-                EVP_cleanup();
                 ssl_ = nullptr;
             }
             module_ = nullptr;
@@ -169,6 +161,11 @@ namespace yuan::net
         }
 
         if (res <= 0) {
+            const int ssl_error = SSL_get_error(data_->ssl_, res);
+            if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+                errno = EAGAIN;
+                return -1;
+            }
             ERR_print_errors_cb(set_err_msg, this->data_->module_);
         }
 
@@ -182,28 +179,50 @@ namespace yuan::net
         data_->mode_ = mode;
     }
 
-    int OpenSSLHandler::ssl_write(buffer::Buffer *buff)
+    int OpenSSLHandler::ssl_write(const char *data, std::size_t size)
     {
-        if (!data_->module_) {
+        if (!data_->module_ || !data_->ssl_ || !data) {
             return -1;
         }
 
-        int res = SSL_write(data_->ssl_, buff->peek(), buff->readable_bytes());
-        if (res < 0) {
+        if (size == 0) {
+            return 0;
+        }
+
+        int res = SSL_write(data_->ssl_, data, static_cast<int>(size));
+        if (res <= 0) {
+            const int ssl_error = SSL_get_error(data_->ssl_, res);
+            if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+                errno = EAGAIN;
+                return -1;
+            }
             ERR_print_errors_cb(set_err_msg, this->data_->module_);
         }
 
         return res;
     }
 
-    int OpenSSLHandler::ssl_read(buffer::Buffer *buff)
+    int OpenSSLHandler::ssl_read(char *buffer, std::size_t size)
     {
-        if (!data_->module_) {
+        if (!data_->module_ || !data_->ssl_ || !buffer) {
             return -1;
         }
 
-        int res = SSL_read(data_->ssl_, buff->buffer_begin(), buff->writable_size());
-        if (res < 0) {
+        if (size == 0) {
+            errno = ENOBUFS;
+            return -1;
+        }
+
+        int res = SSL_read(data_->ssl_, buffer, static_cast<int>(size));
+        if (res <= 0) {
+            const int ssl_error = SSL_get_error(data_->ssl_, res);
+            if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+                errno = EAGAIN;
+                return -1;
+            }
+            if (ssl_error == SSL_ERROR_ZERO_RETURN) {
+                return 0;
+            }
             ERR_print_errors_cb(set_err_msg, this->data_->module_);
         }
 

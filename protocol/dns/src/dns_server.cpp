@@ -1,13 +1,15 @@
 #include "dns_server.h"
 #include "dns_packet.h"
-#include "net/acceptor/udp_acceptor.h"
+#include "buffer/byte_buffer.h"
+#include "net/acceptor/acceptor_factory.h"
+#include "net/acceptor/datagram_acceptor.h"
+#include "net/acceptor/datagram_endpoint.h"
 #include "net/connection/connection.h"
 #include "event/event_loop.h"
 #include "net/poller/select_poller.h"
 #include "net/socket/socket.h"
 #include "timer/wheel_timer_manager.h"
-#include "buffer/pool.h"
-#include <iostream>
+#include "logger.h"
 #include <cstring>
 #include <algorithm>
 
@@ -19,6 +21,8 @@ namespace yuan::net::dns
         , timer_manager_(nullptr)
         , poller_(nullptr)
         , ev_loop_(nullptr)
+        , acceptor_(nullptr)
+        , own_loop_(false)
     {
         add_record("localhost", "127.0.0.1");
     }
@@ -35,14 +39,14 @@ namespace yuan::net::dns
 
     void DnsServer::on_error(Connection *conn)
     {
-        std::cout << "DNS server connection error!\n";
+        LOG_ERROR("DNS server connection error!");
     }
 
     void DnsServer::on_read(Connection *conn)
     {
-        auto buff = conn->get_input_buff();
-        if (buff && buff->readable_bytes() > 0) {
-            handle_dns_query(conn, buff);
+        auto byte_buffer = conn->get_input_byte_buffer();
+        if (byte_buffer.readable_bytes() > 0) {
+            handle_dns_query(conn, byte_buffer);
         }
     }
 
@@ -52,24 +56,23 @@ namespace yuan::net::dns
 
     void DnsServer::on_close(Connection *conn)
     {
-        std::cout << "DNS server connection closed\n";
+        LOG_INFO("DNS server connection closed");
     }
 
-    void DnsServer::handle_dns_query(Connection *conn, ::yuan::buffer::Buffer *buffer)
+    void DnsServer::handle_dns_query(Connection *conn, const ::yuan::buffer::ByteBuffer &buffer)
     {
         DnsPacket query;
-        if (!query.deserialize(*buffer)) {
-            std::cout << "Failed to parse DNS query\n";
+        auto byte_buffer = buffer;
+        if (!query.deserialize(byte_buffer)) {
+            LOG_WARN("Failed to parse DNS query");
             return;
         }
-
-        std::cout << query.to_string() << std::endl;
 
         DnsPacket response;
         create_response(query, response);
 
-        auto response_buffer = ::yuan::buffer::BufferedPool::get_instance()->allocate();
-        response.serialize(*response_buffer);
+        yuan::buffer::ByteBuffer response_buffer;
+        response.serialize(response_buffer);
         conn->write_and_flush(response_buffer);
     }
 
@@ -119,51 +122,34 @@ namespace yuan::net::dns
         return DnsResourceRecord();
     }
 
-    bool DnsServer::serve(int port)
+    bool DnsServer::init_runtime(timer::TimerManager *timer_manager, Poller *poller, EventLoop *ev_loop)
     {
-        return serve(port, nullptr, nullptr, nullptr);
-    }
+        own_loop_ = (timer_manager == nullptr || poller == nullptr || ev_loop == nullptr);
 
-    bool DnsServer::serve(int port, timer::TimerManager *timer_manager, Poller *poller, EventLoop *ev_loop)
-    {
-        port_ = port;
-        bool own_loop = (timer_manager == nullptr || poller == nullptr || ev_loop == nullptr);
-
-        if (own_loop) {
+        if (own_loop_) {
             timer_manager_ = new timer::WheelTimerManager();
             poller_ = new net::SelectPoller();
             ev_loop_ = new net::EventLoop(poller_, timer_manager_);
-        } else {
-            timer_manager_ = timer_manager;
-            poller_ = poller;
-            ev_loop_ = ev_loop;
+            return timer_manager_ && poller_ && ev_loop_;
         }
 
-        Socket *sock = new Socket("", port, true);
+        timer_manager_ = timer_manager;
+        poller_ = poller;
+        ev_loop_ = ev_loop;
+        return timer_manager_ && poller_ && ev_loop_;
+    }
+
+    bool DnsServer::init_udp_server()
+    {
+        Socket *sock = new Socket("", port_, true);
         if (!sock->valid()) {
-            std::cout << "DNS server: cannot create socket file descriptor!\n";
-            if (own_loop) {
-                delete timer_manager_;
-                delete poller_;
-                delete ev_loop_;
-                timer_manager_ = nullptr;
-                poller_ = nullptr;
-                ev_loop_ = nullptr;
-            }
+            LOG_ERROR("DNS server: cannot create socket file descriptor!");
             delete sock;
             return false;
         }
 
         if (!sock->bind()) {
-            std::cout << "DNS server: cannot bind port: " << port << "!\n";
-            if (own_loop) {
-                delete timer_manager_;
-                delete poller_;
-                delete ev_loop_;
-                timer_manager_ = nullptr;
-                poller_ = nullptr;
-                ev_loop_ = nullptr;
-            }
+            LOG_ERROR("DNS server: cannot bind port: {}!", port_);
             delete sock;
             return false;
         }
@@ -172,39 +158,68 @@ namespace yuan::net::dns
         sock->set_reuse(true);
         sock->set_none_block(true);
 
-        UdpAcceptor *acceptor = new UdpAcceptor(sock, timer_manager_);
-        if (!acceptor->listen()) {
-            std::cout << "DNS server: cannot listen on port: " << port << "!\n";
-            delete acceptor;
-            if (own_loop) {
-                delete timer_manager_;
-                delete poller_;
-                delete ev_loop_;
-                timer_manager_ = nullptr;
-                poller_ = nullptr;
-                ev_loop_ = nullptr;
-            }
+        acceptor_ = create_datagram_acceptor(sock, timer_manager_);
+        if (!acceptor_->listen()) {
+            LOG_ERROR("DNS server: cannot listen on port: {}!", port_);
+            delete acceptor_;
+            acceptor_ = nullptr;
             delete sock;
             return false;
         }
 
-        acceptor->set_event_handler(ev_loop_);
-        acceptor->set_connection_handler(static_cast<ConnectionHandler*>(this));
+        acceptor_->set_event_handler(ev_loop_);
+        acceptor_->set_connection_handler(static_cast<ConnectionHandler*>(this));
+        ev_loop_->update_channel(acceptor_->endpoint_channel());
+        return true;
+    }
+
+    void DnsServer::cleanup_runtime()
+    {
+        if (acceptor_) {
+            delete acceptor_;
+            acceptor_ = nullptr;
+        }
+
+        if (own_loop_) {
+            if (ev_loop_) {
+                delete ev_loop_;
+            }
+            if (poller_) {
+                delete poller_;
+            }
+            if (timer_manager_) {
+                delete timer_manager_;
+            }
+        }
+
+        ev_loop_ = nullptr;
+        poller_ = nullptr;
+        timer_manager_ = nullptr;
+        own_loop_ = false;
+    }
+
+    bool DnsServer::serve(int port)
+    {
+        return serve(port, nullptr, nullptr, nullptr);
+    }
+
+    bool DnsServer::serve(int port, timer::TimerManager *timer_manager, Poller *poller, EventLoop *ev_loop)
+    {
+        port_ = port;
+        if (!init_runtime(timer_manager, poller, ev_loop)) {
+            return false;
+        }
+
+        if (!init_udp_server()) {
+            cleanup_runtime();
+            return false;
+        }
 
         running_ = true;
         ev_loop_->loop();
 
         running_ = false;
-        delete acceptor;
-
-        if (own_loop) {
-            delete timer_manager_;
-            delete poller_;
-            delete ev_loop_;
-            timer_manager_ = nullptr;
-            poller_ = nullptr;
-            ev_loop_ = nullptr;
-        }
+        cleanup_runtime();
 
         return true;
     }

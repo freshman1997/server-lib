@@ -1,6 +1,6 @@
 #ifndef __NET_WEBSOCKET_COMMON_WEB_SOCKET_CONNECTION_H__
 #define __NET_WEBSOCKET_COMMON_WEB_SOCKET_CONNECTION_H__
-#include "buffer/linked_buffer.h"
+#include "buffer/byte_buffer.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
 #include "timer/timer_manager.h"
@@ -47,7 +47,7 @@ namespace yuan::net::websocket
     public:
         void on_created(Connection *conn);
         
-        bool send(buffer::Buffer *buf, PacketType pktType = WebSocketConnection::PacketType::text_);
+        bool send(const ::yuan::buffer::ByteBuffer &buf, PacketType pktType = WebSocketConnection::PacketType::text_);
 
         bool send(const char *data, size_t len, PacketType pktType = WebSocketConnection::PacketType::text_);
 
@@ -75,7 +75,7 @@ namespace yuan::net::websocket
     private:
         void free_self();
 
-        std::vector<buffer::Buffer *> * get_output_buffers();
+        std::vector<::yuan::buffer::ByteBuffer> * get_output_buffers();
 
         std::vector<ProtoChunk> * get_input_chunks();
         

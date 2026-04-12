@@ -42,6 +42,7 @@ struct NatConfig
     // ===== General =====
     std::string external_ip;            // Manually set external IP (empty = auto-detect)
     int32_t max_active_connections = 100; // Total max connections (inbound + outbound)
+    bool allow_loopback_peers = false;  // Allow 127.0.0.1 peers for local integration/e2e tests
 };
 
 } // namespace yuan::net::bit_torrent

@@ -69,19 +69,17 @@ int main()
     FtpClient client;
     std::thread clientThread([&]() { client.connect("127.0.0.1", 12123); });
 
-    require(wait_until([&]() { return client.is_ok(); }, 10000), "client did not connect to server");
+    require(client.wait_until_connected(10000), "client did not connect to server");
     std::cout << "Connected to server\n";
 
     require(client.login("tester", "secret"), "login command send failed");
-    require(wait_until([&]() {
-        const auto *ctx = client.get_client_context();
-        return ctx && !ctx->responses_.empty() && ctx->responses_.back().code_ == 230;
-    }), "login did not complete");
+    require(client.wait_for_response_code(230, 10000), "login did not complete");
     std::cout << "Login successful\n";
 
     const auto resumeFile = downloadDir / "downloaded.txt";
     require(client.download("sample.txt", resumeFile.generic_string()), "download send failed");
-    require(wait_until([&]() { return fs::exists(resumeFile) && read_file(resumeFile) == "0123456789abcdef"; }, 15000), "download did not complete correctly");
+    require(client.wait_for_local_file(resumeFile, 15000), "download target file was not created");
+    require(wait_until([&]() { return read_file(resumeFile) == "0123456789abcdef"; }, 5000), "download did not complete correctly");
     std::cout << "Download successful\n";
 
     const auto uploaded = fs::temp_directory_path() / "ftp_e2e_root" / "uploaded.txt";
@@ -91,7 +89,7 @@ int main()
         std::string content = exists ? read_file(uploaded) : "";
         return exists && content == "client-upload";
     }, 20000), "upload did not complete correctly");
-    require(wait_until([&]() { return !client.is_transfer_in_progress(); }, 5000), "upload transfer not completed");
+    require(client.wait_for_transfer_idle(5000), "upload transfer not completed");
     std::cout << "Upload successful\n";
 
     const auto appendTarget = fs::temp_directory_path() / "ftp_e2e_root" / "append_target.txt";

@@ -46,14 +46,10 @@ public:
             client_.connect(host, port);
         });
 
-        // Wait for connection
-        for (int i = 0; i < 50; ++i) {
-            if (client_.is_ok()) {
-                connected_ = true;
-                std::cout << "Connected!" << std::endl;
-                return true;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (client_.wait_until_connected(5000)) {
+            connected_ = true;
+            std::cout << "Connected!" << std::endl;
+            return true;
         }
         
         std::cout << "Connection failed or timed out" << std::endl;
@@ -73,21 +69,10 @@ public:
             return false;
         }
 
-        // Wait for login response
-        for (int i = 0; i < 50; ++i) {
-            const auto* ctx = client_.get_client_context();
-            if (ctx && !ctx->responses_.empty()) {
-                const auto& last = ctx->responses_.back();
-                if (last.code_ == 230) {
-                    logged_in_ = true;
-                    std::cout << "Login successful!" << std::endl;
-                    return true;
-                } else if (last.code_ == 530) {
-                    std::cout << "Login failed: " << last.body_ << std::endl;
-                    return false;
-                }
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (client_.wait_for_response_code(230, 5000)) {
+            logged_in_ = true;
+            std::cout << "Login successful!" << std::endl;
+            return true;
         }
 
         std::cout << "Login timed out" << std::endl;
@@ -108,14 +93,10 @@ public:
             return false;
         }
 
-        // Wait for list completion
-        for (int i = 0; i < 50; ++i) {
-            const auto* ctx = client_.get_client_context();
-            if (ctx && !ctx->list_output_.empty()) {
-                std::cout << ctx->list_output_ << std::endl;
-                return true;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::string output;
+        if (client_.wait_for_list_output(&output, 5000)) {
+            std::cout << output << std::endl;
+            return true;
         }
 
         std::cout << "List timed out or empty" << std::endl;
@@ -136,15 +117,10 @@ public:
             return false;
         }
 
-        // Wait for download completion
-        for (int i = 0; i < 100; ++i) {
-            std::ifstream file(local_path, std::ios::binary);
-            if (file.good()) {
-                auto size = std::filesystem::file_size(local_path);
-                std::cout << "Download complete! Size: " << size << " bytes" << std::endl;
-                return true;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (client_.wait_for_local_file(local_path, 10000)) {
+            auto size = std::filesystem::file_size(local_path);
+            std::cout << "Download complete! Size: " << size << " bytes" << std::endl;
+            return true;
         }
 
         std::cout << "Download timed out" << std::endl;
@@ -171,13 +147,9 @@ public:
             return false;
         }
 
-        // Wait for upload completion
-        for (int i = 0; i < 100; ++i) {
-            if (!client_.is_transfer_in_progress()) {
-                std::cout << "Upload complete!" << std::endl;
-                return true;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (client_.wait_for_transfer_idle(10000)) {
+            std::cout << "Upload complete!" << std::endl;
+            return true;
         }
 
         std::cout << "Upload timed out" << std::endl;
@@ -204,13 +176,9 @@ public:
             return false;
         }
 
-        // Wait for append completion
-        for (int i = 0; i < 100; ++i) {
-            if (!client_.is_transfer_in_progress()) {
-                std::cout << "Append complete!" << std::endl;
-                return true;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (client_.wait_for_transfer_idle(10000)) {
+            std::cout << "Append complete!" << std::endl;
+            return true;
         }
 
         std::cout << "Append timed out" << std::endl;
@@ -231,14 +199,10 @@ public:
             return false;
         }
 
-        // Wait for nlist completion
-        for (int i = 0; i < 50; ++i) {
-            const auto* ctx = client_.get_client_context();
-            if (ctx && !ctx->list_output_.empty()) {
-                std::cout << ctx->list_output_ << std::endl;
-                return true;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::string output;
+        if (client_.wait_for_list_output(&output, 5000)) {
+            std::cout << output << std::endl;
+            return true;
         }
 
         std::cout << "Nlist timed out or empty" << std::endl;

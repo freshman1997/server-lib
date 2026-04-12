@@ -1,6 +1,6 @@
 #include "server.h"
-#include "net/acceptor/acceptor.h"
-#include "net/acceptor/tcp_acceptor.h"
+#include "net/acceptor/acceptor_factory.h"
+#include "net/acceptor/stream_acceptor.h"
 #include "event/event_loop.h"
 #include "net/poller/epoll_poller.h"
 #include "net/poller/select_poller.h"
@@ -15,7 +15,8 @@
 #include <memory>
 #include <unordered_set>
 #include <unordered_map>
-#include <iostream>
+
+#include "logger.h"
 
 #if defined (WS_USE_SSL)
 #include "net/secuity/openssl.h"
@@ -32,10 +33,21 @@ namespace yuan::net::websocket
             poller_ = nullptr;
             loop_ = nullptr;
             timer_manager_ = nullptr;
+            acceptor_ = nullptr;
         }
 
         ~ServerData() 
         {
+            for (const auto& [conn, wsConn] : connections_) {
+                delete wsConn;
+            }
+            connections_.clear();
+
+            if (acceptor_) {
+                delete acceptor_;
+                acceptor_ = nullptr;
+            }
+
             if (timer_manager_) {
                 delete timer_manager_;
                 timer_manager_ = nullptr;
@@ -69,11 +81,12 @@ namespace yuan::net::websocket
                 return false;
             }
 
-            TcpAcceptor *acceptor = new TcpAcceptor(sock);
+            StreamAcceptor *acceptor = create_stream_acceptor(sock);
             if (!acceptor->listen()) {
                 delete acceptor;
                 return false;
             }
+            acceptor_ = acceptor;
 
         #ifdef unix
             poller_ = new EpollPoller;
@@ -91,7 +104,7 @@ namespace yuan::net::websocket
             ssl_module_ = std::make_shared<OpenSSLModule>();
             if (!ssl_module_->init("./ssl/ca.crt", "./ssl/ca.key", SSLHandler::SSLMode::acceptor_)) {
                 if (auto msg = ssl_module_->get_error_message()) {
-                    std::cerr << msg->c_str() << '\n';
+                    LOG_ERROR("{}", msg->c_str());
                 }
                 return false;
             }
@@ -145,7 +158,7 @@ namespace yuan::net::websocket
             }
         }
 
-        void on_receive_packet(WebSocketConnection *wsConn, buffer::Buffer *buff)
+        void on_receive_packet(WebSocketConnection *wsConn, const ::yuan::buffer::ByteBuffer &buff)
         {
             if (data_handler_) {
                 data_handler_->on_data(wsConn, buff);
@@ -169,6 +182,7 @@ namespace yuan::net::websocket
         std::unordered_map<Connection *, WebSocketConnection *> connections_;
         std::unordered_set<std::string> connected_urls_;
         std::shared_ptr<SSLModule> ssl_module_;
+        StreamAcceptor *acceptor_;
     };
 
     WebSocketServer::WebSocketServer() : data_(std::make_unique<WebSocketServer::ServerData>())
@@ -192,5 +206,12 @@ namespace yuan::net::websocket
     void WebSocketServer::set_data_handler(WebSocketDataHandler *handler)
     {
         data_->data_handler_ = handler;
+    }
+
+    void WebSocketServer::stop()
+    {
+        if (data_->loop_) {
+            data_->loop_->quit();
+        }
     }
 }

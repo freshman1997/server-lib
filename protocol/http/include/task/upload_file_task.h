@@ -31,7 +31,7 @@ namespace yuan::net::http
 
         bool init() override;
 
-        bool on_data(buffer::Buffer *buf) override;
+        bool on_data(::yuan::buffer::ByteBuffer *buf) override;
 
         HttpTaskType get_task_type() const override
         {
@@ -63,3 +63,4 @@ namespace yuan::net::http
 }
 
 #endif // __UPLOAD_FILE_TASK_H__
+

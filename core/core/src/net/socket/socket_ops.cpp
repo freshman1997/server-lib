@@ -22,7 +22,7 @@ namespace yuan::net::socket
     int create_ipv4_tcp_socket(bool noneBlock)
     {
         int fd = create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
-        if (fd > 0 && noneBlock) {
+        if (fd >= 0 && noneBlock) {
             set_none_block(fd, true);
         }
         return fd;
@@ -31,7 +31,7 @@ namespace yuan::net::socket
     int create_ipv4_udp_socket(bool noneBlock)
     {
         int fd = create_ipv4_socket(SOCK_DGRAM, IPPROTO_UDP);
-        if (fd > 0 && noneBlock) {
+        if (fd >= 0 && noneBlock) {
             set_none_block(fd, true);
         }
         return fd;
@@ -72,6 +72,15 @@ namespace yuan::net::socket
     {
         struct sockaddr_in saddr =  addr.to_ipv4_address();
         return ::connect(fd, (const struct sockaddr *)&saddr, sizeof(saddr));
+    }
+
+    int get_last_error()
+    {
+    #ifndef _WIN32
+        return errno;
+    #else
+        return WSAGetLastError();
+    #endif
     }
 
     bool set_reuse(int fd, bool on, bool exclude)
@@ -128,9 +137,7 @@ namespace yuan::net::socket
         }
     #else
         u_long mode = on ? 1 : 0;
-        if (ioctlsocket(fd, FIONBIO, &mode) == SOCKET_ERROR) {
-            WSACleanup();
-        }
+        (void)ioctlsocket(fd, FIONBIO, &mode);
     #endif
     }
 }

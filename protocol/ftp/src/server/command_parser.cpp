@@ -1,5 +1,4 @@
 #include "server/command_parser.h"
-#include "buffer/pool.h"
 
 #include <algorithm>
 #include <cctype>
@@ -15,32 +14,27 @@ namespace yuan::net::ftp
         }
     }
 
-    FtpCommandParser::FtpCommandParser() : buff_(nullptr) {}
+    FtpCommandParser::FtpCommandParser() = default;
 
-    FtpCommandParser::~FtpCommandParser()
-    {
-        if (buff_) {
-            buffer::BufferedPool::get_instance()->free(buff_);
-        }
-    }
+    FtpCommandParser::~FtpCommandParser() = default;
 
     std::vector<FtpCommand> FtpCommandParser::split_cmds(const std::string_view &endWith, const std::string &splitStr)
     {
         std::vector<FtpCommand> res;
-        if (!buff_ || buff_->readable_bytes() == 0) {
+        if (buff_.readable_bytes() == 0) {
             return res;
         }
 
-        while (buff_->readable_bytes() >= endWith.size()) {
-            const char *begin = buff_->peek();
-            const char *end = buff_->peek_end();
+        while (buff_.readable_bytes() >= endWith.size()) {
+            const char *begin = buff_.read_ptr();
+            const char *end = buff_.read_ptr() + buff_.readable_bytes();
             const char *lineEnd = std::search(begin, end, endWith.begin(), endWith.end());
             if (lineEnd == end) {
                 break;
             }
             std::string line(begin, lineEnd);
-            buff_->add_read_index(static_cast<size_t>((lineEnd - begin) + endWith.size()));
-            buff_->shink_to_fit();
+            buff_.consume(static_cast<size_t>((lineEnd - begin) + endWith.size()));
+            buff_.compact();
             if (line.empty()) {
                 continue;
             }
@@ -55,18 +49,18 @@ namespace yuan::net::ftp
         return res;
     }
 
-    void FtpCommandParser::set_buff(buffer::Buffer *buff)
+    void FtpCommandParser::set_buff(const ::yuan::buffer::ByteBuffer &buff)
     {
-        if (!buff) {
-            return;
-        }
-        if (buff_) {
-            buff_->append_buffer(*buff);
-            buffer::BufferedPool::get_instance()->free(buff);
-        } else {
-            buff_ = buff;
+        if (buff.readable_bytes() > 0) {
+            buff_.append(buff);
         }
     }
 
-    buffer::Buffer *FtpCommandParser::get_buff() { return buff_; }
+    void FtpCommandParser::set_buff(::yuan::buffer::ByteBuffer &&buff)
+    {
+        if (buff.readable_bytes() > 0) {
+            buff_.append(buff);
+            buff.clear();
+        }
+    }
 }

@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.12)
 project(plugins)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_library(HelloWorld SHARED ./helloworld/helloworld.cpp)
-target_link_libraries(HelloWorld PRIVATE Core)
+target_link_libraries(HelloWorld PRIVATE App PluginCore)
 
 set(targets HelloWorld)
 

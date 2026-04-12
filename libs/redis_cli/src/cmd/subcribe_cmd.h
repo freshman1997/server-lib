@@ -3,6 +3,7 @@
 #include "default_cmd.h"
 #include "redis_client.h"
 #include "value/array_value.h"
+#include <deque>
 #include <memory>
 #include <string>
 #include <functional>
@@ -37,7 +38,12 @@ namespace yuan::redis
 
         void exec_callback();
 
-        virtual int unpack(buffer::BufferReader& reader);
+        bool has_pending_messages() const
+        {
+            return !pending_messages_.empty() || !pending_pmessages_.empty();
+        }
+
+        virtual int unpack(buffer::ByteBufferReader& reader);
 
         void set_is_subcribe(bool is_subcribe)
         {
@@ -83,16 +89,26 @@ namespace yuan::redis
             message_cmd_ = message_cmd;
         }
 
+        void set_subscribe_cmd(const std::string &subscribe_cmd)
+        {
+            subscribe_cmd_ = subscribe_cmd;
+        }
+
     private:
-        int unpack_sub_message(std::shared_ptr<ArrayValue> msgs);
-        int unpack_psub_message(std::shared_ptr<ArrayValue> msgs);
+        int handle_frame(const std::shared_ptr<ArrayValue> &frame);
+        int unpack_sub_message(const std::shared_ptr<ArrayValue> &frame);
+        int unpack_psub_message(const std::shared_ptr<ArrayValue> &frame);
+        int update_subscription_state(const std::string &kind, const std::shared_ptr<ArrayValue> &frame);
 
     private:
         bool is_subcribe_ = false;
+        std::string subscribe_cmd_;
         std::string message_cmd_;
         std::set<std::string> channels_;
         std::vector<SubMessage> messages_;
         std::vector<PSubMessage> pmessages_;
+        std::deque<std::vector<SubMessage>> pending_messages_;
+        std::deque<std::vector<PSubMessage>> pending_pmessages_;
         std::function<void(const std::vector<SubMessage> &messages)> msg_callback_;
         std::function<void(const std::vector<PSubMessage> &pmessages)> pmsg_callback_;
     };

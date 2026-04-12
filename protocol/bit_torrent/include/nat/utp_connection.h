@@ -16,14 +16,15 @@
 //   ST_RESET  (4): <type:1><version:1><conn_id:2><seq_nr:4>  = 8 bytes
 
 #include "peer_wire/peer_connection.h"
-#include "net/acceptor/udp_acceptor.h"
+#include "net/acceptor/datagram_acceptor.h"
+#include "net/acceptor/datagram_endpoint.h"
 #include "net/handler/connection_handler.h"
 #include "net/connection/connection.h"
+#include "timer/timer_task.h"
 #include "timer/timer_manager.h"
 #include <functional>
 #include <unordered_map>
 #include <queue>
-#include <chrono>
 #include <cstdint>
 #include <cstring>
 
@@ -116,7 +117,7 @@ public:
                   const std::string &peer_id,
                   uint32_t recv_conn_id,    // conn_id we send to them
                   uint32_t send_conn_id,    // conn_id we expect from them
-                  net::UdpAcceptor *acceptor,
+                  net::DatagramEndpoint *acceptor,
                   net::EventLoop *loop,
                   timer::TimerManager *timer_mgr);
 
@@ -192,7 +193,7 @@ private:
     {
         uint32_t seq_nr;
         std::vector<uint8_t> data;
-        std::chrono::steady_clock::time_point sent_time;
+        uint64_t sent_time_us = 0;
         uint32_t timestamp;
         bool acked = false;
     };
@@ -207,7 +208,7 @@ private:
 
     timer::Timer *retransmit_timer_ = nullptr;
     timer::TimerManager *timer_manager_;
-    net::UdpAcceptor *acceptor_;
+    net::DatagramEndpoint *acceptor_;
     net::EventLoop *ev_loop_;
 
     DataHandler data_handler_;
@@ -246,7 +247,7 @@ public:
 
     void remove_connection(uint32_t conn_id);
 
-    // ConnectionHandler interface (for UdpAcceptor)
+    // ConnectionHandler interface (for datagram endpoint events)
     void on_connected(net::Connection *conn) override;
     void on_error(net::Connection *conn) override;
     void on_read(net::Connection *conn) override;
@@ -262,7 +263,7 @@ private:
     bool running_ = false;
     int32_t port_ = 0;
 
-    net::UdpAcceptor *acceptor_ = nullptr;
+    net::DatagramAcceptor *acceptor_ = nullptr;
     net::EventLoop *ev_loop_ = nullptr;
     timer::TimerManager *timer_manager_ = nullptr;
 

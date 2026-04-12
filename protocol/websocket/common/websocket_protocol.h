@@ -1,7 +1,6 @@
 #ifndef __NET_WEBSOCKET_COMMON_WEBSOCKET_PROTOCOL_H__
 #define __NET_WEBSOCKET_COMMON_WEBSOCKET_PROTOCOL_H__
-#include "buffer/buffer.h"
-#include "buffer/pool.h"
+#include "buffer/byte_buffer.h"
 #include <cstdint>
 #include <limits>
 
@@ -101,16 +100,19 @@ namespace yuan::net::websocket
     {
         ProtoHead head_;
         bool has_set_head_ = false;
-        buffer::Buffer * body_ = nullptr;
+        ::yuan::buffer::ByteBuffer body_;
 
         bool is_completed()
         {
-            if (head_.extend_pay_load_len_ > 0)
-            {
-                return body_ ? body_->readable_bytes() >= head_.extend_pay_load_len_ : false;
+            if (!has_set_head_) {
+                return false;
             }
 
-            return head_.is_close_frame() || head_.is_ping_frame() || head_.is_pong_frame();
+            if (head_.extend_pay_load_len_ > 0) {
+                return body_.readable_bytes() >= head_.extend_pay_load_len_;
+            }
+
+            return true;
         }
 
         static int calc_head_size(uint32_t dataSize, bool setMask = true)

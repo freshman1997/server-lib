@@ -1,7 +1,6 @@
 #include "dns_packet.h"
 #include "dns_server.h"
 #include "dns_client.h"
-#include "buffer/pool.h"
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -31,7 +30,7 @@ void test_dns_packet_serialization()
     question.class_ = DnsClass::IN;
     packet.add_question(question);
 
-    Buffer buffer;
+    ByteBuffer buffer;
     packet.serialize(buffer);
 
     DnsPacket parsed_packet;
@@ -59,7 +58,7 @@ void test_dns_resource_record()
     record.ttl = 3600;
     record.set_rdata_from_string("93.184.216.34");
 
-    Buffer buffer;
+    ByteBuffer buffer;
     record.serialize(buffer);
 
     auto result = DnsResourceRecord::deserialize(buffer);
@@ -181,7 +180,7 @@ void test_dns_name_compression()
     answer.set_rdata_from_string("93.184.216.34");
     packet.add_answer(answer);
 
-    Buffer buffer;
+    ByteBuffer buffer;
     packet.serialize(buffer);
 
     DnsPacket parsed_packet;
@@ -234,7 +233,7 @@ void test_dns_various_types()
     txt_record.set_rdata_from_string("test record");
     packet.add_answer(txt_record);
 
-    Buffer buffer;
+    ByteBuffer buffer;
     packet.serialize(buffer);
 
     DnsPacket parsed_packet;
@@ -291,7 +290,7 @@ void test_dns_error_codes()
         packet.set_is_response(true);
         packet.set_response_code(test_case.code);
 
-        Buffer buffer;
+        ByteBuffer buffer;
         packet.serialize(buffer);
 
         DnsPacket parsed;

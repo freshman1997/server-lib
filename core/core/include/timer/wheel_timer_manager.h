@@ -1,7 +1,8 @@
 #ifndef __WHEEL_TIMER_MANAGER_H__
 #define __WHEEL_TIMER_MANAGER_H__
 #include <cstdint>
-#include <list>
+#include <memory>
+#include <vector>
 
 #include "timer_manager.h"
 
@@ -33,8 +34,8 @@ namespace yuan::timer
     private:
         uint32_t time_unit_;
         uint32_t count_;
-        WheelTimerItem *helper_item_;
-        std::list<Wheel *> wheels_;
+        std::unique_ptr<WheelTimerItem> helper_item_;
+        std::vector<std::unique_ptr<Wheel>> wheels_;
     };
 }
 

@@ -1,9 +1,11 @@
 #include "redis_client.h"
+#include "coroutine/sync_wait.h"
 #include "event/event_loop.h"
 #include "internal/coroutine.h"
 #include "internal/redis_registry.h"
+#include "net/connection/connection_factory.h"
+#include "net/connection/stream_transport.h"
 #include "net/socket/socket.h"
-#include "net/connection/tcp_connection.h"
 #include "net/socket/inet_address.h"
 #include "redis_value.h"
 #include "internal/redis_impl.h"
@@ -23,13 +25,6 @@ namespace yuan::redis
     RedisClient::~RedisClient()
     {
         close();
-    }
-
-    static SimpleTask<bool> do_connect(RedisClient *client)
-    {
-        co_await std::suspend_always{};
-        RedisRegistry::get_instance()->get_event_loop()->loop();
-        co_return client->is_connected();
     }
 
     int RedisClient::connect()
@@ -52,25 +47,73 @@ namespace yuan::redis
 
         sock->set_none_block(true);
         if (!sock->connect()) {
+            const int socket_error = sock->last_error();
             delete sock;
             sock = nullptr;
-            impl_->last_error_ = ErrorValue::from_string(impl_->option_.name_ + " connect failed");
+            impl_->last_error_ = ErrorValue::from_string(
+                impl_->option_.name_ + " connect failed, socket error: " + std::to_string(socket_error));
             return -1;
         }
 
         const auto loop = RedisRegistry::get_instance()->get_event_loop();
         
-        Connection *conn = new TcpConnection(sock);
+        Connection *conn = create_stream_connection(sock);
         conn->set_connection_handler(impl_.get());
         conn->set_event_handler(loop);
-        loop->update_channel(conn->get_channel());
+        if (auto *stream = dynamic_cast<net::StreamTransport *>(conn)) {
+            auto *channel = stream->stream_channel();
+            if (!channel) {
+                conn->close();
+                impl_->last_error_ = ErrorValue::from_string("stream channel is invalid");
+                return -1;
+            }
+            loop->update_channel(channel);
+        } else {
+            conn->close();
+            impl_->last_error_ = ErrorValue::from_string("connection is not a stream transport");
+            return -1;
+        }
 
         impl_->on_do_connect(conn);
+        impl_->completion_event_.reset(loop);
 
-        auto co = do_connect(this);
-        const bool res = co.execute();
+        const auto runtime = RedisRegistry::get_instance()->get_coroutine_runtime();
+        auto wait_connect = [this]() -> SimpleTask<bool> {
+            const auto timer_manager = RedisRegistry::get_instance()->get_timer_manager();
+            const bool timed_out = co_await impl_->completion_event_.wait_for(
+                timer_manager,
+                impl_->option_.timeout_ms_ > 0 ? static_cast<uint32_t>(impl_->option_.timeout_ms_) : 0);
+            co_return !timed_out && is_connected();
+        };
+        const bool res = yuan::coroutine::sync_wait(runtime, wait_connect());
 
-        return res ? 0 : -1;
+        if (!res) {
+            impl_->last_error_ = ErrorValue::from_string(impl_->option_.name_ + " connect timeout");
+            impl_->close();
+            return -1;
+        }
+
+        impl_->clear_mask(RedisState::connecting);
+
+        if (!impl_->option_.password_.empty())
+        {
+            if (const auto auth_result = auth(impl_->option_.password_); !auth_result) {
+                impl_->last_error_ = ErrorValue::from_string("auth failed");
+                close();
+                return -1;
+            }
+        }
+
+        if (impl_->option_.db_ != 0)
+        {
+            if (const auto select_result = select(impl_->option_.db_); !select_result) {
+                impl_->last_error_ = ErrorValue::from_string("select db failed");
+                close();
+                return -1;
+            }
+        }
+
+        return 0;
     }
 
     void RedisClient::set_option(const Option &opt)

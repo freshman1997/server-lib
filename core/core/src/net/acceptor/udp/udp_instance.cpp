@@ -1,9 +1,10 @@
 #include "net/acceptor/udp/udp_instance.h"
-#include "buffer/pool.h"
 #include "net/acceptor/udp/kcp_adapter.h"
-#include "net/acceptor/udp_acceptor.h"
+#include "net/acceptor/datagram_endpoint.h"
+#include "net/channel/channel.h"
 #include "net/connection/connection.h"
-#include "net/connection/udp_connection.h"
+#include "net/connection/connection_factory.h"
+#include "net/connection/datagram_transport.h"
 #include "net/acceptor/udp/adapter.h"
 #include "net/handler/connection_handler.h"
 #include <cassert>
@@ -11,7 +12,7 @@
 
 namespace yuan::net 
 {
-    UdpInstance::UdpInstance(UdpAcceptor *acceptor) : acceptor_(acceptor), adapter_type_(UdpAdapterType::none), is_closing_(false)
+    UdpInstance::UdpInstance(DatagramEndpoint *acceptor) : acceptor_(acceptor), adapter_type_(UdpAdapterType::none), is_closing_(false)
     {
     }
 
@@ -24,7 +25,7 @@ namespace yuan::net
         conns_.clear();
     }
 
-    void UdpInstance::set_acceptor(UdpAcceptor *acceptor)
+    void UdpInstance::set_acceptor(DatagramEndpoint *acceptor)
     {
         acceptor_ = acceptor;
     }
@@ -33,28 +34,30 @@ namespace yuan::net
     {
         auto it = conns_.find(address);
         if (it == conns_.end()) {
-            UdpConnection *udpConn;
+            Connection *udpConn;
             if (adapter_type_ == UdpAdapterType::kcp) {
                 UdpAdapter *adapter = new KcpAdapter;
-                udpConn = new UdpConnection(address, adapter);
-                if (!adapter->init(udpConn, acceptor_->get_timer_manager())) {
+                udpConn = create_datagram_connection(address, adapter);
+                if (!adapter->init(udpConn, acceptor_->endpoint_timer_manager())) {
                     return {false, udpConn};
                 }
             } else {
-                udpConn = new UdpConnection(address);
+                udpConn = create_datagram_connection(address);
             }
-            udpConn->set_instance_handler(this);
+            if (auto *datagram = dynamic_cast<DatagramTransport *>(udpConn)) {
+                datagram->attach_datagram_instance(this);
+            }
             conns_[address] = udpConn;
-            return {true, udpConn};
+            return std::make_pair(true, udpConn);
         } else {
-            return {true, it->second};
+            return std::make_pair(true, it->second);
         }
     }
 
-    int UdpInstance::on_send(Connection *conn, buffer::Buffer *buff)
+    int UdpInstance::on_send(Connection *conn, const yuan::buffer::ByteBuffer &buff)
     {
         assert(acceptor_);
-        return acceptor_->send_to(conn, buff);
+        return acceptor_->send_datagram(conn, buff);
     }
 
     void UdpInstance::send()
@@ -85,15 +88,15 @@ namespace yuan::net
 
     timer::TimerManager * UdpInstance::get_timer_manager()
     {
-        return acceptor_ ? acceptor_->get_timer_manager() : nullptr;
+        return acceptor_ ? acceptor_->endpoint_timer_manager() : nullptr;
     }
 
     void UdpInstance::enable_rw_events()
     {
         if (acceptor_) {
-            acceptor_->get_channel()->enable_read();
-            acceptor_->get_channel()->enable_write();
-            acceptor_->update_channel();
+            acceptor_->endpoint_channel()->enable_read();
+            acceptor_->endpoint_channel()->enable_write();
+            acceptor_->update_endpoint_channel();
         }
     }
 }

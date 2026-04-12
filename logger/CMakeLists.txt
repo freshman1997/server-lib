@@ -1,12 +1,30 @@
 cmake_minimum_required(VERSION 3.12)
 project(Logger)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static -fPIC")
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static -fPIC")
+endif()
 
 FILE(GLOB_RECURSE LOG_SRC "./src/*.cpp")
 
-add_library(Logger ${LOG_SRC})
+add_library(${PROJECT_NAME} ${LOG_SRC})
 
-target_link_libraries(Logger PUBLIC Core fmt)
+target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_20)
 
-target_include_directories(Logger PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>" "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+target_link_libraries(${PROJECT_NAME}
+    PUBLIC
+        CoreBase
+        fmt
+)
+
+target_include_directories(${PROJECT_NAME}
+    PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
+        "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+)
+
+# ============================================================
+# NetLogger 独立子库（依赖 Logger + Core，可选链接）
+# 解决 Core ↔ Logger 循环依赖问题
+# ============================================================
+add_subdirectory(net)

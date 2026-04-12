@@ -9,7 +9,7 @@
 
 #include <cassert>
 #include <filesystem>
-#include <iostream>
+#include "logger.h"
 
 namespace yuan::net::ftp
 {
@@ -74,7 +74,7 @@ namespace yuan::net::ftp
         // context_ fields (conn_, app_, file_stream_) are already null,
         // so context_.close() is a no-op.
         context_.close();
-        std::cout << "ftp session closed!\n";
+        LOG_DEBUG("ftp session closed");
     }
 
     void FtpSession::on_connected(Connection *conn) { (void)conn; }
@@ -303,8 +303,8 @@ namespace yuan::net::ftp
         if (!context_.conn_ || !context_.conn_->is_connected()) {
             return false;
         }
-        std::cout << "ftp send mode=" << static_cast<int>(work_mode_) << " cmd=" << cmd;
-        context_.conn_->get_output_linked_buffer()->get_current_buffer()->write_string(cmd);
+        LOG_DEBUG("ftp send mode={} cmd={}", static_cast<int>(work_mode_), cmd);
+        context_.conn_->append_output(cmd);
         context_.conn_->flush();
         return true;
     }

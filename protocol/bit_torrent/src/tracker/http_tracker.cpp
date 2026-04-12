@@ -1,23 +1,60 @@
 #include "tracker/http_tracker.h"
+#include "http_client.h"
+#include "request.h"
+#include "response.h"
 #include "utils.h"
-#include <sstream>
-#include <cstring>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#pragma comment(lib, "ws2_32.lib")
-#else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <fcntl.h>
-#define closesocket close
-#endif
+#include <memory>
+#include <sstream>
+#include <thread>
+#include <cstring>
 
 namespace yuan::net::bit_torrent
 {
+
+namespace
+{
+
+bool split_http_url(const std::string &url, std::string &authority, std::string &request_target)
+{
+    const auto scheme_pos = url.find("://");
+    if (scheme_pos == std::string::npos)
+    {
+        return false;
+    }
+
+    const auto authority_begin = scheme_pos + 3;
+    const auto path_pos = url.find('/', authority_begin);
+    if (path_pos == std::string::npos)
+    {
+        authority = url.substr(authority_begin);
+        request_target = "/";
+        return !authority.empty();
+    }
+
+    authority = url.substr(authority_begin, path_pos - authority_begin);
+    request_target = url.substr(path_pos);
+    return !authority.empty() && !request_target.empty();
+}
+
+bool tracker_response_ok(const TrackerResponse &response)
+{
+    return !response.peers_.empty() || response.interval_ > 0;
+}
+
+void configure_announce_request(http::HttpRequest *req,
+                                const std::string &request_target,
+                                const std::string &authority)
+{
+    req->set_method(http::HttpMethod::get_);
+    req->set_raw_url(request_target);
+    req->add_header("Connection", "close");
+    req->add_header("Host", authority);
+    req->add_header("User-Agent", "YuanBT/1.0");
+    req->send();
+}
+
+} // namespace
 
 HttpTracker::HttpTracker() : peer_id_(generate_peer_id()) {}
 
@@ -28,7 +65,8 @@ std::string HttpTracker::build_announce_url(const std::string &tracker_url,
                                             int32_t port,
                                             int64_t uploaded,
                                             int64_t downloaded,
-                                            int64_t left)
+                                            int64_t left,
+                                            TrackerAnnounceEvent event)
 {
     // info_hash: each byte URL-encoded (%XX)
     std::string info_hash_encoded;
@@ -60,7 +98,21 @@ std::string HttpTracker::build_announce_url(const std::string &tracker_url,
     url += "&left=" + left_str;
     url += "&compact=1";  // compact format (binary peers)
     url += "&no_peer_id=1";
-    url += "&event=started";
+    switch (event)
+    {
+    case TrackerAnnounceEvent::completed:
+        url += "&event=completed";
+        break;
+    case TrackerAnnounceEvent::started:
+        url += "&event=started";
+        break;
+    case TrackerAnnounceEvent::stopped:
+        url += "&event=stopped";
+        break;
+    case TrackerAnnounceEvent::none:
+    default:
+        break;
+    }
 
     if (!last_tracker_id_.empty())
         url += "&trackerid=" + url_encode(last_tracker_id_);
@@ -151,120 +203,49 @@ bool HttpTracker::announce(const std::string &tracker_url,
                            int64_t uploaded,
                            int64_t downloaded,
                            int64_t left,
+                           TrackerAnnounceEvent event,
                            TrackerResponse *out)
 {
-    std::string url = build_announce_url(tracker_url, meta, port, uploaded, downloaded, left);
+    const std::string url = build_announce_url(tracker_url, meta, port, uploaded, downloaded, left, event);
 
-    // Use system HTTP GET (platform-independent via fopen for simplicity,
-    // or the user can integrate with the project's HttpClient)
-    // For a self-contained implementation, we use a simple socket-based GET.
-    // TODO: integrate with project's HttpClient for SSL support
-
-    // Parse URL to get host and path
-    std::string host, path;
-    bool use_ssl = false;
-    uint16_t url_port = 80;
-
-    if (url.substr(0, 8) == "https://")
+    std::string authority;
+    std::string request_target;
+    if (!split_http_url(url, authority, request_target))
     {
-        use_ssl = true;
-        url_port = 443;
-        url = url.substr(8);
-    }
-    else if (url.substr(0, 7) == "http://")
-    {
-        url = url.substr(7);
-    }
-
-    auto slash_pos = url.find('/');
-    if (slash_pos == std::string::npos)
-    {
-        host = url;
-        path = "/";
-    }
-    else
-    {
-        host = url.substr(0, slash_pos);
-        path = url.substr(slash_pos);
-    }
-
-    auto colon_pos = host.find(':');
-    if (colon_pos != std::string::npos)
-    {
-        url_port = static_cast<uint16_t>(std::atoi(host.substr(colon_pos + 1).c_str()));
-        host = host.substr(0, colon_pos);
-    }
-
-    // For SSL trackers, we cannot do a simple socket connection.
-    // The user should integrate with HttpClient for HTTPS support.
-    if (use_ssl)
-    {
-        // Return true to indicate the URL is valid, but cannot connect without SSL.
-        // The real implementation would use HttpClient.
         return false;
     }
 
-    // Simple synchronous HTTP GET via socket
-#ifdef _WIN32
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
-#endif
-
-    int sock = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0)
+    auto client = std::make_unique<http::HttpClient>();
+    if (!client->query(url))
     {
-#ifdef _WIN32
-        WSACleanup();
-#endif
         return false;
     }
 
-    struct sockaddr_in server_addr {};
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(url_port);
-    inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr);
+    std::string body;
+    const bool request_ok = client->connect(
+        [request_target, authority](http::HttpRequest *req) {
+            configure_announce_request(req, request_target, authority);
+        },
+        [&body](http::HttpRequest *, http::HttpResponse *response) {
+            if (!response || response->get_body_length() == 0) {
+                return;
+            }
 
-    if (::connect(sock, reinterpret_cast<struct sockaddr *>(&server_addr), sizeof(server_addr)) < 0)
+            const char *begin = response->body_begin();
+            if (!begin) {
+                return;
+            }
+
+            body.assign(begin, response->get_body_length());
+        });
+
+    if (!request_ok || body.empty())
     {
-        ::closesocket(sock);
-#ifdef _WIN32
-        WSACleanup();
-#endif
         return false;
     }
-
-    // Build HTTP GET request
-    std::string request = "GET " + path + " HTTP/1.1\r\n"
-                          "Host: " + host + "\r\n"
-                          "Connection: close\r\n"
-                          "User-Agent: YuanBT/1.0\r\n"
-                          "\r\n";
-
-    ::send(sock, request.c_str(), static_cast<int>(request.size()), 0);
-
-    // Read response
-    std::string response;
-    char buf[4096];
-    int bytes;
-    while ((bytes = ::recv(sock, buf, sizeof(buf), 0)) > 0)
-    {
-        response.append(buf, bytes);
-    }
-
-    ::closesocket(sock);
-#ifdef _WIN32
-    WSACleanup();
-#endif
-
-    if (response.empty()) return false;
-
-    // Extract body (after \r\n\r\n)
-    auto body_pos = response.find("\r\n\r\n");
-    if (body_pos == std::string::npos) return false;
-    std::string body = response.substr(body_pos + 4);
 
     TrackerResponse resp;
-    bool ok = parse_response(body, resp);
+    const bool ok = parse_response(body, resp);
     if (ok && out) *out = resp;
     return ok;
 }
@@ -275,15 +256,17 @@ void HttpTracker::announce_async(const std::string &tracker_url,
                                  TrackerResponseHandler handler,
                                  int64_t uploaded,
                                  int64_t downloaded,
-                                 int64_t left)
+                                 int64_t left,
+                                 TrackerAnnounceEvent event)
 {
-    // For async support, the caller should integrate with the project's EventLoop + HttpClient.
-    // As a fallback, run synchronously on a separate thread.
-    // TODO: integrate with HttpClient for proper async support
-    TrackerResponse resp;
-    bool ok = announce(tracker_url, meta, port, uploaded, downloaded, left, &resp);
-    if (handler)
-        handler(ok ? resp : TrackerResponse{});
+    std::thread([this, tracker_url, meta, port, handler = std::move(handler), uploaded, downloaded, left, event]() mutable {
+        TrackerResponse resp;
+        const bool ok = announce(tracker_url, meta, port, uploaded, downloaded, left, event, &resp);
+        if (handler)
+        {
+            handler(ok ? resp : TrackerResponse{});
+        }
+    }).detach();
 }
 
 } // namespace yuan::net::bit_torrent

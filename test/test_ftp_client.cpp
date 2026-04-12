@@ -24,14 +24,20 @@ int main()
         client.connect("192.168.96.1", 12123);
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    if (!client.wait_until_connected(2000)) {
+        std::cout << "client didn't connected yet\n";
+        runner.join();
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return 0;
+    }
+
     yuan::net::ftp::CommandScanner scanner;
     while (true) {
         if (client.is_ok()) {
             client.send_command(scanner.simpleCommand());
         } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-            std::cout << "client didn't connected yet\n";
             break;
         }
     }

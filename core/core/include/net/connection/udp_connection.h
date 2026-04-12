@@ -1,18 +1,19 @@
 #ifndef __NET_UDP_CONNECTION_H__
 #define __NET_UDP_CONNECTION_H__
-#include "buffer/buffer.h"
-#include "buffer/linked_buffer.h"
+#include "buffer/buffer_chain.h"
 #include "connection.h"
+#include "datagram_transport.h"
 #include "net/socket/inet_address.h"
 #include "timer/timer.h"
 #include "timer/timer_task.h"
+#include <memory>
 
 namespace yuan::net
 {
     class UdpInstance;
     class UdpAdapter;
 
-    class UdpConnection : public Connection, public timer::TimerTask
+    class UdpConnection : public Connection, public DatagramTransport, public timer::TimerTask
     {
     public:
         UdpConnection(const InetAddress &addr);
@@ -28,9 +29,13 @@ namespace yuan::net
 
         virtual const InetAddress & get_remote_address();
 
-        virtual void write(buffer::Buffer *buff);
+        const InetAddress &peer_address() const override;
+        void attach_datagram_instance(UdpInstance *instance) override;
+        void set_datagram_state(ConnectionState state) override;
 
-        virtual void write_and_flush(buffer::Buffer *buff);
+        virtual void write(const ::yuan::buffer::ByteBuffer &buffer);
+
+        virtual void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer);
 
         virtual void flush();
 
@@ -40,15 +45,9 @@ namespace yuan::net
         // 发送完数据后返回
         virtual void close();
 
-        virtual ConnectionType get_conn_type();
-
-        virtual Channel * get_channel();
-        
         virtual void set_connection_handler(ConnectionHandler *handler);
 
         virtual ConnectionHandler * get_connection_handler();
-
-        virtual void forward(Connection *conn);
 
         virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler);
 
@@ -60,10 +59,6 @@ namespace yuan::net
         virtual void set_event_handler(EventHandler *eventHandler);
 
     public:
-        void set_instance_handler(UdpInstance *instance);
-
-        void set_connection_state(ConnectionState state);
-
     public:
         virtual void on_timer(timer::Timer *timer);
 
@@ -72,7 +67,7 @@ namespace yuan::net
 
         void process_pending_output_buffer();
 
-        bool proc_one_buff(buffer::Buffer *buff);
+        bool proc_one_buffer(const ::yuan::buffer::ByteBuffer &buffer);
 
     private:
         bool active_;
@@ -81,12 +76,12 @@ namespace yuan::net
         ConnectionState state_;
         int idle_cnt_;
         InetAddress address_;
-        UdpAdapter *adapter_;
+        std::unique_ptr<UdpAdapter> adapter_;
         ConnectionHandler *connectionHandler_;
         EventHandler *eventHandler_;
         UdpInstance *instance_;
         timer::Timer *alive_timer_;
-        buffer::LinkedBuffer pending_output_buffer_;
+        ::yuan::buffer::BufferChain pending_output_buffer_;
     };
 }
 

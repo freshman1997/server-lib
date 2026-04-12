@@ -1,14 +1,14 @@
 #include "server/commands/stou.h"
+#include "base/time.h"
 #include "common/response_code.h"
 #include "common/session.h"
 #include "server/commands/stor.h"
-#include <chrono>
 namespace yuan::net::ftp
 {
     REGISTER_COMMAND_IMPL(CommandStou);
     FtpCommandResponse CommandStou::execute(FtpSession *session, const std::string &args)
     {
-        const auto unique = args.empty() ? ("upload_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) + ".bin") : args;
+        const auto unique = args.empty() ? ("upload_" + std::to_string(base::time::system_now_us()) + ".bin") : args;
         CommandStor stor;
         return stor.execute(session, unique);
     }

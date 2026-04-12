@@ -1,6 +1,6 @@
 #include "server/ftp_server.h"
-#include "net/acceptor/acceptor.h"
-#include "net/acceptor/tcp_acceptor.h"
+#include "net/acceptor/acceptor_factory.h"
+#include "net/acceptor/stream_acceptor.h"
 #include "net/connection/connection.h"
 #include "event/event_loop.h"
 #include "net/handler/event_handler.h"
@@ -9,7 +9,7 @@
 #include "server/server_session.h"
 #include "timer/wheel_timer_manager.h"
 
-#include <iostream>
+#include "logger.h"
 #include <memory>
 
 namespace yuan::net::ftp 
@@ -40,7 +40,7 @@ namespace yuan::net::ftp
 
     FtpServer::~FtpServer()
     {
-        std::cout << "ftp server exit now!\n";
+        LOG_INFO("ftp server exiting");
         quit();
     }
 
@@ -48,13 +48,13 @@ namespace yuan::net::ftp
     {
         Socket *sock = new Socket("", port);
         if (!sock->valid()) {
-            std::cout << "cant create socket file descriptor!\n";
+            LOG_ERROR("cant create socket file descriptor!");
             delete sock;
             return false;
         }
 
         if (!sock->bind()) {
-            std::cout << "cant bind port: " << port << "!\n";
+            LOG_ERROR("cant bind port: {}!", port);
             delete sock;
             return false;
         }
@@ -62,9 +62,9 @@ namespace yuan::net::ftp
         sock->set_reuse(true);
         sock->set_none_block(true);
 
-        TcpAcceptor *acceptor = new TcpAcceptor(sock);
+        StreamAcceptor *acceptor = create_stream_acceptor(sock);
         if (!acceptor->listen()) {
-            std::cout << "cant listen on port: " << port << "!\n";
+            LOG_ERROR("cant listen on port: {}!", port);
             delete acceptor;
             return false;
         }
@@ -111,7 +111,7 @@ namespace yuan::net::ftp
     {
         auto session = impl_->session_manager_.get_session(conn);
         if (session) {
-            std::cout << "internal error occured!!!\n";
+            LOG_WARN("ftp internal error: duplicate session");
             conn->close();
         } else {
             auto newSessoion = std::make_shared<ServerFtpSession>(conn, this);
@@ -127,12 +127,12 @@ namespace yuan::net::ftp
 
     void FtpServer::on_read(Connection *conn)
     {
-        std::cerr << "on_read internal error occured!!!\n";
+        LOG_ERROR("ftp on_read internal error!");
     }
 
     void FtpServer::on_write(Connection *conn)
     {
-        std::cerr << "on_write internal error occured!!!\n";
+        LOG_ERROR("ftp on_write internal error!");
     }
 
     void FtpServer::on_close(Connection *conn)

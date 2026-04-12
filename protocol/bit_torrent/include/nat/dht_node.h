@@ -18,7 +18,6 @@
 
 #include "torrent_meta.h"
 #include "nat_config.h"
-#include "net/acceptor/udp_acceptor.h"
 #include "event/event_loop.h"
 #include "timer/timer_manager.h"
 #include <string>
@@ -31,7 +30,7 @@
 
 namespace yuan::net
 {
-    class UdpAcceptor;
+    class DatagramAcceptor;
     class Connection;
 }
 
@@ -112,7 +111,7 @@ public:
     // Get routing table size
     size_t routing_table_size() const;
 
-    // ConnectionHandler interface (for UdpAcceptor)
+    // ConnectionHandler interface (for datagram endpoint events)
     void on_connected(net::Connection *conn) override;
     void on_error(net::Connection *conn) override;
     void on_read(net::Connection *conn) override;
@@ -194,7 +193,7 @@ private:
     bool running_ = false;
     int32_t port_ = 0;
 
-    net::UdpAcceptor *acceptor_ = nullptr;
+    net::DatagramAcceptor *acceptor_ = nullptr;
     net::EventLoop *ev_loop_ = nullptr;
     timer::TimerManager *timer_manager_ = nullptr;
 

@@ -1,4 +1,3 @@
-#include "buffer/linked_buffer.h"
 #include "net/connection/connection.h"
 #include "context.h"
 #include "ops/option.h"
@@ -29,29 +28,26 @@ namespace yuan::net::http
 
     bool HttpSessionContext::parse()
     {
-        if (!conn_) {
-            return false;
-        }
+        if (!conn_) return false;
 
         if (!is_downloading() && !has_parsed_) {
             reset();
             has_parsed_ = true;
         }
 
-        const auto pkt = get_packet();
-        pkt->parse(*conn_->get_input_buff());
+        auto pkt = get_packet();
+        pkt->parse(conn_->take_input_byte_buffer());
         return pkt->good();
     }
 
     bool HttpSessionContext::write() const
     {
-        if (response_->is_uploading() && conn_->is_connected())
-        {
-            const auto buff = response_->get_buff(true);
-            buff->reset();
-            buff->resize(static_cast<size_t>(config::client_max_content_length + config::max_header_length));
-            response_->write(*buff);
-            conn_->write_and_flush(buff);
+        if (response_->is_uploading() && conn_->is_connected()) {
+            ::yuan::buffer::ByteBuffer buffer(static_cast<std::size_t>(config::client_max_content_length + config::max_header_length));
+            response_->write(buffer);
+            if (!buffer.empty()) {
+                conn_->write_and_flush(buffer);
+            }
         }
 
         return true;
@@ -59,9 +55,7 @@ namespace yuan::net::http
 
     bool HttpSessionContext::is_completed()
     {
-        if (!conn_) {
-            return false;
-        }
+        if (!conn_) return false;
 
         if (get_packet()->is_ok()) {
             has_parsed_ = false;

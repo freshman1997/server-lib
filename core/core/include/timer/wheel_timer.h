@@ -1,6 +1,7 @@
 #ifndef __WHEEL_TIMER_H__
 #define __WHEEL_TIMER_H__
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "timer.h"
@@ -89,12 +90,16 @@ namespace yuan::timer
         void trigger();
 
     private:
+        void bind_task(TimerTask *task);
+
+    private:
         TimerState state_;
         int32_t period_;
         uint32_t period_counter_;
         uint32_t interval_;
         uint64_t remain_;
         TimerTask * task_;
+        std::unique_ptr<TimerTask> owned_task_;
         WheelTimer *prev_;
         WheelTimer *next_;
         WheelTimerItem *item_;

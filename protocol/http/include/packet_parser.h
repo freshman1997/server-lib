@@ -1,6 +1,6 @@
 #ifndef __NET_HTTP_PACKET_PARSER_H__
 #define __NET_HTTP_PACKET_PARSER_H__
-#include "buffer/buffer.h"
+#include "buffer/byte_buffer.h"
 
 namespace yuan::net::http
 {
@@ -54,7 +54,7 @@ namespace yuan::net::http
         virtual ~HttpPacketParser() {}
 
     public:
-        virtual bool parse_header(buffer::Buffer &buff) = 0;
+        virtual bool parse_header(::yuan::buffer::ByteBuffer &buff) = 0;
 
     public:
         void set_ptr(HttpPacket *packet)
@@ -68,7 +68,7 @@ namespace yuan::net::http
             body_state = BodyState::init;
         }
 
-        int parse(buffer::Buffer &buff);
+        int parse(::yuan::buffer::ByteBuffer &buff);
 
         bool done() const;
 
@@ -85,13 +85,13 @@ namespace yuan::net::http
         }
 
     protected:
-        bool parse_version(buffer::Buffer &buff, char ending = '\r', char next = '\n');
+        bool parse_version(::yuan::buffer::ByteBuffer &buff, char ending = '\r', char next = '\n');
 
-        bool parse_header_keys(buffer::Buffer &buff);
+        bool parse_header_keys(::yuan::buffer::ByteBuffer &buff);
 
-        bool parse_new_line(buffer::Buffer &buff);
+        bool parse_new_line(::yuan::buffer::ByteBuffer &buff);
 
-        int  parse_body(buffer::Buffer &buff, uint32_t length);
+        int  parse_body(::yuan::buffer::ByteBuffer &buff, uint32_t length);
 
         bool parse_content_disposition(const std::string *val, std::string &originName);
 
