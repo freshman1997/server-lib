@@ -4,6 +4,7 @@
 #include <string>
 #include <unordered_map>
 #include <string_view>
+#include <cstdint>
 
 namespace yuan::net::http
 {

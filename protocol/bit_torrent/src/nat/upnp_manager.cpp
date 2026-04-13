@@ -201,7 +201,7 @@ void UpnpManager::discover_igd()
         #ifdef __linux__
             n = ::recvfrom(sock, buf, sizeof(buf) - 1, MSG_DONTWAIT,  (struct sockaddr *)&from, (socklen_t *)&fromlen);
         #elif defined _WIN32
-            int n = recvfrom(sock, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&from, &fromlen);
+            n = recvfrom(sock, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&from, &fromlen);
         #elif defined __APPLE__
             n = ::recvfrom(sock, buf, sizeof(buf) - 1, MSG_DONTWAIT,  (struct sockaddr *)&from, &fromlen);
         #endif
