@@ -2,7 +2,7 @@
 #include <cassert>
 #include "base/utils/string_converter.h"
 
-#ifdef unix
+#ifdef __unix__
 #include <dlfcn.h>
 #elif _WIN32
 #include <windows.h>
@@ -13,7 +13,7 @@ namespace yuan::plugin
 {
     void * PluginSymbolSolver::load_native_lib(const std::string &path)
     {
-    #ifdef unix
+    #ifdef __unix__
         void *handle = dlopen(path.c_str(), RTLD_LAZY);
         return handle;
     #elif _WIN32
@@ -31,7 +31,7 @@ namespace yuan::plugin
             return;
         }
         
-    #ifdef unix
+    #ifdef __unix__
         dlclose(handle);
     #elif _WIN32
         FreeLibrary((HMODULE)handle);
@@ -42,7 +42,7 @@ namespace yuan::plugin
 
     void * PluginSymbolSolver::find_symbol(void *handle, const std::string &symbolName)
     {
-    #ifdef unix
+    #ifdef __unix__
         void *addr = dlsym(handle, symbolName.c_str());
         return addr;
     #elif _WIN32
