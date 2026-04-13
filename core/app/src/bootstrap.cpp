@@ -4,6 +4,9 @@
 #include "eventbus/event_bus.h"
 #include "logger.h"
 #include "runtime_plan.h"
+#include "base/time.h"
+
+#include <thread>
 
 #ifndef _WIN32
 #include <csignal>

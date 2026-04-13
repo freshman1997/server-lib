@@ -21,6 +21,18 @@
 namespace yuan::net::bit_torrent
 {
 
+namespace 
+{
+    static void _close(int sock)
+    {
+    #ifdef _WIN32
+        closesocket(sock);
+    #else
+        close(sock);
+    #endif
+    }
+}
+
 UpnpManager::UpnpManager()
     : running_(false),
       mapped_(false),
@@ -165,9 +177,11 @@ void UpnpManager::discover_igd()
 
     if (!send_ssdp_discover(sock))
     {
-        closesocket(sock);
 #ifdef _WIN32
+        closesocket(sock);
         WSACleanup();
+#else
+        close(sock);
 #endif
         return;
     }
@@ -180,8 +194,17 @@ void UpnpManager::discover_igd()
     {
         struct sockaddr_in from;
         int fromlen = sizeof(from);
-        int n = recvfrom(sock, buf, sizeof(buf) - 1, 0,
-                         (struct sockaddr *)&from, &fromlen);
+        //int n = recvfrom(sock, buf, sizeof(buf) - 1, 0,
+        //                 (struct sockaddr *)&from, &fromlen);
+
+        int n = -1;
+        #ifdef __linux__
+            n = ::recvfrom(sock, buf, sizeof(buf) - 1, MSG_DONTWAIT,  (struct sockaddr *)&from, (socklen_t *)&fromlen);
+        #elif defined _WIN32
+            int n = recvfrom(sock, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&from, &fromlen);
+        #elif defined __APPLE__
+            n = ::recvfrom(sock, buf, sizeof(buf) - 1, MSG_DONTWAIT,  (struct sockaddr *)&from, &fromlen);
+        #endif
 
         if (n <= 0) break;
 
@@ -216,7 +239,7 @@ void UpnpManager::discover_igd()
         }
     }
 
-    closesocket(sock);
+    _close(sock);
 
     if (!igd_control_url_.empty())
     {
@@ -295,7 +318,7 @@ bool UpnpManager::fetch_igd_description(const std::string &location)
 
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0)
     {
-        closesocket(sock);
+        _close(sock);
         return false;
     }
 
@@ -313,7 +336,8 @@ bool UpnpManager::fetch_igd_description(const std::string &location)
         buf[n] = '\0';
         xml += buf;
     }
-    closesocket(sock);
+
+    _close(sock);
 
     if (xml.empty()) return false;
 
@@ -423,7 +447,7 @@ std::string UpnpManager::http_request(const std::string &url, const std::string 
 
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0)
     {
-        closesocket(sock);
+        _close(sock);
         return "";
     }
 
@@ -446,7 +470,7 @@ std::string UpnpManager::http_request(const std::string &url, const std::string 
         buf[n] = '\0';
         response += buf;
     }
-    closesocket(sock);
+    _close(sock);
 
     return response;
 }
@@ -580,7 +604,7 @@ bool UpnpManager::nat_pmp_get_external_ip()
     if (sendto(sock, (const char *)request, 2, 0,
                (struct sockaddr *)&gateway, sizeof(gateway)) < 0)
     {
-        closesocket(sock);
+        _close(sock);
         return false;
     }
 
@@ -597,9 +621,17 @@ bool UpnpManager::nat_pmp_get_external_ip()
     uint8_t response[16];
     struct sockaddr_in from;
     int fromlen = sizeof(from);
-    int n = recvfrom(sock, (char *)response, sizeof(response), 0,
+    int n = -1;
+#ifdef __linux__
+    n = ::recvfrom(sock, (char *)response, sizeof(response) - 1, MSG_DONTWAIT,  (struct sockaddr *)&from, (socklen_t *)&fromlen);
+#elif defined _WIN32
+    n = recvfrom(sock, (char *)response, sizeof(response), 0,
                      (struct sockaddr *)&from, &fromlen);
-    closesocket(sock);
+#elif defined __APPLE__
+    n = ::recvfrom(sock, (char *)response, sizeof(response) - 1, MSG_DONTWAIT,  (struct sockaddr *)&from, &fromlen);
+#endif
+
+    _close(sock);
 
     if (n < 12) return false;
     if (response[0] != 0 || response[1] != 128) return false; // version=0, opcode=128(=response)
@@ -651,7 +683,7 @@ bool UpnpManager::nat_pmp_map_port()
     if (sendto(sock, (const char *)request, 12, 0,
                (struct sockaddr *)&gateway, sizeof(gateway)) < 0)
     {
-        closesocket(sock);
+        _close(sock);
         return false;
     }
 
@@ -668,9 +700,16 @@ bool UpnpManager::nat_pmp_map_port()
     uint8_t response[16];
     struct sockaddr_in from;
     int fromlen = sizeof(from);
-    int n = recvfrom(sock, (char *)response, sizeof(response), 0,
+    int n = -1;
+#ifdef __linux__
+    n = ::recvfrom(sock, (char *)response, sizeof(response) - 1, MSG_DONTWAIT,  (struct sockaddr *)&from, (socklen_t *)&fromlen);
+#elif defined _WIN32
+    n = recvfrom(sock, (char *)response, sizeof(response), 0,
                      (struct sockaddr *)&from, &fromlen);
-    closesocket(sock);
+#elif defined __APPLE__
+    n = ::recvfrom(sock, (char *)response, sizeof(response) - 1, MSG_DONTWAIT,  (struct sockaddr *)&from, &fromlen);
+#endif
+    _close(sock);
 
     if (n < 16) return false;
     if (response[0] != 0 || response[1] != 129) return false; // version=0, opcode=129
@@ -707,19 +746,19 @@ std::string UpnpManager::get_local_ip()
     // Connect UDP socket to determine local IP (doesn't send data)
     if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) < 0)
     {
-        closesocket(sock);
+        _close(sock);
         return "";
     }
 
     struct sockaddr_in local;
     int local_len = sizeof(local);
-    if (getsockname(sock, (struct sockaddr *)&local, &local_len) < 0)
+    if (getsockname(sock, (struct sockaddr *)&local, (socklen_t *)&local_len) < 0)
     {
-        closesocket(sock);
+        _close(sock);
         return "";
     }
 
-    closesocket(sock);
+    _close(sock);
 
     char ip_str[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &local.sin_addr, ip_str, sizeof(ip_str));

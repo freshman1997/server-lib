@@ -46,7 +46,9 @@ int main()
     DnsClient client;
     if (!client.connect("127.0.0.1", PORT)) {
         std::cout << "FAIL: Failed to connect to DNS server!" << std::endl;
+    #ifdef _WIN32
         WSACleanup();
+    #endif
         return 1;
     }
     std::cout << "OK: Connected to DNS server on port " << PORT << std::endl;
