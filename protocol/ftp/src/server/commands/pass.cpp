@@ -3,7 +3,6 @@
 #include "common/session.h"
 namespace yuan::net::ftp
 {
-    REGISTER_COMMAND_IMPL(CommandPass);
     FtpCommandResponse CommandPass::execute(FtpSession *session, const std::string &args)
     {
         if (args.empty()) {
@@ -15,6 +14,6 @@ namespace yuan::net::ftp
         }
         return {FtpResponseCode::__230__, "Login successful."};
     }
-    CommandType CommandPass::get_command_type() { return CommandType::cmd_user; }
-    std::string CommandPass::get_comand_name() { return "PASS"; }
+    CommandType CommandPass::get_command_type() { return CommandType::cmd_pass; }
+    std::string CommandPass::get_command_name() { return "PASS"; }
 }

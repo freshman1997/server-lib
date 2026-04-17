@@ -6,9 +6,10 @@
 #include "udp/udp_instance.h"
 #include "../channel/channel.h"
 #include "../socket/inet_address.h"
+#include "net/secuity/ssl_module.h"
 #include <memory>
 
-namespace yuan::timer 
+namespace yuan::timer
 {
     class TimerManager;
 }
@@ -28,7 +29,7 @@ namespace yuan::net
 
         virtual void close();
 
-        virtual Channel *endpoint_channel() override
+        virtual Channel *endpoint_channel() const override
         {
             return channel_.get();
         }
@@ -44,7 +45,9 @@ namespace yuan::net
 
         virtual void set_connection_handler(ConnectionHandler *connHandler);
 
-        virtual void set_ssl_module(std::shared_ptr<SSLModule> module) {}
+        virtual void set_ssl_module(std::shared_ptr<SSLModule> module)
+        {
+        }
 
     public:
         int send_to(Connection *conn, const ::yuan::buffer::ByteBuffer &buff);
@@ -63,17 +66,17 @@ namespace yuan::net
             update_channel();
         }
 
-        timer::TimerManager * get_timer_manager()
+        timer::TimerManager *get_timer_manager() const
         {
             return timer_manager_;
         }
 
-        virtual timer::TimerManager *endpoint_timer_manager() override
+        virtual timer::TimerManager *endpoint_timer_manager() const override
         {
             return timer_manager_;
         }
 
-        UdpInstance * get_udp_instance() override
+        UdpInstance *get_udp_instance() const override
         {
             return instance_.get();
         }

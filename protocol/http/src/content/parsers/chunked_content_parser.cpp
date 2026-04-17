@@ -46,10 +46,11 @@ namespace yuan::net::http
 
     bool ChunkedContentParser::can_parse(ContentType contentType)
     {
-        return contentType == ContentType::chunked;
+        (void)contentType;
+        return true;
     }
 
-    ChunkState ChunkedContentParser::parse_chunked(HttpPacket *packet)
+    ChunkState ChunkedContentParser::parse_chunked(HttpPacket * packet)
     {
         if (!packet) {
             return ChunkState::internal_error_;
@@ -102,11 +103,13 @@ namespace yuan::net::http
                         ++pos;
 
                         std::size_t chunk_size = 0;
-                        auto [ptr, ec] = std::from_chars(
-                            size_buf_.data(),
-                            size_buf_.data() + size_buf_.size(),
-                            chunk_size,
-                            16);
+                        auto[
+                            ptr,
+                            ec
+                        ] = std::from_chars(size_buf_.data(),
+                                            size_buf_.data() + size_buf_.size(),
+                                            chunk_size,
+                                            16);
 
                         if (ec != std::errc{} || ptr != size_buf_.data() + size_buf_.size() || chunk_size > max_chunk_size_) {
                             phase_ = ParsePhase::error;
@@ -122,7 +125,11 @@ namespace yuan::net::http
                         pending_buffer_.compact();
                         return ChunkState::need_more_;
                     }
-                } else if (std::isxdigit(static_cast<unsigned char>(ch)) || ch == ' ') {
+                } else if (std::isxdigit(static_cast<unsigned char>(ch))) {
+                    if (size_buf_.size() >= max_size_buf_length_) {
+                        phase_ = ParsePhase::error;
+                        break;
+                    }
                     size_buf_.push_back(ch);
                 } else if (ch == ';') {
                     while (pos < data_end && *pos != '\r') {
@@ -162,10 +169,10 @@ namespace yuan::net::http
                 }
 
                 if (!file_stream_ && total_bytes_ > disk_spill_size_ && exceed_save_file_) {
-                    tmp_file_path_ = "___tmp___" + std::to_string(yuan::base::time::now());
+                    tmp_file_path_ = "/tmp/http_chunk_" + std::to_string(yuan::base::time::now()) + "_" + std::to_string(reinterpret_cast<uintptr_t>(this));
                     file_stream_ = std::make_unique<std::fstream>(
                         tmp_file_path_,
-                        std::ios_base::out | std::ios_base::binary | std::ios_base::app);
+                        std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
 
                     if (!file_stream_->is_open() || !file_stream_->good()) {
                         file_stream_.reset();
@@ -199,11 +206,22 @@ namespace yuan::net::http
                     pos += 2;
                     phase_ = ParsePhase::done;
                 } else {
-                    if (*pos != '\r' && *pos != '\n') {
-                        trailer_checksum_.push_back(static_cast<char>(
-                            std::tolower(static_cast<unsigned char>(*pos))));
+                    while (pos < data_end && *pos != '\r') {
+                        trailer_checksum_.push_back(
+                            static_cast<char>(std::tolower(static_cast<unsigned char>(*pos))));
+                        ++pos;
                     }
-                    ++pos;
+                    if (pos < data_end && *pos == '\r') {
+                        ++pos;
+                        if (pos < data_end && *pos == '\n') {
+                            ++pos;
+                        }
+                    }
+                    if (pos >= data_end) {
+                        pending_buffer_.consume(static_cast<std::size_t>(pos - pending_buffer_.read_ptr()));
+                        pending_buffer_.compact();
+                        return ChunkState::need_more_;
+                    }
                 }
                 break;
             }
@@ -225,7 +243,7 @@ namespace yuan::net::http
         return ChunkState::need_more_;
     }
 
-    bool ChunkedContentParser::parse(HttpPacket *packet)
+    bool ChunkedContentParser::parse(HttpPacket * packet)
     {
         ChunkState state = parse_chunked(packet);
 
@@ -238,7 +256,7 @@ namespace yuan::net::http
             cc->tmp_file = tmp_file_path_;
             cc->total_bytes = total_bytes_;
             cc->trailer_checksum = trailer_checksum_;
-            packet->set_body_content(new Content(ContentType::chunked, cc.release()));
+            packet->set_body_content(new Content(ContentType::not_support, cc.release()));
             packet->set_body_state(BodyState::fully);
         }
 

@@ -1,5 +1,5 @@
-#ifndef _NET_FTP_CLIENT_FILE_MANAGER_H__
-#define _NET_FTP_CLIENT_FILE_MANAGER_H__
+#ifndef NET_FTP_CLIENT_FILE_MANAGER_H
+#define NET_FTP_CLIENT_FILE_MANAGER_H
 #include <vector>
 #include "common/def.h"
 

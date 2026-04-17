@@ -15,10 +15,10 @@ namespace yuan::net
     public:
         virtual bool init(const std::string &cert, const std::string &privateKey = {}, SSLHandler::SSLMode mode = SSLHandler::SSLMode::connector_);
 
-        virtual const std::string * get_error_message();
+        virtual const std::string *get_error_message() const override;
 
         virtual std::shared_ptr<SSLHandler> create_handler(int fd, SSLHandler::SSLMode mode);
-        
+
     public:
         void set_error_msg(const char *msg, size_t len);
 
@@ -30,6 +30,7 @@ namespace yuan::net
     class OpenSSLHandler : public SSLHandler
     {
         friend class OpenSSLModule;
+
     public:
         OpenSSLHandler();
         ~OpenSSLHandler();
@@ -40,6 +41,10 @@ namespace yuan::net
         virtual int ssl_write(const char *data, std::size_t size);
 
         virtual int ssl_read(char *buffer, std::size_t size);
+
+        virtual bool ssl_want_read() const override;
+
+        virtual bool ssl_want_write() const override;
 
     private:
         void set_ssl_data(OpenSSLModule *module, void *ssl, SSLMode mode);

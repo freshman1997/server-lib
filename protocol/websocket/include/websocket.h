@@ -5,5 +5,6 @@
 #include "../entry/data_handler.h"
 #include "../entry/server.h"
 #include "../entry/client.h"
+#include "../common/handler.h"
 
 #endif

@@ -19,17 +19,17 @@ namespace yuan::net
             fd_ = fd;
         }
 
-        int get_fd() const 
+        int get_fd() const
         {
             return fd_;
         }
 
-        int get_events() const 
+        int get_events() const
         {
             return events_;
         }
 
-        bool has_events()
+        bool has_events() const
         {
             return events_ != NONE_EVENT;
         }
@@ -71,16 +71,16 @@ namespace yuan::net
             priority_ = priority;
         }
 
-        int get_priority()
+        int get_priority() const
         {
             return priority_;
         }
 
     public:
-        static constexpr int READ_EVENT  = 0b001;
+        static constexpr int READ_EVENT = 0b001;
         static constexpr int WRITE_EVENT = 0b010;
         static constexpr int EXCEP_EVENT = 0b100;
-        static constexpr int NONE_EVENT  = 0;
+        static constexpr int NONE_EVENT = 0;
 
     private:
         int events_;
@@ -90,6 +90,5 @@ namespace yuan::net
         SelectHandler *handler_;
     };
 }
-
 
 #endif

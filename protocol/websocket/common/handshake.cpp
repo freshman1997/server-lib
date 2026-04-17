@@ -13,14 +13,21 @@
 #include <openssl/ssl.h>
 #include <sstream>
 
-namespace yuan::net::websocket 
+namespace yuan::net::websocket
 {
-    WebSocketHandshaker::WebSocketHandshaker() : ok_(false)
+    static bool iequals(const std::string & a, const std::string & b)
     {
-        client_key_ = WebSocketConfigManager::get_instance()->get_client_key();
+        if (a.size() != b.size())
+            return false;
+        return std::strcasecmp(a.c_str(), b.c_str()) == 0;
     }
 
-    bool WebSocketHandshaker::on_handshake(http::HttpRequest * req, http::HttpResponse *resp, WebSocketConnection::WorkMode workMode, bool isResp)
+    WebSocketHandshaker::WebSocketHandshaker()
+        : ok_(false), config_(nullptr)
+    {
+    }
+
+    bool WebSocketHandshaker::on_handshake(http::HttpRequest * req, http::HttpResponse * resp, WebSocketConnection::WorkMode workMode, bool isResp)
     {
         ok_ = false;
 
@@ -31,47 +38,41 @@ namespace yuan::net::websocket
         }
     }
 
-    bool WebSocketHandshaker::do_handshake_server(http::HttpRequest * req, http::HttpResponse *resp)
+    bool WebSocketHandshaker::do_handshake_server(http::HttpRequest * req, http::HttpResponse * resp)
     {
-        if (req->get_method() != http::HttpMethod::get_ || req->get_version() != http::HttpVersion::v_1_1)
-        {
+        if (req->get_method() != http::HttpMethod::get_ || req->get_version() != http::HttpVersion::v_1_1) {
             return false;
         }
 
         auto conn = req->get_header("connection");
-        if (!conn || (*conn != "Upgrade" && *conn != "upgrade"))
-        {
+        if (!conn || !iequals(*conn, "Upgrade")) {
             return false;
         }
 
         auto upgrade = req->get_header("upgrade");
-        if (!upgrade || (*upgrade != "websocket" && *upgrade != "Websocket"))
-        {
+        if (!upgrade || !iequals(*upgrade, "websocket")) {
             return false;
         }
 
         auto version = req->get_header("sec-websocket-version");
-        if (!version || *version != "13")
-        {
+        if (!version || *version != "13") {
             return false;
         }
 
         auto key = req->get_header("sec-websocket-key");
-        if (!key || key->empty())
-        {
+        if (!key || key->empty()) {
             return false;
         }
 
         client_key_ = *key;
         server_key_ = WebSocketUtils::generate_server_key(client_key_);
 
-
         auto subProtocol = req->get_header("sec-websocket-protocol");
         if (subProtocol) {
             decode_into_set(*subProtocol, client_sub_protos_, ',');
 
             // 服务器必须在响应中明确表示接受哪个子协议，否则连接将不会成功建立。
-            const auto *supportProto = WebSocketConfigManager::get_instance()->find_server_support_sub_protocol(client_sub_protos_);
+            const auto *supportProto = config_ ? config_->find_server_support_sub_protocol(client_sub_protos_) : nullptr;
             if (supportProto) {
                 working_subproto_ = *supportProto;
                 resp->add_header("Sec-WebSocket-Protocol", working_subproto_);
@@ -97,9 +98,13 @@ namespace yuan::net::websocket
         return true;
     }
 
-    bool WebSocketHandshaker::do_handshake_client(http::HttpRequest * req, http::HttpResponse *resp, bool isResp)
+    bool WebSocketHandshaker::do_handshake_client(http::HttpRequest * req, http::HttpResponse * resp, bool isResp)
     {
         if (!isResp) {
+            if (client_key_.empty() && config_) {
+                client_key_ = config_->get_client_key();
+            }
+
             req->set_method(http::HttpMethod::get_);
             req->set_version(http::HttpVersion::v_1_1);
             req->add_header("Upgrade", "websocket");
@@ -107,9 +112,11 @@ namespace yuan::net::websocket
             req->add_header("Sec-WebSocket-Key", client_key_);
             req->add_header("Sec-WebSocket-Version", "13");
 
-            const auto & supportProtos = WebSocketConfigManager::get_instance()->get_client_support_subprotos();
-            if (!supportProtos.empty()) {
-                req->add_header("Sec-WebSocket-Protocol", encode_sub_proto(supportProtos));
+            if (config_) {
+                const auto &supportProtos = config_->get_client_support_subprotos();
+                if (!supportProtos.empty()) {
+                    req->add_header("Sec-WebSocket-Protocol", encode_sub_proto(supportProtos));
+                }
             }
 
             req->send();
@@ -120,20 +127,17 @@ namespace yuan::net::websocket
             }
 
             auto conn = resp->get_header("connection");
-            if (!conn || (*conn != "Upgrade" && *conn != "upgrade"))
-            {
+            if (!conn || !iequals(*conn, "Upgrade")) {
                 return false;
             }
 
             auto upgrade = resp->get_header("upgrade");
-            if (!upgrade || (*upgrade != "websocket" && *upgrade != "Websocket"))
-            {
+            if (!upgrade || !iequals(*upgrade, "websocket")) {
                 return false;
             }
 
             auto key = resp->get_header("sec-websocket-accept");
-            if (!key)
-            {
+            if (!key) {
                 return false;
             }
 
@@ -141,23 +145,21 @@ namespace yuan::net::websocket
                 return false;
             }
 
-            if (!WebSocketConfigManager::get_instance()->get_client_support_subprotos().empty()) {
+            if (config_ && !config_->get_client_support_subprotos().empty()) {
                 auto subProtocol = resp->get_header("sec-websocket-protocol");
 
-                // 服务器必须在响应中明确表示接受哪个子协议，否则连接将不会成功建立。
                 if (!subProtocol) {
                     return false;
                 }
 
                 decode_into_set(*subProtocol, server_sub_protos_, ',');
 
-                const auto *supportProto = WebSocketConfigManager::get_instance()->find_server_support_sub_protocol(server_sub_protos_);
+                const auto *supportProto = config_->find_server_support_sub_protocol(server_sub_protos_);
                 if (!supportProto) {
                     return false;
                 }
                 working_subproto_ = *supportProto;
             }
-            
 
             server_key_ = *key;
             ok_ = true;
@@ -165,7 +167,7 @@ namespace yuan::net::websocket
         }
     }
 
-    void WebSocketHandshaker::decode_into_set(const std::string &raw, std::set<std::string> &protos, char delimiter)
+    void WebSocketHandshaker::decode_into_set(const std::string & raw, std::set<std::string> & protos, char delimiter)
     {
         // json, mqtt
         if (raw.empty()) {
@@ -173,7 +175,7 @@ namespace yuan::net::websocket
         }
 
         std::string word;
-        for (int i = 0; i < raw.size(); ) {
+        for (int i = 0; i < raw.size();) {
             if (raw[i] == ' ') {
                 ++i;
                 continue;
@@ -195,15 +197,15 @@ namespace yuan::net::websocket
         }
     }
 
-    std::string WebSocketHandshaker::encode_sub_proto(const std::set<std::string> &protos)
+    std::string WebSocketHandshaker::encode_sub_proto(const std::set<std::string> & protos)
     {
         std::stringstream ss;
         std::size_t counter = 0;
         for (const auto &proto : protos) {
-            ss << proto;
-            if (counter < protos.size()) {
+            if (counter > 0) {
                 ss << ", ";
             }
+            ss << proto;
             ++counter;
         }
         return ss.str();

@@ -10,16 +10,19 @@ namespace yuan::net::socket
 
     int create_ipv4_udp_socket(bool noneBlock = false);
 
+    int create_ipv6_tcp_socket(bool noneBlock = false);
+
+    int create_ipv6_udp_socket(bool noneBlock = false);
 
     void close_fd(int fd);
 
-    int bind(int fd, const InetAddress &addr);
+    int bind(int fd, const InetAddress & addr);
 
-    int listen(int fd,int backlog);
+    int listen(int fd, int backlog);
 
-    int accept(int fd, sockaddr_in &peer_addr);
+    int accept(int fd, sockaddr_storage & peer_addr);
 
-    int connect(int fd, const InetAddress &addr);
+    int connect(int fd, const InetAddress & addr);
 
     int get_last_error();
 
@@ -30,6 +33,8 @@ namespace yuan::net::socket
     void set_keep_alive(int fd, bool on);
 
     void set_none_block(int fd, bool on);
+
+    void set_ipv6_only(int fd, bool on);
 }
 
 #endif

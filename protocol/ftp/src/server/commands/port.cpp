@@ -2,7 +2,6 @@
 #include "common/response_code.h"
 namespace yuan::net::ftp
 {
-    REGISTER_COMMAND_IMPL(CommandPort);
     FtpCommandResponse CommandPort::execute(FtpSession *session, const std::string &args)
     {
         (void)session;
@@ -10,5 +9,5 @@ namespace yuan::net::ftp
         return {FtpResponseCode::__502__, "PORT active mode is not implemented."};
     }
     CommandType CommandPort::get_command_type() { return CommandType::cmd_port; }
-    std::string CommandPort::get_comand_name() { return "PORT"; }
+    std::string CommandPort::get_command_name() { return "PORT"; }
 }

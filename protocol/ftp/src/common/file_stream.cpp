@@ -10,7 +10,8 @@
 
 namespace yuan::net::ftp
 {
-    FtpFileStream::FtpFileStream(FtpSession *session) : session_(session)
+    FtpFileStream::FtpFileStream(FtpSession * session)
+        : session_(session)
     {
     }
 
@@ -22,15 +23,20 @@ namespace yuan::net::ftp
         }
     }
 
-    void FtpFileStream::on_connected(Connection *conn)
+    void FtpFileStream::on_connected(Connection * conn)
     {
         LOG_DEBUG("data stream connected ip: {}", conn->get_remote_address().get_ip());
         assert(session_);
         auto *stream_session = new FtpFileStreamSession(session_);
         const auto ip = conn->get_remote_address().get_ip();
+        const auto addr_key = conn->get_remote_address().to_address_key();
+
+        if (last_sessions_.find(ip) != last_sessions_.end()) {
+            LOG_WARN("file stream last_sessions_ collision for ip={}, overwriting", ip);
+        }
         last_sessions_[ip] = stream_session;
         conn->set_connection_handler(stream_session);
-        file_stream_sessions_[conn->get_remote_address().to_address_key()] = stream_session;
+        file_stream_sessions_[addr_key] = stream_session;
         stream_session->on_connected(conn);
 
         auto pending = pending_files_.find(ip);
@@ -45,27 +51,27 @@ namespace yuan::net::ftp
         }
     }
 
-    void FtpFileStream::on_error(Connection *conn)
+    void FtpFileStream::on_error(Connection * conn)
     {
         LOG_WARN("file stream on_error ip={}", conn ? conn->get_remote_address().get_ip() : "null");
     }
 
-    void FtpFileStream::on_read(Connection *conn)
+    void FtpFileStream::on_read(Connection * conn)
     {
         LOG_DEBUG("file stream on_read ip={}", conn ? conn->get_remote_address().get_ip() : "null");
     }
 
-    void FtpFileStream::on_write(Connection *conn)
+    void FtpFileStream::on_write(Connection * conn)
     {
         LOG_DEBUG("file stream on_write ip={}", conn ? conn->get_remote_address().get_ip() : "null");
     }
 
-    void FtpFileStream::on_close(Connection *conn)
+    void FtpFileStream::on_close(Connection * conn)
     {
         LOG_DEBUG("file stream on_close ip={}", conn ? conn->get_remote_address().get_ip() : "null");
     }
 
-    void FtpFileStream::quit(const InetAddress &addr)
+    void FtpFileStream::quit(const InetAddress & addr)
     {
         auto it = file_stream_sessions_.find(addr.to_address_key());
         if (it != file_stream_sessions_.end()) {
@@ -83,24 +89,39 @@ namespace yuan::net::ftp
         }
     }
 
-    void FtpFileStream::remove_session(FtpFileStreamSession *fs)
+    void FtpFileStream::remove_session(FtpFileStreamSession * fs)
     {
         for (auto it = file_stream_sessions_.begin(); it != file_stream_sessions_.end(); ++it) {
             if (it->second == fs) {
                 file_stream_sessions_.erase(it);
-                // also try to erase by ip entries if exist
-                // (we can't get the key quickly here; higher-level code usually handles pending/last maps)
-                delete fs;
                 break;
             }
         }
+
+        for (auto it = last_sessions_.begin(); it != last_sessions_.end(); ++it) {
+            if (it->second == fs) {
+                last_sessions_.erase(it);
+                break;
+            }
+        }
+
+        if (fs->get_work_file()) {
+            for (auto it = pending_files_.begin(); it != pending_files_.end(); ++it) {
+                if (it->second == fs->get_work_file()) {
+                    pending_files_.erase(it);
+                    break;
+                }
+            }
+        }
+
+        delete fs;
 
         if (file_stream_sessions_.empty()) {
             delete this;
         }
     }
 
-    bool FtpFileStream::set_work_file(FtpFileInfo *file, const std::string &ip)
+    bool FtpFileStream::set_work_file(FtpFileInfo * file, const std::string & ip)
     {
         if (!file) {
             return false;

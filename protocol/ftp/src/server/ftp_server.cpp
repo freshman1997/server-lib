@@ -1,41 +1,21 @@
 #include "server/ftp_server.h"
-#include "net/acceptor/acceptor_factory.h"
-#include "net/acceptor/stream_acceptor.h"
+#include "coroutine/io_result.h"
+#include "coroutine/stream_io_awaitable.h"
 #include "net/connection/connection.h"
-#include "event/event_loop.h"
-#include "net/handler/event_handler.h"
-#include "net/poller/select_poller.h"
-#include "net/socket/socket.h"
+#include "net/connection/stream_transport.h"
+#include "net/channel/channel.h"
 #include "server/server_session.h"
-#include "timer/wheel_timer_manager.h"
+#include "server/command.h"
+#include "server/context.h"
+#include "common/def.h"
 
 #include "logger.h"
 #include <memory>
 
-namespace yuan::net::ftp 
+namespace yuan::net::ftp
 {
-    class FtpServer::PrivateImpl
+    FtpServer::FtpServer()
     {
-    public:
-        explicit PrivateImpl()
-        {
-            closing_ = false;
-            ev_loop_ = nullptr;
-            timer_manager_ = nullptr;
-        }
-
-        PrivateImpl(const PrivateImpl &) = delete;
-        PrivateImpl & operator=(const PrivateImpl &) = delete;
-
-        bool closing_;
-        EventLoop *ev_loop_;
-        timer::TimerManager *timer_manager_;
-        FtpSessionManager session_manager_;
-    };
-
-    FtpServer::FtpServer() : impl_(std::make_unique<PrivateImpl>())
-    {
-
     }
 
     FtpServer::~FtpServer()
@@ -46,155 +26,229 @@ namespace yuan::net::ftp
 
     bool FtpServer::serve(int port)
     {
-        Socket *sock = new Socket("", port);
-        if (!sock->valid()) {
-            LOG_ERROR("cant create socket file descriptor!");
-            delete sock;
-            return false;
-        }
+        owned_runtime_ = std::make_unique<NetworkRuntime>();
+        return serve(port, *owned_runtime_);
+    }
 
-        if (!sock->bind()) {
-            LOG_ERROR("cant bind port: {}!", port);
-            delete sock;
-            return false;
-        }
-
-        sock->set_reuse(true);
-        sock->set_none_block(true);
-
-        StreamAcceptor *acceptor = create_stream_acceptor(sock);
-        if (!acceptor->listen()) {
+    bool FtpServer::serve(int port, NetworkRuntime & runtime)
+    {
+        if (!listener_.bind(port, runtime)) {
             LOG_ERROR("cant listen on port: {}!", port);
-            delete acceptor;
+            if (owned_runtime_)
+                owned_runtime_.reset();
             return false;
         }
 
-        // Allocate on heap to ensure objects remain alive
-        auto *timerManager = new timer::WheelTimerManager();
-        auto *poller = new SelectPoller();
-        auto *evLoop = new EventLoop(poller, timerManager);
+        listener_.set_connection_handler(
+            [this](net::AsyncConnectionContext ctx)->coroutine::Task<void> {
+                co_await handle_connection(std::move(ctx));
+            });
 
-        impl_->ev_loop_ = evLoop;
-        impl_->timer_manager_ = timerManager;
-        acceptor->set_event_handler(impl_->ev_loop_);
-        acceptor->set_connection_handler(this);
-
-        impl_->ev_loop_->loop();
-
-        // Cleanup after event loop exits.
-        // If quit() was called while the loop was running, the deferred
-        // callbacks already ran and cleaned up sessions/connections.
-        // Otherwise, we must clean up manually to prevent leaks.
-        {
-            auto sessions = impl_->session_manager_.get_sessions();
-            for (auto item : sessions) {
-                auto *conn = item.second->get_connection();
-                if (conn) {
-                    conn->set_connection_handler(nullptr);
-                    conn->close();
-                }
-            }
+        if (owned_runtime_) {
+            auto accept_task = listener_.run_async();
+            accept_task.resume();
+            owned_runtime_->run();
+            listener_.close();
+            owned_runtime_.reset();
         }
-        impl_->session_manager_.clear();
-        impl_->ev_loop_ = nullptr;
-        impl_->timer_manager_ = nullptr;
-        acceptor->close();
-        delete acceptor;
-        delete evLoop;
-        delete poller;
-        delete timerManager;
 
         return true;
     }
 
-    void FtpServer::on_connected(Connection *conn)
+    coroutine::Task<void> FtpServer::handle_connection(net::AsyncConnectionContext ctx)
     {
-        auto session = impl_->session_manager_.get_session(conn);
-        if (session) {
-            LOG_WARN("ftp internal error: duplicate session");
-            conn->close();
-        } else {
-            auto newSessoion = std::make_shared<ServerFtpSession>(conn, this);
-            impl_->session_manager_.add_session(conn, newSessoion);
-            newSessoion->on_connected(conn);
+        auto *conn = ctx.native_handle();
+        if (!conn) {
+            co_return;
         }
+
+        auto session = std::make_unique<ServerFtpSession>(conn, this, false, true);
+        active_sessions_.insert(session.get());
+
+        ctx.append_output("220 Welcome to FTP server.\r\n");
+        ctx.flush();
+
+        while (ctx.is_connected()) {
+            auto read_result = co_await ctx.read_async();
+            if (read_result.status != coroutine::IoStatus::success) {
+                break;
+            }
+
+            auto &parser = session->command_parser();
+            parser.set_buff(std::move(read_result.data));
+            const auto &cmds = parser.split_cmds(delimiter, " ");
+
+            for (const auto &item : cmds) {
+                LOG_DEBUG("ftp server cmd={} args={}", item.cmd_, item.args_);
+                auto command = CommandFactory::get_instance()->find_command(item.cmd_);
+                if (!command) {
+                    ctx.append_output("500 Unsupported command.\r\n");
+                    ctx.flush();
+                    continue;
+                }
+
+                const auto &res = command->execute(session.get(), item.args_);
+                LOG_DEBUG("ftp server response code={} body={}", static_cast<int>(res.code_), res.body_);
+                if (res.code_ == FtpResponseCode::invalid) {
+                    continue;
+                }
+
+                ctx.append_output(std::to_string((int)res.code_));
+                ctx.append_output(" ");
+                ctx.append_output(res.body_);
+                ctx.append_output("\r\n");
+                ctx.flush();
+
+                if (session->has_pending_transfer()) {
+                    auto data_listener = session->take_data_listener();
+                    auto *file_info = session->take_pending_file_info();
+                    session->clear_pending_transfer();
+
+                    if (data_listener && file_info) {
+                        co_await data_transfer(ctx.runtime_view(), std::move(data_listener), file_info, ctx);
+                    }
+                }
+
+                if (res.close_) {
+                    goto done;
+                }
+            }
+        }
+
+    done:
+        return_passive_port(session.get());
+        on_session_closed(session.get());
+        session->detach_async();
+        co_return;
     }
 
-    void FtpServer::on_error(Connection *conn)
+    coroutine::Task<void> FtpServer::data_transfer(
+        coroutine::RuntimeView rv,
+        std::unique_ptr<net::AsyncListenerHost> listener,
+        FtpFileInfo * file_info,
+        net::AsyncConnectionContext & control_ctx)
     {
+        auto *data_conn = co_await listener->accept_async();
+        if (!data_conn) {
+            if (control_ctx.is_connected()) {
+                control_ctx.append_output("425 Can't open data connection.\r\n");
+                control_ctx.flush();
+            }
+            co_return;
+        }
 
-    }
+        data_conn->set_connection_handler(nullptr);
+        rv.register_connection(data_conn, nullptr);
 
-    void FtpServer::on_read(Connection *conn)
-    {
-        LOG_ERROR("ftp on_read internal error!");
-    }
+        net::AsyncConnectionContext data_ctx(data_conn, rv);
 
-    void FtpServer::on_write(Connection *conn)
-    {
-        LOG_ERROR("ftp on_write internal error!");
-    }
+        if (auto *stream = dynamic_cast<StreamTransport *>(data_conn)) {
+            if (auto *channel = stream->stream_channel()) {
+                if (file_info->mode_ == StreamMode::Receiver) {
+                    channel->disable_write();
+                    channel->enable_read();
+                } else {
+                    channel->disable_read();
+                    channel->enable_write();
+                }
+                rv.update_channel(channel);
+            }
+        }
 
-    void FtpServer::on_close(Connection *conn)
-    {
+        bool transfer_ok = false;
 
+        if (file_info->mode_ == StreamMode::Sender) {
+            while (!file_info->is_completed()) {
+                ::yuan::buffer::ByteBuffer buff(default_write_buff_size);
+                int ret = file_info->read_file(default_write_buff_size, buff);
+                if (ret < 0) {
+                    break;
+                }
+                if (buff.readable_bytes() > 0) {
+                    data_ctx.write_and_flush(buff);
+                    auto flush_result = co_await data_ctx.flush_async();
+                    if (flush_result.status != coroutine::IoStatus::success) {
+                        break;
+                    }
+                }
+                if (file_info->is_completed()) {
+                    transfer_ok = true;
+                    break;
+                }
+            }
+        } else {
+            while (true) {
+                auto read_result = co_await data_ctx.read_async();
+                if (read_result.status != coroutine::IoStatus::success) {
+                    break;
+                }
+                int ret = file_info->write_file(read_result.data);
+                if (ret < 0) {
+                    break;
+                }
+                if (file_info->is_completed()) {
+                    transfer_ok = true;
+                    break;
+                }
+            }
+            if (file_info->file_size_ == 0 && !file_info->is_completed()) {
+                file_info->state_ = FileState::processed;
+                transfer_ok = true;
+            }
+        }
+
+        co_await data_ctx.close_async();
+
+        if (control_ctx.is_connected()) {
+            if (transfer_ok) {
+                control_ctx.append_output("226 Transfer complete.\r\n");
+            } else {
+                control_ctx.append_output("426 Connection closed; transfer aborted.\r\n");
+            }
+            control_ctx.flush();
+        }
+
+        co_return;
     }
 
     bool FtpServer::is_ok()
     {
-        return impl_ && impl_->ev_loop_ != nullptr;
+        return listener_.is_listening();
     }
 
-    timer::TimerManager * FtpServer::get_timer_manager()
+    NetworkRuntime *FtpServer::get_runtime()
     {
-        return impl_->timer_manager_;
+        return listener_.runtime();
     }
 
-    EventHandler * FtpServer::get_event_handler()
+    void FtpServer::on_session_closed(FtpSession * session)
     {
-        return impl_->ev_loop_;
-    }
-
-    void FtpServer::on_session_closed(FtpSession *session)
-    {
-        if (!session || impl_->closing_) {
+        if (!session) {
             return;
         }
-        // Use remove_by_session because conn_ may already be deleted
-        // when on_session_closed is called from a deferred cleanup callback
-        impl_->session_manager_.remove_by_session(session);
+        active_sessions_.erase(session);
+        LOG_INFO("ftp session closed, remaining sessions: {}", active_sessions_.size());
+    }
+
+    void FtpServer::return_passive_port(FtpSession * session)
+    {
+        auto passive_addr = session->get_passive_addr();
+        if (passive_addr.has_value()) {
+            ServerContext::get_instance()->remove_stream_port(passive_addr->get_port());
+            session->clear_passive_addr();
+        }
     }
 
     void FtpServer::quit()
     {
-        if (impl_->closing_) {
+        if (closing_) {
             return;
         }
 
-        impl_->closing_ = true;
+        closing_ = true;
 
-        // Notify sessions to quit (this sets close_=true and closes connections).
-        // After this, on_close() -> delete this or deferred on_session_closed
-        // may destroy the sessions. Set closing_ first so on_session_closed
-        // skips the remove_by_session call (which would be a no-op anyway
-        // since we clear() below).
-        auto sessions = impl_->session_manager_.get_sessions();
-        for (auto item : sessions) {
-            item.second->quit();
-        }
-
-        // Clear the session manager: this releases all shared_ptrs.
-        // Sessions that called quit() above will have already been deleted
-        // via the close_=true path (on_close -> delete this) since quit()
-        // calls conn->close() which triggers ~TcpConnection -> on_close.
-        // For sessions still in the deferred-cleanup path (close_=false),
-        // they are destroyed here when the last shared_ptr is released.
-        impl_->session_manager_.clear();
-        impl_->timer_manager_ = nullptr;
-
-        if (impl_->ev_loop_) {
-            impl_->ev_loop_->quit();
-            impl_->ev_loop_ = nullptr;
+        if (owned_runtime_) {
+            owned_runtime_->stop();
         }
     }
 }

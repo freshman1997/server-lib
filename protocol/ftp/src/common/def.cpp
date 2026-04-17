@@ -12,25 +12,38 @@ namespace yuan::net::ftp
 
     FtpFileInfo::~FtpFileInfo()
     {
-        if (fstream_) { fstream_->close(); delete fstream_; fstream_ = nullptr; }
+        if (fstream_) {
+            fstream_->close();
+            delete fstream_;
+            fstream_ = nullptr;
+        }
     }
 
-    int FtpFileInfo::read_file(std::size_t size, ::yuan::buffer::ByteBuffer &buff)
+    int FtpFileInfo::read_file(std::size_t size, ::yuan::buffer::ByteBuffer & buff)
     {
         if (in_memory_) {
-            if (current_progress_ >= memory_content_.size()) { state_ = FileState::processed; return 0; }
+            if (current_progress_ >= memory_content_.size()) {
+                state_ = FileState::processed;
+                return 0;
+            }
             const std::size_t left = memory_content_.size() - current_progress_;
             const std::size_t chunk = std::min(left, size);
             buff.append(memory_content_.data() + current_progress_, chunk);
             current_progress_ += chunk;
-            if (current_progress_ >= memory_content_.size()) { state_ = FileState::processed; }
+            if (current_progress_ >= memory_content_.size()) {
+                state_ = FileState::processed;
+            }
             return static_cast<int>(chunk);
         }
 
         if (!fstream_) {
             fstream_ = new std::fstream();
             fstream_->open(origin_name_.c_str(), std::ios_base::in | std::ios_base::binary);
-            if (!fstream_->good()) { delete fstream_; fstream_ = nullptr; return -1; }
+            if (!fstream_->good()) {
+                delete fstream_;
+                fstream_ = nullptr;
+                return -1;
+            }
             state_ = FileState::processing;
         }
 
@@ -40,11 +53,16 @@ namespace yuan::net::ftp
         std::size_t read = static_cast<std::size_t>(fstream_->gcount());
         buff.commit(read);
         current_progress_ += read;
-        if (current_progress_ >= file_size_) { state_ = FileState::processed; fstream_->close(); delete fstream_; fstream_ = nullptr; }
+        if (fstream_->eof() || read == 0 || current_progress_ >= file_size_) {
+            state_ = FileState::processed;
+            fstream_->close();
+            delete fstream_;
+            fstream_ = nullptr;
+        }
         return static_cast<int>(read);
     }
 
-    int FtpFileInfo::write_file(::yuan::buffer::ByteBuffer &buff)
+    int FtpFileInfo::write_file(::yuan::buffer::ByteBuffer & buff)
     {
         if (in_memory_) {
             const std::size_t sz = buff.readable_bytes();
@@ -53,7 +71,9 @@ namespace yuan::net::ftp
                 current_progress_ += sz;
             }
             buff.clear();
-            if (file_size_ > 0 && current_progress_ >= file_size_) { state_ = FileState::processed; }
+            if (file_size_ > 0 && current_progress_ >= file_size_) {
+                state_ = FileState::processed;
+            }
             return static_cast<int>(sz);
         }
 
@@ -62,21 +82,42 @@ namespace yuan::net::ftp
             auto mode = std::ios_base::out | std::ios_base::binary;
             mode |= append_mode_ ? std::ios_base::app : std::ios_base::trunc;
             fstream_->open(dest_name_.c_str(), mode);
-            if (!fstream_->good()) { delete fstream_; fstream_ = nullptr; return -1; }
+            if (!fstream_->good()) {
+                delete fstream_;
+                fstream_ = nullptr;
+                return -1;
+            }
             state_ = FileState::processing;
         }
 
         std::size_t sz = buff.readable_bytes();
         fstream_->write(buff.read_ptr(), static_cast<std::streamsize>(sz));
-        if (!fstream_->good()) { return -1; }
+        if (!fstream_->good()) {
+            delete fstream_;
+            fstream_ = nullptr;
+            return -1;
+        }
         current_progress_ += sz;
         buff.clear();
-        if (file_size_ > 0 && current_progress_ >= file_size_) { fstream_->flush(); fstream_->close(); delete fstream_; fstream_ = nullptr; state_ = FileState::processed; }
+        if (file_size_ > 0 && current_progress_ >= file_size_) {
+            fstream_->flush();
+            fstream_->close();
+            delete fstream_;
+            fstream_ = nullptr;
+            state_ = FileState::processed;
+        }
         return static_cast<int>(sz);
     }
 
     std::string FtpFileInfo::build_cmd_args()
     {
-        nlohmann::json jval; jval["type"] = in_memory_ ? "memory" : "file"; jval["size"] = file_size_; jval["progress"] = current_progress_; if (!origin_name_.empty()) { jval["origin"] = origin_name_; } return jval.dump();
+        nlohmann::json jval;
+        jval["type"] = in_memory_ ? "memory" : "file";
+        jval["size"] = file_size_;
+        jval["progress"] = current_progress_;
+        if (!origin_name_.empty()) {
+            jval["origin"] = origin_name_;
+        }
+        return jval.dump();
     }
 }

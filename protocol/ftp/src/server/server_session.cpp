@@ -6,10 +6,15 @@
 
 namespace yuan::net::ftp
 {
-    ServerFtpSession::ServerFtpSession(Connection *conn, FtpApp *app, bool keepUtilSent) : FtpSession(conn, app, WorkMode::server, keepUtilSent) {}
-    ServerFtpSession::~ServerFtpSession() {}
+    ServerFtpSession::ServerFtpSession(Connection * conn, FtpApp * app, bool keepUtilSent, bool async_mode)
+        : FtpSession(conn, app, WorkMode::server, keepUtilSent, async_mode)
+    {
+    }
+    ServerFtpSession::~ServerFtpSession()
+    {
+    }
 
-    void ServerFtpSession::on_read(Connection *conn)
+    void ServerFtpSession::on_read(Connection * conn)
     {
         auto buff = conn->take_input_byte_buffer();
         command_parser_.set_buff(buff);

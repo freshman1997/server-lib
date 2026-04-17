@@ -6,7 +6,7 @@
 
 #include "timer.h"
 
-namespace yuan::timer 
+namespace yuan::timer
 {
 
     class WheelTimerItem;
@@ -34,14 +34,13 @@ namespace yuan::timer
 
         void place_timer(uint32_t idx, WheelTimer *timer);
 
-        WheelTimerItem * tick(WheelTimerItem *newItem);
+        WheelTimerItem *tick(WheelTimerItem *newItem);
 
     private:
         uint32_t cursor_;
         uint64_t time_unit_;
         std::vector<WheelTimerItem *> items_;
     };
-
 
     // 轮子链接的item
     class WheelTimerItem
@@ -55,9 +54,9 @@ namespace yuan::timer
         void on_schedule(WheelTimer *timer);
         void on_delete(WheelTimer *timer);
 
-        WheelTimer * begin();
-        WheelTimer * end();
-        WheelTimer * pop();
+        WheelTimer *begin() const;
+        WheelTimer *end() const;
+        WheelTimer *pop();
 
     private:
         WheelTimer *head_;
@@ -66,22 +65,23 @@ namespace yuan::timer
     class WheelTimer : public timer::Timer
     {
         friend WheelTimerManager;
+
     public:
-        WheelTimer(uint32_t timeout, uint32_t interval, TimerTask * task, int32_t period = 0);
+        WheelTimer(uint32_t timeout, uint32_t interval, TimerTask *task, int32_t period = 0);
         ~WheelTimer();
 
     public:
-        virtual bool ready();
+        virtual bool ready() const override;
         virtual void cancel();
         virtual void reset();
-        virtual bool is_processing();
-        virtual bool is_done();
-        virtual bool is_cancel();
-        TimerTask * get_task();
+        virtual bool is_processing() const override;
+        virtual bool is_done() const override;
+        virtual bool is_cancel() const override;
+        TimerTask *get_task() const override;
 
     public:
-        WheelTimer * get_prev();
-        WheelTimer * get_next();
+        WheelTimer *get_prev() const;
+        WheelTimer *get_next() const;
         void set_prev(WheelTimer *timer);
         void set_next(WheelTimer *timer);
         void set_remain(uint64_t remain);
@@ -98,7 +98,7 @@ namespace yuan::timer
         uint32_t period_counter_;
         uint32_t interval_;
         uint64_t remain_;
-        TimerTask * task_;
+        TimerTask *task_;
         std::unique_ptr<TimerTask> owned_task_;
         WheelTimer *prev_;
         WheelTimer *next_;

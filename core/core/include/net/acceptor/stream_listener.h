@@ -10,7 +10,7 @@ namespace yuan::net
     public:
         virtual ~StreamListener() = default;
 
-        virtual Channel *listener_channel() = 0;
+        virtual Channel *listener_channel() const = 0;
     };
 }
 

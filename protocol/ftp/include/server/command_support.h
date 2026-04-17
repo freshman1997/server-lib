@@ -1,5 +1,5 @@
-#ifndef __NET_FTP_SERVER_COMMAND_SUPPORT_H__
-#define __NET_FTP_SERVER_COMMAND_SUPPORT_H__
+#ifndef NET_FTP_SERVER_COMMAND_SUPPORT_H
+#define NET_FTP_SERVER_COMMAND_SUPPORT_H
 
 #include "common/def.h"
 #include <filesystem>

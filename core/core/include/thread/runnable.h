@@ -1,21 +1,39 @@
-#ifndef __TASK_H__
-#define __TASK_H__
+#ifndef __RUNNABLE_H__
+#define __RUNNABLE_H__
 
-namespace yuan::thread 
+#include <atomic>
+
+namespace yuan::thread
 {
-    class Runnable 
+    class Runnable
     {
     public:
-        Runnable() : valid_(true) {}
-        explicit Runnable(const bool valid) : valid_(valid) {}
-        virtual ~Runnable() = default;
-        void cancel_task() { valid_ = false; }
-        void enable_task() { valid_ = true; }
-        bool is_valid() const { return valid_; }
-
-        void run() 
+        Runnable()
+            : valid_(true)
         {
-            if (valid_) {
+        }
+        explicit Runnable(bool valid)
+            : valid_(valid)
+        {
+        }
+        virtual ~Runnable() = default;
+
+        void cancel_task()
+        {
+            valid_.store(false, std::memory_order_release);
+        }
+        void enable_task()
+        {
+            valid_.store(true, std::memory_order_release);
+        }
+        bool is_valid() const
+        {
+            return valid_.load(std::memory_order_acquire);
+        }
+
+        void run()
+        {
+            if (valid_.load(std::memory_order_acquire)) {
                 run_internal();
             }
         }
@@ -24,7 +42,7 @@ namespace yuan::thread
         virtual void run_internal() = 0;
 
     private:
-        bool valid_;
+        std::atomic<bool> valid_;
     };
 }
 

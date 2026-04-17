@@ -1,9 +1,9 @@
 #include "common/session.h"
-#include "client/client_file_stream.h"
 #include "common/def.h"
 #include "common/file_stream.h"
 #include "common/file_stream_session.h"
 #include "handler/ftp_app.h"
+#include "net/async/async_listener_host.h"
 #include "server/context.h"
 #include "server/server_file_stream.h"
 
@@ -22,7 +22,10 @@ namespace yuan::net::ftp
         }
     }
 
-    FtpSessionContext::FtpSessionContext() : instance_(nullptr), file_stream_(nullptr), app_(nullptr), conn_(nullptr) {}
+    FtpSessionContext::FtpSessionContext()
+        : instance_(nullptr), file_stream_(nullptr), app_(nullptr), conn_(nullptr)
+    {
+    }
 
     FtpSessionContext::~FtpSessionContext()
     {
@@ -48,100 +51,107 @@ namespace yuan::net::ftp
             app->on_session_closed(instance_);
         }
         if (conn) {
-            // Clear handler before closing: ~TcpConnection calls
-            // connectionHandler_->on_close() if handler is not null,
-            // which would re-enter the (now destroying) session.
             conn->set_connection_handler(nullptr);
             conn->close();
         }
     }
 
-    FtpSession::FtpSession(Connection *conn, FtpApp *app, WorkMode mode, bool keepUtilSent) : work_mode_(mode), keep_util_sent_(keepUtilSent), close_(false)
+    FtpSession::FtpSession(Connection * conn, FtpApp * app, WorkMode mode, bool keepUtilSent, bool async_mode)
+        : work_mode_(mode), keep_util_sent_(keepUtilSent), close_(false), async_mode_(async_mode)
     {
         context_.conn_ = conn;
         context_.app_ = app;
-        context_.conn_->set_connection_handler(this);
+        if (!async_mode_) {
+            context_.conn_->set_connection_handler(this);
+        }
         context_.instance_ = this;
-        context_.root_dir_ = normalize_dir(ServerContext::get_instance()->get_server_work_dir());
+        if (work_mode_ == WorkMode::server) {
+            context_.root_dir_ = normalize_dir(ServerContext::get_instance()->get_server_work_dir());
+        } else {
+            context_.root_dir_ = normalize_dir("");
+        }
         context_.cwd_ = "/";
     }
 
     FtpSession::~FtpSession()
     {
-        // Don't set close_ flag here - it should only be set when explicitly calling quit()
-        // This prevents session from being destroyed during data transfer operations
-        // Note: if quit() was called and its deferred callback already ran,
-        // context_ fields (conn_, app_, file_stream_) are already null,
-        // so context_.close() is a no-op.
-        context_.close();
+        if (async_mode_) {
+            context_.conn_ = nullptr;
+            context_.app_ = nullptr;
+            context_.file_stream_ = nullptr;
+            context_.passive_addr_.reset();
+        } else {
+            context_.close();
+        }
         LOG_DEBUG("ftp session closed");
     }
 
-    void FtpSession::on_connected(Connection *conn) { (void)conn; }
-    void FtpSession::on_error(Connection *conn) { (void)conn; }
-    void FtpSession::on_write(Connection *conn) { (void)conn; }
-
-    void FtpSession::on_close(Connection *conn)
+    void FtpSession::on_connected(Connection * conn)
     {
         (void)conn;
-        if (close_) {
-            // Session was explicitly quit() — the deferred callback from quit()
-            // already handles on_session_closed and connection close.
-            // Since quit()'s deferred callback sets connectionHandler_ to null
-            // before calling conn->close(), this on_close() should NOT be
-            // reached. If it IS reached (e.g., remote closes before the
-            // deferred callback runs), just return — the deferred callback
-            // will handle everything.
+    }
+    void FtpSession::on_error(Connection * conn)
+    {
+        (void)conn;
+    }
+    void FtpSession::on_write(Connection * conn)
+    {
+        (void)conn;
+    }
+
+    void FtpSession::on_close(Connection * conn)
+    {
+        (void)conn;
+        if (async_mode_) {
             return;
         }
-        // Connection closed by remote end (abrupt disconnect).
-        // Defer cleanup to avoid self-deletion while still on the call stack
-        // (~TcpConnection -> on_close -> we are here).
+        if (close_) {
+            return;
+        }
         close_ = true;
         auto *app = context_.app_;
         auto *instance = this;
         auto *file_stream = context_.file_stream_;
         auto *pending_ffs = pending_file_stream_cleanup_;
-        // Save remote address before conn_ becomes dangling
         InetAddress remote_addr = context_.conn_ ? context_.conn_->get_remote_address() : InetAddress{};
-        // Clear immediately to prevent reentrant access
         context_.app_ = nullptr;
         context_.conn_ = nullptr;
         context_.passive_addr_.reset();
         context_.file_stream_ = nullptr;
         pending_file_stream_cleanup_ = nullptr;
         if (app) {
-            app->get_event_handler()->queue_in_loop([app, instance, file_stream, pending_ffs, remote_addr]() {
+            app->get_runtime()->dispatch([app, instance, file_stream, pending_ffs, remote_addr]() {
                 if (file_stream) {
                     file_stream->quit(remote_addr);
                 }
                 if (pending_ffs && pending_ffs != file_stream) {
                     pending_ffs->quit(remote_addr);
                 }
-                // Notify the app (server removes from session_manager, client quits loop).
-                // Note: during server shutdown (FtpServer::quit()), the closing_ flag
-                // is set BEFORE sessions are cleared. The on_session_closed callback
-                // checks this flag and returns early, so the dangling 'instance'
-                // pointer is never dereferenced.
                 app->on_session_closed(instance);
             });
         }
     }
 
-    void FtpSession::on_timer(timer::Timer *timer)
+    void FtpSession::on_timer(timer::Timer * timer)
     {
         (void)timer;
-        if (close_) {
+        if (async_mode_ || close_) {
             return;
         }
-        // Timer timeout: treat like an abrupt disconnect, use deferred cleanup
         quit();
     }
 
-    void FtpSession::on_opened(FtpFileStreamSession *fs) { (void)fs; }
-
-    void FtpSession::on_connect_timeout(FtpFileStreamSession *fs)
+    void FtpSession::on_opened(FtpFileStreamSession * fs)
     {
+        (void)fs;
+        if (async_mode_)
+            return;
+    }
+
+    void FtpSession::on_connect_timeout(FtpFileStreamSession * fs)
+    {
+        if (async_mode_)
+            return;
         if (work_mode_ == WorkMode::server) {
             send_command("425 Can't open data connection.\r\n");
         }
@@ -149,10 +159,15 @@ namespace yuan::net::ftp
         clear_passive_addr();
     }
 
-    void FtpSession::on_start(FtpFileStreamSession *fs) { (void)fs; }
-
-    void FtpSession::on_error(FtpFileStreamSession *fs)
+    void FtpSession::on_start(FtpFileStreamSession * fs)
     {
+        (void)fs;
+    }
+
+    void FtpSession::on_error(FtpFileStreamSession * fs)
+    {
+        if (async_mode_)
+            return;
         (void)fs;
         if (work_mode_ == WorkMode::server) {
             send_command("426 Connection closed; transfer aborted.\r\n");
@@ -160,8 +175,10 @@ namespace yuan::net::ftp
         clear_passive_addr();
     }
 
-    void FtpSession::on_completed(FtpFileStreamSession *fs)
+    void FtpSession::on_completed(FtpFileStreamSession * fs)
     {
+        if (async_mode_)
+            return;
         (void)fs;
         if (work_mode_ == WorkMode::server) {
             send_command("226 Transfer complete.\r\n");
@@ -169,38 +186,35 @@ namespace yuan::net::ftp
         if (context_.file_manager_.is_completed()) {
             context_.file_manager_.reset();
         }
-        // Release the file_stream reference immediately so the next PASV
-        // command creates a fresh FtpFileStream/acceptor on a new port.
-        // Save the pointer for deferred cleanup via on_closed.
         pending_file_stream_cleanup_ = context_.file_stream_;
         context_.file_stream_ = nullptr;
         clear_passive_addr();
     }
 
-    void FtpSession::on_closed(FtpFileStreamSession *fs)
+    void FtpSession::on_closed(FtpFileStreamSession * fs)
     {
-        if (pending_file_stream_cleanup_ && fs)
-        {
-            // Deferred cleanup: the data connection has been closed (we're in the
-            // on_closed callback from FtpFileStreamSession::quit()), so it's safe
-            // to clean up the FtpFileStream now. We defer via queue_in_loop to
-            // ensure the current call stack (which still references the session)
-            // has fully unwound before the FtpFileStream deletes the session.
+        if (async_mode_)
+            return;
+        if (pending_file_stream_cleanup_ && fs) {
             auto *ffs = pending_file_stream_cleanup_;
             pending_file_stream_cleanup_ = nullptr;
             auto *app = context_.app_;
             if (app) {
-                app->get_event_handler()->queue_in_loop([ffs, fs]() {
+                app->get_runtime()->dispatch([ffs, fs]() {
                     ffs->quit(fs->get_remote_address());
                 });
             }
-        }
-        else
-        {
+        } else {
             check_file_stream(fs);
         }
     }
-    void FtpSession::on_idle_timeout(FtpFileStreamSession *fs) { check_file_stream(fs); clear_passive_addr(); }
+    void FtpSession::on_idle_timeout(FtpFileStreamSession * fs)
+    {
+        if (async_mode_)
+            return;
+        check_file_stream(fs);
+        clear_passive_addr();
+    }
     void FtpSession::quit()
     {
         if (close_) {
@@ -208,21 +222,28 @@ namespace yuan::net::ftp
         }
         close_ = true;
 
-        // Save state on stack before any operation that might destroy this
+        if (async_mode_) {
+            data_listener_.reset();
+            pending_file_info_ = nullptr;
+            context_.conn_ = nullptr;
+            context_.app_ = nullptr;
+            context_.file_stream_ = nullptr;
+            context_.passive_addr_.reset();
+            return;
+        }
+
         Connection *conn = context_.conn_;
         FtpApp *app = context_.app_;
         FtpFileStream *ffs = context_.file_stream_;
         FtpFileStream *pending_ffs = pending_file_stream_cleanup_;
         InetAddress remote_addr = conn ? conn->get_remote_address() : InetAddress{};
 
-        // Clear context immediately to prevent reentrant access
         context_.conn_ = nullptr;
         context_.app_ = nullptr;
         context_.file_stream_ = nullptr;
         context_.passive_addr_.reset();
         pending_file_stream_cleanup_ = nullptr;
 
-        // Close file stream if exists
         if (ffs) {
             ffs->quit(remote_addr);
         }
@@ -230,21 +251,9 @@ namespace yuan::net::ftp
             pending_ffs->quit(remote_addr);
         }
 
-        // Defer ALL cleanup to pending callbacks section of the event loop.
-        // This is critical: if on_session_closed is called directly here, it
-        // deletes the session (server: shared_ptr released, client: delete session).
-        // But the event loop is still inside channel->on_event() processing.
-        // If the connection has both READ and WRITE events, on_write_event()
-        // would be called next, accessing the already-deleted session via
-        // connectionHandler_->on_write(this) -> use-after-free -> crash.
-        // By deferring, we ensure all channel events finish before cleanup.
         if (conn && app) {
-            app->get_event_handler()->queue_in_loop([conn, app, this]() {
-                // Notify app: server removes shared_ptr (may delete this),
-                // client deletes session and quits event loop.
+            app->get_runtime()->dispatch([conn, app, this]() {
                 app->on_session_closed(this);
-                // Clear handler before closing to prevent on_close() from
-                // accessing the (now deleted) session.
                 conn->set_connection_handler(nullptr);
                 conn->close();
             });
@@ -265,21 +274,36 @@ namespace yuan::net::ftp
         return true;
     }
 
-    void FtpSession::set_username(const std::string &username) { context_.user_.username_ = username; context_.user_.logined_ = false; }
-    void FtpSession::set_password(const std::string &passwd) { context_.user_.password_ = passwd; context_.user_.logined_ = false; }
-
-    bool FtpSession::start_file_stream(const InetAddress &addr, StreamMode mode)
+    void FtpSession::set_username(const std::string & username)
     {
-        (void)mode;
+        context_.user_.username_ = username;
+        context_.user_.logined_ = false;
+    }
+    void FtpSession::set_password(const std::string & passwd)
+    {
+        context_.user_.password_ = passwd;
+        context_.user_.logined_ = false;
+    }
+
+    bool FtpSession::start_file_stream(const InetAddress & addr, StreamMode mode)
+    {
         assert(context_.app_);
+        if (async_mode_) {
+            if (data_listener_) {
+                return true;
+            }
+            data_listener_ = std::make_unique<net::AsyncListenerHost>();
+            auto *runtime = context_.app_->get_runtime();
+            if (!data_listener_->bind(addr.get_port(), *runtime)) {
+                data_listener_.reset();
+                return false;
+            }
+            return true;
+        }
         if (context_.file_stream_) {
             return true;
         }
-        if (work_mode_ == WorkMode::server) {
-            context_.file_stream_ = new ServerFtpFileStream(this);
-        } else {
-            context_.file_stream_ = new ClientFtpFileStream(this);
-        }
+        context_.file_stream_ = new ServerFtpFileStream(this);
         if (!context_.file_stream_->start(addr)) {
             delete context_.file_stream_;
             context_.file_stream_ = nullptr;
@@ -288,18 +312,27 @@ namespace yuan::net::ftp
         return true;
     }
 
-    void FtpSession::set_passive_addr(const InetAddress &addr) { context_.passive_addr_ = addr; }
-    void FtpSession::clear_passive_addr() { context_.passive_addr_.reset(); }
+    void FtpSession::set_passive_addr(const InetAddress & addr)
+    {
+        context_.passive_addr_ = addr;
+    }
+    void FtpSession::clear_passive_addr()
+    {
+        context_.passive_addr_.reset();
+    }
 
-    void FtpSession::check_file_stream(FtpFileStreamSession *fs)
+    void FtpSession::check_file_stream(FtpFileStreamSession * fs)
     {
         if (context_.file_stream_ && fs) {
             context_.file_stream_->quit(fs->get_remote_address());
         }
     }
 
-    bool FtpSession::send_command(const std::string &cmd)
+    bool FtpSession::send_command(const std::string & cmd)
     {
+        if (async_mode_) {
+            return false;
+        }
         if (!context_.conn_ || !context_.conn_->is_connected()) {
             return false;
         }
@@ -309,18 +342,38 @@ namespace yuan::net::ftp
         return true;
     }
 
-    void FtpSession::change_cwd(const std::string &filepath) { context_.cwd_ = filepath.empty() ? "/" : filepath; }
-    void FtpSession::on_error(int errcode) { (void)errcode; }
-
-    bool FtpSession::set_work_file(FtpFileInfo *info)
+    void FtpSession::change_cwd(const std::string & filepath)
     {
+        context_.cwd_ = filepath.empty() ? "/" : filepath;
+    }
+    void FtpSession::on_error(int errcode)
+    {
+        (void)errcode;
+    }
+
+    bool FtpSession::set_work_file(FtpFileInfo * info)
+    {
+        if (async_mode_) {
+            pending_file_info_ = info;
+            return info != nullptr;
+        }
         return info && context_.conn_ && context_.file_stream_ && context_.file_stream_->set_work_file(info, context_.conn_->get_remote_address().get_ip());
     }
 
-    void FtpSession::on_file_stream_close(FtpFileStream *ffs)
+    void FtpSession::on_file_stream_close(FtpFileStream * ffs)
     {
         if (context_.file_stream_ == ffs) {
             context_.file_stream_ = nullptr;
         }
+    }
+
+    void FtpSession::detach_async()
+    {
+        context_.conn_ = nullptr;
+        context_.app_ = nullptr;
+        context_.file_stream_ = nullptr;
+        context_.passive_addr_.reset();
+        data_listener_.reset();
+        pending_file_info_ = nullptr;
     }
 }

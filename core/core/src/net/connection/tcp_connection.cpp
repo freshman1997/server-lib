@@ -4,9 +4,10 @@
 #include "net/handler/connection_handler.h"
 #include "net/socket/socket_ops.h"
 #include "net/handler/event_handler.h"
+#include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
+#include "net/secuity/ssl_handler.h"
 #include "logger.h"
-
 
 #include <cassert>
 #include <cerrno>
@@ -15,18 +16,21 @@
 #include <windows.h>
 #include <io.h>
 #else
+#include <sys/socket.h>
 #include <unistd.h>
 #endif
 
 namespace yuan::net
 {
-    TcpConnection::TcpConnection(const std::string ip, int port, int fd) : Connection()
+    TcpConnection::TcpConnection(const std::string ip, int port, int fd)
+        : Connection()
     {
         socket_ = std::make_unique<Socket>(ip, port, false, fd);
         init();
     }
 
-    TcpConnection::TcpConnection(Socket *sock) : socket_(sock), Connection()
+    TcpConnection::TcpConnection(Socket * sock)
+        : socket_(sock), Connection()
     {
         init();
     }
@@ -70,26 +74,27 @@ namespace yuan::net
             LOG_WARN("connection closed, ip: {}, port: {}, fd: {}", socket_->get_address()->get_ip(), socket_->get_address()->get_port(), channel_->get_fd());
         }
 
+        ssl_handler_.reset();
         socket_.reset();
         channel_.reset();
     }
 
-    ConnectionState TcpConnection::get_connection_state()
+    ConnectionState TcpConnection::get_connection_state() const
     {
         return state_;
     }
 
-    bool TcpConnection::is_connected()
+    bool TcpConnection::is_connected() const
     {
         return state_ == ConnectionState::connected;
     }
 
-    const InetAddress &TcpConnection::get_remote_address()
+    const InetAddress &TcpConnection::get_remote_address() const
     {
         return *socket_->get_address();
     }
 
-    void TcpConnection::write(const ::yuan::buffer::ByteBuffer &buffer)
+    void TcpConnection::write(const ::yuan::buffer::ByteBuffer & buffer)
     {
         if (buffer.empty()) {
             return;
@@ -107,7 +112,7 @@ namespace yuan::net
         }
     }
 
-    void TcpConnection::write_and_flush(const ::yuan::buffer::ByteBuffer &buffer)
+    void TcpConnection::write_and_flush(const ::yuan::buffer::ByteBuffer & buffer)
     {
         if (buffer.empty() || state_ != ConnectionState::connected) {
             return;
@@ -136,11 +141,11 @@ namespace yuan::net
             if (ssl_handler_) {
                 ret = ssl_handler_->ssl_write(front->read_ptr(), front->readable_bytes());
             } else {
-            #ifdef _WIN32
+#ifdef _WIN32
                 ret = ::send(channel_->get_fd(), front->read_ptr(), static_cast<int>(front->readable_bytes()), 0);
-            #else
+#else
                 ret = ::send(channel_->get_fd(), front->read_ptr(), front->readable_bytes(), MSG_NOSIGNAL);
-            #endif
+#endif
             }
 
             if (ret > 0) {
@@ -151,12 +156,12 @@ namespace yuan::net
                     front->consume(static_cast<std::size_t>(ret));
                 }
             } else if (ret < 0) {
-            #ifdef _WIN32
+#ifdef _WIN32
                 const int err = WSAGetLastError();
                 if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
-            #else
+#else
                 if (EAGAIN != errno && EWOULDBLOCK != errno && EINTR != errno) {
-            #endif
+#endif
                     connectionHandler_->on_error(this);
                     close();
                     return;
@@ -204,12 +209,12 @@ namespace yuan::net
         do_close();
     }
 
-    Channel *TcpConnection::stream_channel()
+    Channel *TcpConnection::stream_channel() const
     {
         return channel_.get();
     }
 
-    void TcpConnection::set_connection_handler(ConnectionHandler *handler)
+    void TcpConnection::set_connection_handler(ConnectionHandler * handler)
     {
         this->connectionHandler_ = handler;
     }
@@ -221,63 +226,139 @@ namespace yuan::net
             connectionHandler_->on_connected(this);
         }
 
-        bool read = false, close = false;
-        int bytes = 0;
-
-        input_buffer_.clear();
-
-        do {
-            if (read && input_buffer_.writable_bytes() == 0) {
-                connectionHandler_->on_error(this);
-                close = true;
-                break;
-            }
-
-            if (!ssl_handler_) {
-            #ifndef _WIN32
-                bytes = ::read(channel_->get_fd(), input_buffer_.write_ptr(), input_buffer_.writable_bytes());
-            #else
-                bytes = ::recv(channel_->get_fd(), input_buffer_.write_ptr(), static_cast<int>(input_buffer_.writable_bytes()), 0);
-            #endif
-            } else {
-                bytes = ssl_handler_->ssl_read(input_buffer_.write_ptr(), input_buffer_.writable_bytes());
-            }
-
-            if (bytes <= 0) {
-                if (bytes == 0) {
-                    close = true;
-                } else if (bytes == -1) {
-                    if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
-                    #ifdef _WIN32
-                        if (WSAGetLastError() == WSAEWOULDBLOCK) {
-                            goto again;
-                        }
-                    #endif
-                        LOG_ERROR("read error: {}", errno);
-                        connectionHandler_->on_error(this);
-                        close = true;
-                        break;
-                    }
-                again:
-                    channel_->enable_read();
-                    if (eventHandler_) {
-                        eventHandler_->update_channel(channel_.get());
-                    }
-                    break;
+        if (ssl_handshaking_) {
+            auto *ssl = ssl_handler_.get();
+            if (!ssl) {
+                ssl_handshaking_ = false;
+                if (ssl_handshake_callback_) {
+                    auto cb = std::move(ssl_handshake_callback_);
+                    ssl_handshake_callback_ = nullptr;
+                    cb(false);
                 }
-            } else {
-                read = true;
-                input_buffer_.commit(static_cast<std::size_t>(bytes));
+                return;
             }
-        } while (bytes > 0 && input_buffer_.writable_bytes() == 0);
-
-        if (read && state_ == ConnectionState::connected && connectionHandler_) {
-            connectionHandler_->on_read(this);
+            int ret = ssl->ssl_init_action();
+            if (ret > 0) {
+                ssl_handshaking_ = false;
+                if (ssl_handshake_callback_) {
+                    auto cb = std::move(ssl_handshake_callback_);
+                    ssl_handshake_callback_ = nullptr;
+                    cb(true);
+                }
+            } else if (ssl->ssl_want_read() || ssl->ssl_want_write()) {
+                return;
+            } else {
+                ssl_handshaking_ = false;
+                if (ssl_handshake_callback_) {
+                    auto cb = std::move(ssl_handshake_callback_);
+                    ssl_handshake_callback_ = nullptr;
+                    cb(false);
+                }
+                close();
+                return;
+            }
         }
 
-        if (close) {
-            LOG_INFO("connection closed by peer, ip: {}, port: {}", socket_->get_address()->get_ip(), socket_->get_address()->get_port());
-            abort();
+        if (!ssl_handler_) {
+            bool read = false, close_flag = false;
+            int bytes = 0;
+
+            input_buffer_.clear();
+
+            do {
+                if (read && input_buffer_.writable_bytes() == 0) {
+                    connectionHandler_->on_error(this);
+                    close_flag = true;
+                    break;
+                }
+
+#ifndef _WIN32
+                bytes = ::read(channel_->get_fd(), input_buffer_.write_ptr(), input_buffer_.writable_bytes());
+#else
+                bytes = ::recv(channel_->get_fd(), input_buffer_.write_ptr(), static_cast<int>(input_buffer_.writable_bytes()), 0);
+#endif
+
+                if (bytes <= 0) {
+                    if (bytes == 0) {
+                        close_flag = true;
+                    } else if (bytes == -1) {
+                        if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
+#ifdef _WIN32
+                            if (WSAGetLastError() == WSAEWOULDBLOCK) {
+                                goto again_read;
+                            }
+#endif
+                            LOG_ERROR("read error: {}", errno);
+                            connectionHandler_->on_error(this);
+                            close_flag = true;
+                            break;
+                        }
+                    again_read:
+                        channel_->enable_read();
+                        if (eventHandler_) {
+                            eventHandler_->update_channel(channel_.get());
+                        }
+                        break;
+                    }
+                } else {
+                    read = true;
+                    input_buffer_.commit(static_cast<std::size_t>(bytes));
+                }
+            } while (bytes > 0 && input_buffer_.writable_bytes() == 0);
+
+            if (read && state_ == ConnectionState::connected && connectionHandler_) {
+                connectionHandler_->on_read(this);
+            }
+
+            if (close_flag) {
+                LOG_INFO("connection closed by peer, ip: {}, port: {}", socket_->get_address()->get_ip(), socket_->get_address()->get_port());
+                abort();
+            }
+        } else {
+            bool read = false, close_flag = false;
+            int bytes = 0;
+
+            input_buffer_.clear();
+
+            do {
+                if (read && input_buffer_.writable_bytes() == 0) {
+                    connectionHandler_->on_error(this);
+                    close_flag = true;
+                    break;
+                }
+
+                bytes = ssl_handler_->ssl_read(input_buffer_.write_ptr(), input_buffer_.writable_bytes());
+
+                if (bytes <= 0) {
+                    if (bytes == 0) {
+                        close_flag = true;
+                    } else if (bytes == -1) {
+                        if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
+                            LOG_ERROR("ssl read error: {}", errno);
+                            connectionHandler_->on_error(this);
+                            close_flag = true;
+                            break;
+                        }
+                        channel_->enable_read();
+                        if (eventHandler_) {
+                            eventHandler_->update_channel(channel_.get());
+                        }
+                        break;
+                    }
+                } else {
+                    read = true;
+                    input_buffer_.commit(static_cast<std::size_t>(bytes));
+                }
+            } while (bytes > 0 && input_buffer_.writable_bytes() == 0);
+
+            if (read && state_ == ConnectionState::connected && connectionHandler_) {
+                connectionHandler_->on_read(this);
+            }
+
+            if (close_flag) {
+                LOG_INFO("ssl connection closed by peer, ip: {}, port: {}", socket_->get_address()->get_ip(), socket_->get_address()->get_port());
+                abort();
+            }
         }
     }
 
@@ -286,6 +367,39 @@ namespace yuan::net
         if (state_ == ConnectionState::connecting && connectionHandler_) {
             state_ = ConnectionState::connected;
             connectionHandler_->on_connected(this);
+        }
+
+        if (ssl_handshaking_) {
+            auto *ssl = ssl_handler_.get();
+            if (!ssl) {
+                ssl_handshaking_ = false;
+                if (ssl_handshake_callback_) {
+                    auto cb = std::move(ssl_handshake_callback_);
+                    ssl_handshake_callback_ = nullptr;
+                    cb(false);
+                }
+                return;
+            }
+            int ret = ssl->ssl_init_action();
+            if (ret > 0) {
+                ssl_handshaking_ = false;
+                if (ssl_handshake_callback_) {
+                    auto cb = std::move(ssl_handshake_callback_);
+                    ssl_handshake_callback_ = nullptr;
+                    cb(true);
+                }
+            } else if (ssl->ssl_want_read() || ssl->ssl_want_write()) {
+                return;
+            } else {
+                ssl_handshaking_ = false;
+                if (ssl_handshake_callback_) {
+                    auto cb = std::move(ssl_handshake_callback_);
+                    ssl_handshake_callback_ = nullptr;
+                    cb(false);
+                }
+                close();
+                return;
+            }
         }
 
         if ((state_ == ConnectionState::connected || state_ == ConnectionState::closing) && connectionHandler_) {
@@ -298,7 +412,7 @@ namespace yuan::net
         }
     }
 
-    void TcpConnection::set_event_handler(EventHandler *eventHandler)
+    void TcpConnection::set_event_handler(EventHandler * eventHandler)
     {
         assert(channel_);
         eventHandler_ = eventHandler;
@@ -323,7 +437,7 @@ namespace yuan::net
         delete this;
     }
 
-    ConnectionHandler *TcpConnection::get_connection_handler()
+    ConnectionHandler *TcpConnection::get_connection_handler() const
     {
         return connectionHandler_;
     }

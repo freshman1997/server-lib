@@ -6,15 +6,15 @@
 
 namespace yuan::net
 {
-class UdpInstance;
+    class UdpInstance;
 
-class DatagramAcceptor : public Acceptor, public DatagramEndpoint
-{
-public:
-    ~DatagramAcceptor() override = default;
+    class DatagramAcceptor : public Acceptor, public DatagramEndpoint
+    {
+    public:
+        ~DatagramAcceptor() override = default;
 
-    virtual UdpInstance *get_udp_instance() = 0;
-};
+        virtual UdpInstance *get_udp_instance() const = 0;
+    };
 
 } // namespace yuan::net
 

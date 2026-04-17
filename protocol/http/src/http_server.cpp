@@ -1,9 +1,7 @@
 #include "content/types.h"
 #include "context.h"
-#include "net/poller/epoll_poller.h"
-#include "net/poller/kqueue_poller.h"
-#include "net/poller/poll_poller.h"
-#include "net/poller/select_poller.h"
+#include "coroutine/io_result.h"
+#include "net/runtime/network_runtime.h"
 #include "net/secuity/openssl.h"
 #include "nlohmann/json.hpp"
 #include "nlohmann/json_fwd.hpp"
@@ -29,10 +27,6 @@
 #include <unistd.h>
 #endif
 
-#include "timer/wheel_timer_manager.h"
-#include "net/acceptor/acceptor_factory.h"
-#include "net/acceptor/stream_acceptor.h"
-#include "event/event_loop.h"
 #include "http_server.h"
 #include "middleware.h"
 #include "net/socket/socket.h"
@@ -50,52 +44,22 @@ namespace yuan::net::http
 {
     namespace
     {
-        using HttpSessionMap = std::unordered_map<uint64_t, HttpSession *>;
+        using HttpSessionMap = std::unordered_map<uint64_t, std::unique_ptr<HttpSession> >;
 
         HttpSession *find_http_session(HttpSessionMap &sessions, uint64_t session_id)
         {
             const auto it = sessions.find(session_id);
-            return it == sessions.end() ? nullptr : it->second;
-        }
-
-        void reset_http_connection_buffer(Connection *conn)
-        {
-            if (!conn || !conn->is_connected()) {
-                return;
-            }
-
-            conn->clear_input_buffer();
-        }
-
-        void release_http_session(HttpSessionMap &sessions, uint64_t session_id, HttpProxy *proxy, Connection *conn)
-        {
-            const auto it = sessions.find(session_id);
-            if (it == sessions.end()) {
-                return;
-            }
-
-            if (proxy && conn) {
-                proxy->on_client_close(conn);
-            }
-
-            delete it->second;
-            sessions.erase(it);
+            return it == sessions.end() ? nullptr : it->second.get();
         }
     }
-    Poller * HttpServer::create_default_poller()
+
+    HttpServer::HttpServer()
+        : HttpServer(HttpServerConfig())
     {
-#if defined(__unix__)
-        return new net::EpollPoller;
-#elif defined(__APPLE__)
-        return new net::KQueuePoller;
-#else
-        return new net::SelectPoller;
-#endif
     }
 
-    HttpServer::HttpServer() : HttpServer(HttpServerConfig()) {}
-
-    HttpServer::HttpServer(const HttpServerConfig &config) : quit_(false), poller_(nullptr), acceptor_(nullptr), event_loop_(nullptr), timer_manager_(nullptr), ssl_module_(nullptr), proxy_(nullptr), config_(config)
+    HttpServer::HttpServer(const HttpServerConfig & config)
+        : config_(config)
     {
         if (config_.enable_keep_alive) {
             global_pipeline_.add(middlewares::connection_handler());
@@ -110,70 +74,29 @@ namespace yuan::net::http
 
     HttpServer::~HttpServer()
     {
-        cleanup_runtime();
-    }
-
-    bool HttpServer::init_runtime(int port)
-    {
-        Socket *sock = new net::Socket("", port);
-        if (!sock->valid()) {
-            LOG_ERROR("create socket fail!!! {}", errno);
-            delete sock;
-            return false;
-        }
-
-#ifdef _WIN32
-        sock->set_reuse(true, true);
-#else
-        sock->set_reuse(true);
-#endif
-        sock->set_none_block(true);
-        if (!sock->bind()) {
-            LOG_ERROR("bind port {} failed!", port);
-            delete sock;
-            return false;
-        }
-
-        poller_ = create_default_poller();
-        if (!poller_ || !poller_->init()) {
-            LOG_ERROR("poller init failed!");
-            delete poller_;
-            poller_ = nullptr;
-            delete sock;
-            return false;
-        }
-
-        acceptor_ = create_stream_acceptor(sock);
-        if (!acceptor_->listen()) {
-            LOG_ERROR("listen failed!");
-            cleanup_runtime();
-            return false;
-        }
-
-        return true;
+        sessions_.clear();
     }
 
     bool HttpServer::init_ssl_if_needed()
     {
 #ifdef HTTP_USE_SSL
         ssl_module_ = std::make_shared<OpenSSLModule>();
-        if (!ssl_module_->init("./ssl/ca.crt", "./ssl/ca.key", SSLHandler::SSLMode::acceptor_)) {
+        if (!ssl_module_->init("./ca/ca.crt", "./ca/ca.key", SSLHandler::SSLMode::acceptor_)) {
             if (auto msg = ssl_module_->get_error_message()) {
                 LOG_ERROR("{}", msg->c_str());
             }
             return false;
         }
 
-        if (acceptor_) {
-            acceptor_->set_ssl_module(ssl_module_);
-        }
+        listener_.set_ssl_module(ssl_module_);
 #endif
         return true;
     }
 
     bool HttpServer::init_http_features()
     {
-        try {
+        try
+        {
             config::load_config();
             load_static_paths();
             register_builtin_routes();
@@ -182,10 +105,14 @@ namespace yuan::net::http
             }
 
             thread_pool_ = std::make_unique<thread::ThreadPool>(config_.thread_pool_size);
-        } catch (const std::exception& e) {
+        }
+        catch (const std::exception &e)
+        {
             LOG_ERROR("Exception during server init: {}", e.what());
             thread_pool_ = std::make_unique<thread::ThreadPool>(config_.thread_pool_size);
-        } catch (...) {
+        }
+        catch (...)
+        {
             LOG_ERROR("Unknown exception during server init");
             thread_pool_ = std::make_unique<thread::ThreadPool>(config_.thread_pool_size);
         }
@@ -213,16 +140,17 @@ namespace yuan::net::http
             return true;
         }
 
-        proxy_ = new HttpProxy(this);
+        proxy_ = std::make_unique<HttpProxy>(this);
         if (!proxy_->load_proxy_config_and_init()) {
             LOG_ERROR("load proxies config failed!");
+            proxy_.reset();
             return false;
         }
 
         return true;
     }
 
-    bool HttpServer::parse_request(HttpSessionContext *context)
+    bool HttpServer::parse_request(HttpSessionContext * context)
     {
         if (!context->parse()) {
             if (context->has_error()) {
@@ -248,7 +176,33 @@ namespace yuan::net::http
         return context->is_completed();
     }
 
-    bool HttpServer::dispatch_request(HttpSessionContext *context)
+    bool HttpServer::parse_request(HttpSessionContext * context, const ::yuan::buffer::ByteBuffer & data)
+    {
+        if (!context->parse_from(data)) {
+            if (context->has_error()) {
+                context->process_error(context->get_error_code());
+            }
+            return false;
+        }
+
+        if (context->has_error()) {
+            context->process_error(context->get_error_code());
+            return false;
+        }
+
+        if (!context->is_completed()) {
+            return false;
+        }
+
+        if (!context->try_parse_request_content()) {
+            context->process_error(ResponseCode::bad_request);
+            return false;
+        }
+
+        return context->is_completed();
+    }
+
+    bool HttpServer::dispatch_request(HttpSessionContext * context)
     {
         auto *request = context->get_request();
         auto *response = context->get_response();
@@ -259,7 +213,35 @@ namespace yuan::net::http
         }
 
         if (proxy_ && proxy_->is_proxy_url(request->get_raw_url())) {
-            proxy_->serve_proxy(request, response);
+            const auto &route_key = proxy_->find_proxy_route(request->get_raw_url());
+            auto *upgrade = request->get_header("upgrade");
+            bool is_ws_upgrade = false;
+            if (upgrade) {
+                std::string upgrade_lower = *upgrade;
+                std::transform(upgrade_lower.begin(), upgrade_lower.end(), upgrade_lower.begin(), ::tolower);
+                is_ws_upgrade = (upgrade_lower == "websocket");
+            }
+            if (is_ws_upgrade && ws_proxy_handler_) {
+                auto *client_key_hdr = request->get_header("sec-websocket-key");
+                std::string client_key = client_key_hdr ? *client_key_hdr : "";
+                if (!client_key.empty()) {
+                    std::string subproto;
+                    auto *subproto_hdr = request->get_header("sec-websocket-protocol");
+                    if (subproto_hdr && !subproto_hdr->empty()) {
+                        subproto = *subproto_hdr;
+                    }
+                    context->ws_handoff_ = true;
+                    context->ws_route_key_ = route_key;
+                    context->ws_client_key_ = client_key;
+                    context->ws_subproto_ = subproto;
+                    return true;
+                }
+            }
+            if (is_ws_upgrade) {
+                proxy_->handle_websocket_upgrade_by_url(request, response, route_key);
+            } else {
+                proxy_->serve_proxy(request, response);
+            }
             return true;
         }
 
@@ -276,7 +258,7 @@ namespace yuan::net::http
         return true;
     }
 
-    void HttpServer::finalize_request(uint64_t sessionId, HttpSession *session, HttpSessionContext *context)
+    void HttpServer::finalize_request(uint64_t sessionId, HttpSession * session, HttpSessionContext * context)
     {
         if (!find_http_session(sessions_, sessionId)) {
             return;
@@ -285,134 +267,40 @@ namespace yuan::net::http
         if (config::close_idle_connection && session) {
             session->reset_timer();
         }
-
-        reset_http_connection_buffer(context ? context->get_connection() : nullptr);
-    }
-
-    void HttpServer::bind_event_loop(EventLoop *loop)
-    {
-        if (!loop || !acceptor_) {
-            return;
-        }
-
-        acceptor_->set_event_handler(loop);
-        acceptor_->set_connection_handler(this);
-        if (auto *channel = acceptor_->listener_channel()) {
-            loop->update_channel(channel);
-        }
-        event_loop_ = loop;
-    }
-
-    void HttpServer::cleanup_runtime()
-    {
-        event_loop_ = nullptr;
-        timer_manager_ = nullptr;
-
-        for (auto &[_, session] : sessions_) {
-            delete session;
-        }
-        sessions_.clear();
-
-        delete proxy_;
-        proxy_ = nullptr;
-
-        delete acceptor_;
-        acceptor_ = nullptr;
-
-        delete poller_;
-        poller_ = nullptr;
-
-        ssl_module_.reset();
-        thread_pool_.reset();
-    }
-
-    void HttpServer::on_connected(Connection *conn)
-    {
-        const auto sessionId = reinterpret_cast<uint64_t>(conn);
-        if (sessions_.contains(sessionId)) {
-            // session already exists, ignore
-            return;
-        }
-
-        conn->set_max_packet_size(HttpPacket::get_max_packet_size());
-        sessions_[sessionId] = new HttpSession(sessionId, new HttpSessionContext(conn), timer_manager_);
-    }
-
-    void HttpServer::on_error(Connection *conn)
-    {
-        (void)conn;
-        // error hook
-    }
-    void HttpServer::on_read(Connection *conn)
-    {
-        const auto sessionId = reinterpret_cast<uint64_t>(conn);
-        const auto session = find_http_session(sessions_, sessionId);
-        if (!session) {
-            return;
-        }
-
-        const auto context = session->get_context();
-
-        try {
-            if (!parse_request(context)) {
-                return;
-            }
-
-            (void)dispatch_request(context);
-            finalize_request(sessionId, session, context);
-        } catch (const fmt::format_error& e) {
-            LOG_ERROR("Invalid UTF-8 or format error while processing HTTP request: {}", e.what());
-            if (find_http_session(sessions_, sessionId)) {
-                context->process_error(ResponseCode::bad_request);
-            }
-        } catch (const std::exception& e) {
-            LOG_ERROR("Exception while processing HTTP request: {}", e.what());
-            if (find_http_session(sessions_, sessionId)) {
-                context->process_error(ResponseCode::internal_server_error);
-            }
-        } catch (...) {
-            LOG_ERROR("Unknown exception while processing HTTP request");
-            if (find_http_session(sessions_, sessionId)) {
-                context->process_error(ResponseCode::internal_server_error);
-            }
-        }
-    }
-
-    void HttpServer::on_write(Connection *conn)
-    {
-        const uint64_t sessionId = reinterpret_cast<uint64_t>(conn);
-        const auto it = sessions_.find(sessionId);
-        if (it == sessions_.end()) {
-            return;
-        }
-
-        const auto context = it->second->get_context();
-        (void)context->write();
-    }
-
-    void HttpServer::on_close(Connection *conn)
-    {
-        free_session(conn);
     }
 
     bool HttpServer::init(int port)
     {
-        cleanup_runtime();
+        owned_runtime_ = std::make_unique<NetworkRuntime>();
+        return init(port, *owned_runtime_);
+    }
+
+    bool HttpServer::init(int port, NetworkRuntime & runtime)
+    {
+        sessions_.clear();
+        proxy_.reset();
+        listener_.close();
 
         if (HttpConfigManager::get_instance()->good()) {
             LOG_INFO("{} starting...", HttpConfigManager::get_instance()->get_string_property("server_name"));
         }
 
-        if (!init_runtime(port)) {
+        if (!init_ssl_if_needed()) {
+            if (owned_runtime_)
+                owned_runtime_.reset();
             return false;
         }
 
-        if (!init_ssl_if_needed()) {
-            cleanup_runtime();
+        if (!listener_.bind(port, runtime)) {
+            LOG_ERROR("bind port {} failed!", port);
+            if (owned_runtime_)
+                owned_runtime_.reset();
             return false;
         }
+
         if (!init_http_features()) {
-            cleanup_runtime();
+            if (owned_runtime_)
+                owned_runtime_.reset();
             return false;
         }
 
@@ -421,104 +309,206 @@ namespace yuan::net::http
 
     void HttpServer::serve()
     {
-        timer::WheelTimerManager timerManager;
-        timer_manager_ = &timerManager;
-
-        net::EventLoop loop(poller_, &timerManager);
-        bind_event_loop(&loop);
-
         LOG_INFO("{} started", HttpConfigManager::get_instance()->get_string_property("server_name", config_.server_name));
 
         if (thread_pool_) {
             thread_pool_->start();
         }
 
-        loop.loop();
+        listener_.set_connection_handler(
+            [this](net::AsyncConnectionContext ctx)->coroutine::Task<void> {
+                co_await handle_connection(std::move(ctx));
+            });
 
-        event_loop_ = nullptr;
-        timer_manager_ = nullptr;
+        if (owned_runtime_) {
+            auto accept_task = listener_.run_async();
+            accept_task.resume();
+            owned_runtime_->run();
+        }
     }
 
     void HttpServer::stop()
     {
-        if (event_loop_) {
-            event_loop_->quit();
+        if (thread_pool_) {
+            thread_pool_->shutdown();
+        }
+        if (owned_runtime_) {
+            owned_runtime_->stop();
         }
     }
 
-    void HttpServer::on(const std::string &url, request_function func, bool is_prefix)
+    void HttpServer::on(const std::string & url, request_function func, bool is_prefix)
     {
-        if (url.empty() || !func) return;
+        if (url.empty() || !func)
+            return;
         dispatcher_.register_handler(url, func, is_prefix);
     }
 
-    void HttpServer::on(const std::string &url, request_function func,
-                         std::shared_ptr<MiddlewarePipeline> pipeline, bool is_prefix)
+    void HttpServer::on(const std::string & url, request_function func,
+                        std::shared_ptr<MiddlewarePipeline> pipeline, bool is_prefix)
     {
-        if (url.empty() || !func || !pipeline) return;
-        
-        auto wrapped_func = [func, pipeline]( HttpRequest *req,  HttpResponse *resp) mutable {
+        if (url.empty() || !func || !pipeline)
+            return;
+
+        auto wrapped_func = [func, pipeline](HttpRequest *req, HttpResponse *resp) mutable {
             if (pipeline && !pipeline->execute(req, resp)) return;
             func(req, resp);
         };
-        
+
         dispatcher_.register_handler(url, wrapped_func, is_prefix);
     }
 
     void HttpServer::use(std::shared_ptr<HttpMiddleware> middleware)
     {
-        if (middleware) global_pipeline_.add(std::move(middleware));
+        if (middleware)
+            global_pipeline_.add(std::move(middleware));
     }
 
-    void HttpServer::use(middleware_function fn, const char *name)
+    void HttpServer::use(middleware_function fn, const char * name)
     {
         global_pipeline_.add(std::move(fn), name);
     }
 
-    void HttpServer::free_session(Connection *conn)
+    coroutine::Task<void> HttpServer::handle_connection(net::AsyncConnectionContext ctx)
     {
-        const uint64_t sessionId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(conn));
-        release_http_session(sessions_, sessionId, proxy_, conn);
+        auto *conn = ctx.native_handle();
+        if (!conn) {
+            co_return;
+        }
+
+        if (conn->is_ssl_handshaking()) {
+            auto hs_result = co_await ctx.ssl_handshake_async();
+            if (hs_result != coroutine::SslHandshakeResult::success) {
+                co_return;
+            }
+        }
+
+        const auto sessionId = ctx.connection_id();
+        conn->set_max_packet_size(HttpPacket::get_max_packet_size());
+
+        auto *httpCtx = new HttpSessionContext(conn);
+        auto session = std::make_unique<HttpSession>(sessionId, httpCtx, listener_.runtime()->runtime_view());
+        auto *session_ptr = session.get();
+        sessions_[sessionId] = std::move(session);
+
+        while (ctx.is_connected()) {
+            auto read_result = co_await ctx.read_async();
+            if (read_result.status != coroutine::IoStatus::success) {
+                break;
+            }
+
+            auto *context = session->get_context();
+
+            try
+            {
+                if (!parse_request(context, read_result.data)) {
+                    if (context->has_error()) {
+                        break;
+                    }
+                    continue;
+                }
+
+                (void)dispatch_request(context);
+
+                if (context->ws_handoff_ && ws_proxy_handler_) {
+                    std::string route_key = std::move(context->ws_route_key_);
+                    std::string raw_url = context->get_request()->get_raw_url();
+                    std::string client_key = std::move(context->ws_client_key_);
+                    std::string subproto = std::move(context->ws_subproto_);
+                    auto leftover = context->take_leftover_buffer();
+                    sessions_.erase(sessionId);
+                    delete session;
+
+                    auto proxy_task = ws_proxy_handler_(std::move(ctx), raw_url, route_key, client_key, subproto, std::move(leftover));
+                    proxy_task.resume();
+                    proxy_task.detach();
+                    co_return;
+                }
+
+                finalize_request(sessionId, session, context);
+
+                while (context->get_response()->is_uploading()) {
+                    auto flush_result = co_await ctx.flush_async();
+                    if (flush_result.status != coroutine::IoStatus::success) {
+                        break;
+                    }
+                    context->write();
+                }
+            }
+            catch (const fmt::format_error &e)
+            {
+                LOG_ERROR("Invalid UTF-8 or format error while processing HTTP request: {}", e.what());
+                if (find_http_session(sessions_, sessionId)) {
+                    context->process_error(ResponseCode::bad_request);
+                }
+            }
+            catch (const std::exception &e)
+            {
+                LOG_ERROR("Exception while processing HTTP request: {}", e.what());
+                if (find_http_session(sessions_, sessionId)) {
+                    context->process_error(ResponseCode::internal_server_error);
+                }
+            }
+            catch (...)
+            {
+                LOG_ERROR("Unknown exception while processing HTTP request");
+                if (find_http_session(sessions_, sessionId)) {
+                    context->process_error(ResponseCode::internal_server_error);
+                }
+            }
+        }
+
+        if (proxy_ && conn) {
+            proxy_->on_client_close(conn);
+        }
+        sessions_.erase(sessionId);
+        delete session;
+
+        co_return;
     }
 
     void HttpServer::load_static_paths()
     {
         auto cfgManager = HttpConfigManager::get_instance();
         const std::vector<nlohmann::json> &paths = cfgManager->get_type_array_properties<nlohmann::json>(config::static_file_paths);
-        
+
         for (const auto &path : paths) {
             const std::string &root = path[config::static_file_paths_root];
             const std::string &rootPath = path[config::static_file_paths_path];
-            if (root.empty() || rootPath.empty()) continue;
+            if (root.empty() || rootPath.empty())
+                continue;
 
             static_paths_[root] = rootPath;
             on(root, [this](HttpRequest *req, HttpResponse *resp) { 
-                this->serve_static(req, resp); 
-            }, true);
+                this->serve_static(req, resp);
+                     },
+               true);
         }
 
         if (paths.empty()) {
             static_paths_["/static"] = std::filesystem::current_path().string();
             on("/static", [this](HttpRequest *req, HttpResponse *resp) { 
-                this->serve_static(req, resp); 
-            }, true);
+                this->serve_static(req, resp);
+                          },
+               true);
         }
 
         const std::vector<std::string> &types = cfgManager->get_type_array_properties<std::string>(config::playable_types);
-        for (const auto &type : types) play_types_.insert(type);
+        for (const auto &type : types)
+            play_types_.insert(type);
 
         if (play_types_.empty()) {
-            play_types_.insert({".mp4", ".mp3", ".mov", ".flac", ".wav", ".avi", ".ogg"});
+            play_types_.insert({ ".mp4", ".mp3", ".mov", ".flac", ".wav", ".avi", ".ogg" });
         }
     }
 
-    void HttpServer::icon(HttpRequest *req, HttpResponse *resp)
+    void HttpServer::icon(HttpRequest * req, HttpResponse * resp)
     {
         (void)req;
         resp->add_header("Connection", "close");
         resp->add_header("Content-Type", "image/x-icon");
         resp->set_response_code(ResponseCode::ok_);
-        
+
         std::fstream file;
         file.open("icon.ico");
         if (!file.good()) {
@@ -543,11 +533,11 @@ namespace yuan::net::http
     }
 
     bool HttpServer::resolve_static_request(
-        const std::string &url,
-        std::string &prefix,
-        std::string &path_prefix,
-        std::string &file_relative_path,
-        HttpResponse *resp)
+        const std::string & url,
+        std::string & prefix,
+        std::string & path_prefix,
+        std::string & file_relative_path,
+        HttpResponse * resp)
     {
         const auto result = dispatcher_.get_compress_trie().find_prefix(url);
         const auto prefix_idx = static_cast<int>(result.match_length);
@@ -581,7 +571,7 @@ namespace yuan::net::http
         return true;
     }
 
-    bool HttpServer::serve_embedded_static_page(const std::string &file_relative_path, HttpResponse *resp)
+    bool HttpServer::serve_embedded_static_page(const std::string & file_relative_path, HttpResponse * resp)
     {
         if (file_relative_path == "filelist.html") {
             resp->append_body(config::file_list_html_text);
@@ -601,11 +591,11 @@ namespace yuan::net::http
     }
 
     void HttpServer::serve_static_file(
-        HttpRequest *req,
-        HttpResponse *resp,
-        const std::string &url,
-        const std::string &file_relative_path,
-        const std::string &path_prefix)
+        HttpRequest * req,
+        HttpResponse * resp,
+        const std::string & url,
+        const std::string & file_relative_path,
+        const std::string & path_prefix)
     {
         std::string path;
         if (!path_prefix.empty() && path_prefix.back() == '/') {
@@ -614,12 +604,15 @@ namespace yuan::net::http
             path = path_prefix + "/" + file_relative_path;
         }
 
-        try {
+        try
+        {
             if (std::filesystem::is_directory(std::filesystem::path(std::u8string(path.begin(), path.end())))) {
                 serve_list_files(path_prefix, path, resp);
                 return;
             }
-        } catch (...) {
+        }
+        catch (...)
+        {
             resp->process_error(ResponseCode::forbidden);
             return;
         }
@@ -687,7 +680,7 @@ namespace yuan::net::http
             const auto end_pos = offset + sz - 1;
             resp->add_header("Content-Range",
                              "bytes " + std::to_string(offset) + "-" +
-                             std::to_string(end_pos) + "/" + std::to_string(length));
+                                 std::to_string(end_pos) + "/" + std::to_string(length));
             resp->set_response_code(ResponseCode::partial_content);
         } else {
             resp->set_response_code(ResponseCode::ok_);
@@ -710,7 +703,7 @@ namespace yuan::net::http
         resp->send();
     }
 
-    void HttpServer::serve_static(HttpRequest *req, HttpResponse *resp)
+    void HttpServer::serve_static(HttpRequest * req, HttpResponse * resp)
     {
         const std::string &url = req->get_raw_url();
         std::string prefix;
@@ -732,7 +725,7 @@ namespace yuan::net::http
         serve_static_file(req, resp, url, file_relative_path, path_prefix);
     }
 
-    void HttpServer::serve_download(const std::string &filePath, const std::string &ext, HttpResponse *resp)
+    void HttpServer::serve_download(const std::string & filePath, const std::string & ext, HttpResponse * resp)
     {
         std::fstream file;
         file.open(std::filesystem::path(std::u8string(filePath.begin(), filePath.end())), std::ios::in | std::ios::binary);
@@ -771,19 +764,22 @@ namespace yuan::net::http
         resp->send();
     }
 
-    void HttpServer::serve_list_files(const std::string &prefix, const std::string &filePath, HttpResponse *resp)
+    void HttpServer::serve_list_files(const std::string & prefix, const std::string & filePath, HttpResponse * resp)
     {
-        try {
+        try
+        {
             std::filesystem::path absPrefix = std::filesystem::canonical(std::u8string(prefix.begin(), prefix.end()));
-            std::filesystem::path absFile   = std::filesystem::canonical(std::u8string(filePath.begin(), filePath.end()));
+            std::filesystem::path absFile = std::filesystem::canonical(std::u8string(filePath.begin(), filePath.end()));
 
             auto relPath = std::filesystem::relative(absFile, absPrefix);
             std::string relStr = relPath.string();
-            if (relStr.empty() || (relStr.size() >= 2 && relStr[0] == '.' && relStr[1] == '.')) {          
+            if (relStr.empty() || (relStr.size() >= 2 && relStr[0] == '.' && relStr[1] == '.')) {
                 resp->process_error(ResponseCode::forbidden);
                 return;
             }
-        } catch (...) {
+        }
+        catch (...)
+        {
             resp->process_error(ResponseCode::internal_server_error);
             return;
         }
@@ -791,12 +787,13 @@ namespace yuan::net::http
         nlohmann::json jsonResponse;
         const std::string dir = filePath.substr(prefix.length());
 
-        try {
-            for (const auto& entry : std::filesystem::directory_iterator(
-                    std::filesystem::path(std::u8string(filePath.begin(), filePath.end())))) {
-                
+        try
+        {
+            for (const auto &entry : std::filesystem::directory_iterator(
+                     std::filesystem::path(std::u8string(filePath.begin(), filePath.end())))) {
+
                 nlohmann::json item;
-                
+
                 auto ftime = entry.last_write_time();
 #if __cpp_lib_filesystem >= 201703L && __cplusplus > 201703L
                 using namespace std::chrono;
@@ -820,7 +817,9 @@ namespace yuan::net::http
 
                 jsonResponse.push_back(item);
             }
-        } catch (const std::filesystem::filesystem_error& e) {
+        }
+        catch (const std::filesystem::filesystem_error &e)
+        {
             resp->process_error();
             return;
         }
@@ -830,7 +829,7 @@ namespace yuan::net::http
         resp->send();
     }
 
-    void HttpServer::reload_config(HttpRequest *req, HttpResponse *resp)
+    void HttpServer::reload_config(HttpRequest * req, HttpResponse * resp)
     {
         (void)req;
         if (HttpConfigManager::get_instance()->reload_config()) {
@@ -847,7 +846,7 @@ namespace yuan::net::http
         resp->send();
     }
 
-    void HttpServer::handle_options_preflight(HttpRequest *req, HttpResponse *resp)
+    void HttpServer::handle_options_preflight(HttpRequest * req, HttpResponse * resp)
     {
         (void)req;
         resp->set_response_code(ResponseCode::no_content);
@@ -864,16 +863,16 @@ namespace yuan::net::http
     }
 
     bool HttpServer::parse_upload_request(
-        HttpRequest *req,
-        HttpResponse *resp,
-        FormDataContent *&form,
-        std::string &upload_id,
-        int &chunk_index,
-        std::string &filename,
-        FormDataFileItem *&file_item,
-        uint64_t &chunk_size,
-        int &total_chunks,
-        uint64_t &file_size)
+        HttpRequest * req,
+        HttpResponse * resp,
+        FormDataContent * &form,
+        std::string & upload_id,
+        int & chunk_index,
+        std::string & filename,
+        FormDataFileItem * &file_item,
+        uint64_t & chunk_size,
+        int & total_chunks,
+        uint64_t & file_size)
     {
         if (req->get_method() != HttpMethod::post_) {
             resp->process_error(ResponseCode::method_not_allowed);
@@ -907,9 +906,12 @@ namespace yuan::net::http
             return false;
         }
 
-        try {
+        try
+        {
             chunk_index = std::stoi(form->get_string("chunkindex"));
-        } catch (...) {
+        }
+        catch (...)
+        {
             chunk_index = -1;
         }
         if (chunk_index < 0) {
@@ -975,13 +977,13 @@ namespace yuan::net::http
     }
 
     bool HttpServer::find_or_create_upload_session(
-        const std::string &upload_id,
+        const std::string & upload_id,
         int chunk_index,
-        const std::string &filename,
+        const std::string & filename,
         int total_chunks,
         uint64_t file_size,
-        HttpResponse *resp,
-        std::unordered_map<std::string, UploadFileMapping>::iterator &session_it)
+        HttpResponse * resp,
+        std::unordered_map<std::string, UploadFileMapping>::iterator & session_it)
     {
         session_it = uploaded_chunks_.find(upload_id);
         if (session_it == uploaded_chunks_.end()) {
@@ -1017,15 +1019,15 @@ namespace yuan::net::http
     }
 
     bool HttpServer::store_upload_chunk(
-        HttpRequest *req,
-        HttpResponse *resp,
-        const std::string &upload_id,
+        HttpRequest * req,
+        HttpResponse * resp,
+        const std::string & upload_id,
         int chunk_index,
-        FormDataFileItem *file_item,
+        FormDataFileItem * file_item,
         uint64_t chunk_size,
-        UploadSession &session,
-        UploadSession &session_snapshot,
-        int &received_count)
+        UploadSession & session,
+        UploadSession & session_snapshot,
+        int & received_count)
     {
         (void)req;
         if (session.total_chunks > 0 && chunk_index >= session.total_chunks) {
@@ -1088,14 +1090,13 @@ namespace yuan::net::http
     }
 
     void HttpServer::finalize_upload_chunk(
-        HttpRequest *req,
+        HttpRequest * req,
         int chunk_index,
-        FormDataFileItem *file_item,
-        const UploadSession &session_snapshot,
+        FormDataFileItem * file_item,
+        const UploadSession & session_snapshot,
         int received_count)
     {
-        const bool is_complete = session_snapshot.total_chunks > 0
-            && received_count == session_snapshot.total_chunks;
+        const bool is_complete = session_snapshot.total_chunks > 0 && received_count == session_snapshot.total_chunks;
 
         if (file_item->is_in_memory()) {
             UploadTmpChunk tmp_chunk;
@@ -1107,26 +1108,26 @@ namespace yuan::net::http
                 tmp_chunk.end_ = tmp_chunk.begin_ + tmp_chunk.data_.size();
             }
 
-            auto *task = new SaveUploadTempChunkTask(std::move(tmp_chunk));
+            auto task = std::make_unique<SaveUploadTempChunkTask>(std::move(tmp_chunk));
             if (is_complete) {
                 task->set_session(std::make_shared<UploadSession>(session_snapshot));
                 uploaded_chunks_.erase(session_snapshot.upload_id);
                 LOG_INFO("[Upload] complete: {} size={}", session_snapshot.filename, session_snapshot.total_size);
             }
-            thread_pool_->push_task(task);
+            thread_pool_->push_task(std::move(task));
             return;
         }
 
         if (is_complete) {
-            auto *task = new SaveUploadTempChunkTask();
+            auto task = std::make_unique<SaveUploadTempChunkTask>();
             task->set_session(std::make_shared<UploadSession>(session_snapshot));
             uploaded_chunks_.erase(session_snapshot.upload_id);
-            thread_pool_->push_task(task);
+            thread_pool_->push_task(std::move(task));
             LOG_INFO("[Upload] complete: {} size={}", session_snapshot.filename, session_snapshot.total_size);
         }
     }
 
-    void HttpServer::serve_upload(HttpRequest *req, HttpResponse *resp)
+    void HttpServer::serve_upload(HttpRequest * req, HttpResponse * resp)
     {
         FormDataContent *form = nullptr;
         FormDataFileItem *file_item = nullptr;
@@ -1138,43 +1139,43 @@ namespace yuan::net::http
         uint64_t file_size = 0;
 
         if (!parse_upload_request(
-                req,
-                resp,
-                form,
-                upload_id,
-                chunk_index,
-                filename,
-                file_item,
-                chunk_size,
-                total_chunks,
-                file_size)) {
+                 req,
+                 resp,
+                 form,
+                 upload_id,
+                 chunk_index,
+                 filename,
+                 file_item,
+                 chunk_size,
+                 total_chunks,
+                 file_size)) {
             return;
         }
 
         std::unordered_map<std::string, UploadFileMapping>::iterator session_it;
         if (!find_or_create_upload_session(
-                upload_id,
-                chunk_index,
-                filename,
-                total_chunks,
-                file_size,
-                resp,
-                session_it)) {
+                 upload_id,
+                 chunk_index,
+                 filename,
+                 total_chunks,
+                 file_size,
+                 resp,
+                 session_it)) {
             return;
         }
 
         UploadSession session_snapshot;
         int received_count = 0;
         if (!store_upload_chunk(
-                req,
-                resp,
-                upload_id,
-                chunk_index,
-                file_item,
-                chunk_size,
-                session_it->second,
-                session_snapshot,
-                received_count)) {
+                 req,
+                 resp,
+                 upload_id,
+                 chunk_index,
+                 file_item,
+                 chunk_size,
+                 session_it->second,
+                 session_snapshot,
+                 received_count)) {
             return;
         }
 

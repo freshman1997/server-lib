@@ -1,0 +1,17 @@
+{
+    "plugin_id": "ts_greeter",
+    "name": "TsGreeter",
+    "version": "1.0.0",
+    "author": "yuan",
+    "description": "A demo TypeScript/JavaScript script plugin",
+    "api_version": 1,
+    "entry": "main.js",
+    "language": "typescript",
+    "run_mode": "script",
+    "permissions": "use_event_bus,use_logger,use_scheduler,use_storage",
+    "depends_on": [],
+    "js_memory_limit": 8388608,
+    "js_execution_timeout_ms": 10000,
+    "js_max_stack_size": 262144,
+    "greeting": "Hello from TypeScript!"
+}

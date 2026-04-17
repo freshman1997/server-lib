@@ -5,7 +5,6 @@
 #include <filesystem>
 namespace yuan::net::ftp
 {
-    REGISTER_COMMAND_IMPL(CommandRetr);
     FtpCommandResponse CommandRetr::execute(FtpSession *session, const std::string &args)
     {
         FtpCommandResponse denied{FtpResponseCode::invalid, ""};
@@ -42,5 +41,5 @@ namespace yuan::net::ftp
         return {FtpResponseCode::__150__, "Opening binary mode data connection for file transfer."};
     }
     CommandType CommandRetr::get_command_type() { return CommandType::cmd_retr; }
-    std::string CommandRetr::get_comand_name() { return "RETR"; }
+    std::string CommandRetr::get_command_name() { return "RETR"; }
 }

@@ -1,5 +1,5 @@
-#ifndef _NET_FTP_CLIENT_FILE_STREAM_H__
-#define _NET_FTP_CLIENT_FILE_STREAM_H__
+#ifndef NET_FTP_COMMON_FILE_STREAM_H
+#define NET_FTP_COMMON_FILE_STREAM_H
 #include "net/handler/connection_handler.h"
 #include "net/socket/inet_address.h"
 
@@ -33,11 +33,11 @@ namespace yuan::net::ftp
     public:
         virtual bool start(const InetAddress &addr) = 0;
 
-    virtual void quit(const InetAddress &addr);
+        virtual void quit(const InetAddress &addr);
 
-    // Remove a child file stream session (called by FtpSession when a session wants to close).
-    // Default implementation will find the session in the map, erase it and delete it.
-    virtual void remove_session(FtpFileStreamSession *fs);
+        // Remove a child file stream session (called by FtpSession when a session wants to close).
+        // Default implementation will find the session in the map, erase it and delete it.
+        virtual void remove_session(FtpFileStreamSession *fs);
 
     public:
         bool set_work_file(FtpFileInfo *file, const std::string &ip);
@@ -50,4 +50,4 @@ namespace yuan::net::ftp
     };
 }
 
-#endif
+#endif // NET_FTP_COMMON_FILE_STREAM_H

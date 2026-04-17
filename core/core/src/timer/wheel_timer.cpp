@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace yuan::timer 
+namespace yuan::timer
 {
     Wheel::Wheel(uint32_t size, uint32_t unit)
     {
@@ -52,7 +52,7 @@ namespace yuan::timer
         return cursor_ * time_unit_;
     }
 
-    void Wheel::place_timer(uint32_t idx, WheelTimer *timer)
+    void Wheel::place_timer(uint32_t idx, WheelTimer * timer)
     {
         if (idx % items_.size() == 0) {
             // 放置时候不能覆盖当前的，所以至少往下一个
@@ -63,7 +63,7 @@ namespace yuan::timer
         items_[pos]->on_schedule(timer);
     }
 
-    WheelTimerItem * Wheel::tick(WheelTimerItem *newItem)
+    WheelTimerItem *Wheel::tick(WheelTimerItem * newItem)
     {
         cursor_ = (cursor_ + 1) % items_.size();
         WheelTimerItem *item = items_[cursor_];
@@ -71,9 +71,10 @@ namespace yuan::timer
         return item;
     }
 
-    
-    WheelTimerItem::WheelTimerItem() : head_(nullptr)
-    {}
+    WheelTimerItem::WheelTimerItem()
+        : head_(nullptr)
+    {
+    }
 
     WheelTimerItem::~WheelTimerItem()
     {
@@ -87,7 +88,7 @@ namespace yuan::timer
         head_ = nullptr;
     }
 
-    void WheelTimerItem::on_schedule(WheelTimer *timer)
+    void WheelTimerItem::on_schedule(WheelTimer * timer)
     {
         timer->on_schedule(this);
         if (!head_) {
@@ -102,7 +103,7 @@ namespace yuan::timer
         head_ = timer;
     }
 
-    void WheelTimerItem::on_delete(WheelTimer *timer)
+    void WheelTimerItem::on_delete(WheelTimer * timer)
     {
         if (head_ == timer) {
             head_ = timer->get_next();
@@ -120,17 +121,17 @@ namespace yuan::timer
         }
     }
 
-    WheelTimer * WheelTimerItem::begin()
+    WheelTimer *WheelTimerItem::begin() const
     {
         return head_;
     }
 
-    WheelTimer * WheelTimerItem::end()
+    WheelTimer *WheelTimerItem::end() const
     {
         return nullptr;
     }
 
-    WheelTimer * WheelTimerItem::pop()
+    WheelTimer *WheelTimerItem::pop()
     {
         WheelTimer *timer = head_;
         if (head_) {
@@ -146,8 +147,7 @@ namespace yuan::timer
         return timer;
     }
 
-
-    WheelTimer::WheelTimer(uint32_t timeout, uint32_t interval, TimerTask * task, int32_t period) 
+    WheelTimer::WheelTimer(uint32_t timeout, uint32_t interval, TimerTask * task, int32_t period)
     {
         period_ = period;
         period_counter_ = 0;
@@ -174,7 +174,7 @@ namespace yuan::timer
         }
     }
 
-    bool WheelTimer::ready()
+    bool WheelTimer::ready() const
     {
         return state_ == TimerState::init;
     }
@@ -200,37 +200,37 @@ namespace yuan::timer
         period_counter_ = 0;
     }
 
-    bool WheelTimer::is_processing()
+    bool WheelTimer::is_processing() const
     {
         return state_ == TimerState::processing;
     }
 
-    bool WheelTimer::is_done()
+    bool WheelTimer::is_done() const
     {
         return state_ == TimerState::done;
     }
 
-    bool WheelTimer::is_cancel()
+    bool WheelTimer::is_cancel() const
     {
         return state_ == TimerState::cancal;
     }
 
-    WheelTimer * WheelTimer::get_prev()
+    WheelTimer *WheelTimer::get_prev() const
     {
         return prev_;
     }
 
-    WheelTimer * WheelTimer::get_next()
+    WheelTimer *WheelTimer::get_next() const
     {
         return next_;
     }
 
-    void WheelTimer::set_prev(WheelTimer *timer)
+    void WheelTimer::set_prev(WheelTimer * timer)
     {
         prev_ = timer;
     }
 
-    void WheelTimer::set_next(WheelTimer *timer)
+    void WheelTimer::set_next(WheelTimer * timer)
     {
         next_ = timer;
     }
@@ -245,7 +245,7 @@ namespace yuan::timer
         return remain_;
     }
 
-    void WheelTimer::on_schedule(WheelTimerItem *item)
+    void WheelTimer::on_schedule(WheelTimerItem * item)
     {
         item_ = item;
     }
@@ -282,12 +282,12 @@ namespace yuan::timer
         }
     }
 
-    TimerTask * WheelTimer::get_task()
+    TimerTask *WheelTimer::get_task() const
     {
         return task_;
     }
 
-    void WheelTimer::bind_task(TimerTask *task)
+    void WheelTimer::bind_task(TimerTask * task)
     {
         if (!task) {
             owned_task_.reset();

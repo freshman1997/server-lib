@@ -21,9 +21,9 @@ namespace yuan::net
 
         virtual int send_datagram(Connection *conn, const yuan::buffer::ByteBuffer &buff) = 0;
         virtual int send_datagram(const InetAddress &addr, const yuan::buffer::ByteBuffer &buff) = 0;
-        virtual Channel *endpoint_channel() = 0;
+        virtual Channel *endpoint_channel() const = 0;
         virtual void update_endpoint_channel() = 0;
-        virtual timer::TimerManager *endpoint_timer_manager() = 0;
+        virtual timer::TimerManager *endpoint_timer_manager() const = 0;
     };
 }
 

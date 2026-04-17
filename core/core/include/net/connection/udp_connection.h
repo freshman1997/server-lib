@@ -23,11 +23,11 @@ namespace yuan::net
         ~UdpConnection();
 
     public:
-        virtual ConnectionState get_connection_state();
+        virtual ConnectionState get_connection_state() const override;
 
-        virtual bool is_connected();
+        virtual bool is_connected() const override;
 
-        virtual const InetAddress & get_remote_address();
+        virtual const InetAddress &get_remote_address() const override;
 
         const InetAddress &peer_address() const override;
         void attach_datagram_instance(UdpInstance *instance) override;
@@ -47,7 +47,7 @@ namespace yuan::net
 
         virtual void set_connection_handler(ConnectionHandler *handler);
 
-        virtual ConnectionHandler * get_connection_handler();
+        virtual ConnectionHandler *get_connection_handler() const override;
 
         virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler);
 

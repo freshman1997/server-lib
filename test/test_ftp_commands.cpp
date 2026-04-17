@@ -24,13 +24,34 @@ namespace
     class FakeTimer : public timer::Timer
     {
     public:
-        bool ready() override { return false; }
-        void cancel() override { cancelled_ = true; }
-        void reset() override {}
-        bool is_processing() override { return false; }
-        bool is_done() override { return false; }
-        bool is_cancel() override { return cancelled_; }
-        timer::TimerTask * get_task() override { return nullptr; }
+        bool ready() const override
+        {
+            return false;
+        }
+        void cancel() override
+        {
+            cancelled_ = true;
+        }
+        void reset() override
+        {
+        }
+        bool is_processing() const override
+        {
+            return false;
+        }
+        bool is_done() const override
+        {
+            return false;
+        }
+        bool is_cancel() const override
+        {
+            return cancelled_;
+        }
+        timer::TimerTask *get_task() const override
+        {
+            return nullptr;
+        }
+
     private:
         bool cancelled_ = false;
     };
@@ -38,33 +59,86 @@ namespace
     class FakeTimerManager : public timer::TimerManager
     {
     public:
-        timer::Timer * timeout(uint32_t milliseconds, timer::TimerTask *task) override { (void)milliseconds; (void)task; timers_.push_back(std::make_unique<FakeTimer>()); return timers_.back().get(); }
-        timer::Timer * interval(uint32_t timeout, uint32_t interval, timer::TimerTask *task, int32_t period = 0) override { (void)timeout; (void)interval; (void)task; (void)period; timers_.push_back(std::make_unique<FakeTimer>()); return timers_.back().get(); }
-        bool schedule(timer::Timer *timer) override { (void)timer; return true; }
-        void tick() override {}
-        uint32_t get_time_unit() override { return 1; }
+        timer::Timer *timeout(uint32_t milliseconds, timer::TimerTask *task) override
+        {
+            (void)milliseconds;
+            (void)task;
+            timers_.push_back(std::make_unique<FakeTimer>());
+            return timers_.back().get();
+        }
+        timer::Timer *interval(uint32_t timeout, uint32_t interval, timer::TimerTask *task, int32_t period = 0) override
+        {
+            (void)timeout;
+            (void)interval;
+            (void)task;
+            (void)period;
+            timers_.push_back(std::make_unique<FakeTimer>());
+            return timers_.back().get();
+        }
+        bool schedule(timer::Timer *timer) override
+        {
+            (void)timer;
+            return true;
+        }
+        void tick() override
+        {
+        }
+        uint32_t get_time_unit() const override
+        {
+            return 1;
+        }
+
     private:
-        std::vector<std::unique_ptr<FakeTimer>> timers_;
+        std::vector<std::unique_ptr<FakeTimer> > timers_;
     };
 
     class FakeEventHandler : public EventHandler
     {
     public:
-        void on_new_connection(Connection *conn) override { (void)conn; }
-        void close_channel(Channel *channel) override { (void)channel; }
-        void update_channel(Channel *channel) override { (void)channel; }
-        void quit() override {}
-        void queue_in_loop(std::function<void()> cb) override { (void)cb; }
+        void on_new_connection(Connection *conn) override
+        {
+            (void)conn;
+        }
+        void close_channel(Channel *channel) override
+        {
+            (void)channel;
+        }
+        void update_channel(Channel *channel) override
+        {
+            (void)channel;
+        }
+        void quit() override
+        {
+        }
+        void queue_in_loop(std::function<void()> cb) override
+        {
+            (void)cb;
+        }
     };
 
     class FakeApp : public FtpApp
     {
     public:
-        bool is_ok() override { return true; }
-        timer::TimerManager * get_timer_manager() override { return &timer_manager_; }
-        EventHandler * get_event_handler() override { return &event_handler_; }
-        void on_session_closed(FtpSession *session) override { (void)session; }
-        void quit() override {}
+        bool is_ok() override
+        {
+            return true;
+        }
+        timer::TimerManager *get_timer_manager() const override
+        {
+            return &timer_manager_;
+        }
+        EventHandler *get_event_handler() override
+        {
+            return &event_handler_;
+        }
+        void on_session_closed(FtpSession *session) override
+        {
+            (void)session;
+        }
+        void quit() override
+        {
+        }
+
     private:
         FakeTimerManager timer_manager_;
         FakeEventHandler event_handler_;
@@ -73,21 +147,67 @@ namespace
     class FakeConnection : public Connection
     {
     public:
-        FakeConnection() : state_(ConnectionState::connected), remote_("127.0.0.1", 2121), handler_(nullptr), event_handler_(nullptr) {}
-        ConnectionState get_connection_state() override { return state_; }
-        bool is_connected() override { return state_ == ConnectionState::connected; }
-        const InetAddress & get_remote_address() override { return remote_; }
-        void write(const ::yuan::buffer::ByteBuffer &buffer) override { if (!buffer.empty()) { append_output(buffer); } }
-        void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer) override { write(buffer); flush(); }
-        void flush() override {}
-        void abort() override { output_buffer_.clear(); }
-        void close() override { state_ = ConnectionState::closed; }
-        void set_connection_handler(ConnectionHandler *handler) override { handler_ = handler; }
-        ConnectionHandler * get_connection_handler() override { return handler_; }
-        void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler) override { (void)sslHandler; }
-        void on_read_event() override {}
-        void on_write_event() override {}
-        void set_event_handler(EventHandler *eventHandler) override { event_handler_ = eventHandler; }
+        FakeConnection()
+            : state_(ConnectionState::connected), remote_("127.0.0.1", 2121), handler_(nullptr), event_handler_(nullptr)
+        {
+        }
+        ConnectionState get_connection_state() const override
+        {
+            return state_;
+        }
+        bool is_connected() const override
+        {
+            return state_ == ConnectionState::connected;
+        }
+        const InetAddress &get_remote_address() const override
+        {
+            return remote_;
+        }
+        void write(const ::yuan::buffer::ByteBuffer &buffer) override
+        {
+            if (!buffer.empty()) {
+                append_output(buffer);
+            }
+        }
+        void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer) override
+        {
+            write(buffer);
+            flush();
+        }
+        void flush() override
+        {
+        }
+        void abort() override
+        {
+            output_buffer_.clear();
+        }
+        void close() override
+        {
+            state_ = ConnectionState::closed;
+        }
+        void set_connection_handler(ConnectionHandler *handler) override
+        {
+            handler_ = handler;
+        }
+        ConnectionHandler *get_connection_handler() const override
+        {
+            return handler_;
+        }
+        void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler) override
+        {
+            (void)sslHandler;
+        }
+        void on_read_event() override
+        {
+        }
+        void on_write_event() override
+        {
+        }
+        void set_event_handler(EventHandler *eventHandler) override
+        {
+            event_handler_ = eventHandler;
+        }
+
     private:
         ConnectionState state_;
         InetAddress remote_;
@@ -110,7 +230,10 @@ int main()
     std::error_code ec;
     fs::remove_all(root, ec);
     fs::create_directories(root / "sub", ec);
-    { std::ofstream(root / "sample.txt") << "hello"; std::ofstream(root / "rename.txt") << "rename"; }
+    {
+        std::ofstream(root / "sample.txt") << "hello";
+        std::ofstream(root / "rename.txt") << "rename";
+    }
 
     ServerContext::get_instance()->set_server_work_dir(root.generic_string());
 

@@ -10,30 +10,33 @@
 #include <set>
 #include <vector>
 
-namespace yuan::redis 
+namespace yuan::redis
 {
     class SubcribeCmd : public DefaultCmd
     {
     public:
         SubcribeCmd() = default;
         ~SubcribeCmd() = default;
-        
+
         void set_channels(const std::vector<std::string> &channels)
         {
-            for (auto &channel : channels)
-            {
+            for (auto &channel : channels) {
                 channels_.insert(channel);
             }
         }
 
         void set_msg_callback(std::function<void(const std::vector<SubMessage> &messages)> msg_callback)
         {
-            msg_callback_ = msg_callback;
+            if (msg_callback) {
+                msg_callback_ = std::move(msg_callback);
+            }
         }
 
         void set_pmsg_callback(std::function<void(const std::vector<PSubMessage> &messages)> pmsg_callback)
         {
-            pmsg_callback_ = pmsg_callback;
+            if (pmsg_callback) {
+                pmsg_callback_ = std::move(pmsg_callback);
+            }
         }
 
         void exec_callback();
@@ -43,7 +46,7 @@ namespace yuan::redis
             return !pending_messages_.empty() || !pending_pmessages_.empty();
         }
 
-        virtual int unpack(buffer::ByteBufferReader& reader);
+        virtual int unpack(buffer::ByteBufferReader &reader);
 
         void set_is_subcribe(bool is_subcribe)
         {
@@ -55,23 +58,24 @@ namespace yuan::redis
             return is_subcribe_;
         }
 
-        void unsubcribe(const std::vector<std::string> &channels) 
+        void unsubcribe(const std::vector<std::string> &channels)
         {
             if (channels.empty()) {
                 unsubcribe_all();
                 return;
             }
 
-            for (auto &channel : channels)
-            {
+            for (auto &channel : channels) {
                 unsubcribe(channel);
             }
         }
 
         void unsubcribe(const std::string &channel)
         {
-            if (channel.empty()) channels_.clear();
-            else channels_.erase(channel);
+            if (channel.empty())
+                channels_.clear();
+            else
+                channels_.erase(channel);
 
             if (channels_.empty()) {
                 is_subcribe_ = false;
@@ -84,16 +88,6 @@ namespace yuan::redis
             is_subcribe_ = false;
         }
 
-        void set_message_cmd(const std::string &message_cmd)
-        {
-            message_cmd_ = message_cmd;
-        }
-
-        void set_subscribe_cmd(const std::string &subscribe_cmd)
-        {
-            subscribe_cmd_ = subscribe_cmd;
-        }
-
     private:
         int handle_frame(const std::shared_ptr<ArrayValue> &frame);
         int unpack_sub_message(const std::shared_ptr<ArrayValue> &frame);
@@ -102,13 +96,11 @@ namespace yuan::redis
 
     private:
         bool is_subcribe_ = false;
-        std::string subscribe_cmd_;
-        std::string message_cmd_;
         std::set<std::string> channels_;
         std::vector<SubMessage> messages_;
         std::vector<PSubMessage> pmessages_;
-        std::deque<std::vector<SubMessage>> pending_messages_;
-        std::deque<std::vector<PSubMessage>> pending_pmessages_;
+        std::deque<std::vector<SubMessage> > pending_messages_;
+        std::deque<std::vector<PSubMessage> > pending_pmessages_;
         std::function<void(const std::vector<SubMessage> &messages)> msg_callback_;
         std::function<void(const std::vector<PSubMessage> &pmessages)> pmsg_callback_;
     };

@@ -1,6 +1,7 @@
-#ifndef __NET_FTP_SERVER_CONTEXT_H__
-#define __NET_FTP_SERVER_CONTEXT_H__
+#ifndef NET_FTP_SERVER_CONTEXT_H
+#define NET_FTP_SERVER_CONTEXT_H
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 
@@ -19,6 +20,7 @@ namespace yuan::net::ftp
         void remove_stream_port(short port);
 
     private:
+        std::mutex mutex_;
         std::string work_dir_;
         short init_port_;
         short max_port_;

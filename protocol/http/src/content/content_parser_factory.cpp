@@ -16,15 +16,15 @@ namespace yuan::net::http
         auto text = std::make_unique<TextContentParser>();
         text_parser_instance = text.get();
 
-        parsers_[ContentType::text_plain]       = text.release();
-        parsers_[ContentType::text_html]        = text_parser_instance;
-        parsers_[ContentType::text_javascript]  = text_parser_instance;
+        parsers_[ContentType::text_plain] = text.release();
+        parsers_[ContentType::text_html] = text_parser_instance;
+        parsers_[ContentType::text_javascript] = text_parser_instance;
         parsers_[ContentType::text_style_sheet] = text_parser_instance;
 
-        parsers_[ContentType::multpart_form_data]     = new MultipartFormDataParser;
-        parsers_[ContentType::multpart_byte_ranges]   = new MultipartByterangesParser;
-        parsers_[ContentType::application_json]       = new JsonContentParser;
-        parsers_[ContentType::x_www_form_urlencoded]  = new UrlEncodedContentParser;
+        parsers_[ContentType::multpart_form_data] = new MultipartFormDataParser;
+        parsers_[ContentType::multpart_byte_ranges] = new MultipartByterangesParser;
+        parsers_[ContentType::application_json] = new JsonContentParser;
+        parsers_[ContentType::x_www_form_urlencoded] = new UrlEncodedContentParser;
 
         // shared_text_parser 指向的对象由 parsers[text_plain] 管理
         // 析构时只 delete map 中每个 value，shared_text_parser 不单独 delete
@@ -34,7 +34,7 @@ namespace yuan::net::http
     {
         // shared_text_parser 指向的对象由 parsers map（text_plain条目）管理
         // 避免双重释放：跳过重复引用的指针
-        for (auto it = parsers_.begin(); it != parsers_.end(); ) {
+        for (auto it = parsers_.begin(); it != parsers_.end();) {
             if (it->second == text_parser_instance && it->first != ContentType::text_plain) {
                 ++it;
                 continue;
@@ -44,7 +44,7 @@ namespace yuan::net::http
         }
     }
 
-    bool ContentParserFactory::parse_content(HttpPacket *packet)
+    bool ContentParserFactory::parse_content(HttpPacket * packet)
     {
         if (packet->is_chunked()) {
             ChunkedContentParser *chunked_parser = nullptr;
@@ -55,7 +55,7 @@ namespace yuan::net::http
                 chunked_parser = owned.get();
                 packet->set_pre_content_parser(owned.release());
             } else {
-                chunked_parser = dynamic_cast<ChunkedContentParser*>(raw_parser);
+                chunked_parser = dynamic_cast<ChunkedContentParser *>(raw_parser);
                 if (!chunked_parser) {
                     delete raw_parser;
                     auto owned = std::make_unique<ChunkedContentParser>();
@@ -72,13 +72,8 @@ namespace yuan::net::http
                 return true;
             }
 
-            if (chunked_parser->get_content_length() == 0) {
-                return false;
-            }
-
             packet->set_body_length(chunked_parser->get_content_length());
 
-            // chunked 解析完成，清理 parser 生命周期
             chunked_parser->reset();
             delete chunked_parser;
             packet->set_pre_content_parser(nullptr);
@@ -86,7 +81,7 @@ namespace yuan::net::http
 
         auto it = parsers_.find(packet->get_content_type());
         if (it == parsers_.end() || !it->second->can_parse(packet->get_content_type())) {
-            return false;
+            return true;
         }
 
         return it->second->parse(packet);

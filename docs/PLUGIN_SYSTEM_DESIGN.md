@@ -691,7 +691,118 @@ runtime state healthy
 - 健康监控
 - 更强的隔离模型，至少具备进程外扩展路线
 
-## 18. 总结
+## 18. Lua 脚本插件支持
+
+在完成阶段 A-D 的 C++ 原生插件体系重构后，新增了 Lua 脚本插件支持，使插件系统具备多语言扩展能力。
+
+### 18.1 架构
+
+脚本插件系统采用**语言无关基类 + 语言模块注册**的模块化架构：
+
+```text
+PluginManager::load("my_lua_plugin")
+  │
+  ├─ 读取 config (plugin_name.json 或 plugin_name/plugin.json)
+  │    └─ run_mode = "script" → ScriptPluginRegistry 路径
+  │    └─ 其他 → 原有 native 路径（不变）
+  │
+  └─ ScriptPluginRegistry::create(language, manifest, config)
+       │
+       ├─ 按 language 查找注册的工厂函数
+       │    └─ "lua" → LuaScriptPluginAdapter 工厂
+       │    └─ 其他语言 → (未来扩展)
+       │
+       └─ 工厂创建语言特定适配器（继承 ScriptPluginAdapter → Plugin）
+            ├─ LuaScriptPluginAdapter 内部持有 lua_State*
+            │    ├─ 受内存预算限制的自定义分配器
+            │    ├─ 生命周期回调桥接到 Lua 函数（受指令计数 hook 保护）
+            │    ├─ 宿主能力通过 userdata+元表 绑定到 Lua
+            │    ├─ EventBus/Scheduler 回调同样受指令计数 hook 保护
+            │    └─ Lua 沙箱移除 io/os危险函数/debug/package.loadlib/package.cpath/C searchers
+            └─ 释放时先 stop()（ResourceGuard 清理 + on_release + lua_close）再 unload()（delete adapter）
+```
+
+### 18.2 关键组件
+
+**语言无关层（plugin_core）：**
+
+- `ScriptPluginAdapter` — 纯虚基类，Template Method 模式，不依赖任何特定脚本语言
+- `ScriptPluginRegistry` — 单例注册机制，管理 `language → FactoryFn` 映射
+
+**Lua 实现层（plugin_lua，可选模块）：**
+
+- `LuaScriptPluginAdapter` — 继承 `ScriptPluginAdapter`，实现所有 Lua 特定逻辑
+- `LuaScriptPluginAdapter::Config` — 支持 `memory_budget_bytes` 和 `max_instructions_per_call` 配置
+- `LuaMemoryBudget` + `lua_budget_allocator` — 自定义内存分配器，限制 Lua 内存使用
+- `lua_sethook` + `LUA_MASKCOUNT` — 指令计数 hook，防止死循环（覆盖生命周期回调和回调 dispatch）
+- `lua_register_host_modules()` — 将宿主能力（Logger/EventBus/Scheduler/Storage/ResourceGuard）绑定到 Lua
+- `init_lua_plugin_module()` — 注册 Lua 工厂到 `ScriptPluginRegistry`，宿主程序启动时调用
+
+**宿主侧（plugin_core）：**
+
+- `PluginManager::load_script_plugin()` — 根据 run_mode=script 通过 registry 创建适配器
+
+### 18.3 设计原则
+
+- **不破坏现有 C++ 插件路径** — Lua 插件是新增分支，不是替代
+- **复用现有治理体系** — 状态机、CallGuard、ResourceGuard、PermissionGuard 对 Lua 插件一视同仁
+- **Lua 侧安全优于 C++ 侧** — lua_pcall 天然异常隔离 + 沙箱
+- **双重保护** — lua_pcall (Lua 侧) + PluginCallGuard (C++ 侧)
+- **语言可扩展** — `ScriptPluginRegistry` 支持注册任意语言适配器，Lua 是第一个实现
+
+### 18.4 模块化结构
+
+```text
+plugins/core/                                  # 语言无关抽象层
+  include/plugin/
+    script_plugin_adapter.h                    # 纯虚基类
+    script_plugin_registry.h                   # 注册机制
+  src/plugin/
+    script_plugin_adapter.cpp                  # 基类实现
+    script_plugin_registry.cpp                 # 注册实现
+
+plugins/lua/                                   # Lua 特定实现（可选模块）
+  include/
+    lua_script_plugin_adapter.h                # Lua 适配器
+    lua_plugin_module.h                        # 模块注册入口
+  src/
+    lua_script_plugin_adapter.cpp              # Lua 适配器实现
+    lua_host_bindings.h/.cpp                   # 宿主能力绑定
+    lua_plugin_module.cpp                      # 注册 Lua 工厂
+  CMakeLists.txt                               # 链接 lua_static + PluginCore
+```
+
+### 18.5 Lua 插件定义
+
+Lua 插件通过 `plugin.json` 声明自身，脚本必须返回 `plugin` 表，`on_init` 是唯一必须的函数：
+
+```lua
+local plugin = {}
+function plugin.on_init(ctx)
+    ctx.logger:info("hello from Lua!")
+    return true
+end
+function plugin.on_release() end
+return plugin
+```
+
+### 18.6 宿主能力绑定
+
+一期已绑定：Logger / EventBus / Scheduler / Storage / ResourceGuard
+
+二期规划：ServiceRegistry / ServiceCatalog / HttpInterceptor
+
+### 18.7 启用 Lua 支持
+
+宿主程序需要：
+1. 链接 `PluginLua` 模块
+2. 在启动时调用 `init_lua_plugin_module()` 注册 Lua 工厂
+
+此后 `PluginManager::load_script_plugin()` 会自动通过 registry 找到 Lua 适配器。
+
+详细设计见 `docs/LUA_PLUGIN_DESIGN.md`。
+
+## 19. 总结
 
 当前项目插件系统已经从“能加载插件”进入到“开始形成插件平台骨架”的阶段。  
 下一步最重要的不是继续堆功能，而是把以下三件事做硬：

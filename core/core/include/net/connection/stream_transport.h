@@ -4,15 +4,15 @@
 namespace yuan::net
 {
 
-class Channel;
+    class Channel;
 
-class StreamTransport
-{
-public:
-    virtual ~StreamTransport() = default;
+    class StreamTransport
+    {
+    public:
+        virtual ~StreamTransport() = default;
 
-    virtual Channel *stream_channel() = 0;
-};
+        virtual Channel *stream_channel() const = 0;
+    };
 
 } // namespace yuan::net
 

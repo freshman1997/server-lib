@@ -3,7 +3,7 @@
 #include <fstream>
 #include "logger.h"
 
-namespace yuan::net::http 
+namespace yuan::net::http
 {
     HttpConfigManager::HttpConfigManager()
     {
@@ -15,9 +15,13 @@ namespace yuan::net::http
         return is_good_;
     }
 
-    uint32_t HttpConfigManager::get_uint_property(const std::string &key, uint32_t defVal)
+    uint32_t HttpConfigManager::get_uint_property(const std::string & key, uint32_t defVal)
     {
-        const auto &item = config_json_[key];
+        auto it = config_json_.find(key);
+        if (it == config_json_.end()) {
+            return defVal;
+        }
+        const auto &item = it.value();
         if (item.is_number_unsigned() || item.is_number_integer()) {
             return item;
         }
@@ -30,9 +34,13 @@ namespace yuan::net::http
         return defVal;
     }
 
-    int32_t HttpConfigManager::get_int_property(const std::string &key, int defVal)
+    int32_t HttpConfigManager::get_int_property(const std::string & key, int defVal)
     {
-        const auto &item = config_json_[key];
+        auto it = config_json_.find(key);
+        if (it == config_json_.end()) {
+            return defVal;
+        }
+        const auto &item = it.value();
         if (item.is_number_integer()) {
             return item;
         }
@@ -45,9 +53,13 @@ namespace yuan::net::http
         return defVal;
     }
 
-    bool HttpConfigManager::get_bool_property(const std::string &key, bool defVal)
+    bool HttpConfigManager::get_bool_property(const std::string & key, bool defVal)
     {
-        const auto &item = config_json_[key];
+        auto it = config_json_.find(key);
+        if (it == config_json_.end()) {
+            return defVal;
+        }
+        const auto &item = it.value();
         if (item.is_number_integer()) {
             return item == 1;
         }
@@ -64,9 +76,13 @@ namespace yuan::net::http
         return defVal;
     }
 
-    double HttpConfigManager::get_double_property(const std::string &key, double defVal)
+    double HttpConfigManager::get_double_property(const std::string & key, double defVal)
     {
-        const auto &item = config_json_[key];
+        auto it = config_json_.find(key);
+        if (it == config_json_.end()) {
+            return defVal;
+        }
+        const auto &item = it.value();
         if (item.is_number_float()) {
             return item;
         }
@@ -79,16 +95,20 @@ namespace yuan::net::http
         return defVal;
     }
 
-    std::string HttpConfigManager::get_string_property(const std::string &key, const std::string &defVal)
+    std::string HttpConfigManager::get_string_property(const std::string & key, const std::string & defVal)
     {
-        const auto &item = config_json_[key];
+        auto it = config_json_.find(key);
+        if (it == config_json_.end()) {
+            return defVal;
+        }
+        const auto &item = it.value();
         if (item.is_string()) {
             return item;
         }
 
         return defVal;
     }
-    
+
     bool HttpConfigManager::reload_config()
     {
         is_good_ = load_config();
@@ -98,7 +118,8 @@ namespace yuan::net::http
     bool HttpConfigManager::load_config()
     {
         std::ifstream input(config::config_file_name);
-        try {
+        try
+        {
             if (!input.good()) {
                 LOG_WARN("no `{}` configuration file found in cwd!", config::config_file_name);
                 return false;
@@ -113,7 +134,9 @@ namespace yuan::net::http
             config_json_ = jval;
 
             return true;
-        } catch (...) {
+        }
+        catch (...)
+        {
             LOG_ERROR("parse {} config file failed!", config::config_file_name);
             return false;
         }

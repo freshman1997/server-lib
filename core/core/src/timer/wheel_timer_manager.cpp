@@ -4,7 +4,7 @@
 #include "timer/wheel_timer_manager.h"
 #include "timer/wheel_timer.h"
 
-namespace yuan::timer 
+namespace yuan::timer
 {
     WheelTimerManager::WheelTimerManager()
     {
@@ -15,21 +15,21 @@ namespace yuan::timer
         base::time::init_time(time_unit_);
     }
 
-    WheelTimerManager::~WheelTimerManager() 
+    WheelTimerManager::~WheelTimerManager()
     {
     }
 
-    Timer * WheelTimerManager::timeout(uint32_t milliseconds, TimerTask *task)
+    Timer *WheelTimerManager::timeout(uint32_t milliseconds, TimerTask * task)
     {
         return schedule(milliseconds, 0, task, 0);
     }
 
-    Timer * WheelTimerManager::interval(uint32_t timeout, uint32_t interval, TimerTask *task, int32_t period)
+    Timer *WheelTimerManager::interval(uint32_t timeout, uint32_t interval, TimerTask * task, int32_t period)
     {
         return schedule(timeout, interval, task, period);
     }
 
-    bool WheelTimerManager::schedule(Timer *timer)
+    bool WheelTimerManager::schedule(Timer * timer)
     {
         if (!timer) {
             return false;
@@ -45,14 +45,14 @@ namespace yuan::timer
         return true;
     }
 
-    Timer * WheelTimerManager::schedule(uint32_t timeout, uint32_t interval, TimerTask *task, int32_t period)
+    Timer *WheelTimerManager::schedule(uint32_t timeout, uint32_t interval, TimerTask * task, int32_t period)
     {
         WheelTimer *timer = new WheelTimer(timeout, interval, task, period);
         place_timer(timer);
         return timer;
     }
 
-    void WheelTimerManager::place_timer(WheelTimer *timer)
+    void WheelTimerManager::place_timer(WheelTimer * timer)
     {
         uint64_t time_unit = time_unit_;
         for (auto it = wheels_.begin(); it != wheels_.end(); ++it) {
@@ -81,7 +81,7 @@ namespace yuan::timer
             }
         }
     }
-    
+
     void WheelTimerManager::tick()
     {
         uint32_t click = base::time::get_passed_time();
@@ -113,7 +113,7 @@ namespace yuan::timer
                 }
 
                 helper_item_->reset();
-                
+
                 if (wheel->get_passed_time() != 0) {
                     break;
                 }
@@ -121,7 +121,7 @@ namespace yuan::timer
         }
     }
 
-    uint32_t WheelTimerManager::get_time_unit()
+    uint32_t WheelTimerManager::get_time_unit() const
     {
         return time_unit_;
     }

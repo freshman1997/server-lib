@@ -4,12 +4,11 @@
 #include <cstdint>
 #include <limits>
 
-namespace yuan::net::websocket 
+namespace yuan::net::websocket
 {
     constexpr uint32_t PACKET_MAX_BYTE = 1024 * 1024;
 
-    enum class OpCodeType : uint8_t
-    {
+    enum class OpCodeType : uint8_t {
         type_continue_frame = 0x00,
         type_text_frame = 0x01,
         type_binary_frame = 0x02,
@@ -37,7 +36,7 @@ namespace yuan::net::websocket
         } ctrl_code_;
 
         char mask_ : 1;
-        
+
         char pay_load_len_ : 7;
 
         uint8_t masking_key_[4];
@@ -118,7 +117,8 @@ namespace yuan::net::websocket
         static int calc_head_size(uint32_t dataSize, bool setMask = true)
         {
             int res = 2;
-            if (dataSize <= 0xffff) {
+            if (dataSize <= 125) {
+            } else if (dataSize <= 0xffff) {
                 res += 2;
             } else if (dataSize <= PACKET_MAX_BYTE) {
                 res += 8;
@@ -129,7 +129,7 @@ namespace yuan::net::websocket
             if (setMask) {
                 res += 4;
             }
-            
+
             return res;
         }
     };

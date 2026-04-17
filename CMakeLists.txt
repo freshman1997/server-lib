@@ -48,13 +48,13 @@ add_subdirectory(protocol/ftp)
 add_subdirectory(protocol/dns)
 add_subdirectory(protocol/bit_torrent)
 add_subdirectory(protocol/websocket)
+add_subdirectory(protocol/socks5)
+add_subdirectory(protocol/smb)
+add_subdirectory(protocol/mqtt)
+add_subdirectory(protocol/ssh)
 
 if (YUAN_BUILD_SERVERS OR YUAN_BUILD_TESTS OR YUAN_BUILD_EXAMPLE)
     add_subdirectory(server/services)
-endif()
-
-if (YUAN_ENABLE_PLUGIN_SYSTEM AND (YUAN_BUILD_SERVERS OR YUAN_BUILD_TESTS OR YUAN_BUILD_EXAMPLE))
-    add_subdirectory(server/plugin_bridge)
 endif()
 
 if (YUAN_BUILD_SERVERS)
@@ -65,7 +65,7 @@ if (YUAN_BUILD_TESTS)
     add_subdirectory(test)
 endif()
 
-if (YUAN_BUILD_PLUGINS AND YUAN_ENABLE_PLUGIN_SYSTEM)
+if (YUAN_ENABLE_PLUGIN_SYSTEM)
     add_subdirectory(plugins)
 endif()
 
@@ -75,5 +75,5 @@ endif()
 
 if (YUAN_BUILD_EXAMPLE)
     add_executable(Test main.cpp)
-    target_link_libraries(Test PUBLIC App Core DnsProto Logger ServerServices webserver_project_options)
+    target_link_libraries(Test PUBLIC App Core DnsProto Logger ServerServices Socks5Proto webserver_project_options)
 endif()

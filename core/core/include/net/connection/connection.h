@@ -7,6 +7,7 @@
 #include "net/secuity/ssl_handler.h"
 
 #include <cassert>
+#include <functional>
 #include <memory>
 #include <string_view>
 
@@ -30,8 +31,7 @@ namespace yuan::net
     class ConnectionHandler;
     class Socket;
 
-    enum class ConnectionState
-    {
+    enum class ConnectionState {
         connecting,
         connected,
         closing,
@@ -39,6 +39,8 @@ namespace yuan::net
     };
 
     static constexpr size_t DEFAULT_MAX_PACKET_SIZE = 1024 * 1024 * 5;
+
+    using SslHandshakeCallback = std::function<void(bool success)>;
 
     class Connection : public SelectHandler
     {
@@ -56,9 +58,9 @@ namespace yuan::net
         Connection(Connection &&) = delete;
         Connection &operator=(Connection &&) = delete;
 
-        virtual ConnectionState get_connection_state() = 0;
-        virtual bool is_connected() = 0;
-        virtual const InetAddress &get_remote_address() = 0;
+        virtual ConnectionState get_connection_state() const = 0;
+        virtual bool is_connected() const = 0;
+        virtual const InetAddress &get_remote_address() const = 0;
 
         virtual void write(const ::yuan::buffer::ByteBuffer &buffer) = 0;
 
@@ -69,12 +71,37 @@ namespace yuan::net
         virtual void close() = 0;
 
         virtual void set_connection_handler(ConnectionHandler *handler) = 0;
-        virtual ConnectionHandler *get_connection_handler() = 0;
+        virtual ConnectionHandler *get_connection_handler() const = 0;
         virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler) = 0;
+
+        virtual std::shared_ptr<SSLHandler> get_ssl_handler() const
+        {
+            return nullptr;
+        }
+
+        virtual bool is_ssl_handshaking() const
+        {
+            return false;
+        }
+
+        virtual void set_ssl_handshaking(bool handshaking)
+        {
+            (void)handshaking;
+        }
+
+        virtual void set_ssl_handshake_callback(SslHandshakeCallback callback)
+        {
+            (void)callback;
+        }
 
         ::yuan::buffer::ByteBuffer get_input_byte_buffer() const
         {
             return input_buffer_.copy_readable();
+        }
+
+        size_t input_readable_bytes() const noexcept
+        {
+            return input_buffer_.readable_bytes();
         }
 
         ::yuan::buffer::ByteBuffer take_input_byte_buffer()

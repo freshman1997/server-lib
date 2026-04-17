@@ -1,13 +1,18 @@
-#ifndef __NET_FTP_COMMON_FILE_STREAM_SESSION_H__
-#define __NET_FTP_COMMON_FILE_STREAM_SESSION_H__
+#ifndef NET_FTP_COMMON_FILE_STREAM_SESSION_H
+#define NET_FTP_COMMON_FILE_STREAM_SESSION_H
 #include "net/handler/connection_handler.h"
 #include "net/socket/inet_address.h"
-#include "timer/timer.h"
+#include "net/runtime/network_runtime.h"
 #include "def.h"
 
 namespace yuan::net
 {
     class Connection;
+}
+
+namespace yuan::timer
+{
+    class Timer;
 }
 
 namespace yuan::net::ftp
@@ -49,10 +54,10 @@ namespace yuan::net::ftp
 
         void quit();
 
-        FileSteamState get_state();
+        FileStreamState get_state();
 
     private:
-        FileSteamState state_;
+        FileStreamState state_;
         std::size_t write_buff_size_;
         uint32_t last_active_time_;
         FtpFileInfo *current_file_info_;

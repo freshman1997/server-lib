@@ -20,7 +20,7 @@ namespace yuan::net::http
         }
     }
 
-    void MiddlewarePipeline::add(middleware_function fn, const char *name)
+    void MiddlewarePipeline::add(middleware_function fn, const char * name)
     {
         if (fn) {
             middlewares_.push_back(std::make_shared<FunctionMiddleware>(std::move(fn), name));
@@ -34,37 +34,40 @@ namespace yuan::net::http
         }
     }
 
-    bool MiddlewarePipeline::execute(HttpRequest *req, HttpResponse *resp) const
+    bool MiddlewarePipeline::execute(HttpRequest * req, HttpResponse * resp) const
     {
         for (auto &mw : middlewares_) {
             auto result = mw->process(req, resp);
             switch (result) {
-                case MiddlewareResult::next:
-                    break;
-                case MiddlewareResult::stop:
-                    return false;
-                case MiddlewareResult::unauthorized:
-                    resp->set_response_code(ResponseCode::unauthorized);
-                    resp->add_header("WWW-Authenticate", "Basic realm=\"Secure Area\"");
-                    resp->process_error(ResponseCode::unauthorized);
-                    return false;
-                case MiddlewareResult::forbidden:
-                    resp->process_error(ResponseCode::forbidden);
-                    return false;
+            case MiddlewareResult::next:
+                break;
+            case MiddlewareResult::stop:
+                return false;
+            case MiddlewareResult::unauthorized:
+                resp->set_response_code(ResponseCode::unauthorized);
+                resp->add_header("WWW-Authenticate", "Basic realm=\"Secure Area\"");
+                resp->process_error(ResponseCode::unauthorized);
+                return false;
+            case MiddlewareResult::forbidden:
+                resp->process_error(ResponseCode::forbidden);
+                return false;
             }
         }
-        return true;  // 所有中间件通过，继续执行handler
+        return true; // 所有中间件通过，继续执行handler
     }
 
     // ==================== 内置中间件实现 ====================
-    
-    namespace middlewares 
+
+    namespace middlewares
     {
         // CORS 中间件
         class CorsMiddleware : public HttpMiddleware
         {
         public:
-            explicit CorsMiddleware(const CorsConfig &config) : config_(config) {}
+            explicit CorsMiddleware(const CorsConfig &config)
+                : config_(config)
+            {
+            }
 
             MiddlewareResult process(HttpRequest *req, HttpResponse *resp) override
             {
@@ -88,10 +91,14 @@ namespace yuan::net::http
                 resp->add_header("Access-Control-Allow-Methods", config_.allow_methods);
                 resp->add_header("Access-Control-Allow-Headers", config_.allow_headers);
 
-                // 处理Origin匹配
                 const std::string *origin = req->get_header(http_header_key::origin);
-                if (origin && !config_.allow_credentials) {
-                    // 如果配置了具体origin而不是*，检查是否匹配
+                if (config_.allow_credentials) {
+                    if (origin && !origin->empty()) {
+                        resp->add_header("Access-Control-Allow-Origin", *origin);
+                        resp->add_header("Vary", "Origin");
+                    }
+                    resp->add_header("Access-Control-Allow-Credentials", "true");
+                } else if (origin) {
                     if (config_.allow_origin != "*" && *origin != config_.allow_origin) {
                         return MiddlewareResult::forbidden;
                     }
@@ -100,7 +107,10 @@ namespace yuan::net::http
                 return MiddlewareResult::next;
             }
 
-            const char* name() const override { return "CORS"; }
+            const char *name() const override
+            {
+                return "CORS";
+            }
 
         private:
             CorsConfig config_;
@@ -115,10 +125,12 @@ namespace yuan::net::http
         class BasicAuthMiddleware : public HttpMiddleware
         {
         public:
-            using VerifierFn = std::function<bool(const std::string&, const std::string&)>;
+            using VerifierFn = std::function<bool(const std::string &, const std::string &)>;
 
             BasicAuthMiddleware(const VerifierFn &verifier, const std::string &realm)
-                : verifier_(verifier), realm_(realm) {}
+                : verifier_(verifier), realm_(realm)
+            {
+            }
 
             MiddlewareResult process(HttpRequest *req, HttpResponse *resp) override
             {
@@ -128,7 +140,10 @@ namespace yuan::net::http
                     return MiddlewareResult::unauthorized;
                 }
 
-                auto [type, credentials] = HttpAuthorization::decode_authorization_value(*auth);
+                auto[
+                    type,
+                    credentials
+                ] = HttpAuthorization::decode_authorization_value(*auth);
                 if (type == authorization_type::basic) {
                     if (verifier_ && verifier_(credentials.first, credentials.second)) {
                         return MiddlewareResult::next;
@@ -139,7 +154,10 @@ namespace yuan::net::http
                 return MiddlewareResult::unauthorized;
             }
 
-            const char* name() const override { return "BasicAuth"; }
+            const char *name() const override
+            {
+                return "BasicAuth";
+            }
 
         private:
             VerifierFn verifier_;
@@ -147,7 +165,7 @@ namespace yuan::net::http
         };
 
         std::shared_ptr<HttpMiddleware> basic_auth(
-            const std::function<bool(const std::string&, const std::string&)> &verifier,
+            const std::function<bool(const std::string &, const std::string &)> &verifier,
             const std::string &realm)
         {
             return std::make_shared<BasicAuthMiddleware>(verifier, realm);
@@ -157,8 +175,10 @@ namespace yuan::net::http
         class BearerAuthMiddleware : public HttpMiddleware
         {
         public:
-            explicit BearerAuthMiddleware(const std::function<bool(const std::string&)> &verifier)
-                : verifier_(verifier) {}
+            explicit BearerAuthMiddleware(const std::function<bool(const std::string &)> &verifier)
+                : verifier_(verifier)
+            {
+            }
 
             MiddlewareResult process(HttpRequest *req, HttpResponse *resp) override
             {
@@ -185,14 +205,17 @@ namespace yuan::net::http
                 return MiddlewareResult::unauthorized;
             }
 
-            const char* name() const override { return "BearerAuth"; }
+            const char *name() const override
+            {
+                return "BearerAuth";
+            }
 
         private:
-            std::function<bool(const std::string&)> verifier_;
+            std::function<bool(const std::string &)> verifier_;
         };
 
         std::shared_ptr<HttpMiddleware> bearer_auth(
-            const std::function<bool(const std::string&)> &verifier)
+            const std::function<bool(const std::string &)> &verifier)
         {
             return std::make_shared<BearerAuthMiddleware>(verifier);
         }
@@ -204,7 +227,7 @@ namespace yuan::net::http
             MiddlewareResult process(HttpRequest *req, HttpResponse *resp) override
             {
                 auto start = base::time::steady_now_ms();
-                
+
                 // 记录请求开始 - 通过返回next让后续handler处理后，在response中记录结束
                 // 这里我们简单地在进入时记录
                 (void)start;
@@ -212,7 +235,10 @@ namespace yuan::net::http
                 return MiddlewareResult::next;
             }
 
-            const char* name() const override { return "Logger"; }
+            const char *name() const override
+            {
+                return "Logger";
+            }
         };
 
         std::shared_ptr<HttpMiddleware> logger()
@@ -225,7 +251,9 @@ namespace yuan::net::http
         {
         public:
             RateLimitMiddleware(int max_rps, int burst_size)
-                : max_rps_(max_rps), burst_size_(burst_size) {}
+                : max_rps_(max_rps), burst_size_(burst_size)
+            {
+            }
 
             MiddlewareResult process(HttpRequest *req, HttpResponse *resp) override
             {
@@ -239,21 +267,29 @@ namespace yuan::net::http
 
                 auto it = requests_.find(ip);
                 if (it == requests_.end()) {
-                    requests_[ip] = {1, now_ms};
+                    requests_[ip] = { 1, now_ms, 0 };
                     return MiddlewareResult::next;
                 }
 
-                auto &[count, window_start] = it->second;
-                
-                // 窗口外则重置
+                auto &[
+                    count,
+                    window_start,
+                    burst_count
+                ] = it->second;
+
                 if (now_ms - window_start > 1000) {
                     count = 1;
                     window_start = now_ms;
+                    burst_count = 0;
                     return MiddlewareResult::next;
                 }
 
-                // 检查是否超限
                 if (static_cast<int>(count) >= max_rps_) {
+                    if (burst_count < burst_size_) {
+                        ++burst_count;
+                        ++count;
+                        return MiddlewareResult::next;
+                    }
                     resp->set_response_code(ResponseCode::too_many_requests);
                     resp->add_header("Retry-After", "1");
                     resp->process_error(ResponseCode::too_many_requests);
@@ -264,13 +300,16 @@ namespace yuan::net::http
                 return MiddlewareResult::next;
             }
 
-            const char* name() const override { return "RateLimit"; }
+            const char *name() const override
+            {
+                return "RateLimit";
+            }
 
         private:
             void cleanup_expired(int64_t now_ms)
             {
                 for (auto it = requests_.begin(); it != requests_.end();) {
-                    if (now_ms - it->second.second > 10000) {  // 10秒过期
+                    if (now_ms - std::get<1>(it->second) > 10000) {
                         it = requests_.erase(it);
                     } else {
                         ++it;
@@ -281,7 +320,7 @@ namespace yuan::net::http
             int max_rps_;
             int burst_size_;
             std::mutex mutex_;
-            std::unordered_map<std::string, std::pair<size_t, int64_t>> requests_;  // ip -> {count, window_start_ms}
+            std::unordered_map<std::string, std::tuple<size_t, int64_t, int> > requests_;
         };
 
         std::shared_ptr<HttpMiddleware> rate_limit(int max_rps, int burst_size)
@@ -293,25 +332,35 @@ namespace yuan::net::http
         class BodyLimitMiddleware : public HttpMiddleware
         {
         public:
-            explicit BodyLimitMiddleware(size_t max_size) : max_size_(max_size) {}
+            explicit BodyLimitMiddleware(size_t max_size)
+                : max_size_(max_size)
+            {
+            }
 
             MiddlewareResult process(HttpRequest *req, HttpResponse *resp) override
             {
                 const std::string *cl = req->get_header(http_header_key::content_length);
                 if (cl) {
-                    try {
+                    try
+                    {
                         size_t len = std::stoull(*cl);
                         if (len > max_size_) {
                             resp->set_response_code(ResponseCode::payload_too_large);
                             resp->process_error(ResponseCode::payload_too_large);
                             return MiddlewareResult::stop;
                         }
-                    } catch (...) {}
+                    }
+                    catch (...)
+                    {
+                    }
                 }
                 return MiddlewareResult::next;
             }
 
-            const char* name() const override { return "BodyLimit"; }
+            const char *name() const override
+            {
+                return "BodyLimit";
+            }
 
         private:
             size_t max_size_;
@@ -334,7 +383,7 @@ namespace yuan::net::http
                     std::string conn_val = *conn;
                     // 转小写比较
                     std::transform(conn_val.begin(), conn_val.end(), conn_val.begin(), ::tolower);
-                    
+
                     if (conn_val == "close") {
                         resp->add_header("Connection", "close");
                     } else if (conn_val == "keep-alive") {
@@ -349,11 +398,14 @@ namespace yuan::net::http
                     resp->add_header("Connection", "keep-alive");
                     resp->add_header("Keep-Alive", "timeout=60, max=1000");
                 }
-                
+
                 return MiddlewareResult::next;
             }
 
-            const char* name() const override { return "ConnectionHandler"; }
+            const char *name() const override
+            {
+                return "ConnectionHandler";
+            }
         };
 
         std::shared_ptr<HttpMiddleware> connection_handler()

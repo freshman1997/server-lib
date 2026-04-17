@@ -1,5 +1,5 @@
-#ifndef __NET_FTP_SERVER_SERVER_FILE_STREAM_H__
-#define __NET_FTP_SERVER_SERVER_FILE_STREAM_H__
+#ifndef NET_FTP_SERVER_SERVER_FILE_STREAM_H
+#define NET_FTP_SERVER_SERVER_FILE_STREAM_H
 #include "common/file_stream.h"
 
 namespace yuan::net 

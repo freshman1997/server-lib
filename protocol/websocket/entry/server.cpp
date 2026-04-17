@@ -1,217 +1,237 @@
 #include "server.h"
-#include "net/acceptor/acceptor_factory.h"
-#include "net/acceptor/stream_acceptor.h"
-#include "event/event_loop.h"
-#include "net/poller/epoll_poller.h"
-#include "net/poller/select_poller.h"
-#include "net/socket/socket.h"
-#include "timer/wheel_timer_manager.h"
 #include "net/connection/connection.h"
+#include "net/async/async_connection_context.h"
 #include "../common/websocket_connection.h"
 #include "data_handler.h"
 #include "../common/websocket_config.h"
-#include "../common/handler.h"
+#include "../common/close_code.h"
+#include "context.h"
+#include "session.h"
+#include "response_code.h"
 
-#include <memory>
-#include <unordered_set>
-#include <unordered_map>
-
-#include "logger.h"
-
-#if defined (WS_USE_SSL)
+#if defined(WS_USE_SSL)
 #include "net/secuity/openssl.h"
 #endif
 
+#include <memory>
+
+#include "logger.h"
+
 namespace yuan::net::websocket
 {
-    class WebSocketServer::ServerData : public WebSocketHandler, public ConnectionHandler
+    struct WebSocketServer::ServerData
     {
-    public:
-        ServerData()
-        {
-            data_handler_ = nullptr;
-            poller_ = nullptr;
-            loop_ = nullptr;
-            timer_manager_ = nullptr;
-            acceptor_ = nullptr;
-        }
-
-        ~ServerData() 
-        {
-            for (const auto& [conn, wsConn] : connections_) {
-                delete wsConn;
-            }
-            connections_.clear();
-
-            if (acceptor_) {
-                delete acceptor_;
-                acceptor_ = nullptr;
-            }
-
-            if (timer_manager_) {
-                delete timer_manager_;
-                timer_manager_ = nullptr;
-            }
-
-            if (poller_) {
-                delete poller_;
-                poller_ = nullptr;
-            }
-
-            if (loop_) {
-                delete loop_;
-                loop_ = nullptr;
-            }
-        }
-
-        bool init(int port)
-        {
-            Socket *sock = new Socket("", port);
-            sock->set_none_block(true);
-            if (!sock->valid()) {
-                delete sock;
-                return false;
-            }
-            
-            sock->set_reuse(true);
-            sock->set_no_delay(true);
-            sock->set_keep_alive(true);
-            if (!sock->bind()) {
-                delete sock;
-                return false;
-            }
-
-            StreamAcceptor *acceptor = create_stream_acceptor(sock);
-            if (!acceptor->listen()) {
-                delete acceptor;
-                return false;
-            }
-            acceptor_ = acceptor;
-
-        #ifdef unix
-            poller_ = new EpollPoller;
-        #else
-            poller_ = new SelectPoller;
-        #endif
-
-            if (!poller_->init()) {
-                delete poller_;
-                delete acceptor;
-                return false;
-            }
-
-        #if defined (WS_USE_SSL)
-            ssl_module_ = std::make_shared<OpenSSLModule>();
-            if (!ssl_module_->init("./ssl/ca.crt", "./ssl/ca.key", SSLHandler::SSLMode::acceptor_)) {
-                if (auto msg = ssl_module_->get_error_message()) {
-                    LOG_ERROR("{}", msg->c_str());
-                }
-                return false;
-            }
-            acceptor->set_ssl_module(ssl_module_);
-        #endif
-
-            timer_manager_ = new timer::WheelTimerManager;
-            loop_ = new EventLoop(poller_, timer_manager_);
-            
-            acceptor->set_connection_handler(this);
-            acceptor->set_event_handler(loop_);
-
-            return WebSocketConfigManager::get_instance()->init(true);
-        }
-
-        virtual void on_connected(Connection *conn)
-        {
-            auto it = connections_.find(conn);
-            if (it != connections_.end()) {
-                conn->close();
-            } else {
-                WebSocketConnection *wsConn = new WebSocketConnection();
-                wsConn->set_handler(this);
-                connections_[conn] = wsConn;
-                wsConn->on_created(conn);
-            }
-        }
-
-        virtual void on_error(Connection *conn) {}
-
-        virtual void on_read(Connection *conn) {}
-
-        virtual void on_write(Connection *conn) {}
-
-        virtual void on_close(Connection *conn)
-        {
-            connections_.erase(conn);
-        }
-
-        void on_connected(WebSocketConnection *wsConn)
-        {
-            if (connected_urls_.find(wsConn->get_url()) != connected_urls_.end()) {
-                wsConn->close();
-                return;
-            }
-
-            connected_urls_.insert(wsConn->get_url());
-            wsConn->try_set_heartbeat_timer(timer_manager_);
-            if (data_handler_) {
-                data_handler_->on_connected(wsConn);
-            }
-        }
-
-        void on_receive_packet(WebSocketConnection *wsConn, const ::yuan::buffer::ByteBuffer &buff)
-        {
-            if (data_handler_) {
-                data_handler_->on_data(wsConn, buff);
-            }
-        }
-
-        void on_close(WebSocketConnection *wsConn)
-        {
-            if (data_handler_) {
-                data_handler_->on_close(wsConn);
-            }
-            connected_urls_.erase(wsConn->get_url());
-            connections_.erase(wsConn->get_native_connection());
-        }
-
-    public:
-        WebSocketDataHandler *data_handler_;
-        Poller *poller_;
-        EventLoop *loop_;
-        timer::TimerManager *timer_manager_;
-        std::unordered_map<Connection *, WebSocketConnection *> connections_;
-        std::unordered_set<std::string> connected_urls_;
+        WebSocketDataHandler *data_handler_ = nullptr;
+        WebSocketConfigManager config_;
         std::shared_ptr<SSLModule> ssl_module_;
-        StreamAcceptor *acceptor_;
+        net::AsyncListenerHost listener_;
+        std::unique_ptr<NetworkRuntime> owned_runtime_;
     };
 
-    WebSocketServer::WebSocketServer() : data_(std::make_unique<WebSocketServer::ServerData>())
+    WebSocketServer::WebSocketServer()
+        : data_(std::make_unique<WebSocketServer::ServerData>())
     {
     }
 
-    WebSocketServer::~WebSocketServer() {}
+    WebSocketServer::~WebSocketServer()
+    {
+    }
 
     bool WebSocketServer::init(int port)
     {
-        return data_->init(port);
+#if defined(WS_USE_SSL)
+        data_->ssl_module_ = std::make_shared<OpenSSLModule>();
+        if (!data_->ssl_module_->init("./ca/ca.crt", "./ca/ca.key", SSLHandler::SSLMode::acceptor_)) {
+            if (auto msg = data_->ssl_module_->get_error_message()) {
+                LOG_ERROR("{}", msg->c_str());
+            }
+            return false;
+        }
+        data_->listener_.set_ssl_module(data_->ssl_module_);
+#endif
+
+        data_->owned_runtime_ = std::make_unique<NetworkRuntime>();
+        if (!data_->listener_.bind(port, *data_->owned_runtime_)) {
+            data_->owned_runtime_.reset();
+            return false;
+        }
+
+        return data_->config_.init(true);
+    }
+
+    bool WebSocketServer::init(int port, NetworkRuntime & runtime)
+    {
+#if defined(WS_USE_SSL)
+        data_->ssl_module_ = std::make_shared<OpenSSLModule>();
+        if (!data_->ssl_module_->init("./ca/ca.crt", "./ca/ca.key", SSLHandler::SSLMode::acceptor_)) {
+            if (auto msg = data_->ssl_module_->get_error_message()) {
+                LOG_ERROR("{}", msg->c_str());
+            }
+            return false;
+        }
+        data_->listener_.set_ssl_module(data_->ssl_module_);
+#endif
+
+        if (!data_->listener_.bind(port, runtime)) {
+            return false;
+        }
+
+        return data_->config_.init(true);
     }
 
     void WebSocketServer::serve()
     {
-        if (data_->loop_) {
-            data_->loop_->loop();
+        data_->listener_.set_connection_handler(
+            [this](net::AsyncConnectionContext ctx)->coroutine::Task<void> {
+                co_await handle_connection(std::move(ctx));
+            });
+
+        if (data_->owned_runtime_) {
+            auto accept_task = data_->listener_.run_async();
+            accept_task.resume();
+            data_->owned_runtime_->run();
         }
     }
 
-    void WebSocketServer::set_data_handler(WebSocketDataHandler *handler)
+    void WebSocketServer::set_data_handler(WebSocketDataHandler * handler)
     {
         data_->data_handler_ = handler;
     }
 
     void WebSocketServer::stop()
     {
-        if (data_->loop_) {
-            data_->loop_->quit();
+        if (data_->owned_runtime_) {
+            data_->owned_runtime_->stop();
         }
+    }
+
+    coroutine::Task<void> WebSocketServer::handle_connection(net::AsyncConnectionContext ctx)
+    {
+        auto *conn = ctx.native_handle();
+
+        if (conn && conn->is_ssl_handshaking()) {
+            auto hs_result = co_await ctx.ssl_handshake_async();
+            if (hs_result != coroutine::SslHandshakeResult::success) {
+                co_return;
+            }
+        }
+
+        WebSocketConnection wsConn(WebSocketConnection::WorkMode::server_);
+        wsConn.bind_connection(conn);
+        wsConn.set_config(&data_->config_);
+
+        if (data_->data_handler_) {
+            wsConn.on_data = [this](WebSocketConnection *c, const ::yuan::buffer::ByteBuffer &buf) {
+                data_->data_handler_->on_data(c, buf);
+            };
+            wsConn.on_connected_cb = [this](WebSocketConnection *c) {
+                c->try_set_heartbeat_timer(data_->listener_.runtime());
+                data_->data_handler_->on_connected(c);
+            };
+            wsConn.on_close_cb = [this](WebSocketConnection *c) {
+                data_->data_handler_->on_close(c);
+            };
+        }
+
+        {
+            http::HttpSessionContext httpCtx(conn);
+            httpCtx.set_mode(http::Mode::server);
+
+            while (!wsConn.handshaker().is_handshake_done()) {
+                auto read_result = co_await ctx.read_async();
+                if (read_result.status != coroutine::IoStatus::success) {
+                    co_return;
+                }
+
+                if (!httpCtx.parse_from(read_result.data)) {
+                    if (httpCtx.has_error()) {
+                        httpCtx.process_error(httpCtx.get_error_code());
+                    }
+                    co_return;
+                }
+
+                if (httpCtx.has_error()) {
+                    httpCtx.process_error(httpCtx.get_error_code());
+                    co_return;
+                }
+
+                if (httpCtx.is_completed()) {
+                    wsConn.handshaker().on_handshake(
+                        httpCtx.get_request(), httpCtx.get_response(),
+                        WebSocketConnection::WorkMode::server_);
+                    if (!wsConn.handshaker().is_handshake_done()) {
+                        httpCtx.process_error(http::ResponseCode::forbidden);
+                        co_return;
+                    }
+                    wsConn.set_url(httpCtx.get_request()->get_raw_url());
+                    wsConn.set_state(WebSocketConnection::State::connected_);
+                    if (wsConn.on_connected_cb) {
+                        wsConn.on_connected_cb(&wsConn);
+                    }
+                }
+            }
+
+            auto leftover = httpCtx.take_leftover_buffer();
+            if (!leftover.empty()) {
+                if (!wsConn.pkt_parser().unpack_from(&wsConn, leftover)) {
+                    wsConn.send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::invalid_palyload_);
+                    ctx.close();
+                    wsConn.set_state(WebSocketConnection::State::closed_);
+                    if (wsConn.on_close_cb) {
+                        wsConn.on_close_cb(&wsConn);
+                    }
+                    co_return;
+                }
+            }
+        }
+
+        if (!wsConn.input_chunks().empty()) {
+            auto result = wsConn.dispatch_frames(conn);
+            if (result == FrameDispatchResult::close_) {
+                wsConn.send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::normal_close_);
+                ctx.close();
+            } else if (result == FrameDispatchResult::error_) {
+                wsConn.send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::invalid_palyload_);
+                ctx.close();
+            }
+            if (result != FrameDispatchResult::ok_) {
+                wsConn.set_state(WebSocketConnection::State::closed_);
+                if (wsConn.on_close_cb) {
+                    wsConn.on_close_cb(&wsConn);
+                }
+                co_return;
+            }
+        }
+
+        while (wsConn.connected()) {
+            auto read_result = co_await ctx.read_async();
+            if (read_result.status != coroutine::IoStatus::success) {
+                break;
+            }
+
+            if (!wsConn.pkt_parser().unpack_from(&wsConn, read_result.data)) {
+                wsConn.send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::invalid_palyload_);
+                ctx.close();
+                break;
+            }
+
+            auto result = wsConn.dispatch_frames(conn);
+            if (result == FrameDispatchResult::close_) {
+                wsConn.send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::normal_close_);
+                ctx.close();
+                break;
+            } else if (result == FrameDispatchResult::error_) {
+                wsConn.send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::invalid_palyload_);
+                ctx.close();
+                break;
+            }
+        }
+
+        wsConn.set_state(WebSocketConnection::State::closed_);
+        if (wsConn.on_close_cb) {
+            wsConn.on_close_cb(&wsConn);
+        }
+
+        co_return;
     }
 }

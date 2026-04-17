@@ -11,26 +11,34 @@
 
 namespace yuan::net
 {
+    enum class AddressFamily {
+        ipv4,
+        ipv6
+    };
+
     class InetAddress
     {
     public:
         InetAddress();
-        
-        InetAddress(std::string ip, int port, uint32_t netIp = 0);
 
-        InetAddress(const struct sockaddr_in &);
+        InetAddress(std::string ip, int port);
+
+        InetAddress(const struct sockaddr_in &addr);
+
+        InetAddress(const struct sockaddr_in6 &addr);
+
+        InetAddress(const struct sockaddr_storage &addr);
 
         InetAddress(const InetAddress &addr);
 
-        InetAddress(InetAddress &&addr);
+        InetAddress(InetAddress &&addr) noexcept;
 
         ~InetAddress() = default;
 
     public:
-        // conventional assignment operator signatures
-        InetAddress & operator=(const InetAddress &other);
+        InetAddress &operator=(const InetAddress &other);
 
-        InetAddress & operator=(InetAddress &&other) noexcept;
+        InetAddress &operator=(InetAddress &&other) noexcept;
 
         bool operator==(const InetAddress &other) const;
 
@@ -42,27 +50,44 @@ namespace yuan::net
         {
             ip_ = ip;
             port_ = port;
-            set_net_ip();
+            init_address();
         }
 
-        int get_port() const 
+        int get_port() const
         {
             return port_;
         }
 
-        const std::string & get_ip() const 
+        const std::string &get_ip() const
         {
             return ip_;
         }
 
-        void set_net_ip();
+        AddressFamily family() const
+        {
+            return family_;
+        }
+
+        bool is_ipv6() const
+        {
+            return family_ == AddressFamily::ipv6;
+        }
+
+        void init_address();
 
         uint32_t get_net_ip() const;
 
         struct sockaddr_in to_ipv4_address() const;
 
+        struct sockaddr_in6 to_ipv6_address() const;
+
+        struct sockaddr_storage to_sockaddr() const;
+
         std::string to_address_key() const
         {
+            if (is_ipv6()) {
+                return "[" + ip_ + "]:" + std::to_string(port_);
+            }
             return ip_ + ":" + std::to_string(port_);
         }
 
@@ -71,36 +96,44 @@ namespace yuan::net
 
         static std::string get_address_by_host(const std::string &host);
 
+        static std::string get_ipv4_address_by_host(const std::string &host);
+
+        static std::string get_ipv6_address_by_host(const std::string &host);
+
     private:
         int port_;
-        uint32_t net_ip_;
+        struct sockaddr_storage addr_;
+        AddressFamily family_;
         std::string ip_;
     };
 }
 
-namespace std 
+namespace std
 {
 #ifndef __APPLE__
-    template<>
-    struct hash<yuan::net::InetAddress> 
-    {
-        size_t operator()(const yuan::net::InetAddress &address) const noexcept
-        {
-            std::size_t h1 = std::hash<std::string>{}(address.get_ip());
-            std::size_t h2 = std::hash<int>{}(address.get_port());
-            return h1 ^ (h2 << 1); // or use boost::hash_combine
-        }
-    };
-#else
-    // On Apple platforms ensure we specialize the same fully-qualified type
-    template<>
+    template <>
     struct hash<yuan::net::InetAddress>
     {
         size_t operator()(const yuan::net::InetAddress &address) const noexcept
         {
-            std::size_t h1 = std::hash<std::string>{}(address.get_ip());
-            std::size_t h2 = std::hash<int>{}(address.get_port());
-            return h1 ^ (h2 << 1); // or use boost::hash_combine
+            std::size_t h1 = std::hash<std::string>
+            {
+            }
+            (address.to_address_key());
+            return h1;
+        }
+    };
+#else
+    template <>
+    struct hash<yuan::net::InetAddress>
+    {
+        size_t operator()(const yuan::net::InetAddress &address) const noexcept
+        {
+            std::size_t h1 = std::hash<std::string>
+            {
+            }
+            (address.to_address_key());
+            return h1;
         }
     };
 #endif

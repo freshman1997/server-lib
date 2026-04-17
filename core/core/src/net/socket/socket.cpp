@@ -9,7 +9,6 @@
 #include <sys/types.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
-#include <sys/socket.h>
 #endif
 
 #include "net/socket/inet_address.h"
@@ -48,10 +47,18 @@ namespace yuan::net
         const std::string realIp = input_ip.empty() ? "" : InetAddress::normalize_host(input_ip);
         addr_ = std::make_unique<InetAddress>(realIp.empty() ? input_ip : realIp, port);
         if (fd < 0) {
-            if (!udp) {
-                fd_ = socket::create_ipv4_tcp_socket(true);
+            if (addr_->is_ipv6()) {
+                if (!udp) {
+                    fd_ = socket::create_ipv6_tcp_socket(true);
+                } else {
+                    fd_ = socket::create_ipv6_udp_socket(true);
+                }
             } else {
-                fd_ = socket::create_ipv4_udp_socket(true);
+                if (!udp) {
+                    fd_ = socket::create_ipv4_tcp_socket(true);
+                } else {
+                    fd_ = socket::create_ipv4_udp_socket(true);
+                }
             }
         }
     }
@@ -74,7 +81,7 @@ namespace yuan::net
         return socket::listen(fd_, 128) == 0;
     }
 
-    int Socket::accept(struct sockaddr_in &peer_addr) const
+    int Socket::accept(struct sockaddr_storage & peer_addr) const
     {
         const int conn_fd = socket::accept(fd_, peer_addr);
         if (conn_fd < 0) {
@@ -84,7 +91,7 @@ namespace yuan::net
         return conn_fd;
     }
 
-    bool Socket::connect(const std::shared_ptr<SSLHandler> &sslModule) const
+    bool Socket::connect(const std::shared_ptr<SSLHandler> & sslModule) const
     {
         int res = -1;
         if (sslModule) {

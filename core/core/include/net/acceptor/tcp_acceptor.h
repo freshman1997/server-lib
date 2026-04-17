@@ -3,6 +3,7 @@
 #include "stream_acceptor.h"
 #include "../handler/select_handler.h"
 #include "../channel/channel.h"
+#include "net/secuity/ssl_module.h"
 #include <memory>
 
 namespace yuan::net
@@ -21,7 +22,7 @@ namespace yuan::net
 
         virtual void close();
 
-        virtual Channel *listener_channel() override
+        virtual Channel *listener_channel() const override
         {
             return channel_.get();
         }

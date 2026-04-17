@@ -1,0 +1,16 @@
+{
+    "plugin_id": "lua_greeter",
+    "name": "LuaGreeter",
+    "version": "1.0.0",
+    "author": "yuan",
+    "description": "A demo Lua script plugin",
+    "api_version": 1,
+    "entry": "main.lua",
+    "language": "lua",
+    "run_mode": "script",
+    "permissions": "use_event_bus,use_logger,use_scheduler,use_storage",
+    "depends_on": [],
+    "lua_memory_budget_bytes": 8388608,
+    "lua_max_instructions": 10000000,
+    "greeting": "Hello from Lua!"
+}

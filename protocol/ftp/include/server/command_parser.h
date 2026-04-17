@@ -1,5 +1,5 @@
-#ifndef __NET_FTP_SERVER_SERVER_PARSER_H__
-#define __NET_FTP_SERVER_SERVER_PARSER_H__
+#ifndef NET_FTP_SERVER_COMMAND_PARSER_H
+#define NET_FTP_SERVER_COMMAND_PARSER_H
 #include <string_view>
 #include <vector>
 
@@ -22,4 +22,4 @@ namespace yuan::net::ftp
     };
 }
 
-#endif
+#endif // NET_FTP_SERVER_COMMAND_PARSER_H

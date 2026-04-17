@@ -1,5 +1,5 @@
-#ifndef __NET_FTP_CLIENT_RESPONSE_PARSER_H__
-#define __NET_FTP_CLIENT_RESPONSE_PARSER_H__
+#ifndef NET_FTP_CLIENT_RESPONSE_PARSER_H
+#define NET_FTP_CLIENT_RESPONSE_PARSER_H
 
 #include "buffer/byte_buffer.h"
 #include "client/context.h"
@@ -21,6 +21,9 @@ namespace yuan::net::ftp
 
     private:
         ::yuan::buffer::ByteBuffer buff_;
+        bool in_multi_line_ = false;
+        int multi_line_code_ = 0;
+        std::string multi_line_body_;
     };
 }
 

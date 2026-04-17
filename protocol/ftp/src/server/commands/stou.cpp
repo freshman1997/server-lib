@@ -5,7 +5,6 @@
 #include "server/commands/stor.h"
 namespace yuan::net::ftp
 {
-    REGISTER_COMMAND_IMPL(CommandStou);
     FtpCommandResponse CommandStou::execute(FtpSession *session, const std::string &args)
     {
         const auto unique = args.empty() ? ("upload_" + std::to_string(base::time::system_now_us()) + ".bin") : args;
@@ -13,5 +12,5 @@ namespace yuan::net::ftp
         return stor.execute(session, unique);
     }
     CommandType CommandStou::get_command_type() { return CommandType::cmd_stou; }
-    std::string CommandStou::get_comand_name() { return "STOU"; }
+    std::string CommandStou::get_command_name() { return "STOU"; }
 }

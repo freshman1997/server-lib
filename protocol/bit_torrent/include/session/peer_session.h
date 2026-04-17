@@ -4,8 +4,7 @@
 #include "torrent_meta.h"
 #include "nat/nat_manager.h"
 #include "peer_wire/peer_connection.h"
-#include "event/event_loop.h"
-#include "timer/timer_manager.h"
+#include "net/runtime/network_runtime.h"
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -16,80 +15,96 @@
 namespace yuan::net::bit_torrent
 {
 
-struct PeerSessionConfig
-{
-    net::EventLoop *ev_loop_ = nullptr;
-    timer::TimerManager *timer_manager_ = nullptr;
-    NatManager *nat_manager_ = nullptr;
-    const TorrentMeta *meta_ = nullptr;
-    const std::string *peer_id_ = nullptr;
-    const std::vector<bool> *pieces_have_ = nullptr;
-    int32_t max_peers_ = 50;
-    bool allow_loopback_peers_ = false;
-    PieceDataHandler piece_data_handler_;
-    PieceRequestHandler piece_request_handler_;
-    PieceServedHandler piece_served_handler_;
-    std::function<void(PeerConnection *)> peer_ready_handler_;
-    std::function<void(const std::vector<PieceBlockRequest> &)> peer_lost_handler_;
-};
+    struct PeerSessionConfig
+    {
+        net::NetworkRuntime *runtime_ = nullptr;
+        NatManager *nat_manager_ = nullptr;
+        const TorrentMeta *meta_ = nullptr;
+        const std::string *peer_id_ = nullptr;
+        const std::vector<bool> *pieces_have_ = nullptr;
+        int32_t max_peers_ = 50;
+        bool allow_loopback_peers_ = false;
+        PieceDataHandler piece_data_handler_;
+        PieceRequestHandler piece_request_handler_;
+        PieceServedHandler piece_served_handler_;
+        std::function<void(PeerConnection *)> peer_ready_handler_;
+        std::function<void(const std::vector<PieceBlockRequest> &)> peer_lost_handler_;
+    };
 
-class PeerSession
-{
-public:
-    using PeerReadyHandler = std::function<void(PeerConnection *)>;
-    using PeerLostHandler = std::function<void(const std::vector<PieceBlockRequest> &)>;
+    class PeerSession
+    {
+    public:
+        using PeerReadyHandler = std::function<void(PeerConnection *)>;
+        using PeerLostHandler = std::function<void(const std::vector<PieceBlockRequest> &)>;
 
-public:
-    void configure(PeerSessionConfig config);
-    void bind_nat_runtime();
-    void set_runtime(net::EventLoop *loop, timer::TimerManager *timer_manager);
-    void set_nat_manager(NatManager *nat_manager);
-    void set_context(const TorrentMeta *meta,
-                     const std::string *peer_id,
-                     const std::vector<bool> *pieces_have);
-    void set_max_peers(int32_t max_peers) { max_peers_ = max_peers; }
-    void set_piece_data_handler(PieceDataHandler handler) { piece_data_handler_ = std::move(handler); }
-    void set_piece_request_handler(PieceRequestHandler handler) { piece_request_handler_ = std::move(handler); }
-    void set_piece_served_handler(PieceServedHandler handler) { piece_served_handler_ = std::move(handler); }
-    void set_peer_ready_handler(PeerReadyHandler handler) { peer_ready_handler_ = std::move(handler); }
-    void set_peer_lost_handler(PeerLostHandler handler) { peer_lost_handler_ = std::move(handler); }
+    public:
+        void configure(PeerSessionConfig config);
+        void bind_nat_runtime();
+        void set_runtime(net::NetworkRuntime *runtime);
+        void set_nat_manager(NatManager *nat_manager);
+        void set_context(const TorrentMeta *meta,
+                         const std::string *peer_id,
+                         const std::vector<bool> *pieces_have);
+        void set_max_peers(int32_t max_peers)
+        {
+            max_peers_ = max_peers;
+        }
+        void set_piece_data_handler(PieceDataHandler handler)
+        {
+            piece_data_handler_ = std::move(handler);
+        }
+        void set_piece_request_handler(PieceRequestHandler handler)
+        {
+            piece_request_handler_ = std::move(handler);
+        }
+        void set_piece_served_handler(PieceServedHandler handler)
+        {
+            piece_served_handler_ = std::move(handler);
+        }
+        void set_peer_ready_handler(PeerReadyHandler handler)
+        {
+            peer_ready_handler_ = std::move(handler);
+        }
+        void set_peer_lost_handler(PeerLostHandler handler)
+        {
+            peer_lost_handler_ = std::move(handler);
+        }
 
-    void connect_peers(const std::vector<PeerAddress> &peer_list);
-    void on_inbound_peer(PeerConnection *peer);
-    void disconnect_all_peers();
-    void broadcast_have(uint32_t piece_index);
-    std::vector<PeerConnection *> get_active_peers() const;
+        void connect_peers(const std::vector<PeerAddress> &peer_list);
+        void on_inbound_peer(PeerConnection *peer);
+        void disconnect_all_peers();
+        void broadcast_have(uint32_t piece_index);
+        std::vector<PeerConnection *> get_active_peers() const;
 
-    int32_t get_peer_count() const;
-    int32_t get_active_peer_count() const;
+        int32_t get_peer_count() const;
+        int32_t get_active_peer_count() const;
 
-private:
-    std::string make_key(const std::string &ip, uint16_t port) const;
-    void attach_peer(PeerConnection *peer, const std::string &key);
-    void on_peer_state_changed(PeerConnection *peer);
-    void on_peer_connected(PeerConnection *peer);
-    void remove_peer(PeerConnection *peer);
+    private:
+        std::string make_key(const std::string &ip, uint16_t port) const;
+        void attach_peer(PeerConnection *peer, const std::string &key);
+        void on_peer_state_changed(PeerConnection *peer);
+        void on_peer_connected(PeerConnection *peer);
+        void remove_peer(PeerConnection *peer);
 
-private:
-    net::EventLoop *ev_loop_ = nullptr;
-    timer::TimerManager *timer_manager_ = nullptr;
-    NatManager *nat_manager_ = nullptr;
+    private:
+        net::NetworkRuntime *runtime_ = nullptr;
+        NatManager *nat_manager_ = nullptr;
 
-    const TorrentMeta *meta_ = nullptr;
-    const std::string *peer_id_ = nullptr;
-    const std::vector<bool> *pieces_have_ = nullptr;
+        const TorrentMeta *meta_ = nullptr;
+        const std::string *peer_id_ = nullptr;
+        const std::vector<bool> *pieces_have_ = nullptr;
 
-    int32_t max_peers_ = 50;
-    bool allow_loopback_peers_ = false;
-    PieceDataHandler piece_data_handler_;
-    PieceRequestHandler piece_request_handler_;
-    PieceServedHandler piece_served_handler_;
-    PeerReadyHandler peer_ready_handler_;
-    PeerLostHandler peer_lost_handler_;
+        int32_t max_peers_ = 50;
+        bool allow_loopback_peers_ = false;
+        PieceDataHandler piece_data_handler_;
+        PieceRequestHandler piece_request_handler_;
+        PieceServedHandler piece_served_handler_;
+        PeerReadyHandler peer_ready_handler_;
+        PeerLostHandler peer_lost_handler_;
 
-    mutable std::mutex peers_mutex_;
-    std::unordered_map<std::string, PeerConnection *> peers_;
-};
+        mutable std::mutex peers_mutex_;
+        std::unordered_map<std::string, PeerConnection *> peers_;
+    };
 
 } // namespace yuan::net::bit_torrent
 

@@ -4,8 +4,7 @@
 namespace yuan::timer
 {
 
-    enum class TimerState : char
-    {
+    enum class TimerState : char {
         init = 0,
         processing,
         done,
@@ -16,22 +15,23 @@ namespace yuan::timer
     class Timer
     {
     public:
-        virtual ~Timer() {}
+        virtual ~Timer()
+        {
+        }
 
-        virtual bool ready() = 0;
+        virtual bool ready() const = 0;
 
         virtual void cancel() = 0;
 
         virtual void reset() = 0;
 
-        virtual bool is_processing() = 0;
+        virtual bool is_processing() const = 0;
 
-        virtual bool is_done() = 0;
+        virtual bool is_done() const = 0;
 
-        virtual bool is_cancel() = 0;
+        virtual bool is_cancel() const = 0;
 
-        virtual TimerTask * get_task() = 0;
-        
+        virtual TimerTask *get_task() const = 0;
     };
 }
 

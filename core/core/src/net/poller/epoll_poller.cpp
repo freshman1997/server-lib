@@ -4,26 +4,25 @@
 #include <unistd.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
-#include <set>
 #include <vector>
 
 #include "base/time.h"
 #include "net/poller/epoll_poller.h"
 #include "net/channel/channel.h"
 
-namespace yuan::net 
+namespace yuan::net
 {
-    class EpollPoller::HelperData 
+    class EpollPoller::HelperData
     {
     public:
         HelperData() = default;
-        ~HelperData() 
+        ~HelperData()
         {
             if (epoll_fd_ != -1) {
                 ::close(epoll_fd_);
             }
         }
-        
+
     public:
         int epoll_fd_;
         std::set<int> fds_;
@@ -40,10 +39,9 @@ namespace yuan::net
         // 设置 ET 触发模式 ？
         data_->epoll_events_.resize(10);
     }
-    
+
     EpollPoller::~EpollPoller()
     {
-
     }
 
     bool EpollPoller::init()
@@ -51,7 +49,7 @@ namespace yuan::net
         return data_->epoll_fd_ != -1;
     }
 
-    uint64_t EpollPoller::poll(uint32_t timeout, std::vector<Channel *> &channels)
+    uint64_t EpollPoller::poll(uint32_t timeout, std::vector<Channel *> & channels)
     {
         int nevent = ::epoll_wait(data_->epoll_fd_, &*data_->epoll_events_.begin(), (int)data_->epoll_events_.size(), timeout);
         uint64_t tm = base::time::get_tick_count();
@@ -77,7 +75,7 @@ namespace yuan::net
                     channels.push_back(channel);
                 }
             }
-            
+
             if (nevent == (int)data_->epoll_events_.size() && (int)data_->epoll_events_.size() < MAX_EVENT) {
                 data_->epoll_events_.resize(data_->epoll_events_.size() * 2 >= MAX_EVENT ? MAX_EVENT : data_->epoll_events_.size() * 2);
             }
@@ -86,7 +84,7 @@ namespace yuan::net
         return tm;
     }
 
-    void EpollPoller::update_channel(Channel *channel)
+    void EpollPoller::update_channel(Channel * channel)
     {
         auto it = data_->fds_.find(channel->get_fd());
         if (it != data_->fds_.end()) {
@@ -101,13 +99,13 @@ namespace yuan::net
         }
     }
 
-    void EpollPoller::remove_channel(Channel *channel)
+    void EpollPoller::remove_channel(Channel * channel)
     {
         update(EPOLL_CTL_DEL, channel);
         data_->fds_.erase(channel->get_fd());
     }
 
-    void EpollPoller::update(int op, Channel *channel)
+    void EpollPoller::update(int op, Channel * channel)
     {
         int ret = 0;
         if (op != EPOLL_CTL_DEL) {

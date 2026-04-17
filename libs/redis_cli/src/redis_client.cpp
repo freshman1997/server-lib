@@ -15,13 +15,13 @@
 
 namespace yuan::redis
 {
-    RedisClient::RedisClient(const Option &opt)
+    RedisClient::RedisClient(const Option & opt)
     {
         impl_ = std::make_unique<Impl>();
         impl_->option_ = opt;
         impl_->client_ = this;
     }
-    
+
     RedisClient::~RedisClient()
     {
         close();
@@ -36,7 +36,7 @@ namespace yuan::redis
             impl_->last_error_ = ErrorValue::from_string("port is invalid");
             return -1;
         }
-        
+
         auto *sock = new net::Socket(addr.get_ip().c_str(), addr.get_port());
         if (!sock->valid()) {
             delete sock;
@@ -56,7 +56,7 @@ namespace yuan::redis
         }
 
         const auto loop = RedisRegistry::get_instance()->get_event_loop();
-        
+
         Connection *conn = create_stream_connection(sock);
         conn->set_connection_handler(impl_.get());
         conn->set_event_handler(loop);
@@ -78,7 +78,8 @@ namespace yuan::redis
         impl_->completion_event_.reset(loop);
 
         const auto runtime = RedisRegistry::get_instance()->get_coroutine_runtime();
-        auto wait_connect = [this]() -> SimpleTask<bool> {
+        auto wait_connect = [this]()->SimpleTask<bool>
+        {
             const auto timer_manager = RedisRegistry::get_instance()->get_timer_manager();
             const bool timed_out = co_await impl_->completion_event_.wait_for(
                 timer_manager,
@@ -95,8 +96,7 @@ namespace yuan::redis
 
         impl_->clear_mask(RedisState::connecting);
 
-        if (!impl_->option_.password_.empty())
-        {
+        if (!impl_->option_.password_.empty()) {
             if (const auto auth_result = auth(impl_->option_.password_); !auth_result) {
                 impl_->last_error_ = ErrorValue::from_string("auth failed");
                 close();
@@ -104,8 +104,7 @@ namespace yuan::redis
             }
         }
 
-        if (impl_->option_.db_ != 0)
-        {
+        if (impl_->option_.db_ != 0) {
             if (const auto select_result = select(impl_->option_.db_); !select_result) {
                 impl_->last_error_ = ErrorValue::from_string("select db failed");
                 close();
@@ -116,7 +115,7 @@ namespace yuan::redis
         return 0;
     }
 
-    void RedisClient::set_option(const Option &opt)
+    void RedisClient::set_option(const Option & opt)
     {
         impl_->option_ = opt;
     }
@@ -138,7 +137,6 @@ namespace yuan::redis
 
     void RedisClient::close()
     {
-        impl_->last_error_ = nullptr;
         if (!is_connected()) {
             return;
         }
@@ -157,12 +155,12 @@ namespace yuan::redis
         impl_->last_error_ = error;
     }
 
-    const std::string & RedisClient::get_name() const
+    const std::string &RedisClient::get_name() const
     {
         return impl_->option_.name_;
     }
 
-    void RedisClient::unsubscibe_channel(const std::string &channel)
+    void RedisClient::unsubscribe_channel(const std::string & channel)
     {
         if (impl_->subcribe_cmd) {
             impl_->subcribe_cmd->unsubcribe(channel);
@@ -182,7 +180,7 @@ namespace yuan::redis
         return impl_->fetch_next_message(0);
     }
 
-    bool RedisClient::is_subcribing() const
+    bool RedisClient::is_subscribing() const
     {
         return impl_->subcribe_cmd != nullptr && impl_->subcribe_cmd->is_subcribe();
     }

@@ -5,9 +5,9 @@
 #include "value/string_value.h"
 #include <iostream>
 
-namespace yuan::redis 
+namespace yuan::redis
 {
-    int SubcribeCmd::unpack(buffer::ByteBufferReader& reader)
+    int SubcribeCmd::unpack(buffer::ByteBufferReader & reader)
     {
         messages_.clear();
         pmessages_.clear();
@@ -47,7 +47,7 @@ namespace yuan::redis
         return ret;
     }
 
-    int SubcribeCmd::handle_frame(const std::shared_ptr<ArrayValue> &frame)
+    int SubcribeCmd::handle_frame(const std::shared_ptr<ArrayValue> & frame)
     {
         if (!frame) {
             return -1;
@@ -77,17 +77,14 @@ namespace yuan::redis
             return unpack_psub_message(frame);
         }
 
-        if (kind->get_value() == "subscribe"
-            || kind->get_value() == "psubscribe"
-            || kind->get_value() == "unsubscribe"
-            || kind->get_value() == "punsubscribe") {
+        if (kind->get_value() == "subscribe" || kind->get_value() == "psubscribe" || kind->get_value() == "unsubscribe" || kind->get_value() == "punsubscribe") {
             return update_subscription_state(kind->get_value(), frame);
         }
 
         return -1;
     }
 
-    int SubcribeCmd::unpack_sub_message(const std::shared_ptr<ArrayValue> &frame)
+    int SubcribeCmd::unpack_sub_message(const std::shared_ptr<ArrayValue> & frame)
     {
         const auto &values = frame->get_values();
         if (values.size() != 3) {
@@ -104,7 +101,7 @@ namespace yuan::redis
         return 0;
     }
 
-    int SubcribeCmd::unpack_psub_message(const std::shared_ptr<ArrayValue> &frame)
+    int SubcribeCmd::unpack_psub_message(const std::shared_ptr<ArrayValue> & frame)
     {
         const auto &values = frame->get_values();
         if (values.size() != 4) {
@@ -122,7 +119,7 @@ namespace yuan::redis
         return 0;
     }
 
-    int SubcribeCmd::update_subscription_state(const std::string &kind, const std::shared_ptr<ArrayValue> &frame)
+    int SubcribeCmd::update_subscription_state(const std::string & kind, const std::shared_ptr<ArrayValue> & frame)
     {
         const auto &values = frame->get_values();
         if (values.size() < 3) {
@@ -159,7 +156,6 @@ namespace yuan::redis
             auto messages = std::move(pending_messages_.front());
             pending_messages_.pop_front();
             msg_callback_(messages);
-            return;
         }
 
         if (!pending_pmessages_.empty() && pmsg_callback_) {

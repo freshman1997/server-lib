@@ -1,0 +1,378 @@
+#include "ssh_server.h"
+#include "auth/ssh_auth_password.h"
+#include "auth/ssh_auth_publickey.h"
+#include "auth/ssh_auth_keyboard_interactive.h"
+#include "connection/ssh_port_forwarding.h"
+#include "sftp/ssh_sftp_subsystem.h"
+#include "protocol/ssh_message_codec.h"
+#include "transport/ssh_version_exchange.h"
+#include "transport/ssh_packet_codec.h"
+
+namespace yuan::net::ssh
+{
+    SshServer::SshServer()
+        : config_(), crypto_(std::make_unique<SshCryptoOpenSSL>())
+    {
+    }
+
+    SshServer::SshServer(const SshServerConfig & config)
+        : config_(config), crypto_(std::make_unique<SshCryptoOpenSSL>())
+    {
+    }
+
+    SshServer::~SshServer()
+    {
+        stop();
+    }
+
+    bool SshServer::init(int port)
+    {
+        auto runtime = std::make_unique<NetworkRuntime>();
+        if (!runtime->init()) {
+            return false;
+        }
+
+        owned_runtime_ = std::move(runtime);
+        return init(port, *owned_runtime_);
+    }
+
+    bool SshServer::init(int port, NetworkRuntime & runtime)
+    {
+        init_default_algorithms();
+
+        for (const auto &path : config_.host_key_paths) {
+            host_key_provider_.load_key(path);
+        }
+
+        if (config_.enable_sftp) {
+            if (!file_system_) {
+                file_system_ = std::make_unique<SshLocalFileSystem>(
+                    config_.sftp_root_dir.empty() ? "/" : config_.sftp_root_dir);
+            }
+            auto *fs = file_system_.get();
+            register_subsystem("sftp", [fs]()->std::unique_ptr<SshChannelHandler> {
+                return std::make_unique<SshSftpSubsystem>(fs);
+            });
+        }
+
+        if (!listener_.bind(port, runtime)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    void SshServer::serve()
+    {
+        running_.store(true, std::memory_order_relaxed);
+
+        listener_.set_connection_handler(
+            [this](AsyncConnectionContext ctx)->coroutine::Task<void> {
+                co_await handle_connection(std::move(ctx));
+            });
+
+        auto task = listener_.run_async();
+        task.resume();
+        task.detach();
+    }
+
+    void SshServer::stop()
+    {
+        bool expected = true;
+        if (!running_.compare_exchange_strong(expected, false)) {
+            return;
+        }
+
+        listener_.close();
+        session_mgr_.close_all();
+
+        if (owned_runtime_) {
+            owned_runtime_->shutdown();
+        }
+    }
+
+    void SshServer::register_subsystem(const std::string & name, SshConnectionManager::SubsystemFactory factory)
+    {
+        subsystem_factories_[name] = std::move(factory);
+    }
+
+    coroutine::Task<void> SshServer::handle_connection(AsyncConnectionContext ctx)
+    {
+        if (session_mgr_.session_limit_reached(config_.max_sessions)) {
+            co_return;
+        }
+
+        auto *session = session_mgr_.create_session(this);
+        if (!session) {
+            co_return;
+        }
+
+        session->transport() = SshTransport(&algo_registry_, crypto_.get(), true);
+
+        session->set_client_connection(ctx.native_handle());
+        session->set_runtime(ctx.runtime_view());
+
+        for (const auto & [
+                              name,
+                              factory
+                          ] : subsystem_factories_) {
+            session->connection_manager().register_subsystem(name, factory);
+        }
+
+        init_auth_methods(session);
+
+        // 1. Send server version
+        auto server_version = session->transport().build_version_string(config_.software_version);
+        session->transport().set_server_version(server_version.substr(0, server_version.size() - 2));
+        {
+            ByteBuffer version_buf(server_version);
+            co_await ctx.write_async(version_buf);
+        }
+
+        // 2. Read client version
+        {
+            auto read_result = co_await ctx.read_async(config_.idle_timeout_ms);
+            if (read_result.status != coroutine::IoStatus::success) {
+                session_mgr_.remove_session(session->session_id());
+                co_return;
+            }
+
+            auto &data = read_result.data;
+            auto version_end = SshVersionExchange::find_version_line_end(
+                reinterpret_cast<const uint8_t *>(data.read_ptr()), data.readable_bytes());
+            if (!version_end) {
+                session_mgr_.remove_session(session->session_id());
+                co_return;
+            }
+
+            std::string version_line(data.read_ptr(), *version_end - 2);
+            auto version_info = SshVersionExchange::parse_version_line(version_line);
+            if (!version_info || !SshVersionExchange::is_valid_protocol_version(version_info->protocol_version)) {
+                session_mgr_.remove_session(session->session_id());
+                co_return;
+            }
+
+            session->transport().set_client_version(version_info->raw_line);
+            data.consume(*version_end);
+            session->set_state(SshSession::State::version_exchanged);
+        }
+
+        // 3. Send KEXINIT
+        {
+            auto kex_init_buf = session->transport().build_kex_init(config_);
+            auto packet = session->transport().encode_packet(
+                reinterpret_cast<const uint8_t *>(kex_init_buf.read_ptr()), kex_init_buf.readable_bytes());
+            session->transport().increment_send_seq();
+            co_await ctx.write_async(packet);
+        }
+
+        // 4. Main packet processing loop
+        ByteBuffer recv_buf;
+
+        auto flush_outgoing = [&]()->coroutine::Task<void>
+        {
+            auto buffers = session->drain_outgoing();
+            for (auto &buf : buffers) {
+                auto packet = session->transport().encode_packet(
+                    reinterpret_cast<const uint8_t *>(buf.read_ptr()), buf.readable_bytes());
+                session->transport().increment_send_seq();
+                co_await ctx.write_async(packet);
+            }
+        };
+
+        auto send_packet = [&](const ByteBuffer & buf)->coroutine::Task<void>
+        {
+            auto packet = session->transport().encode_packet(
+                reinterpret_cast<const uint8_t *>(buf.read_ptr()), buf.readable_bytes());
+            session->transport().increment_send_seq();
+            co_await ctx.write_async(packet);
+        };
+
+        while (session->state() != SshSession::State::disconnected && running_.load(std::memory_order_relaxed)) {
+            if (recv_buf.readable_bytes() == 0) {
+                auto read_result = co_await ctx.read_async(config_.idle_timeout_ms);
+                if (read_result.status != coroutine::IoStatus::success) {
+                    break;
+                }
+                recv_buf.append(read_result.data);
+            }
+
+            while (recv_buf.readable_bytes() > 0) {
+                auto parse = session->transport().try_parse_packet(recv_buf);
+                if (!parse.complete) {
+                    auto read_result = co_await ctx.read_async(config_.idle_timeout_ms);
+                    if (read_result.status != coroutine::IoStatus::success) {
+                        goto session_end;
+                    }
+                    recv_buf.append(read_result.data);
+                    continue;
+                }
+
+                auto payload = session->transport().decode_packet(
+                    reinterpret_cast<const uint8_t *>(recv_buf.read_ptr()), parse.total_bytes);
+                session->transport().increment_recv_seq();
+
+                if (!payload) {
+                    auto disc = session->build_disconnect(
+                        SshDisconnectReason::SSH_DISCONNECT_MAC_ERROR, "Decryption failed");
+                    co_await send_packet(disc);
+                    goto session_end;
+                }
+
+                recv_buf.consume(parse.total_bytes);
+
+                if (payload->empty()) {
+                    continue;
+                }
+
+                auto msg_type = static_cast<SshMessageType>((*payload)[0]);
+
+                // Handle DISCONNECT from any state
+                if (msg_type == SshMessageType::SSH_MSG_DISCONNECT) {
+                    session->set_state(SshSession::State::disconnected);
+                    goto session_end;
+                }
+
+                // Handle KEXINIT from any state
+                if (msg_type == SshMessageType::SSH_MSG_KEXINIT) {
+                    if (session->state() != SshSession::State::version_exchanged) {
+                        session->set_pre_rekey_state(session->state());
+                        session->transport().reset_for_rekey();
+                    }
+
+                    session->transport().set_peer_kex_init_raw(*payload);
+
+                    auto kex_init = SshMessageCodec::decode_kex_init(payload->data(), payload->size());
+                    if (kex_init) {
+                        auto negotiated = session->transport().process_kex_init(*kex_init, config_);
+                        if (!negotiated) {
+                            goto session_end;
+                        }
+
+                        // For rekey, send our KEXINIT in response
+                        if (session->pre_rekey_state() != SshSession::State::connected) {
+                            auto kex_init_buf = session->transport().build_kex_init(config_);
+                            co_await send_packet(kex_init_buf);
+                        }
+
+                        session->set_state(SshSession::State::kex_init);
+                    }
+                    continue;
+                }
+
+                // Handle DH/ECDH init when in kex_init
+                if (session->state() == SshSession::State::kex_init &&
+                    (msg_type == SshMessageType::SSH_MSG_KEX_ECDH_INIT ||
+                     msg_type == SshMessageType::SSH_MSG_KEXDH_INIT)) {
+                    size_t offset = 1;
+                    auto client_public = SshMessageCodec::read_mpint(payload->data(), payload->size(), offset);
+                    if (client_public) {
+                        auto reply = session->transport().process_kex_init_message(
+                            *client_public,
+                            session->transport().client_version(),
+                            session->transport().server_version());
+                        if (reply) {
+                            auto reply_buf = SshMessageCodec::encode_kex_ecdh_reply(*reply);
+                            co_await send_packet(reply_buf);
+
+                            auto newkeys_buf = SshMessageCodec::encode_newkeys();
+                            co_await send_packet(newkeys_buf);
+
+                            // Do NOT call process_newkeys() here.
+                            // New keys are activated when client's NEWKEYS is received,
+                            // ensuring old keys are used for receiving until then.
+                            session->set_state(SshSession::State::newkeys);
+                        }
+                    }
+                    continue;
+                }
+
+                // Handle NEWKEYS from client — activate new keys
+                if (msg_type == SshMessageType::SSH_MSG_NEWKEYS) {
+                    session->transport().process_newkeys();
+
+                    if (session->pre_rekey_state() != SshSession::State::connected &&
+                        session->pre_rekey_state() != SshSession::State::version_exchanged) {
+                        // Rekey completed — restore pre-rekey state
+                        session->set_state(session->pre_rekey_state());
+                        session->set_pre_rekey_state(SshSession::State::connected);
+                    } else {
+                        // Initial KEX completed
+                        session->set_state(SshSession::State::newkeys);
+                    }
+                    continue;
+                }
+
+                // Handle IGNORE and DEBUG silently
+                if (msg_type == SshMessageType::SSH_MSG_IGNORE ||
+                    msg_type == SshMessageType::SSH_MSG_DEBUG) {
+                    continue;
+                }
+
+                // Dispatch non-KEX messages to session
+                session->dispatch(msg_type, *payload, handler_);
+
+                // Send responses based on session state changes
+                if (session->state() == SshSession::State::auth_start) {
+                    auto accept = session->build_service_accept(SSH_SERVICE_USERAUTH);
+                    co_await send_packet(accept);
+                } else if (session->state() == SshSession::State::auth_success) {
+                    auto success = session->build_userauth_success();
+                    co_await send_packet(success);
+
+                    if (handler_) {
+                        handler_->on_session_opened(session);
+                    }
+                } else if (session->state() == SshSession::State::auth_need_more) {
+                    auto pending = session->authenticator().pending_auth_response();
+                    if (pending == SshAuthenticator::PendingAuthResponse::pk_ok) {
+                        auto pk_ok = session->build_userauth_pk_ok(
+                            session->authenticator().pending_pk_algo(),
+                            session->authenticator().pending_pk_key_blob());
+                        co_await send_packet(pk_ok);
+                    } else if (pending == SshAuthenticator::PendingAuthResponse::info_request) {
+                        auto *method = session->authenticator().active_method();
+                        SshUserauthInfoRequestMessage info_req;
+                        if (method) {
+                            info_req = method->build_challenge(session, session->authenticator().username());
+                        }
+                        auto info_buf = session->build_userauth_info_request(info_req);
+                        co_await send_packet(info_buf);
+                    }
+                } else if (session->state() == SshSession::State::authenticating) {
+                    auto failure = session->build_userauth_failure(false);
+                    co_await send_packet(failure);
+                }
+
+                co_await flush_outgoing();
+            }
+        }
+
+    session_end:
+        if (handler_) {
+            handler_->on_session_closed(session);
+        }
+        session->set_state(SshSession::State::disconnected);
+        session_mgr_.remove_session(session->session_id());
+    }
+
+    void SshServer::init_default_algorithms()
+    {
+        // Algorithm registrations are done in the algorithm registry implementation
+        // The registry is populated with factory functions for each algorithm
+        algo_registry_.register_defaults();
+    }
+
+    void SshServer::init_auth_methods(SshSession * session)
+    {
+        for (const auto &method_name : config_.auth_methods) {
+            if (method_name == "password") {
+                session->authenticator().register_method(std::make_unique<SshAuthPassword>());
+            } else if (method_name == "publickey") {
+                session->authenticator().register_method(std::make_unique<SshAuthPublickey>(crypto_.get()));
+            } else if (method_name == "keyboard-interactive") {
+                session->authenticator().register_method(std::make_unique<SshAuthKeyboardInteractive>());
+            }
+        }
+    }
+}

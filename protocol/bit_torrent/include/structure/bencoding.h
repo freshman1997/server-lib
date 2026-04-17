@@ -5,10 +5,9 @@
 #include <vector>
 #include <cstdint>
 
-namespace yuan::net::bit_torrent 
+namespace yuan::net::bit_torrent
 {
-    enum class DataType
-    {
+    enum class DataType {
         invalid_ = -1,
         integer_,
         string_,
@@ -19,7 +18,9 @@ namespace yuan::net::bit_torrent
     class BaseData
     {
     public:
-        virtual ~BaseData() {}
+        virtual ~BaseData()
+        {
+        }
 
         virtual std::string to_string() = 0;
 
@@ -30,12 +31,13 @@ namespace yuan::net::bit_torrent
     class IntegerData : public BaseData
     {
     public:
-        IntegerData(int32_t data) : data_(data) 
+        IntegerData(int64_t data)
+            : data_(data)
         {
             type_ = DataType::integer_;
         }
 
-        int32_t get_data() const 
+        int64_t get_data() const
         {
             return data_;
         }
@@ -46,7 +48,7 @@ namespace yuan::net::bit_torrent
         }
 
     private:
-        int32_t data_;
+        int64_t data_;
     };
 
     class StringData : public BaseData
@@ -57,14 +59,14 @@ namespace yuan::net::bit_torrent
             data_ = std::move(data);
             type_ = DataType::string_;
         }
-        
+
         StringData(const char *begin, const char *end)
         {
             data_ = std::move(std::string(begin, end));
             type_ = DataType::string_;
         }
 
-        const std::string & get_data() const 
+        const std::string &get_data() const
         {
             return data_;
         }
@@ -108,12 +110,12 @@ namespace yuan::net::bit_torrent
             datas_.push_back(data);
         }
 
-        BaseData * get_data(uint32_t idx) 
+        BaseData *get_data(uint32_t idx)
         {
             return idx >= datas_.size() ? nullptr : datas_[idx];
         }
 
-        std::vector<BaseData *> get_data() const 
+        std::vector<BaseData *> get_data() const
         {
             return datas_;
         }
@@ -144,20 +146,20 @@ namespace yuan::net::bit_torrent
             datas_[key] = val;
         }
 
-        bool has(const std::string &k) 
+        bool has(const std::string &k)
         {
             return datas_.count(k);
         }
 
-        BaseData * get_val(const std::string &k)
+        BaseData *get_val(const std::string &k)
         {
             auto it = datas_.find(k);
             return it == datas_.end() ? nullptr : it->second;
         }
 
-        std::vector<std::pair<std::string, BaseData *>> get_items() const
+        std::vector<std::pair<std::string, BaseData *> > get_items() const
         {
-            return std::vector<std::pair<std::string, BaseData *>>(datas_.begin(), datas_.end());
+            return std::vector<std::pair<std::string, BaseData *> >(datas_.begin(), datas_.end());
         }
 
         std::string to_string();
@@ -170,8 +172,8 @@ namespace yuan::net::bit_torrent
     {
     public:
         // decode
-        static BaseData * parse(const std::string &raw);
-        static BaseData * parse(const char *begin, const char *end);
+        static BaseData *parse(const std::string &raw);
+        static BaseData *parse(const char *begin, const char *end);
         static std::vector<BaseData *> parse_datas(const char *begin, const char *end);
 
         // encode

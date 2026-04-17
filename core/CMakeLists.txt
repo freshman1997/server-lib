@@ -6,8 +6,3 @@ if(NOT TARGET CoreBase)
 endif()
 add_subdirectory(core)
 add_subdirectory(app)
-
-if(YUAN_ENABLE_PLUGIN_SYSTEM)
-    add_subdirectory(plugin_core)
-    add_subdirectory(plugin_host)
-endif()

@@ -1,18 +1,14 @@
 cmake_minimum_required(VERSION 3.12)
 project(plugins)
 
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+add_subdirectory(core)
+add_subdirectory(host)
+add_subdirectory(bridge)
 
-add_library(HelloWorld SHARED ./helloworld/helloworld.cpp)
-target_link_libraries(HelloWorld PRIVATE App PluginCore)
+add_subdirectory(lua_wrap)
+add_subdirectory(lua)
 
-set(targets HelloWorld)
+add_subdirectory(quickjs_wrap)
+add_subdirectory(typescript)
 
-foreach(target ${targets})
-    set_target_properties(${target} PROPERTIES 
-        OUTPUT_NAME ${target} 
-        PREFIX "" 
-        SUFFIX ".plugin"
-    )
-endforeach(target ${targets})
-
+add_subdirectory(examples)

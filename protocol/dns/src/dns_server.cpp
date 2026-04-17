@@ -1,30 +1,19 @@
 #include "dns_server.h"
 #include "dns_packet.h"
 #include "buffer/byte_buffer.h"
-#include "net/acceptor/acceptor_factory.h"
-#include "net/acceptor/datagram_acceptor.h"
-#include "net/acceptor/datagram_endpoint.h"
-#include "net/connection/connection.h"
-#include "event/event_loop.h"
-#include "net/poller/select_poller.h"
-#include "net/socket/socket.h"
-#include "timer/wheel_timer_manager.h"
 #include "logger.h"
-#include <cstring>
+#include "net/session/connection_context.h"
 #include <algorithm>
 
 namespace yuan::net::dns
 {
     DnsServer::DnsServer()
-        : port_(53)
-        , running_(false)
-        , timer_manager_(nullptr)
-        , poller_(nullptr)
-        , ev_loop_(nullptr)
-        , acceptor_(nullptr)
-        , own_loop_(false)
+        : port_(53), running_(false)
     {
         add_record("localhost", "127.0.0.1");
+        session_.set_read_callback([this](ConnectionContext &ctx) {
+            handle_dns_query(ctx);
+        });
     }
 
     DnsServer::~DnsServer()
@@ -32,37 +21,14 @@ namespace yuan::net::dns
         stop();
     }
 
-    void DnsServer::on_connected(Connection *conn)
+    void DnsServer::handle_dns_query(ConnectionContext & ctx)
     {
-        conn->set_connection_handler(this);
-    }
-
-    void DnsServer::on_error(Connection *conn)
-    {
-        LOG_ERROR("DNS server connection error!");
-    }
-
-    void DnsServer::on_read(Connection *conn)
-    {
-        auto byte_buffer = conn->get_input_byte_buffer();
-        if (byte_buffer.readable_bytes() > 0) {
-            handle_dns_query(conn, byte_buffer);
+        auto byte_buffer = ctx.take_input_byte_buffer();
+        if (byte_buffer.readable_bytes() == 0) {
+            return;
         }
-    }
 
-    void DnsServer::on_write(Connection *conn)
-    {
-    }
-
-    void DnsServer::on_close(Connection *conn)
-    {
-        LOG_INFO("DNS server connection closed");
-    }
-
-    void DnsServer::handle_dns_query(Connection *conn, const ::yuan::buffer::ByteBuffer &buffer)
-    {
         DnsPacket query;
-        auto byte_buffer = buffer;
         if (!query.deserialize(byte_buffer)) {
             LOG_WARN("Failed to parse DNS query");
             return;
@@ -73,10 +39,10 @@ namespace yuan::net::dns
 
         yuan::buffer::ByteBuffer response_buffer;
         response.serialize(response_buffer);
-        conn->write_and_flush(response_buffer);
+        ctx.write_and_flush(response_buffer);
     }
 
-    void DnsServer::create_response(const DnsPacket &query, DnsPacket &response)
+    void DnsServer::create_response(const DnsPacket & query, DnsPacket & response)
     {
         response.set_session_id(query.get_session_id());
         response.set_is_response(true);
@@ -107,7 +73,7 @@ namespace yuan::net::dns
         }
     }
 
-    DnsResourceRecord DnsServer::find_record(const std::string &name, DnsType type)
+    DnsResourceRecord DnsServer::find_record(const std::string & name, DnsType type)
     {
         auto key = name;
         std::transform(key.begin(), key.end(), key.begin(), ::tolower);
@@ -122,104 +88,26 @@ namespace yuan::net::dns
         return DnsResourceRecord();
     }
 
-    bool DnsServer::init_runtime(timer::TimerManager *timer_manager, Poller *poller, EventLoop *ev_loop)
-    {
-        own_loop_ = (timer_manager == nullptr || poller == nullptr || ev_loop == nullptr);
-
-        if (own_loop_) {
-            timer_manager_ = new timer::WheelTimerManager();
-            poller_ = new net::SelectPoller();
-            ev_loop_ = new net::EventLoop(poller_, timer_manager_);
-            return timer_manager_ && poller_ && ev_loop_;
-        }
-
-        timer_manager_ = timer_manager;
-        poller_ = poller;
-        ev_loop_ = ev_loop;
-        return timer_manager_ && poller_ && ev_loop_;
-    }
-
-    bool DnsServer::init_udp_server()
-    {
-        Socket *sock = new Socket("", port_, true);
-        if (!sock->valid()) {
-            LOG_ERROR("DNS server: cannot create socket file descriptor!");
-            delete sock;
-            return false;
-        }
-
-        if (!sock->bind()) {
-            LOG_ERROR("DNS server: cannot bind port: {}!", port_);
-            delete sock;
-            return false;
-        }
-
-        sock->set_no_delay(true);
-        sock->set_reuse(true);
-        sock->set_none_block(true);
-
-        acceptor_ = create_datagram_acceptor(sock, timer_manager_);
-        if (!acceptor_->listen()) {
-            LOG_ERROR("DNS server: cannot listen on port: {}!", port_);
-            delete acceptor_;
-            acceptor_ = nullptr;
-            delete sock;
-            return false;
-        }
-
-        acceptor_->set_event_handler(ev_loop_);
-        acceptor_->set_connection_handler(static_cast<ConnectionHandler*>(this));
-        ev_loop_->update_channel(acceptor_->endpoint_channel());
-        return true;
-    }
-
-    void DnsServer::cleanup_runtime()
-    {
-        if (acceptor_) {
-            delete acceptor_;
-            acceptor_ = nullptr;
-        }
-
-        if (own_loop_) {
-            if (ev_loop_) {
-                delete ev_loop_;
-            }
-            if (poller_) {
-                delete poller_;
-            }
-            if (timer_manager_) {
-                delete timer_manager_;
-            }
-        }
-
-        ev_loop_ = nullptr;
-        poller_ = nullptr;
-        timer_manager_ = nullptr;
-        own_loop_ = false;
-    }
-
     bool DnsServer::serve(int port)
     {
-        return serve(port, nullptr, nullptr, nullptr);
+        owned_runtime_ = std::make_unique<NetworkRuntime>();
+        return serve(port, *owned_runtime_);
     }
 
-    bool DnsServer::serve(int port, timer::TimerManager *timer_manager, Poller *poller, EventLoop *ev_loop)
+    bool DnsServer::serve(int port, NetworkRuntime & runtime)
     {
         port_ = port;
-        if (!init_runtime(timer_manager, poller, ev_loop)) {
-            return false;
-        }
-
-        if (!init_udp_server()) {
-            cleanup_runtime();
+        if (!session_.bind(port, runtime)) {
             return false;
         }
 
         running_ = true;
-        ev_loop_->loop();
 
-        running_ = false;
-        cleanup_runtime();
+        if (owned_runtime_) {
+            runtime.run();
+            running_ = false;
+            session_.close();
+        }
 
         return true;
     }
@@ -227,8 +115,8 @@ namespace yuan::net::dns
     void DnsServer::stop()
     {
         running_ = false;
-        if (ev_loop_) {
-            ev_loop_->quit();
+        if (owned_runtime_) {
+            owned_runtime_->stop();
         }
     }
 
@@ -237,7 +125,7 @@ namespace yuan::net::dns
         query_handler_ = handler;
     }
 
-    void DnsServer::add_record(const std::string &name, const std::string &ip, DnsType type)
+    void DnsServer::add_record(const std::string & name, const std::string & ip, DnsType type)
     {
         DnsResourceRecord record;
         record.name = name;

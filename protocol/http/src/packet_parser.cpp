@@ -6,8 +6,10 @@
 #include "header_key.h"
 #include "request.h"
 
+#include <charconv>
+#include <cstdlib>
 
-namespace yuan::net::http 
+namespace yuan::net::http
 {
     uint32_t HttpPacketParser::get_body_length()
     {
@@ -16,10 +18,40 @@ namespace yuan::net::http
             return 0;
         }
 
-        return std::atoi(length->c_str());
+        const char *start = length->data();
+        const char *end = start + length->size();
+
+        while (start < end && (*start == ' ' || *start == '\t')) {
+            ++start;
+        }
+
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
+            --end;
+        }
+
+        if (start == end) {
+            return 0;
+        }
+
+        for (const char *p = start; p < end; ++p) {
+            if (*p < '0' || *p > '9') {
+                return 0;
+            }
+        }
+
+        uint32_t result = 0;
+        auto[
+            ptr,
+            ec
+        ] = std::from_chars(start, end, result);
+        if (ec != std::errc{} || ptr != end) {
+            return 0;
+        }
+
+        return result;
     }
 
-    bool HttpPacketParser::parse_version(::yuan::buffer::ByteBuffer &buff, char ending, char next)
+    bool HttpPacketParser::parse_version(::yuan::buffer::ByteBuffer & buff, char ending, char next)
     {
         if ((header_state != HeaderState::url_gap && header_state != HeaderState::init) || buff.readable_bytes() == 0) {
             return false;
@@ -37,8 +69,10 @@ namespace yuan::net::http
             }
         }
 
-        if (next && buff.read_i8() != next) {
-            return false;
+        if (next) {
+            if (buff.readable_bytes() == 0 || buff.read_i8() != next) {
+                return false;
+            }
         }
 
         size_t tag_pos = version.find_first_of("/");
@@ -72,10 +106,10 @@ namespace yuan::net::http
             return false;
         }
 
-        return true; 
+        return true;
     }
 
-    bool HttpPacketParser::parse_header_keys(::yuan::buffer::ByteBuffer &buff)
+    bool HttpPacketParser::parse_header_keys(::yuan::buffer::ByteBuffer & buff)
     {
         if (buff.readable_bytes() == 0 || (header_state != HeaderState::version_newline && header_state != HeaderState::header_status_desc_gap)) {
             return false;
@@ -124,24 +158,24 @@ namespace yuan::net::http
                 }
             }
 
-            if (buff.read_i8() != '\n') {
+            if (buff.readable_bytes() == 0 || buff.read_i8() != '\n') {
                 return false;
             }
 
             packet_->add_header(key, val);
         }
 
-        if (buff.read_i8() != '\n') {
+        if (buff.readable_bytes() == 0 || buff.read_i8() != '\n') {
             return false;
         }
 
         return true;
     }
 
-    int HttpPacketParser::parse_body(::yuan::buffer::ByteBuffer &buff, uint32_t length)
+    int HttpPacketParser::parse_body(::yuan::buffer::ByteBuffer & buff, uint32_t length)
     {
         if (!is_header_done()) {
-            return 0; 
+            return 0;
         }
 
         if (length > config::client_max_content_length) {
@@ -155,7 +189,7 @@ namespace yuan::net::http
         return 1;
     }
 
-    bool HttpPacketParser::parse_new_line(::yuan::buffer::ByteBuffer &buff)
+    bool HttpPacketParser::parse_new_line(::yuan::buffer::ByteBuffer & buff)
     {
         char ch = buff.read_i8();
         if (ch != '\r') {
@@ -170,7 +204,7 @@ namespace yuan::net::http
         return true;
     }
 
-    int HttpPacketParser::parse(::yuan::buffer::ByteBuffer &buff)
+    int HttpPacketParser::parse(::yuan::buffer::ByteBuffer & buff)
     {
         if (done()) {
             body_state = BodyState::too_long;
@@ -188,6 +222,13 @@ namespace yuan::net::http
         }
 
         if (is_header_done()) {
+            bool has_content_length = packet_->get_header(http_header_key::content_length) != nullptr;
+            bool has_transfer_encoding = packet_->get_header(http_header_key::transfer_encoding) != nullptr;
+
+            if (has_content_length && has_transfer_encoding) {
+                return -1;
+            }
+
             uint32_t length = packet_->get_body_length() ? packet_->get_body_length() : get_body_length();
             if (length > 0) {
                 if (packet_->get_body_length() == 0) {
@@ -218,15 +259,17 @@ namespace yuan::net::http
 
                     packet_->set_original_file_name(originName);
                     packet_->set_download_file(true);
-                    
+
                     return 1;
                 } else {
                     auto contentType = packet_->get_header(http_header_key::content_type);
                     if (contentType && !ContentParserFactory::get_instance()->can_parse(find_content_type(*contentType))) {
-                        auto req = static_cast<HttpRequest *>(packet_);
-                        std::string originName = req->get_last_uri();
-                        packet_->set_download_file(true);
-                        packet_->set_original_file_name(originName);
+                        if (packet_->get_packet_type() == PacketType::request) {
+                            auto req = static_cast<HttpRequest *>(packet_);
+                            std::string originName = req->get_last_uri();
+                            packet_->set_download_file(true);
+                            packet_->set_original_file_name(originName);
+                        }
                         return 1;
                     }
                 }
@@ -245,7 +288,7 @@ namespace yuan::net::http
         return is_header_done() && (is_body_done() || packet_->is_pending_large_block());
     }
 
-    bool HttpPacketParser::parse_content_disposition(const std::string *val, std::string &originName)
+    bool HttpPacketParser::parse_content_disposition(const std::string * val, std::string & originName)
     {
         if (!val || val->empty() || !val->starts_with("attachment; ")) {
             return false;
@@ -256,18 +299,18 @@ namespace yuan::net::http
         size_t pos = val->find("filename*=");
         if (pos != std::string::npos) {
             pos += 10; // length of "filename*="
-            size_t encodePos = val->find_first_of("''", pos);
+            size_t encodePos = val->find("''", pos);
             if (encodePos == std::string::npos) {
                 return false;
             }
 
             std::string encode = val->substr(pos, encodePos - pos);
             if (encode.empty()) {
-                return false; // invalid encoding
+                return false;
             }
 
             pos = encodePos + 2; // skip "''"
-            size_t endPos = val->find_first_of("; ", pos);
+            size_t endPos = val->find(';', pos);
             if (endPos == std::string::npos) {
                 endPos = val->size();
             }
@@ -278,7 +321,7 @@ namespace yuan::net::http
                 return false;
             }
             pos += 9; // length of "filename="
-            size_t endPos = val->find_first_of("; ", pos);
+            size_t endPos = val->find(';', pos);
             if (endPos == std::string::npos) {
                 endPos = val->size();
             }

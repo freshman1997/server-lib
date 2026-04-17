@@ -1,5 +1,5 @@
-#ifndef __NET_FTP_HANDLER_FILE_STREAM_H__
-#define __NET_FTP_HANDLER_FILE_STREAM_H__
+#ifndef NET_FTP_HANDLER_FILE_STREAM_H
+#define NET_FTP_HANDLER_FILE_STREAM_H
 
 namespace yuan::net::ftp 
 {

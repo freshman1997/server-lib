@@ -1,14 +1,15 @@
 #include <sstream>
 #include <algorithm>
+#include <cstdlib>
 #include "structure/bencoding.h"
 
-namespace yuan::net::bit_torrent 
+namespace yuan::net::bit_torrent
 {
     std::string Listdata::to_string()
     {
         std::stringstream ss;
         ss << "[";
-        
+
         int i = 0;
         for (const auto &it : datas_) {
             ss << it->to_string();
@@ -22,12 +23,12 @@ namespace yuan::net::bit_torrent
 
         return ss.str();
     }
-    
+
     std::string DicttionaryData::to_string()
     {
         std::stringstream ss;
         ss << "{ \n";
-        
+
         for (const auto &it : datas_) {
             ss << '"' << it.first << "\": " << it.second->to_string() << ", \n";
         }
@@ -36,20 +37,20 @@ namespace yuan::net::bit_torrent
 
         return ss.str();
     }
-    
-    BaseData * BencodingDataConverter::parse(const std::string &raw)
+
+    BaseData *BencodingDataConverter::parse(const std::string & raw)
     {
         return parse(raw.c_str(), raw.c_str() + raw.size());
     }
 
-    static std::pair<int, BaseData *> do_parse(const char *begin, const char *end);
+    static std::pair<int, BaseData *> do_parse(const char * begin, const char * end);
 
-    BaseData * BencodingDataConverter::parse(const char *begin, const char *end)
+    BaseData *BencodingDataConverter::parse(const char * begin, const char * end)
     {
         return do_parse(begin, end).second;
     }
 
-    std::vector<BaseData *> BencodingDataConverter::parse_datas(const char *begin, const char *end)
+    std::vector<BaseData *> BencodingDataConverter::parse_datas(const char * begin, const char * end)
     {
         std::vector<BaseData *> res;
 
@@ -66,11 +67,10 @@ namespace yuan::net::bit_torrent
         return res;
     }
 
-
-    static std::pair<int, BaseData *> parse_integer(const char *begin, const char *end)
+    static std::pair<int, BaseData *> parse_integer(const char * begin, const char * end)
     {
         std::string str;
-        const char * p = begin;
+        const char *p = begin;
         for (; p <= end; ++p) {
             char ch = *p;
             if (ch == 'e') {
@@ -80,16 +80,16 @@ namespace yuan::net::bit_torrent
         }
 
         if (str.empty()) {
-            return {-1, nullptr};
+            return { -1, nullptr };
         }
 
-        return {p - begin + 2, new IntegerData(std::atoi(str.c_str()))};
+        return { p - begin + 2, new IntegerData(std::atoi(str.c_str())) };
     }
 
-    static std::pair<int, BaseData *> parse_string(const char *begin, const char *end)
+    static std::pair<int, BaseData *> parse_string(const char * begin, const char * end)
     {
         std::string str;
-        const char * p = begin;
+        const char *p = begin;
         for (; p <= end; ++p) {
             char ch = *p;
             if (ch == ':') {
@@ -100,23 +100,23 @@ namespace yuan::net::bit_torrent
         }
 
         if (str.empty()) {
-            return {-1, nullptr};
+            return { -1, nullptr };
         }
 
         std::size_t len = std::atoi(str.c_str());
         str.clear();
         if (end - p < len) {
-            return {-1, nullptr};
+            return { -1, nullptr };
         }
 
-        return {p - begin + len, new StringData(p, p + len)};
+        return { p - begin + len, new StringData(p, p + len) };
     }
 
-    static std::pair<int, BaseData *> parse_list(const char *begin, const char *end)
+    static std::pair<int, BaseData *> parse_list(const char * begin, const char * end)
     {
-        const char * p = begin;
+        const char *p = begin;
         Listdata *list = new Listdata;
-        for (; p <= end; ) {
+        for (; p <= end;) {
             char ch = *p;
             if (ch == 'e') {
                 break;
@@ -125,21 +125,21 @@ namespace yuan::net::bit_torrent
             const auto &res = do_parse(p, end);
             if (res.first < 0) {
                 delete list;
-                return {-1, nullptr};
+                return { -1, nullptr };
             }
-            
+
             p += res.first;
             list->push(res.second);
         }
 
-        return {p - begin + 2, list};
+        return { p - begin + 2, list };
     }
 
-    static std::pair<int, BaseData *> parse_dictionary(const char *begin, const char *end)
+    static std::pair<int, BaseData *> parse_dictionary(const char * begin, const char * end)
     {
-        const char * p = begin;
+        const char *p = begin;
         DicttionaryData *dict = new DicttionaryData;
-        for (; p <= end; ) {
+        for (; p <= end;) {
             char ch = *p;
             if (ch == 'e') {
                 break;
@@ -148,15 +148,15 @@ namespace yuan::net::bit_torrent
             const auto &key = do_parse(p, end);
             if (key.first < 0 || key.second->type_ != DataType::string_) {
                 delete dict;
-                return {-1, nullptr};
+                return { -1, nullptr };
             }
-            
+
             p += key.first;
 
             const auto &val = do_parse(p, end);
             if (val.first < 0) {
                 delete dict;
-                return {-1, nullptr};
+                return { -1, nullptr };
             }
 
             p += val.first;
@@ -167,12 +167,12 @@ namespace yuan::net::bit_torrent
             delete key.second;
         }
 
-        return {p - begin + 2, dict};
+        return { p - begin + 2, dict };
     }
 
-    static std::pair<int, BaseData *> do_parse(const char *begin, const char *end)
+    static std::pair<int, BaseData *> do_parse(const char * begin, const char * end)
     {
-        std::pair<int, BaseData *> res{-1, nullptr};
+        std::pair<int, BaseData *> res{ -1, nullptr };
 
         char ch = *begin;
         if (std::isdigit(ch)) {
@@ -188,9 +188,10 @@ namespace yuan::net::bit_torrent
         return res;
     }
 
-    static std::string do_encode(const BaseData *data)
+    static std::string do_encode(const BaseData * data)
     {
-        if (!data) return "";
+        if (!data)
+            return "";
 
         switch (data->type_) {
         case DataType::integer_: {
@@ -215,7 +216,7 @@ namespace yuan::net::bit_torrent
             auto *d = static_cast<const DicttionaryData *>(data);
             auto entries = d->get_items();
             std::sort(entries.begin(), entries.end(),
-                [](const auto &a, const auto &b) { return a.first < b.first; });
+                      [](const auto &a, const auto &b) { return a.first < b.first; });
             std::string r = "d";
             for (const auto &entry : entries) {
                 StringData key(entry.first);
@@ -230,7 +231,7 @@ namespace yuan::net::bit_torrent
         }
     }
 
-    std::string BencodingDataConverter::encode(const BaseData *data)
+    std::string BencodingDataConverter::encode(const BaseData * data)
     {
         return do_encode(data);
     }

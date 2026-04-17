@@ -13,7 +13,7 @@
 
 #include <cassert>
 
-namespace yuan::redis 
+namespace yuan::redis
 {
     namespace
     {
@@ -23,7 +23,7 @@ namespace yuan::redis
         }
     }
 
-    void RedisClient::Impl::on_connected(net::Connection *conn)
+    void RedisClient::Impl::on_connected(net::Connection * conn)
     {
         set_mask(RedisState::connected);
         completion_event_.notify();
@@ -31,20 +31,21 @@ namespace yuan::redis
 
     void RedisClient::Impl::close()
     {
-        if (!conn_ || is_executing()) {
+        if (!conn_ || is_closed()) {
             return;
         }
 
         set_mask(RedisState::closed, true);
-        conn_->close();
+        if (conn_) {
+            conn_->close();
+            conn_ = nullptr;
+        }
         completion_event_.notify();
-        conn_ = nullptr;
     }
 
-    void RedisClient::Impl::on_read(net::Connection *conn)
+    void RedisClient::Impl::on_read(net::Connection * conn)
     {
-        if ((!last_cmd_ && !subcribe_cmd) || !is_connected())
-        {
+        if ((!last_cmd_ && !subcribe_cmd) || !is_connected()) {
             return;
         }
 
@@ -52,8 +53,7 @@ namespace yuan::redis
         reader_.add_buffer(conn->take_input_byte_buffer());
 
         const auto cmd = last_cmd_ ? last_cmd_ : subcribe_cmd;
-        if (const int ret = cmd->unpack(reader_); ret < 0)
-        {
+        if (const int ret = cmd->unpack(reader_); ret < 0) {
             if (ret == UnpackCode::need_more_bytes) {
                 return;
             } else if (ret == UnpackCode::format_error) {
@@ -79,7 +79,7 @@ namespace yuan::redis
         }
 
         reader_.just_clear();
-        if (is_timeout()) {
+        if (is_timeout() && !is_closed()) {
             close();
         }
 
@@ -89,20 +89,8 @@ namespace yuan::redis
         }
     }
 
-    void RedisClient::Impl::on_write(net::Connection *conn)
+    void RedisClient::Impl::on_write(net::Connection * conn)
     {
-        if (last_cmd_)
-        {
-            return;
-        }
-
-        if (pending_cmd_)
-        {
-            const auto& cmdStr = pending_cmd_->pack();
-            conn->append_output(cmdStr);
-            last_cmd_ = pending_cmd_;
-            last_check_time_ = base::time::now();
-        }
     }
 
     std::shared_ptr<RedisValue> RedisClient::Impl::execute_command(std::shared_ptr<Command> cmd)
@@ -138,24 +126,24 @@ namespace yuan::redis
         check_timeout();
 
         if (is_timeout()) {
-            close();
+            if (!is_closed()) {
+                close();
+            }
             return nullptr;
         }
 
-        if (pending_cmd_) {
+        if (last_cmd_) {
             last_error_ = ErrorValue::from_string("executing");
             return nullptr;
         }
 
         last_error_ = nullptr;
 
-        pending_cmd_ = cmd;
         last_cmd_ = cmd;
         completion_event_.reset(RedisRegistry::get_instance()->get_event_loop());
 
         if (!conn_) {
             last_error_ = ErrorValue::from_string("connection missing");
-            pending_cmd_ = nullptr;
             last_cmd_ = nullptr;
             return nullptr;
         }
@@ -164,21 +152,22 @@ namespace yuan::redis
         conn_->write(::yuan::buffer::ByteBuffer(std::string_view(cmdStr.data(), cmdStr.size())));
 
         const auto runtime = RedisRegistry::get_instance()->get_coroutine_runtime();
-        auto res = yuan::coroutine::sync_wait(runtime, [this, cmd]() -> SimpleTask<std::shared_ptr<RedisValue>> {
+        auto res = yuan::coroutine::sync_wait(runtime, [
+                                                           this,
+                                                           cmd
+                                                       ]()->SimpleTask<std::shared_ptr<RedisValue> > {
             co_await completion_event_.wait();
             if (client_ && client_->is_closed()) {
                 client_->set_last_error(ErrorValue::from_string("connection closed"));
             }
-            co_return cmd->get_result();
-        }());
+            co_return cmd->get_result(); }());
 
-        pending_cmd_ = nullptr;
         last_cmd_ = nullptr;
 
         return res;
     }
 
-    void RedisClient::Impl::on_do_connect(net::Connection *conn)
+    void RedisClient::Impl::on_do_connect(net::Connection * conn)
     {
         clear_mask();
         set_mask(RedisState::connecting);
@@ -190,11 +179,11 @@ namespace yuan::redis
         }
     }
 
-    void RedisClient::Impl::on_timer(timer::Timer *timer)
+    void RedisClient::Impl::on_timer(timer::Timer * timer)
     {
         check_timeout();
 
-        if (is_timeout()) {
+        if (is_timeout() || is_closed()) {
             timer->cancel();
             close();
         }
@@ -202,14 +191,13 @@ namespace yuan::redis
 
     void RedisClient::Impl::check_timeout()
     {
-        if (option_.timeout_ms_ == 0) {
+        if (option_.timeout_ms_ == 0 || is_closed()) {
             return;
         }
 
         if (const auto now = base::time::now(); now - last_check_time_ > option_.timeout_ms_) {
             set_mask(RedisState::timeout);
             last_error_ = ErrorValue::from_string("connection time out");
-            close();
         }
     }
 
@@ -230,7 +218,11 @@ namespace yuan::redis
             return 0;
         }
 
-        const auto wait_task = [timeout, this]() -> SimpleTask<int> {
+        const auto wait_task = [
+            timeout,
+            this
+        ]()->SimpleTask<int>
+        {
             const auto runtime = RedisRegistry::get_instance()->get_coroutine_runtime();
             completion_event_.reset(RedisRegistry::get_instance()->get_event_loop());
             const bool is_timeout = co_await completion_event_.wait_for(
@@ -242,7 +234,6 @@ namespace yuan::redis
             }
 
             co_return is_timeout ? -1 : 0;
-
         };
         const auto runtime = RedisRegistry::get_instance()->get_coroutine_runtime();
         const auto result = yuan::coroutine::sync_wait(runtime, wait_task());

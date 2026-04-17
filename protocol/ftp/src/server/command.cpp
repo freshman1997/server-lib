@@ -21,11 +21,11 @@ namespace yuan::net::ftp
     bool CommandFactory::register_command(Command *cmdImpl)
     {
         if (cmdImpl) {
-            if (commands.find(cmdImpl->get_comand_name()) != commands.end()) {
+            if (commands.find(cmdImpl->get_command_name()) != commands.end()) {
                 delete cmdImpl;
                 return false;
             }
-            commands[cmdImpl->get_comand_name()] = cmdImpl;
+            commands[cmdImpl->get_command_name()] = cmdImpl;
             return true;
         }
         return false;

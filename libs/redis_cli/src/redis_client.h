@@ -9,7 +9,7 @@
 #include "option.h"
 #include "redis_value.h"
 
-namespace yuan::redis 
+namespace yuan::redis
 {
     struct SubMessage
     {
@@ -30,7 +30,7 @@ namespace yuan::redis
         RedisClient() = default;
 
         explicit RedisClient(const Option &opt);
-        
+
         ~RedisClient();
 
     public:
@@ -48,16 +48,16 @@ namespace yuan::redis
 
         void set_last_error(std::shared_ptr<RedisValue> error);
 
-        const std::string & get_name() const;
+        const std::string &get_name() const;
 
         int receive(int timeout);
 
         int receive();
 
-        bool is_subcribing() const;
+        bool is_subscribing() const;
 
     public:
-        void unsubscibe_channel(const std::string &channel);
+        void unsubscribe_channel(const std::string &channel);
 
     public: // common commands
         // key
@@ -201,7 +201,7 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> bitfield_set(std::string key, int64_t offset, std::string value);
 
         // geo
-        std::shared_ptr<RedisValue> geoadd(std::string key, const std::vector<std::tuple<double, double, std::string>> &members);
+        std::shared_ptr<RedisValue> geoadd(std::string key, const std::vector<std::tuple<double, double, std::string> > &members);
         std::shared_ptr<RedisValue> geodist(std::string key, std::string member1, std::string member2, const std::string &unit = "m");
         std::shared_ptr<RedisValue> geohash(std::string key, const std::vector<std::string> &members);
         std::shared_ptr<RedisValue> geopos(std::string key, const std::vector<std::string> &members);
@@ -243,7 +243,7 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> script_flush();
         std::shared_ptr<RedisValue> script_kill();
         std::shared_ptr<RedisValue> script_flush_with_args(const std::vector<std::string> &args);
-        
+
     public: // special command
         // auth
         std::shared_ptr<RedisValue> auth(std::string password);
@@ -296,7 +296,7 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> shutdown(std::string save, std::string nopersist, std::string force, std::string noflush, std::string async);
         std::shared_ptr<RedisValue> shutdown(std::string save, std::string nopersist, std::string force, std::string noflush, std::string async, std::string skip_slave_start);
         std::shared_ptr<RedisValue> shutdown(std::string save, std::string nopersist, std::string force, std::string noflush, std::string async, std::string skip_slave_start, std::string no_save);
-        
+
         // stream
         std::shared_ptr<RedisValue> xack(std::string key, std::string group, const std::vector<std::string> &ids);
         std::shared_ptr<RedisValue> xadd(std::string key, std::string id, const std::vector<std::string> &fields);
@@ -330,7 +330,7 @@ namespace yuan::redis
 
     private:
         int connect();
-        
+
     private:
         class Impl;
         std::unique_ptr<Impl> impl_;

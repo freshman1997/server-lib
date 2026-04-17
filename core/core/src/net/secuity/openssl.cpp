@@ -7,9 +7,9 @@
 #include "openssl/ssl.h"
 #include "openssl/err.h"
 
-namespace yuan::net 
+namespace yuan::net
 {
-    static int set_err_msg(const char *msg, size_t len, void *udata)
+    static int set_err_msg(const char * msg, size_t len, void * udata)
     {
         OpenSSLModule *this_ = (OpenSSLModule *)udata;
         this_->set_error_msg(msg, len);
@@ -32,14 +32,16 @@ namespace yuan::net
         SSL_CTX *ctx_ = nullptr;
     };
 
-    OpenSSLModule::OpenSSLModule() : data_(std::make_unique<OpenSSLModule::ModuleData>()) {}
+    OpenSSLModule::OpenSSLModule()
+        : data_(std::make_unique<OpenSSLModule::ModuleData>())
+    {
+    }
 
     OpenSSLModule::~OpenSSLModule()
     {
-        
     }
 
-    bool OpenSSLModule::init(const std::string &cert, const std::string &privateKey, SSLHandler::SSLMode mode)
+    bool OpenSSLModule::init(const std::string & cert, const std::string & privateKey, SSLHandler::SSLMode mode)
     {
         SSL_library_init();
         SSL_load_error_strings();
@@ -88,7 +90,7 @@ namespace yuan::net
         return true;
     }
 
-    const std::string * OpenSSLModule::get_error_message()
+    const std::string *OpenSSLModule::get_error_message() const
     {
         return data_->errmsg_.empty() ? nullptr : &data_->errmsg_;
     }
@@ -105,7 +107,7 @@ namespace yuan::net
             ERR_print_errors_cb(set_err_msg, this);
             return nullptr;
         }
-       
+
         if (!SSL_set_fd(ssl, fd)) {
             ERR_print_errors_cb(set_err_msg, this);
             SSL_free(ssl);
@@ -118,7 +120,7 @@ namespace yuan::net
         return handler;
     }
 
-    void OpenSSLModule::set_error_msg(const char *msg, size_t len)
+    void OpenSSLModule::set_error_msg(const char * msg, size_t len)
     {
         data_->errmsg_.assign(msg, len);
     }
@@ -126,8 +128,9 @@ namespace yuan::net
     class OpenSSLHandler::HandlerData
     {
         friend OpenSSLModule;
+
     public:
-        ~HandlerData() 
+        ~HandlerData()
         {
             if (ssl_) {
                 SSL_shutdown(ssl_);
@@ -143,9 +146,14 @@ namespace yuan::net
         OpenSSLModule *module_ = nullptr;
     };
 
-    OpenSSLHandler::OpenSSLHandler() : data_(std::make_unique<OpenSSLHandler::HandlerData>()) {}
+    OpenSSLHandler::OpenSSLHandler()
+        : data_(std::make_unique<OpenSSLHandler::HandlerData>())
+    {
+    }
 
-    OpenSSLHandler::~OpenSSLHandler() {}
+    OpenSSLHandler::~OpenSSLHandler()
+    {
+    }
 
     int OpenSSLHandler::ssl_init_action()
     {
@@ -172,14 +180,24 @@ namespace yuan::net
         return res;
     }
 
-    void OpenSSLHandler::set_ssl_data(OpenSSLModule *module, void *ssl, SSLMode mode)
+    bool OpenSSLHandler::ssl_want_read() const
+    {
+        return data_->ssl_ && SSL_want_read(data_->ssl_);
+    }
+
+    bool OpenSSLHandler::ssl_want_write() const
+    {
+        return data_->ssl_ && SSL_want_write(data_->ssl_);
+    }
+
+    void OpenSSLHandler::set_ssl_data(OpenSSLModule * module, void * ssl, SSLMode mode)
     {
         data_->module_ = module;
         data_->ssl_ = (SSL *)ssl;
         data_->mode_ = mode;
     }
 
-    int OpenSSLHandler::ssl_write(const char *data, std::size_t size)
+    int OpenSSLHandler::ssl_write(const char * data, std::size_t size)
     {
         if (!data_->module_ || !data_->ssl_ || !data) {
             return -1;
@@ -202,7 +220,7 @@ namespace yuan::net
         return res;
     }
 
-    int OpenSSLHandler::ssl_read(char *buffer, std::size_t size)
+    int OpenSSLHandler::ssl_read(char * buffer, std::size_t size)
     {
         if (!data_->module_ || !data_->ssl_ || !buffer) {
             return -1;

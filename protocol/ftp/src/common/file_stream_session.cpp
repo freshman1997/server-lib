@@ -5,27 +5,24 @@
 #include "net/channel/channel.h"
 #include "net/connection/stream_transport.h"
 #include "handler/ftp_app.h"
-#include "timer/timer.h"
-#include "timer/timer_manager.h"
-#include "timer/timer_util.hpp"
+#include "net/runtime/network_runtime.h"
 #include "logger.h"
 
 #include <cassert>
 
 namespace yuan::net::ftp
 {
-    FtpFileStreamSession::FtpFileStreamSession(FtpSession *session)
+    FtpFileStreamSession::FtpFileStreamSession(FtpSession * session)
     {
-        state_ = FileSteamState::init;
+        state_ = FileStreamState::init;
         current_file_info_ = nullptr;
         conn_timer_ = nullptr;
         conn_ = nullptr;
         remote_addr_ = InetAddress{};
         session_ = session;
-        auto timerManager = session_->get_app()->get_timer_manager();
-        assert(timerManager);
-        conn_timer_ = timer::TimerUtil::build_period_timer(
-            timerManager, 2 * 1000, 10 * 1000, this, &FtpFileStreamSession::on_timer, -1);
+        auto *runtime = session_->get_app()->get_runtime();
+        assert(runtime);
+        conn_timer_ = runtime->schedule_periodic(2 * 1000, 10 * 1000, [this]() { on_timer(nullptr); }, -1);
         last_active_time_ = 0;
         write_buff_size_ = default_write_buff_size;
     }
@@ -45,13 +42,13 @@ namespace yuan::net::ftp
         }
     }
 
-    void FtpFileStreamSession::on_connected(Connection *conn)
+    void FtpFileStreamSession::on_connected(Connection * conn)
     {
         if (conn_) {
             conn->close();
             return;
         }
-        state_ = FileSteamState::connected;
+        state_ = FileStreamState::connected;
         conn_ = conn;
         remote_addr_ = conn->get_remote_address();
         LOG_DEBUG("file session connected remote={}:{}", remote_addr_.get_ip(), remote_addr_.get_port());
@@ -59,42 +56,42 @@ namespace yuan::net::ftp
         last_active_time_ = base::time::now();
     }
 
-    void FtpFileStreamSession::on_error(Connection *conn)
+    void FtpFileStreamSession::on_error(Connection * conn)
     {
         (void)conn;
-        state_ = FileSteamState::connection_error;
+        state_ = FileStreamState::connection_error;
         session_->on_error(this);
         // Defer close to avoid use-after-free
         if (conn_) {
             auto *c = conn_;
             conn_ = nullptr;
-            session_->get_app()->get_event_handler()->queue_in_loop([c]() { c->close(); });
+            session_->get_app()->get_runtime()->dispatch([c]() { c->close(); });
         }
     }
 
-    void FtpFileStreamSession::on_read(Connection *conn)
+    void FtpFileStreamSession::on_read(Connection * conn)
     {
         if (!current_file_info_ || current_file_info_->mode_ != StreamMode::Receiver || !current_file_info_->ready_) {
             LOG_DEBUG("file session read skipped");
             return;
         }
-        state_ = FileSteamState::processing;
+        state_ = FileStreamState::processing;
         auto buff = conn->take_input_byte_buffer();
         LOG_DEBUG("file session read bytes={} dest={}", buff.readable_bytes(), current_file_info_->dest_name_);
         int ret = current_file_info_->write_file(buff);
         if (ret < 0) {
-            state_ = FileSteamState::file_error;
+            state_ = FileStreamState::file_error;
             session_->on_error(this);
             // Defer close to avoid use-after-free (see on_read completion path)
             if (conn_) {
                 auto *c = conn_;
                 conn_ = nullptr;
-                session_->get_app()->get_event_handler()->queue_in_loop([c]() { c->close(); });
+                session_->get_app()->get_runtime()->dispatch([c]() { c->close(); });
             }
             return;
         }
         if (current_file_info_->is_completed()) {
-            state_ = FileSteamState::idle;
+            state_ = FileStreamState::idle;
             current_file_info_->ready_ = false;
             session_->on_completed(this);
             current_file_info_ = nullptr;
@@ -105,31 +102,31 @@ namespace yuan::net::ftp
             if (conn_) {
                 auto *c = conn_;
                 conn_ = nullptr;
-                session_->get_app()->get_event_handler()->queue_in_loop([c]() { c->close(); });
+                session_->get_app()->get_runtime()->dispatch([c]() { c->close(); });
             }
             return;
         }
         last_active_time_ = base::time::now();
     }
 
-    void FtpFileStreamSession::on_write(Connection *conn)
+    void FtpFileStreamSession::on_write(Connection * conn)
     {
         if (!current_file_info_ || current_file_info_->mode_ != StreamMode::Sender || !current_file_info_->ready_) {
             LOG_DEBUG("file session write skipped");
             return;
         }
-        state_ = FileSteamState::processing;
+        state_ = FileStreamState::processing;
         yuan::buffer::ByteBuffer buff(write_buff_size_);
         int ret = current_file_info_->read_file(write_buff_size_, buff);
         LOG_DEBUG("file session write ret={} source={} progress={}/{}", ret, current_file_info_->origin_name_, current_file_info_->current_progress_, current_file_info_->file_size_);
         if (ret < 0) {
-            state_ = FileSteamState::file_error;
+            state_ = FileStreamState::file_error;
             session_->on_error(this);
             // Defer close to avoid use-after-free (see on_read above)
             if (conn_) {
                 auto *c = conn_;
                 conn_ = nullptr;
-                session_->get_app()->get_event_handler()->queue_in_loop([c]() { c->close(); });
+                session_->get_app()->get_runtime()->dispatch([c]() { c->close(); });
             }
             return;
         }
@@ -137,7 +134,7 @@ namespace yuan::net::ftp
             conn->write(buff);
         }
         if (current_file_info_->is_completed()) {
-            state_ = FileSteamState::idle;
+            state_ = FileStreamState::idle;
             current_file_info_->ready_ = false;
             conn->flush();
             session_->on_completed(this);
@@ -146,7 +143,7 @@ namespace yuan::net::ftp
             if (conn_) {
                 auto *c = conn_;
                 conn_ = nullptr;
-                session_->get_app()->get_event_handler()->queue_in_loop([c]() { c->close(); });
+                session_->get_app()->get_runtime()->dispatch([c]() { c->close(); });
             }
             return;
         }
@@ -154,11 +151,11 @@ namespace yuan::net::ftp
         conn->flush();
     }
 
-    void FtpFileStreamSession::on_close(Connection *conn)
+    void FtpFileStreamSession::on_close(Connection * conn)
     {
         (void)conn;
         LOG_DEBUG("file session close remote={}:{}", remote_addr_.get_ip(), remote_addr_.get_port());
-        if (state_ == FileSteamState::disconnected) {
+        if (state_ == FileStreamState::disconnected) {
             return;
         }
         if (current_file_info_ && current_file_info_->mode_ == StreamMode::Receiver && current_file_info_->file_size_ == 0) {
@@ -171,27 +168,39 @@ namespace yuan::net::ftp
         quit();
     }
 
-    void FtpFileStreamSession::on_timer(timer::Timer *timer)
+    void FtpFileStreamSession::on_timer(timer::Timer * timer)
     {
         (void)timer;
-        if (state_ == FileSteamState::idle && base::time::now() - last_active_time_ >= default_session_idle_timeout) {
-            state_ = FileSteamState::idle_timeout;
+        if (state_ == FileStreamState::idle && base::time::now() - last_active_time_ >= default_session_idle_timeout) {
+            state_ = FileStreamState::idle_timeout;
             session_->on_idle_timeout(this);
             quit();
-        } else if (state_ == FileSteamState::connecting) {
-            state_ = FileSteamState::connect_timeout;
+        } else if (state_ == FileStreamState::connecting) {
+            state_ = FileStreamState::connect_timeout;
             session_->on_connect_timeout(this);
             quit();
         } else {
-            state_ = FileSteamState::idle;
+            state_ = FileStreamState::idle;
         }
     }
 
-    Connection *FtpFileStreamSession::get_connection() { return conn_; }
-    const InetAddress &FtpFileStreamSession::get_remote_address() const { return remote_addr_; }
-    std::size_t FtpFileStreamSession::get_write_buff_size() { return write_buff_size_; }
-    void FtpFileStreamSession::set_write_buff_size(std::size_t sz) { write_buff_size_ = sz; }
-    void FtpFileStreamSession::set_work_file(FtpFileInfo *info)
+    Connection *FtpFileStreamSession::get_connection()
+    {
+        return conn_;
+    }
+    const InetAddress &FtpFileStreamSession::get_remote_address() const
+    {
+        return remote_addr_;
+    }
+    std::size_t FtpFileStreamSession::get_write_buff_size()
+    {
+        return write_buff_size_;
+    }
+    void FtpFileStreamSession::set_write_buff_size(std::size_t sz)
+    {
+        write_buff_size_ = sz;
+    }
+    void FtpFileStreamSession::set_work_file(FtpFileInfo * info)
     {
         current_file_info_ = info;
         LOG_DEBUG("set work file mode={} origin={} dest={}", info ? static_cast<int>(info->mode_) : -1,
@@ -209,16 +218,19 @@ namespace yuan::net::ftp
                 channel->disable_read();
                 channel->enable_write();
             }
-            session_->get_app()->get_event_handler()->update_channel(channel);
+            session_->get_app()->get_runtime()->update_channel(channel);
         }
     }
-    FtpFileInfo *FtpFileStreamSession::get_work_file() { return current_file_info_; }
+    FtpFileInfo *FtpFileStreamSession::get_work_file()
+    {
+        return current_file_info_;
+    }
     void FtpFileStreamSession::quit()
     {
-        if (state_ == FileSteamState::disconnected) {
+        if (state_ == FileStreamState::disconnected) {
             return;
         }
-        state_ = FileSteamState::disconnected;
+        state_ = FileStreamState::disconnected;
         // stop timer and close connection; ownership removal is delegated to FtpFileStream via session->on_closed
         if (conn_timer_) {
             conn_timer_->cancel();
@@ -236,5 +248,8 @@ namespace yuan::net::ftp
         }
         // do not delete this here; the owner (FtpFileStream::remove_session or quit) will delete
     }
-    FileSteamState FtpFileStreamSession::get_state() { return state_; }
+    FileStreamState FtpFileStreamSession::get_state()
+    {
+        return state_;
+    }
 }

@@ -4,7 +4,6 @@
 #include "server/command_support.h"
 namespace yuan::net::ftp
 {
-    REGISTER_COMMAND_IMPL(CommandPwd);
     FtpCommandResponse CommandPwd::execute(FtpSession *session, const std::string &args)
     {
         (void)args;
@@ -14,6 +13,6 @@ namespace yuan::net::ftp
         }
         return {FtpResponseCode::__257__, "\"" + session->get_cwd() + "\" is the current directory."};
     }
-    CommandType CommandPwd::get_command_type() { return CommandType::cmd_cwd; }
-    std::string CommandPwd::get_comand_name() { return "PWD"; }
+    CommandType CommandPwd::get_command_type() { return CommandType::cmd_pwd; }
+    std::string CommandPwd::get_command_name() { return "PWD"; }
 }

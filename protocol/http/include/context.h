@@ -1,21 +1,21 @@
 #ifndef __HTTP_REQUEST_CONTEXT_H__
 #define __HTTP_REQUEST_CONTEXT_H__
 #include "response_code.h"
+#include "buffer/byte_buffer.h"
 
-namespace yuan::net 
+namespace yuan::net
 {
     class Connection;
 }
 
-namespace yuan::net::http 
+namespace yuan::net::http
 {
     class HttpRequest;
     class HttpResponse;
     class HttpSession;
     class HttpPacket;
 
-    enum class Mode
-    {
+    enum class Mode {
         server,
         client
     };
@@ -26,17 +26,17 @@ namespace yuan::net::http
         HttpSessionContext(net::Connection *conn_);
         ~HttpSessionContext();
 
-        HttpRequest * get_request()
+        HttpRequest *get_request()
         {
             return request_;
         }
 
-        HttpResponse * get_response()
+        HttpResponse *get_response()
         {
             return response_;
         }
 
-        net::Connection * get_connection()
+        net::Connection *get_connection()
         {
             return conn_;
         }
@@ -51,7 +51,7 @@ namespace yuan::net::http
             session_ = session;
         }
 
-        HttpSession * get_session()
+        HttpSession *get_session()
         {
             return session_;
         }
@@ -60,6 +60,10 @@ namespace yuan::net::http
 
     public:
         bool parse();
+
+        bool parse_from(const ::yuan::buffer::ByteBuffer &data);
+
+        ::yuan::buffer::ByteBuffer take_leftover_buffer();
 
         bool write() const;
 
@@ -77,14 +81,19 @@ namespace yuan::net::http
         {
             mode_ = mode;
         }
-        
-        inline HttpPacket * get_packet() const;
+
+        inline HttpPacket *get_packet() const;
 
         bool is_downloading() const;
-        
+
+        bool ws_handoff_ = false;
+        std::string ws_route_key_;
+        std::string ws_client_key_;
+        std::string ws_subproto_;
+
     private:
         void reset() const;
-        
+
     private:
         Mode mode_;
         bool has_parsed_;

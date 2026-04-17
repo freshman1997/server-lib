@@ -13,27 +13,25 @@
 
 #include <memory>
 
-namespace yuan::redis 
+namespace yuan::redis
 {
-    enum class RedisState : uint8_t
-    {
+    enum class RedisState : uint8_t {
         connecting = 1,
         connected = 2,
-        exec_command = 3,
         timeout = 4,
         disconnecting = 5,
         closed = 6,
     };
-
     class RedisClient::Impl final : public net::ConnectionHandler, public timer::TimerTask
     {
         friend class Psub;
+
     public:
         Impl()
         {
             clear_mask();
         }
-        
+
         Impl(const Impl &) = delete;
         Impl &operator=(const Impl &) = delete;
         ~Impl() override = default;
@@ -61,7 +59,7 @@ namespace yuan::redis
 
     public:
         void on_timer(timer::Timer *timer) override;
-        
+
     public:
         void on_do_connect(net::Connection *conn);
 
@@ -69,7 +67,8 @@ namespace yuan::redis
 
         void set_mask(RedisState state, const bool only = false)
         {
-            if (only) clear_mask();
+            if (only)
+                clear_mask();
             mask_ |= 1 << static_cast<uint8_t>(state);
         }
 
@@ -82,7 +81,7 @@ namespace yuan::redis
         {
             mask_ = 0;
         }
-        
+
         bool is_connecting() const
         {
             return mask_ & 1 << static_cast<uint8_t>(RedisState::connecting);
@@ -103,11 +102,6 @@ namespace yuan::redis
             return mask_ & 1 << static_cast<uint8_t>(RedisState::disconnecting);
         }
 
-        bool is_executing() const
-        {
-            return mask_ & 1 << static_cast<uint8_t>(RedisState::exec_command);
-        }
-
         bool is_timeout() const
         {
             return mask_ & 1 << static_cast<uint8_t>(RedisState::timeout);
@@ -117,7 +111,7 @@ namespace yuan::redis
 
         std::shared_ptr<RedisValue> execute_command(std::shared_ptr<Command> cmd);
 
-        buffer::ByteBufferReader * get_reader()
+        buffer::ByteBufferReader *get_reader()
         {
             return &reader_;
         }
@@ -130,7 +124,6 @@ namespace yuan::redis
         Option option_;
         net::Connection *conn_ = nullptr;
         std::shared_ptr<Command> last_cmd_;
-        std::shared_ptr<Command> pending_cmd_;
         std::shared_ptr<MultiCmd> multi_cmd_;
         std::shared_ptr<SubcribeCmd> subcribe_cmd;
         std::shared_ptr<RedisValue> last_error_;
@@ -138,7 +131,6 @@ namespace yuan::redis
         buffer::ByteBufferReader reader_;
         yuan::coroutine::CompletionEvent completion_event_;
     };
-
 }
 
 #endif // __YUAN_REDIS_CLIENT_INTERNAL_IMPL_H__

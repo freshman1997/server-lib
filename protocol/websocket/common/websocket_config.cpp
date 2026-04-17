@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-namespace yuan::net::websocket 
+namespace yuan::net::websocket
 {
     std::string_view heart_beat_interval_key = "heart_beat_interval";
     std::string_view client_key_string_key = "client_key_string";
@@ -30,7 +30,8 @@ namespace yuan::net::websocket
         bool load_config(bool isServer)
         {
             std::ifstream input(config_file_path_.data());
-            try {
+            try
+            {
                 if (!input.good()) {
                     LOG_WARN("not found config file: {}", config_file_path_);
                     return true;
@@ -55,35 +56,42 @@ namespace yuan::net::websocket
                     const auto &items = config_json_[client_support_protos_key];
                     if (items.is_array()) {
                         for (const auto &item : items.items()) {
-                            server_subprotos_.insert(item.value());
+                            client_subprotos_.insert(item.value());
                         }
                     }
                 }
 
                 return true;
-            } catch (...) {
+            }
+            catch (...)
+            {
                 LOG_ERROR("parse {} config file failed!", config_file_path_);
                 return false;
             }
         }
 
     public:
-        std::string_view config_file_path_;
+        std::string config_file_path_;
         nlohmann::json config_json_;
         std::set<std::string> client_subprotos_;
         std::set<std::string> server_subprotos_;
     };
 
-    WebSocketConfigManager::WebSocketConfigManager() : data_(std::make_unique<WebSocketConfigManager::ConfigData>()) {}
+    WebSocketConfigManager::WebSocketConfigManager()
+        : data_(std::make_unique<WebSocketConfigManager::ConfigData>())
+    {
+    }
 
-    WebSocketConfigManager::~WebSocketConfigManager() {}
+    WebSocketConfigManager::~WebSocketConfigManager()
+    {
+    }
 
     bool WebSocketConfigManager::init(bool isServer)
     {
         return data_->load_config(isServer);
     }
 
-    void WebSocketConfigManager::set_config_path(const std::string_view &path)
+    void WebSocketConfigManager::set_config_path(const std::string_view & path)
     {
         data_->config_file_path_ = path;
     }
@@ -98,17 +106,17 @@ namespace yuan::net::websocket
         return data_->config_json_.value(client_key_string_key, WebSocketUtils::gen_magic_string());
     }
 
-    const std::set<std::string> & WebSocketConfigManager::get_client_support_subprotos()
+    const std::set<std::string> &WebSocketConfigManager::get_client_support_subprotos()
     {
         return data_->client_subprotos_;
     }
 
-    const std::set<std::string> & WebSocketConfigManager::get_server_support_subprotos()
+    const std::set<std::string> &WebSocketConfigManager::get_server_support_subprotos()
     {
         return data_->server_subprotos_;
     }
 
-    const std::string * WebSocketConfigManager::find_server_support_sub_protocol(const std::set<std::string> &clientProtos)
+    const std::string *WebSocketConfigManager::find_server_support_sub_protocol(const std::set<std::string> & clientProtos)
     {
         for (const auto &proto : clientProtos) {
             auto it = data_->server_subprotos_.find(proto);
@@ -132,5 +140,10 @@ namespace yuan::net::websocket
     uint32_t WebSocketConfigManager::get_heat_beat_timeout()
     {
         return data_->config_json_.value(heat_beat_timeout_key, 0);
+    }
+
+    void WebSocketConfigManager::force_client_mask()
+    {
+        data_->config_json_[client_use_mask_key] = 1;
     }
 }

@@ -1,16 +1,11 @@
-#ifndef __NET_FTP_HANDLER_ENTRY_H__
-#define __NET_FTP_HANDLER_ENTRY_H__
-namespace yuan::net 
+#ifndef NET_FTP_HANDLER_ENTRY_H
+#define NET_FTP_HANDLER_ENTRY_H
+namespace yuan::net
 {
-    class EventHandler;
+    class NetworkRuntime;
 }
 
-namespace yuan::timer 
-{
-    class TimerManager;
-}
-
-namespace yuan::net::ftp 
+namespace yuan::net::ftp
 {
     class FtpSession;
 
@@ -19,9 +14,7 @@ namespace yuan::net::ftp
     public:
         virtual bool is_ok() = 0;
 
-        virtual timer::TimerManager * get_timer_manager() = 0;
-
-        virtual EventHandler * get_event_handler() = 0;
+        virtual NetworkRuntime *get_runtime() = 0;
 
         virtual void on_session_closed(FtpSession *session) = 0;
 

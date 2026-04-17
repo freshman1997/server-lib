@@ -6,83 +6,92 @@
 
 #include "coroutine/runtime.h"
 #include "coroutine/task.h"
+#include "event/event_loop.h"
 
 namespace yuan::coroutine
 {
 
-template <typename T>
-T sync_wait(RuntimeView runtime, Task<T> task)
-{
-    if (!runtime.event_loop()) {
-        return task.execute();
-    }
-
-    std::optional<T> result;
-    std::exception_ptr error;
-    bool completed = false;
-
-    auto driver = [&]() -> Task<bool> {
-        co_await runtime.schedule();
-
-        try {
-            result = co_await task;
-        } catch (...) {
-            error = std::current_exception();
+    template <typename T>
+    T sync_wait(RuntimeView runtime, Task<T> task)
+    {
+        if (!runtime.event_loop()) {
+            return task.execute();
         }
 
-        completed = true;
-        runtime.request_resume();
-        co_return true;
-    };
+        std::optional<T> result;
+        std::exception_ptr error;
+        bool completed = false;
 
-    auto driver_task = driver();
-    driver_task.resume();
+        auto driver = [&]()->Task<bool>
+        {
+            co_await runtime.schedule();
 
-    while (!completed) {
-        runtime.event_loop()->loop();
-    }
+            try
+            {
+                result = co_await task;
+            }
+            catch (...)
+            {
+                error = std::current_exception();
+            }
 
-    if (error) {
-        std::rethrow_exception(error);
-    }
+            completed = true;
+            runtime.request_resume();
+            co_return true;
+        };
 
-    return std::move(*result);
-}
+        auto driver_task = driver();
+        driver_task.resume();
 
-inline void sync_wait(RuntimeView runtime, Task<void> task)
-{
-    if (!runtime.event_loop()) {
-        task.execute();
-        return;
-    }
-
-    std::exception_ptr error;
-    bool completed = false;
-
-    auto driver = [&]() -> Task<void> {
-        co_await runtime.schedule();
-
-        try {
-            co_await task;
-        } catch (...) {
-            error = std::current_exception();
+        while (!completed) {
+            runtime.event_loop()->loop();
         }
 
-        completed = true;
-        runtime.request_resume();
-    };
+        if (error) {
+            std::rethrow_exception(error);
+        }
 
-    auto driver_task = driver();
-    driver_task.resume();
-
-    while (!completed) {
-        runtime.event_loop()->loop();
+        return std::move(*result);
     }
 
-    if (error) {
-        std::rethrow_exception(error);
+    inline void sync_wait(RuntimeView runtime, Task<void> task)
+    {
+        if (!runtime.event_loop()) {
+            task.execute();
+            return;
+        }
+
+        std::exception_ptr error;
+        bool completed = false;
+
+        auto driver = [&]()->Task<void>
+        {
+            co_await runtime.schedule();
+
+            try
+            {
+                co_await task;
+            }
+            catch (...)
+            {
+                error = std::current_exception();
+            }
+
+            completed = true;
+            runtime.request_resume();
+        };
+
+        auto driver_task = driver();
+        driver_task.resume();
+
+        while (!completed) {
+            runtime.event_loop()->loop();
+        }
+
+        if (error) {
+            std::rethrow_exception(error);
+        }
     }
-}
 
 } // namespace yuan::coroutine
 

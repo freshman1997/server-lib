@@ -3,18 +3,26 @@
 
 namespace yuan::timer
 {
-class TimerManager;
+    class TimerManager;
+}
+
+namespace yuan::coroutine
+{
+    class RuntimeView;
 }
 
 namespace yuan::net
 {
 
-class Socket;
-class StreamAcceptor;
-class DatagramAcceptor;
+    class Socket;
+    class StreamAcceptor;
+    class DatagramAcceptor;
+    class NetworkRuntime;
 
-StreamAcceptor *create_stream_acceptor(Socket *socket);
-DatagramAcceptor *create_datagram_acceptor(Socket *socket, yuan::timer::TimerManager *timer_manager);
+    StreamAcceptor *create_stream_acceptor(Socket * socket);
+    DatagramAcceptor *create_datagram_acceptor(Socket * socket, yuan::timer::TimerManager * timer_manager);
+    DatagramAcceptor *create_datagram_acceptor(Socket * socket, coroutine::RuntimeView runtime);
+    DatagramAcceptor *create_datagram_acceptor(Socket * socket, NetworkRuntime & runtime);
 
 } // namespace yuan::net
 

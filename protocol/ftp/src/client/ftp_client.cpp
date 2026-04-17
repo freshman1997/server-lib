@@ -1,270 +1,520 @@
 #include "client/ftp_client.h"
-#include "client/client_session.h"
+#include "coroutine/io_result.h"
+#include "coroutine/stream_io_awaitable.h"
+#include "coroutine/connect_awaitable.h"
+#include "coroutine/sync_wait.h"
 #include "net/connection/connection.h"
-#include "net/connection/connection_factory.h"
-#include "net/poller/select_poller.h"
-#include "net/socket/socket.h"
-#include "timer/wheel_timer_manager.h"
+#include "net/connection/stream_transport.h"
+#include "net/channel/channel.h"
+#include "common/def.h"
 
 #include "logger.h"
 
-#include <chrono>
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <sstream>
+#include <vector>
 
 namespace yuan::net::ftp
 {
-    FtpClient::FtpClient() : timer_manager_(nullptr), ev_loop_(nullptr), session_(nullptr),
-                            owned_timer_manager_(nullptr), owned_ev_loop_(nullptr) {}
-
-    FtpClient::~FtpClient()
+    namespace
     {
-        LOG_INFO("ftp client exiting");
-        if (owned_ev_loop_) {
-            delete owned_ev_loop_;
-            owned_ev_loop_ = nullptr;
-        }
-        if (owned_timer_manager_) {
-            delete owned_timer_manager_;
-            owned_timer_manager_ = nullptr;
+        InetAddress parse_pasv_endpoint(const std::string &body)
+        {
+            const auto left = body.find('(');
+            const auto right = body.find(')');
+            if (left == std::string::npos || right == std::string::npos || right <= left + 1) {
+                return {};
+            }
+            std::string payload = body.substr(left + 1, right - left - 1);
+            std::stringstream ss(payload);
+            std::string item;
+            std::vector<int> parts;
+            while (std::getline(ss, item, ',')) {
+                parts.push_back(std::stoi(item));
+            }
+            if (parts.size() != 6) {
+                return {};
+            }
+            std::string ip = std::to_string(parts[0]) + "." + std::to_string(parts[1]) + "." + std::to_string(parts[2]) + "." + std::to_string(parts[3]);
+            return { ip, parts[4] * 256 + parts[5] };
         }
     }
 
-    bool FtpClient::is_ok() { return ev_loop_ != nullptr && session_ != nullptr && session_->get_connection() != nullptr && session_->get_connection()->is_connected(); }
-    timer::TimerManager *FtpClient::get_timer_manager() { return timer_manager_; }
-    EventHandler *FtpClient::get_event_handler() { return ev_loop_; }
+    FtpClient::FtpClient() = default;
 
-    void FtpClient::on_session_closed(FtpSession *session)
+    FtpClient::~FtpClient()
     {
-        // Delete the session: on the client side, the session is owned via raw pointer.
-        // On the server side, deletion is handled by shared_ptr in session_manager.
-        delete session;
-        session_ = nullptr;
-        notify_connected_state(false);
-        LOG_INFO("FTP session closed by server or connection lost");
-        // Quit the event loop so connect() returns and the thread finishes.
-        // This allows the user to reconnect from the same process.
-        if (ev_loop_) {
-            ev_loop_->quit();
+        quit();
+    }
+
+    bool FtpClient::connect(const std::string & ip, uint16_t port)
+    {
+        owned_runtime_ = std::make_unique<NetworkRuntime>();
+        auto rv = owned_runtime_->runtime_view();
+        return coroutine::sync_wait(rv, connect_async(rv, ip, port));
+    }
+
+    bool FtpClient::login(const std::string & username, const std::string & password)
+    {
+        if (!control_session_.is_connected()) {
+            return false;
         }
+        auto rv = control_session_.runtime_view();
+        return coroutine::sync_wait(rv, login_async(username, password));
+    }
+
+    std::string FtpClient::list(const std::string & path)
+    {
+        if (!control_session_.is_connected()) {
+            return {};
+        }
+        auto rv = control_session_.runtime_view();
+        return coroutine::sync_wait(rv, list_async(path));
+    }
+
+    std::string FtpClient::nlist(const std::string & path)
+    {
+        if (!control_session_.is_connected()) {
+            return {};
+        }
+        auto rv = control_session_.runtime_view();
+        return coroutine::sync_wait(rv, nlist_async(path));
+    }
+
+    bool FtpClient::download(const std::string & remote_path, const std::string & local_path)
+    {
+        if (!control_session_.is_connected()) {
+            return false;
+        }
+        auto rv = control_session_.runtime_view();
+        return coroutine::sync_wait(rv, download_async(remote_path, local_path));
+    }
+
+    bool FtpClient::upload(const std::string & local_path, const std::string & remote_path)
+    {
+        if (!control_session_.is_connected()) {
+            return false;
+        }
+        auto rv = control_session_.runtime_view();
+        return coroutine::sync_wait(rv, upload_async(local_path, remote_path));
+    }
+
+    bool FtpClient::append(const std::string & local_path, const std::string & remote_path)
+    {
+        if (!control_session_.is_connected()) {
+            return false;
+        }
+        auto rv = control_session_.runtime_view();
+        return coroutine::sync_wait(rv, append_async(local_path, remote_path));
     }
 
     void FtpClient::quit()
     {
-        if (session_) {
-            // session_->quit() defers on_session_closed via queue_in_loop,
-            // which calls ev_loop_->quit() from within the event loop thread.
-            // Do NOT call ev_loop_->quit() here — it races with the event loop:
-            // if the loop is in cond.wait(), it wakes up and exits BEFORE
-            // processing the deferred callback, leaking the session/connection.
-            session_->quit();
+        if (control_session_.is_connected()) {
+            control_session_.close();
         }
-        // If session_ is null, on_session_closed already ran and quit the loop.
+        connected_ = false;
+        if (owned_runtime_) {
+            owned_runtime_->stop();
+        }
     }
 
-    void FtpClient::notify_connected_state(bool connected)
+    bool FtpClient::is_connected() const
     {
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            connected_ = connected;
-            if (!connected) {
-                pending_action_ = ClientPendingAction::none;
-                transfer_stage_ = ClientTransferStage::idle;
-                last_list_output_.clear();
+        return connected_ && control_session_.is_connected();
+    }
+
+    coroutine::Task<FtpClientResponse> FtpClient::read_response()
+    {
+        if (!pending_responses_.empty()) {
+            auto resp = std::move(pending_responses_.front());
+            pending_responses_.pop_front();
+            co_return resp;
+        }
+
+        while (true) {
+            auto responses = response_parser_.split_responses();
+            if (!responses.empty()) {
+                for (size_t i = 0; i + 1 < responses.size(); ++i) {
+                    pending_responses_.push_back(std::move(responses[i]));
+                }
+                co_return std::move(responses.back());
             }
-        }
-        state_cv_.notify_all();
-    }
 
-    void FtpClient::notify_client_context(const ClientContext &context)
-    {
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            pending_action_ = context.pending_action_;
-            transfer_stage_ = context.transfer_stage_;
-            last_list_output_ = context.list_output_;
-            if (!context.responses_.empty()) {
-                last_response_code_ = context.responses_.back().code_;
+            auto read_result = co_await control_session_.read_async();
+            if (read_result.status != coroutine::IoStatus::success) {
+                co_return FtpClientResponse{ 0, {} };
             }
+            response_parser_.set_buff(std::move(read_result.data));
         }
-        state_cv_.notify_all();
     }
 
-    bool FtpClient::wait_until_connected(uint32_t timeout_ms) const
+    coroutine::Task<FtpClientResponse> FtpClient::send_command_and_read(const std::string & cmd)
     {
-        std::unique_lock<std::mutex> lock(state_mutex_);
-        return state_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this]() {
-            return connected_;
-        });
-    }
-
-    bool FtpClient::wait_for_response_code(int code, uint32_t timeout_ms) const
-    {
-        std::unique_lock<std::mutex> lock(state_mutex_);
-        return state_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this, code]() {
-            return last_response_code_ == code;
-        });
-    }
-
-    bool FtpClient::wait_for_transfer_idle(uint32_t timeout_ms) const
-    {
-        std::unique_lock<std::mutex> lock(state_mutex_);
-        return state_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this]() {
-            return pending_action_ == ClientPendingAction::none
-                && transfer_stage_ == ClientTransferStage::idle;
-        });
-    }
-
-    bool FtpClient::wait_for_list_output(std::string *output, uint32_t timeout_ms) const
-    {
-        std::unique_lock<std::mutex> lock(state_mutex_);
-        const bool ready = state_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this]() {
-            return !last_list_output_.empty();
-        });
-        if (ready && output) {
-            *output = last_list_output_;
+        if (!control_session_.is_connected()) {
+            co_return FtpClientResponse{ 0, {} };
         }
-        return ready;
+        LOG_DEBUG("ftp client send: {}", cmd.substr(0, cmd.size() > 2 ? cmd.size() - 2 : cmd.size()));
+        control_session_.context().append_output(cmd);
+        control_session_.context().flush();
+        co_return co_await read_response();
     }
 
-    bool FtpClient::wait_for_local_file(const std::filesystem::path &path, uint32_t timeout_ms) const
+    coroutine::Task<bool> FtpClient::connect_async(coroutine::RuntimeView rv, const std::string & ip, uint16_t port, uint32_t timeout_ms)
     {
-        std::unique_lock<std::mutex> lock(state_mutex_);
-        return state_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this, &path]() {
-            return pending_action_ == ClientPendingAction::none
-                && transfer_stage_ == ClientTransferStage::idle
-                && std::filesystem::exists(path);
-        });
-    }
+        bool ok = co_await control_session_.connect_async(rv, ip, port, timeout_ms);
+        if (!ok) {
+            co_return false;
+        }
 
-    bool FtpClient::connect(const std::string &ip, short port)
-    {
-        // Clean up previous connection resources if reconnecting
-        if (session_) {
-            Connection *oldConn = session_->get_connection();
-            session_->quit();
-            if (oldConn) {
-                oldConn->set_connection_handler(nullptr);
-                oldConn->close();
-            }
-            delete session_;
-            session_ = nullptr;
-        }
-        if (owned_ev_loop_) {
-            delete owned_ev_loop_;
-            owned_ev_loop_ = nullptr;
-        }
-        if (owned_timer_manager_) {
-            delete owned_timer_manager_;
-            owned_timer_manager_ = nullptr;
-        }
-        timer_manager_ = nullptr;
-        ev_loop_ = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
+        connected_ = true;
+
+        auto welcome = co_await read_response();
+        if (welcome.code_ != 220) {
             connected_ = false;
-            last_response_code_ = 0;
-            pending_action_ = ClientPendingAction::none;
-            transfer_stage_ = ClientTransferStage::idle;
-            last_list_output_.clear();
-        }
-        state_cv_.notify_all();
-
-        addr_.set_addr(ip, port);
-        net::Socket *sock = new net::Socket(addr_.get_ip().c_str(), addr_.get_port());
-        if (!sock->valid()) {
-            LOG_ERROR("create socket fail!");
-            return false;
-        }
-        sock->set_none_block(true);
-        if (!sock->connect()) {
-            LOG_WARN("connect failed");
-            delete sock;
-            return false;
+            control_session_.close();
+            co_return false;
         }
 
-        // Allocate on heap to ensure objects remain alive after connect() returns
-        owned_timer_manager_ = new timer::WheelTimerManager();
-        owned_ev_loop_ = new net::EventLoop(new SelectPoller(), owned_timer_manager_);
-        timer_manager_ = owned_timer_manager_;
-        ev_loop_ = owned_ev_loop_;
+        co_return true;
+    }
 
-        auto *conn = create_stream_connection(sock);
-        session_ = new ClientFtpSession(conn, this);
-        conn->set_event_handler(ev_loop_);
-        ev_loop_->loop();
+    coroutine::Task<bool> FtpClient::login_async(const std::string & username, const std::string & password)
+    {
+        auto user_resp = co_await send_command_and_read("USER " + username + "\r\n");
+        if (user_resp.code_ != 331 && user_resp.code_ != 230) {
+            co_return false;
+        }
 
-        // Cleanup after loop exits.
-        // If the deferred callback from session_->quit() ran, session_ is null
-        // and everything is already cleaned up. Otherwise, clean up manually.
-        if (session_) {
-            // Save connection before quit() clears it from context
-            Connection *conn = session_->get_connection();
-            session_->quit();
-            // Close the connection manually (deferred callback didn't run)
-            if (conn) {
-                conn->set_connection_handler(nullptr);
-                conn->close();
+        if (user_resp.code_ == 230) {
+            co_return true;
+        }
+
+        auto pass_resp = co_await send_command_and_read("PASS " + password + "\r\n");
+        co_return pass_resp.code_ == 230;
+    }
+
+    coroutine::Task<InetAddress> FtpClient::do_pasv()
+    {
+        auto resp = co_await send_command_and_read("PASV\r\n");
+        if (resp.code_ != 227) {
+            co_return InetAddress{};
+        }
+        co_return parse_pasv_endpoint(resp.body_);
+    }
+
+    coroutine::Task<net::AsyncConnectionContext> FtpClient::connect_data_channel(const InetAddress & data_addr, StreamMode mode)
+    {
+        auto rv = control_session_.runtime_view();
+
+        auto connect_result = co_await coroutine::async_connect(rv, data_addr.get_ip(), data_addr.get_port());
+        if (connect_result.result != coroutine::ConnectResult::success || !connect_result.connection) {
+            co_return net::AsyncConnectionContext{};
+        }
+
+        auto *data_conn = connect_result.connection;
+        net::AsyncConnectionContext data_ctx(data_conn, rv);
+
+        if (auto *stream = dynamic_cast<StreamTransport *>(data_conn)) {
+            if (auto *channel = stream->stream_channel()) {
+                if (mode == StreamMode::Receiver) {
+                    channel->disable_write();
+                    channel->enable_read();
+                } else {
+                    channel->disable_read();
+                    channel->enable_write();
+                }
+                rv.update_channel(channel);
             }
-            delete session_;
-            session_ = nullptr;
         }
 
-        return true;
+        co_return data_ctx;
     }
-    bool FtpClient::send_command(const std::string &cmd) { return session_ ? session_->send_command(cmd) : false; }
-    bool FtpClient::login(const std::string &username, const std::string &password)
+
+    coroutine::Task<FtpTransferResult> FtpClient::transfer_data(net::AsyncConnectionContext & data_ctx, FtpFileInfo & file_info)
     {
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            last_response_code_ = 0;
+        bool transfer_ok = false;
+
+        if (file_info.mode_ == StreamMode::Sender) {
+            while (!file_info.is_completed()) {
+                ::yuan::buffer::ByteBuffer buff(default_write_buff_size);
+                int ret = file_info.read_file(default_write_buff_size, buff);
+                if (ret < 0) {
+                    break;
+                }
+                if (buff.readable_bytes() > 0) {
+                    data_ctx.write_and_flush(buff);
+                    auto flush_result = co_await data_ctx.flush_async();
+                    if (flush_result.status != coroutine::IoStatus::success) {
+                        break;
+                    }
+                }
+                if (file_info.is_completed()) {
+                    transfer_ok = true;
+                    break;
+                }
+            }
+        } else {
+            while (true) {
+                auto read_result = co_await data_ctx.read_async();
+                if (read_result.status != coroutine::IoStatus::success) {
+                    break;
+                }
+                int ret = file_info.write_file(read_result.data);
+                if (ret < 0) {
+                    break;
+                }
+                if (file_info.is_completed()) {
+                    transfer_ok = true;
+                    break;
+                }
+            }
+            if (file_info.file_size_ == 0 && !file_info.is_completed()) {
+                file_info.state_ = FileState::processed;
+                transfer_ok = true;
+            }
         }
-        auto *session = dynamic_cast<ClientFtpSession *>(session_);
-        return session ? session->login(username, password) : false;
-    }
-    bool FtpClient::list(const std::string &path)
-    {
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            last_list_output_.clear();
+
+        co_await data_ctx.close_async();
+
+        FtpTransferResult result;
+        result.ok = transfer_ok;
+        if (file_info.in_memory_ && file_info.mode_ == StreamMode::Receiver) {
+            result.list_output = file_info.memory_content_;
         }
-        auto *session = dynamic_cast<ClientFtpSession *>(session_);
-        return session ? session->list(path) : false;
+        co_return result;
     }
-    bool FtpClient::nlist(const std::string &path)
+
+    coroutine::Task<std::string> FtpClient::list_async(const std::string & path)
     {
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            last_list_output_.clear();
+        auto data_addr = co_await do_pasv();
+        if (data_addr.get_port() <= 0) {
+            co_return{};
         }
-        auto *session = dynamic_cast<ClientFtpSession *>(session_);
-        return session ? session->nlist(path) : false;
-    }
-    bool FtpClient::download(const std::string &remote_path, const std::string &local_path)
-    {
-        auto *session = dynamic_cast<ClientFtpSession *>(session_);
-        return session ? session->download(remote_path, local_path) : false;
-    }
-    bool FtpClient::upload(const std::string &local_path, const std::string &remote_path)
-    {
-        auto *session = dynamic_cast<ClientFtpSession *>(session_);
-        return session ? session->upload(local_path, remote_path) : false;
-    }
-    bool FtpClient::append(const std::string &local_path, const std::string &remote_path)
-    {
-        auto *session = dynamic_cast<ClientFtpSession *>(session_);
-        return session ? session->append(local_path, remote_path) : false;
-    }
-    const ClientContext *FtpClient::get_client_context() const
-    {
-        auto *session = dynamic_cast<ClientFtpSession *>(session_);
-        return session ? &session->get_client_context() : nullptr;
-    }
-    bool FtpClient::is_transfer_in_progress() const
-    {
-        auto *session = dynamic_cast<ClientFtpSession *>(session_);
-        if (!session) {
-            return false;
+
+        auto data_ctx = co_await connect_data_channel(data_addr, StreamMode::Receiver);
+        if (!data_ctx.is_connected()) {
+            co_return{};
         }
-        const auto *ctx = get_client_context();
-        return ctx && ctx->pending_action_ != ClientPendingAction::none && ctx->transfer_stage_ != ClientTransferStage::idle;
+
+        FtpFileInfo info;
+        info.mode_ = StreamMode::Receiver;
+        info.type_ = FileType::directory;
+        info.in_memory_ = true;
+        info.ready_ = true;
+
+        auto cmd = path.empty() ? "LIST\r\n" : "LIST " + path + "\r\n";
+        auto cmd_resp = co_await send_command_and_read(cmd);
+        if (cmd_resp.code_ != 150) {
+            data_ctx.close();
+            co_return{};
+        }
+
+        auto transfer_result = co_await transfer_data(data_ctx, info);
+        if (!transfer_result.ok) {
+            co_return{};
+        }
+
+        auto final_resp = co_await read_response();
+        if (final_resp.code_ != 226) {
+            co_return{};
+        }
+
+        co_return transfer_result.list_output;
+    }
+
+    coroutine::Task<std::string> FtpClient::nlist_async(const std::string & path)
+    {
+        auto data_addr = co_await do_pasv();
+        if (data_addr.get_port() <= 0) {
+            co_return{};
+        }
+
+        auto data_ctx = co_await connect_data_channel(data_addr, StreamMode::Receiver);
+        if (!data_ctx.is_connected()) {
+            co_return{};
+        }
+
+        FtpFileInfo info;
+        info.mode_ = StreamMode::Receiver;
+        info.type_ = FileType::directory;
+        info.in_memory_ = true;
+        info.ready_ = true;
+
+        auto cmd = path.empty() ? "NLST\r\n" : "NLST " + path + "\r\n";
+        auto cmd_resp = co_await send_command_and_read(cmd);
+        if (cmd_resp.code_ != 150) {
+            data_ctx.close();
+            co_return{};
+        }
+
+        auto transfer_result = co_await transfer_data(data_ctx, info);
+        if (!transfer_result.ok) {
+            co_return{};
+        }
+
+        auto final_resp = co_await read_response();
+        if (final_resp.code_ != 226) {
+            co_return{};
+        }
+
+        co_return transfer_result.list_output;
+    }
+
+    coroutine::Task<bool> FtpClient::download_async(const std::string & remote_path, const std::string & local_path)
+    {
+        namespace fs = std::filesystem;
+
+        std::size_t offset = 0;
+        if (!local_path.empty() && fs::exists(local_path)) {
+            offset = static_cast<std::size_t>(fs::file_size(local_path));
+        }
+
+        if (offset > 0) {
+            auto rest_resp = co_await send_command_and_read("REST " + std::to_string(offset) + "\r\n");
+            if (rest_resp.code_ != 350) {
+                offset = 0;
+            }
+        }
+
+        std::size_t file_size = 0;
+        auto size_resp = co_await send_command_and_read("SIZE " + remote_path + "\r\n");
+        if (size_resp.code_ == 213) {
+            try
+            {
+                file_size = static_cast<std::size_t>(std::stoll(size_resp.body_));
+            }
+            catch (...)
+            {
+                co_return false;
+            }
+        }
+
+        auto data_addr = co_await do_pasv();
+        if (data_addr.get_port() <= 0) {
+            co_return false;
+        }
+
+        auto data_ctx = co_await connect_data_channel(data_addr, StreamMode::Receiver);
+        if (!data_ctx.is_connected()) {
+            co_return false;
+        }
+
+        std::string resolved_local = local_path;
+        if (resolved_local.empty()) {
+            resolved_local = fs::path(remote_path).filename().generic_string();
+        }
+        const auto parent = fs::path(resolved_local).parent_path();
+        if (!parent.empty()) {
+            fs::create_directories(parent);
+        }
+
+        FtpFileInfo info;
+        info.mode_ = StreamMode::Receiver;
+        info.origin_name_ = remote_path;
+        info.dest_name_ = resolved_local;
+        info.file_size_ = file_size;
+        info.current_progress_ = offset;
+        info.append_mode_ = offset > 0;
+        info.ready_ = true;
+
+        auto cmd_resp = co_await send_command_and_read("RETR " + remote_path + "\r\n");
+        if (cmd_resp.code_ != 150) {
+            data_ctx.close();
+            co_return false;
+        }
+
+        auto transfer_result = co_await transfer_data(data_ctx, info);
+
+        auto final_resp = co_await read_response();
+        co_return transfer_result.ok &&final_resp.code_ == 226;
+    }
+
+    coroutine::Task<bool> FtpClient::upload_async(const std::string & local_path, const std::string & remote_path)
+    {
+        namespace fs = std::filesystem;
+        if (!fs::exists(local_path)) {
+            co_return false;
+        }
+
+        const std::size_t total = static_cast<std::size_t>(fs::file_size(local_path));
+
+        auto allo_resp = co_await send_command_and_read("ALLO " + std::to_string(total) + "\r\n");
+        if (allo_resp.code_ != 200 && allo_resp.code_ != 202) {
+            co_return false;
+        }
+
+        auto data_addr = co_await do_pasv();
+        if (data_addr.get_port() <= 0) {
+            co_return false;
+        }
+
+        auto data_ctx = co_await connect_data_channel(data_addr, StreamMode::Sender);
+        if (!data_ctx.is_connected()) {
+            co_return false;
+        }
+
+        FtpFileInfo info;
+        info.mode_ = StreamMode::Sender;
+        info.origin_name_ = local_path;
+        info.dest_name_ = remote_path;
+        info.file_size_ = total;
+        info.ready_ = true;
+
+        auto cmd_resp = co_await send_command_and_read("STOR " + remote_path + "\r\n");
+        if (cmd_resp.code_ != 150) {
+            data_ctx.close();
+            co_return false;
+        }
+
+        auto transfer_result = co_await transfer_data(data_ctx, info);
+
+        auto final_resp = co_await read_response();
+        co_return transfer_result.ok &&final_resp.code_ == 226;
+    }
+
+    coroutine::Task<bool> FtpClient::append_async(const std::string & local_path, const std::string & remote_path)
+    {
+        namespace fs = std::filesystem;
+        if (!fs::exists(local_path)) {
+            co_return false;
+        }
+
+        const std::size_t total = static_cast<std::size_t>(fs::file_size(local_path));
+
+        auto allo_resp = co_await send_command_and_read("ALLO " + std::to_string(total) + "\r\n");
+        if (allo_resp.code_ != 200 && allo_resp.code_ != 202) {
+            co_return false;
+        }
+
+        auto data_addr = co_await do_pasv();
+        if (data_addr.get_port() <= 0) {
+            co_return false;
+        }
+
+        auto data_ctx = co_await connect_data_channel(data_addr, StreamMode::Sender);
+        if (!data_ctx.is_connected()) {
+            co_return false;
+        }
+
+        FtpFileInfo info;
+        info.mode_ = StreamMode::Sender;
+        info.origin_name_ = local_path;
+        info.dest_name_ = remote_path;
+        info.file_size_ = total;
+        info.ready_ = true;
+
+        auto cmd_resp = co_await send_command_and_read("APPE " + remote_path + "\r\n");
+        if (cmd_resp.code_ != 150) {
+            data_ctx.close();
+            co_return false;
+        }
+
+        auto transfer_result = co_await transfer_data(data_ctx, info);
+
+        auto final_resp = co_await read_response();
+        co_return transfer_result.ok &&final_resp.code_ == 226;
     }
 }

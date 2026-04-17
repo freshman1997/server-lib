@@ -34,11 +34,11 @@ namespace yuan::net::http
         if (retry > 0) {
             oss << "retry: " << retry << "\n";
         }
-        oss << "\\n";
+        oss << "\n";
         return oss.str();
     }
 
-    SseConnection::SseConnection(HttpRequest *req, HttpResponse *resp)
+    SseConnection::SseConnection(HttpRequest * req, HttpResponse * resp)
         : req_(req), resp_(resp)
     {
         auto *ctx = req->get_context();
@@ -51,7 +51,7 @@ namespace yuan::net::http
         resp_->add_header("Content-Type", "text/event-stream");
         resp_->add_header("Cache-Control", "no-cache, no-transform");
         resp_->add_header("Connection", "keep-alive");
-        resp_->add_header("X-Accel-Buffering", "no");  // 禁用Nginx缓冲
+        resp_->add_header("X-Accel-Buffering", "no"); // 禁用Nginx缓冲
         resp_->add_header("Access-Control-Allow-Origin", "*");
 
         // 先发送响应头
@@ -63,12 +63,12 @@ namespace yuan::net::http
         close();
     }
 
-    void SseConnection::send(const SseEvent &event)
+    void SseConnection::send(const SseEvent & event)
     {
         do_send(event.serialize());
     }
 
-    void SseConnection::send(const std::string &data, const std::string &event, const std::string &id)
+    void SseConnection::send(const std::string & data, const std::string & event, const std::string & id)
     {
         SseEvent e;
         e.data = data;
@@ -77,7 +77,7 @@ namespace yuan::net::http
         send(e);
     }
 
-    void SseConnection::send_batch(const std::vector<SseEvent> &events)
+    void SseConnection::send_batch(const std::vector<SseEvent> & events)
     {
         std::string payload;
         payload.reserve(4096);
@@ -89,7 +89,7 @@ namespace yuan::net::http
 
     void SseConnection::heartbeat()
     {
-        do_send(": heartbeat\r\n\r\n");  // SSE注释行，保持连接活跃
+        do_send(": heartbeat\r\n\r\n"); // SSE注释行，保持连接活跃
     }
 
     void SseConnection::close()
@@ -102,39 +102,48 @@ namespace yuan::net::http
 
     std::string SseConnection::get_peer_ip() const
     {
-        if (conn_) return conn_->get_remote_address().get_ip();
+        if (conn_)
+            return conn_->get_remote_address().get_ip();
         return {};
     }
 
-    void SseConnection::do_send(const std::string &payload)
+    void SseConnection::do_send(const std::string & payload)
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        if (!active_.load() || !conn_) return;
+        if (!active_.load() || !conn_)
+            return;
 
         conn_->append_output(payload);
         conn_->flush();
     }
 
-    SseChannel::SseChannel(const std::string &name, size_t max_clients)
-        : name_(name), max_clients_(max_clients) {}
+    SseChannel::SseChannel(const std::string & name, size_t max_clients)
+        : name_(name), max_clients_(max_clients)
+    {
+    }
 
     SseChannel::~SseChannel()
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        for (auto &[id, conn] : subscribers_) {
-            if (conn) conn->close();
+        for (auto & [
+                        id,
+                        conn
+                    ] : subscribers_) {
+            if (conn)
+                conn->close();
         }
         subscribers_.clear();
     }
 
-    bool SseChannel::subscribe(SseConnection *conn)
+    bool SseChannel::subscribe(SseConnection * conn)
     {
-        if (!conn) return false;
+        if (!conn)
+            return false;
 
         std::lock_guard<std::mutex> lock(mutex_);
         if (subscribers_.size() >= max_clients_) {
-            return false;  // 已满
+            return false; // 已满
         }
 
         subscribers_[conn->get_connection_id()] = conn;
@@ -147,7 +156,7 @@ namespace yuan::net::http
         subscribers_.erase(conn_id);
     }
 
-    void SseChannel::broadcast(const SseEvent &event)
+    void SseChannel::broadcast(const SseEvent & event)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         for (auto it = subscribers_.begin(); it != subscribers_.end();) {
@@ -160,9 +169,9 @@ namespace yuan::net::http
         }
     }
 
-    void SseChannel::broadcast(const std::string &data, const std::string &event)
+    void SseChannel::broadcast(const std::string & data, const std::string & event)
     {
-        broadcast(SseEvent{"", event, data});
+        broadcast(SseEvent{ "", event, data });
     }
 
     size_t SseChannel::active_count() const
@@ -171,13 +180,13 @@ namespace yuan::net::http
         return subscribers_.size();
     }
 
-    SseManager& SseManager::instance()
+    SseManager &SseManager::instance()
     {
         static SseManager inst;
         return inst;
     }
 
-    std::shared_ptr<SseChannel> SseManager::get_or_create_channel(const std::string &name, size_t max_clients)
+    std::shared_ptr<SseChannel> SseManager::get_or_create_channel(const std::string & name, size_t max_clients)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = channels_.find(name);
@@ -189,14 +198,14 @@ namespace yuan::net::http
         return ch;
     }
 
-    std::shared_ptr<SseChannel> SseManager::get_channel(const std::string &name) const
+    std::shared_ptr<SseChannel> SseManager::get_channel(const std::string & name) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = channels_.find(name);
         return (it != channels_.end()) ? it->second : nullptr;
     }
 
-    void SseManager::remove_channel(const std::string &name)
+    void SseManager::remove_channel(const std::string & name)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         channels_.erase(name);

@@ -17,17 +17,15 @@ namespace yuan::net
 
     const int UDP_DATA_LIMIT = 1472;
 
-    enum class UdpAdapterType
-    {
-        none    = 0,
-        kcp     = 1,
+    enum class UdpAdapterType {
+        none = 0,
+        kcp = 1,
     };
 
-    enum class UdpMode
-    {
-        normal      = 0,
-        broadcast   = 1,
-        multicast   = 2,
+    enum class UdpMode {
+        normal = 0,
+        broadcast = 1,
+        multicast = 2,
     };
 
     class UdpInstance
@@ -37,7 +35,7 @@ namespace yuan::net
         ~UdpInstance();
 
         UdpInstance(const UdpInstance &) = delete;
-        UdpInstance & operator=(const UdpInstance &) = delete;
+        UdpInstance &operator=(const UdpInstance &) = delete;
 
     public:
         void send();
@@ -60,11 +58,14 @@ namespace yuan::net
 
         void set_acceptor(DatagramEndpoint *acceptor);
 
-        timer::TimerManager * get_timer_manager();
+        timer::TimerManager *get_timer_manager() const;
 
         void enable_rw_events();
 
-        bool is_closing() const { return is_closing_; }
+        bool is_closing() const
+        {
+            return is_closing_;
+        }
 
         void set_adapter_type(UdpAdapterType type)
         {

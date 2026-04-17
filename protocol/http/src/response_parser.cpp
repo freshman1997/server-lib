@@ -1,11 +1,12 @@
 #include "response_parser.h"
 #include "response.h"
 #include "response_code.h"
+#include <charconv>
 #include <cstdlib>
 
-namespace yuan::net::http 
+namespace yuan::net::http
 {
-    bool HttpResponseParser::parse_header(::yuan::buffer::ByteBuffer &buff)
+    bool HttpResponseParser::parse_header(::yuan::buffer::ByteBuffer & buff)
     {
         auto from = buff.read_offset();
         if (header_state == HeaderState::init) {
@@ -55,13 +56,13 @@ namespace yuan::net::http
         return true;
     }
 
-    #define PRE_CHECK(state) \
-        HttpResponse *resp = static_cast<HttpResponse *>(packet_); \
-        if (!resp || header_state != state || buff.readable_bytes() == 0) { \
-            return false; \
-        }
-    
-    bool HttpResponseParser::parse_status(::yuan::buffer::ByteBuffer &buff)
+#define PRE_CHECK(state)                                                \
+    HttpResponse *resp = static_cast<HttpResponse *>(packet_);          \
+    if (!resp || header_state != state || buff.readable_bytes() == 0) { \
+        return false;                                                   \
+    }
+
+    bool HttpResponseParser::parse_status(::yuan::buffer::ByteBuffer & buff)
     {
         PRE_CHECK(HeaderState::version_gap)
 
@@ -81,28 +82,45 @@ namespace yuan::net::http
             return false;
         }
 
-        int code = std::atoi(status.c_str());
-        resp->set_response_code((ResponseCode)code);
+        int code = 0;
+        auto[
+            ptr,
+            ec
+        ] = std::from_chars(status.data(), status.data() + status.size(), code);
+        if (ec != std::errc{} || ptr != status.data() + status.size()) {
+            return false;
+        }
+
+        if (code < 100 || code > 599) {
+            return false;
+        }
+
+        resp->set_response_code(static_cast<ResponseCode>(code));
 
         return true;
     }
 
-    bool HttpResponseParser::parse_status_desc(::yuan::buffer::ByteBuffer &buff)
+    bool HttpResponseParser::parse_status_desc(::yuan::buffer::ByteBuffer & buff)
     {
         PRE_CHECK(HeaderState::header_status_gap)
 
         std::string data;
         char ch = buff.read_i8();
         data.push_back(ch);
-        while (ch != '\r' && ch != '\n' && buff.readable_bytes()) {
+        while (ch != '\r' && buff.readable_bytes()) {
             ch = buff.read_i8();
-            if (ch != '\r' && ch != '\n') {
+            if (ch != '\r') {
                 data.push_back(ch);
             }
         }
-        
-        // last /n
-        buff.read_i8();
+
+        if (buff.readable_bytes() == 0) {
+            return false;
+        }
+
+        if (buff.read_i8() != '\n') {
+            return false;
+        }
 
         return true;
     }

@@ -7,7 +7,7 @@
 #include "timer/timer_manager.h"
 #include <memory>
 
-namespace yuan::net 
+namespace yuan::net
 {
     class ConnectorHandler;
 
@@ -20,7 +20,7 @@ namespace yuan::net
 
         virtual void set_ssl_module(std::shared_ptr<SSLModule> module) = 0;
 
-        virtual int get_retry_count() = 0;
+        virtual int get_retry_count() const = 0;
 
         virtual void cancel() = 0;
     };

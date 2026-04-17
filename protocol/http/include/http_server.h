@@ -9,19 +9,15 @@
 #include "common.h"
 #include "define/upload.h"
 #include "middleware.h"
-#include "net/handler/connection_handler.h"
+#include "coroutine/task.h"
+#include "net/async/async_listener_host.h"
+#include "net/async/async_connection_context.h"
+#include "net/runtime/network_runtime.h"
 #include "net/secuity/ssl_module.h"
 #include "request_dispatcher.h"
 #include "thread/thread_pool.h"
-#include "timer/timer_manager.h"
 
-namespace yuan::net
-{
-    class Socket;
-    class Poller;
-    class EventLoop;
-    class StreamAcceptor;
-}
+#include <functional>
 
 namespace yuan::net::http
 {
@@ -40,30 +36,31 @@ namespace yuan::net::http
         std::string server_name = "YuanServer/1.0";
     };
 
-    class HttpServer : public ConnectionHandler
+    class HttpServer
     {
     public:
         HttpServer();
         explicit HttpServer(const HttpServerConfig &config);
         ~HttpServer();
 
-        HttpServer(const HttpServer&) = delete;
-        HttpServer& operator=(const HttpServer&) = delete;
-
-    public:
-        void on_connected(Connection *conn) override;
-        void on_error(Connection *conn) override;
-        void on_read(Connection *conn) override;
-        void on_write(Connection *conn) override;
-        void on_close(Connection *conn) override;
+        HttpServer(const HttpServer &) = delete;
+        HttpServer &operator=(const HttpServer &) = delete;
 
     public:
         bool init(int port);
+        bool init(int port, NetworkRuntime &runtime);
         void serve();
         void stop();
 
-        EventLoop * get_event_loop() { return event_loop_; }
-        timer::TimerManager * get_timer_manager() { return timer_manager_; }
+        NetworkRuntime *runtime() const noexcept
+        {
+            return listener_.runtime();
+        }
+
+        HttpProxy *get_proxy() const noexcept
+        {
+            return proxy_.get();
+        }
 
     public:
         void on(const std::string &url, request_function func, bool is_prefix = false);
@@ -71,24 +68,35 @@ namespace yuan::net::http
                 std::shared_ptr<MiddlewarePipeline> pipeline, bool is_prefix = false);
         void use(std::shared_ptr<HttpMiddleware> middleware);
         void use(middleware_function fn, const char *name = "anonymous");
-        const MiddlewarePipeline& global_middleware() const { return global_pipeline_; }
+
+        using WsProxyHandler = std::function<coroutine::Task<void>(
+            net::AsyncConnectionContext, const std::string &, const std::string &,
+            const std::string &, const std::string &, ::yuan::buffer::ByteBuffer)>;
+
+        void set_ws_proxy_handler(WsProxyHandler handler)
+        {
+            ws_proxy_handler_ = std::move(handler);
+        }
+        const MiddlewarePipeline &global_middleware() const
+        {
+            return global_pipeline_;
+        }
 
     public:
-        const HttpServerConfig& config() const { return config_; }
+        const HttpServerConfig &config() const
+        {
+            return config_;
+        }
 
     private:
-        static Poller * create_default_poller();
-        bool init_runtime(int port);
         bool init_ssl_if_needed();
         bool init_http_features();
         void register_builtin_routes();
         bool init_proxy_if_needed();
         bool parse_request(HttpSessionContext *context);
+        bool parse_request(HttpSessionContext *context, const ::yuan::buffer::ByteBuffer &data);
         bool dispatch_request(HttpSessionContext *context);
         void finalize_request(uint64_t session_id, HttpSession *session, HttpSessionContext *context);
-        void bind_event_loop(EventLoop *loop);
-        void cleanup_runtime();
-        void free_session(Connection *conn);
         void load_static_paths();
         static void icon(HttpRequest *req, HttpResponse *resp);
         void serve_static(HttpRequest *req, HttpResponse *resp);
@@ -146,18 +154,18 @@ namespace yuan::net::http
             int received_count);
         void handle_options_preflight(HttpRequest *req, HttpResponse *resp);
 
+        yuan::coroutine::Task<void> handle_connection(net::AsyncConnectionContext ctx);
+
     private:
-        bool quit_ = false;
-        Poller *poller_ = nullptr;
-        StreamAcceptor *acceptor_ = nullptr;
-        EventLoop *event_loop_ = nullptr;
-        timer::TimerManager *timer_manager_ = nullptr;
+        net::AsyncListenerHost listener_;
+        std::unique_ptr<NetworkRuntime> owned_runtime_;
         std::shared_ptr<SSLModule> ssl_module_;
-        std::unordered_map<uint64_t, HttpSession *> sessions_;
+        std::unordered_map<uint64_t, std::unique_ptr<HttpSession> > sessions_;
         HttpRequestDispatcher dispatcher_;
         std::unordered_map<std::string, std::string> static_paths_;
         std::set<std::string> play_types_;
-        HttpProxy *proxy_ = nullptr;
+        std::unique_ptr<HttpProxy> proxy_;
+        WsProxyHandler ws_proxy_handler_;
         std::unordered_map<std::string, UploadFileMapping> uploaded_chunks_;
         std::unique_ptr<thread::ThreadPool> thread_pool_;
         HttpServerConfig config_;
@@ -165,13 +173,3 @@ namespace yuan::net::http
     };
 }
 #endif
-
-
-
-
-
-
-
-
-
-

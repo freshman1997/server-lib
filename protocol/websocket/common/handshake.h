@@ -8,42 +8,48 @@
 #include <set>
 #include <string>
 
-namespace yuan::net::websocket 
+namespace yuan::net::websocket
 {
+    class WebSocketConfigManager;
+
     class WebSocketHandshaker
     {
     public:
-        
     public:
         WebSocketHandshaker();
 
     public:
-        bool on_handshake(http::HttpRequest * req, http::HttpResponse *resp, WebSocketConnection::WorkMode workMode = WebSocketConnection::WorkMode::client_, bool isResp = false);
+        bool on_handshake(http::HttpRequest *req, http::HttpResponse *resp, WebSocketConnection::WorkMode workMode = WebSocketConnection::WorkMode::client_, bool isResp = false);
 
         bool is_handshake_done() const
         {
             return ok_;
         }
 
-        const std::string & get_client_key() const
+        const std::string &get_client_key() const
         {
             return client_key_;
         }
 
-        const std::string & get_server_key() const
+        const std::string &get_server_key() const
         {
             return server_key_;
         }
 
-        const std::string & get_working_subproto() const
+        const std::string &get_working_subproto() const
         {
             return working_subproto_;
         }
 
-    private:
-        bool do_handshake_server(http::HttpRequest * req, http::HttpResponse *resp);
+        void set_config(WebSocketConfigManager *config)
+        {
+            config_ = config;
+        }
 
-        bool do_handshake_client(http::HttpRequest * req, http::HttpResponse *resp, bool isResp);
+    private:
+        bool do_handshake_server(http::HttpRequest *req, http::HttpResponse *resp);
+
+        bool do_handshake_client(http::HttpRequest *req, http::HttpResponse *resp, bool isResp);
 
         void decode_into_set(const std::string &raw, std::set<std::string> &protos, char delimiter);
 
@@ -56,6 +62,7 @@ namespace yuan::net::websocket
         std::string working_subproto_;
         std::set<std::string> client_sub_protos_;
         std::set<std::string> server_sub_protos_;
+        WebSocketConfigManager *config_;
     };
 }
 

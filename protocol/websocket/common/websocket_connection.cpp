@@ -1,383 +1,293 @@
 #include "websocket_connection.h"
 #include "base/time.h"
-#include "context.h"
 #include "handshake.h"
 #include "net/connection/connection.h"
-#include "net/handler/connection_handler.h"
+#include "net/runtime/network_runtime.h"
 #include "timer/timer.h"
 #include "websocket_config.h"
 #include "websocket_packet_parser.h"
-#include "response_code.h"
-#include "session.h"
 #include "websocket_protocol.h"
-#include "timer/timer_util.hpp"
-#include "handler.h"
 
 #include <cassert>
 #include "logger.h"
-#include <memory>
-#include <vector>
 
 namespace yuan::net::websocket
 {
-    class WebSocketConnection::ConnData : public ConnectionHandler
+    WebSocketConnection::WebSocketConnection(WorkMode mode)
+        : mode_(mode), state_(State::connecting_), conn_(nullptr), heartbeat_timer_(nullptr), config_(nullptr), last_active_time_(0)
     {
-        friend class WebSocketPacketParser;
-    public:
-        ConnData(WebSocketConnection *this_, WorkMode mode) : mode_(mode), state_(State::connecting_), self_(this_), conn_(nullptr), session_(nullptr), handler_(nullptr), heartbeat_timer_(nullptr)
-        {
-        }
-
-        ~ConnData()
-        {
-            if (heartbeat_timer_) {
-                heartbeat_timer_->cancel();
-                heartbeat_timer_ = nullptr;
-            }
-
-            if (session_) {
-                delete session_;
-                session_ = nullptr;
-            }
-
-            input_chunks_.clear();
-
-            output_chunks_.clear();
-        }
-
-    public:
-        virtual void on_connected(Connection *conn)
-        {
-            if (conn_) {
-                LOG_WARN("repeat handshaking!");
-                conn->close();
-                return;
-            }
-
-            assert(state_ == State::connecting_);
-
-            conn_ = conn;
-            conn_->set_connection_handler(this);
-
-            if (mode_ == WorkMode::client_) {
-                assert(!handshaker_.is_handshake_done());
-
-                if (url_.empty()) {
-                    url_ = "/";
-                }
-
-                if (!session_) {
-                    http::HttpSessionContext *ctx = new http::HttpSessionContext(conn);
-                    ctx->set_mode(http::Mode::client);
-                    session_= new http::HttpSession((uint64_t)conn, ctx, nullptr);
-                }
-
-                auto context = session_->get_context();
-                context->get_request()->set_raw_url(url_);
-                if (!handshaker_.on_handshake(context->get_request(), context->get_response(), WorkMode::client_)) {
-                    LOG_WARN("cant handshake!");
-                    conn->close();
-                }
-            }
-        }
-
-        virtual void on_error(Connection *conn) {}
-
-        virtual void on_read(Connection *conn)
-        {
-            if (handshaker_.is_handshake_done()) {
-                assert(handler_);
-                if (pkt_parser_.unpack(self_)) {
-                    bool close = false;
-                    for (int i = 0; i < input_chunks_.size(); ++i) {
-                        auto *chunk = &input_chunks_[i];
-                        if (chunk->is_completed()) {
-                            if (chunk->head_.is_close_frame()) {
-                                close = true;
-                                break;
-                            } else if (chunk->head_.is_ping_frame()) {
-                                send_pong_frame();
-                            } else if (chunk->head_.is_pong_frame()) {
-                                on_pong_frame();
-                            } else {
-                                if (!chunk->body_.empty() || chunk->head_.extend_pay_load_len_ == 0) {
-                                    assert(chunk->head_.extend_pay_load_len_ == chunk->body_.readable_bytes());
-                                    handler_->on_receive_packet(self_, chunk->body_);
-                                } else {
-                                    LOG_ERROR("ws internal error: null body");
-                                    close = true;
-                                    break;
-                                }
-                            }
-                        } else {
-                            LOG_ERROR("ws internal error: incomplete chunk");
-                            close = true;
-                            break;
-                        }
-                    }
-
-                    input_chunks_.clear();
-
-                    if (close) {
-                        conn->close();
-                        return;
-                    }
-                } else {
-                    self_->close(WebSocketCloseCode::invalid_palyload_);
-                }
-            } else {
-                assert(state_ == State::connecting_);
-                if (!session_ && mode_ == WorkMode::server_) {
-                    http::HttpSessionContext *ctx = new http::HttpSessionContext(conn);
-                    ctx->set_mode(http::Mode::server);
-                    session_= new http::HttpSession((uint64_t)conn, ctx, nullptr);
-                }
-
-                auto context = session_->get_context();
-                assert(!context->is_completed());
-
-                if (!context->parse()) {
-                    if (mode_ == WorkMode::server_) {
-                        if (context->has_error()) {
-                            context->process_error(context->get_error_code());
-                        }
-                    } else {
-                        conn->close();
-                    }
-                    return;
-                }
-
-                if (context->has_error()) {
-                    context->process_error(context->get_error_code());
-                    return;
-                }
-
-                if (context->is_completed()) {
-                    if (mode_ == WorkMode::client_) {
-                        handshaker_.on_handshake(context->get_request(), context->get_response(), WorkMode::client_, true);
-                        if (!handshaker_.is_handshake_done()) {
-                            LOG_WARN("cant handshake!");
-                            conn->close();
-                            return;
-                        }
-                    } else {
-                        handshaker_.on_handshake(context->get_request(), context->get_response(), WorkMode::server_);
-                        if (!handshaker_.is_handshake_done()) {
-                            LOG_WARN("cant handshake!");
-                            context->process_error(http::ResponseCode::forbidden);
-                            return;
-                        }
-                        url_ = context->get_request()->get_raw_url();
-                    }
-                    
-                    state_ = State::connected_;
-                    handler_->on_connected(self_);
-
-                    delete session_;
-                    session_ = nullptr;
-                }
-            }
-        }
-
-        virtual void on_write(Connection *conn) {}
-
-        virtual void on_close(Connection *conn)
-        {
-            state_ = State::closed_;
-            if (session_) {
-                delete session_;
-                session_ = nullptr;
-            }
-            self_->free_self();
-        }
-
-    public:
-        bool send(const yuan::buffer::ByteBuffer &buff, PacketType pktType)
-        {
-            if (state_ != State::connected_) {
-                return false;
-            }
-
-            if (pktType == PacketType::close_ || pktType == PacketType::ping_ || pktType == PacketType::pong_) {
-                conn_->write_and_flush(buff);
-                return true;
-            }
-
-            assert(handler_ && conn_);
-            if (pkt_parser_.pack(self_, buff, (uint8_t)pktType)) {
-                for (auto &chunk : output_chunks_) {
-                    conn_->write(chunk);
-                }
-                output_chunks_.clear();
-
-                // flush
-                conn_->flush();
-
-                return true;
-            } else {
-                LOG_ERROR("cant pack ws frame!");
-                conn_->close();
-                return false;
-            }
-        }
-
-        void hear_beat(timer::Timer *timer)
-        {
-            send_ping_frame();
-        }
-
-        void send_ping_frame()
-        {
-            yuan::buffer::ByteBuffer buf(2);
-            buf.append_u8(0x89);
-            buf.append_u8(0x00);
-            send(buf, PacketType::ping_);
-        }
-
-        void send_pong_frame()
-        {
-            yuan::buffer::ByteBuffer buf(2);
-            buf.append_u8(0x8a);
-            buf.append_u8(0x00);
-            send(buf, PacketType::pong_);
-            state_ = State::closing_;
-        }
-
-        void send_close_frame(uint16_t code)
-        {
-            yuan::buffer::ByteBuffer buf(4);
-            buf.append_u8(0x88);
-            buf.append_u8(0x02);
-
-            // 这里表示关闭连接的原因码为 1000
-            buf.append_u8(uint8_t((code >> 8) & 0xff));
-            buf.append_u8(uint8_t(code & 0xff));
-            send(buf, PacketType::close_);
-        }
-
-        void on_pong_frame()
-        {
-            uint32_t timeout = WebSocketConfigManager::get_instance()->get_heat_beat_timeout();
-            if (timeout > 0) {
-                if (base::time::now() > last_active_time_ + timeout) {
-                    self_->close();
-                    return;
-                }
-            }
-            last_active_time_ = base::time::now();
-        }
-
-    public:
-        WorkMode mode_;
-        State state_;
-        std::string url_;
-        WebSocketConnection *self_;
-        WebSocketHandler *handler_;
-        Connection *conn_;
-        http::HttpSession *session_;
-        timer::Timer *heartbeat_timer_;
-        WebSocketHandshaker handshaker_;
-        WebSocketPacketParser pkt_parser_;
-        std::vector<ProtoChunk> input_chunks_;
-        std::vector<yuan::buffer::ByteBuffer> output_chunks_;
-        uint32_t last_active_time_;
-    };
-
-    WebSocketConnection::WebSocketConnection(WorkMode mode) : data_(std::make_unique<WebSocketConnection::ConnData>(this, mode))
-    {
-        if (mode == WorkMode::client_) {
-            use_mask(WebSocketConfigManager::get_instance()->is_client_use_mask());
-        } else {
-            use_mask(WebSocketConfigManager::get_instance()->is_server_use_mask());
-        }
     }
 
     WebSocketConnection::~WebSocketConnection()
     {
-        if (data_->handler_) {
-            data_->handler_->on_close(this);
-            data_->handler_ = nullptr;
+        if (heartbeat_timer_) {
+            heartbeat_timer_->cancel();
+            heartbeat_timer_ = nullptr;
         }
     }
 
-    void WebSocketConnection::on_created(Connection *conn)
+    void WebSocketConnection::bind_connection(Connection * conn)
     {
-        data_->on_connected(conn);
+        conn_ = conn;
     }
 
-    bool WebSocketConnection::send(const yuan::buffer::ByteBuffer &buf, PacketType pktType)
+    void WebSocketConnection::set_config(WebSocketConfigManager * config)
     {
-        assert(data_->conn_);
-        return data_->send(buf, pktType);
+        config_ = config;
+        handshaker_.set_config(config);
+        if (config_) {
+            if (mode_ == WorkMode::client_) {
+                use_mask(config_->is_client_use_mask());
+            } else {
+                use_mask(config_->is_server_use_mask());
+            }
+        }
     }
 
-    bool WebSocketConnection::send(const char *data, size_t len, PacketType pktType)
+    bool WebSocketConnection::send(const ::yuan::buffer::ByteBuffer & buf, PacketType pktType)
     {
-        if (data_->state_ != State::connected_) {
+        if (state_ != State::connected_) {
             return false;
         }
-        
-        return send(yuan::buffer::ByteBuffer(data, len), pktType);
+
+        assert(conn_);
+
+        if (pktType == PacketType::close_ || pktType == PacketType::ping_ || pktType == PacketType::pong_) {
+            std::vector< ::yuan::buffer::ByteBuffer> output;
+            if (pack_control_frame(buf, static_cast<uint8_t>(pktType), output)) {
+                for (auto &chunk : output) {
+                    conn_->write(chunk);
+                }
+                conn_->flush();
+                return true;
+            }
+            return false;
+        }
+
+        if (pkt_parser_.pack(this, buf, (uint8_t)pktType)) {
+            for (auto &chunk : output_chunks_) {
+                conn_->write(chunk);
+            }
+            output_chunks_.clear();
+            conn_->flush();
+            return true;
+        } else {
+            LOG_ERROR("cant pack ws frame!");
+            conn_->close();
+            return false;
+        }
+    }
+
+    bool WebSocketConnection::send(const char * data, size_t len, PacketType pktType)
+    {
+        if (state_ != State::connected_) {
+            return false;
+        }
+        return send(::yuan::buffer::ByteBuffer(data, len), pktType);
     }
 
     void WebSocketConnection::close(WebSocketCloseCode code)
     {
-        assert(data_->conn_);
-        data_->state_ = State::closing_;
-        data_->send_close_frame((uint16_t)code);
-        data_->conn_->close();
+        if (state_ == State::closed_ || state_ == State::closing_) {
+            return;
+        }
+        state_ = State::closing_;
+        if (conn_) {
+            send_close_frame_to(conn_, (uint16_t)code);
+        }
     }
 
-    void WebSocketConnection::set_handler(WebSocketHandler *handler)
+    Connection *WebSocketConnection::get_native_connection()
     {
-        data_->handler_ = handler;
+        return conn_;
     }
 
-    void WebSocketConnection::free_self()
+    const std::string &WebSocketConnection::get_url() const
     {
-        delete this;
+        return url_;
     }
 
-    net::Connection * WebSocketConnection::get_native_connection()
+    void WebSocketConnection::set_url(const std::string & url)
     {
-        return data_->conn_;
-    }
-
-    std::vector<yuan::buffer::ByteBuffer> * WebSocketConnection::get_output_buffers()
-    {
-        return &data_->output_chunks_;
-    }
-
-    std::vector<ProtoChunk> * WebSocketConnection::get_input_chunks()
-    {
-        return &data_->input_chunks_;
-    }
-
-    const std::string & WebSocketConnection::get_url() const
-    {
-        return data_->url_;
-    }
-
-    void WebSocketConnection::set_url(const std::string &url)
-    {
-        data_->url_ = url;
+        url_ = url;
     }
 
     WebSocketConnection::State WebSocketConnection::get_state() const
     {
-        return data_->state_;
+        return state_;
     }
 
-    void WebSocketConnection::try_set_heartbeat_timer(timer::TimerManager *timerManager)
+    void WebSocketConnection::set_state(State s)
     {
-        uint32_t interval = WebSocketConfigManager::get_instance()->get_heart_beat_interval();
-        if (interval > 0) {
-            data_->heartbeat_timer_ = timer::TimerUtil::build_period_timer(timerManager, interval, interval, this->data_.get(), &WebSocketConnection::ConnData::hear_beat);
-        }
+        state_ = s;
     }
 
     void WebSocketConnection::use_mask(bool on)
     {
-        data_->pkt_parser_.use_mask(on);
+        pkt_parser_.use_mask(on);
+    }
+
+    void WebSocketConnection::try_set_heartbeat_timer(NetworkRuntime * runtime)
+    {
+        if (!config_)
+            return;
+        uint32_t interval = config_->get_heart_beat_interval();
+        if (interval > 0) {
+            heartbeat_timer_ = runtime->schedule_periodic(interval, interval, [this]() {
+                if (conn_ && state_ == State::connected_) {
+                    send_ping_frame_to(conn_);
+                }
+            });
+        }
+    }
+
+    FrameDispatchResult WebSocketConnection::dispatch_frames(Connection * conn)
+    {
+        bool close = false;
+        auto &chunks = input_chunks_;
+        for (size_t i = 0; i < chunks.size(); ++i) {
+            auto &chunk = chunks[i];
+            if (!chunk.is_completed()) {
+                LOG_ERROR("ws internal error: incomplete chunk");
+                return FrameDispatchResult::error_;
+            }
+
+            if (chunk.head_.is_close_frame()) {
+                close = true;
+                break;
+            } else if (chunk.head_.is_ping_frame()) {
+                send_pong_frame_to(conn, chunk.body_);
+            } else if (chunk.head_.is_pong_frame()) {
+                if (config_) {
+                    uint32_t timeout = config_->get_heat_beat_timeout();
+                    if (timeout > 0) {
+                        if (base::time::now() > last_active_time_ + timeout) {
+                            return FrameDispatchResult::close_;
+                        }
+                    }
+                }
+                last_active_time_ = base::time::now();
+            } else {
+                if (!chunk.body_.empty() || chunk.head_.extend_pay_load_len_ == 0) {
+                    if (on_data) {
+                        on_data(this, chunk.body_);
+                    }
+                } else {
+                    LOG_ERROR("ws internal error: null body");
+                    return FrameDispatchResult::error_;
+                }
+            }
+        }
+
+        clear_input_chunks();
+
+        if (close) {
+            return FrameDispatchResult::close_;
+        }
+        return FrameDispatchResult::ok_;
+    }
+
+    WebSocketHandshaker &WebSocketConnection::handshaker()
+    {
+        return handshaker_;
+    }
+
+    WebSocketPacketParser &WebSocketConnection::pkt_parser()
+    {
+        return pkt_parser_;
+    }
+
+    const std::vector<ProtoChunk> &WebSocketConnection::input_chunks() const
+    {
+        return input_chunks_;
+    }
+
+    std::vector<ProtoChunk> &WebSocketConnection::input_chunks()
+    {
+        return input_chunks_;
+    }
+
+    void WebSocketConnection::clear_input_chunks()
+    {
+        input_chunks_.clear();
+    }
+
+    bool WebSocketConnection::pack_frame(const ::yuan::buffer::ByteBuffer & data, uint8_t type, std::vector< ::yuan::buffer::ByteBuffer> & output)
+    {
+        auto *orig = get_output_buffers();
+        orig->clear();
+
+        if (!pkt_parser_.pack(this, data, type)) {
+            return false;
+        }
+
+        for (auto &chunk : *orig) {
+            output.push_back(std::move(chunk));
+        }
+        orig->clear();
+        return true;
+    }
+
+    bool WebSocketConnection::pack_control_frame(const ::yuan::buffer::ByteBuffer & data, uint8_t type, std::vector< ::yuan::buffer::ByteBuffer> & output)
+    {
+        auto *orig = get_output_buffers();
+        orig->clear();
+
+        if (!pkt_parser_.pack_control(this, data, type)) {
+            return false;
+        }
+
+        for (auto &chunk : *orig) {
+            output.push_back(std::move(chunk));
+        }
+        orig->clear();
+        return true;
+    }
+
+    void WebSocketConnection::send_ping_frame_to(Connection * conn)
+    {
+        ::yuan::buffer::ByteBuffer empty_payload;
+        std::vector< ::yuan::buffer::ByteBuffer> output;
+        if (pack_control_frame(empty_payload, static_cast<uint8_t>(OpCodeType::type_ping_frame), output)) {
+            for (auto &buf : output) {
+                conn->write(buf);
+            }
+            conn->flush();
+        }
+    }
+
+    void WebSocketConnection::send_pong_frame_to(Connection * conn, const ::yuan::buffer::ByteBuffer & payload)
+    {
+        std::vector< ::yuan::buffer::ByteBuffer> output;
+        if (pack_control_frame(payload, static_cast<uint8_t>(OpCodeType::type_pong_frame), output)) {
+            for (auto &buf : output) {
+                conn->write(buf);
+            }
+            conn->flush();
+        }
+    }
+
+    void WebSocketConnection::send_close_frame_to(Connection * conn, uint16_t code)
+    {
+        ::yuan::buffer::ByteBuffer payload(2);
+        payload.append_u8(static_cast<uint8_t>((code >> 8) & 0xff));
+        payload.append_u8(static_cast<uint8_t>(code & 0xff));
+        std::vector< ::yuan::buffer::ByteBuffer> output;
+        if (pack_control_frame(payload, static_cast<uint8_t>(OpCodeType::type_close_frame), output)) {
+            for (auto &buf : output) {
+                conn->write(buf);
+            }
+            conn->flush();
+        }
+    }
+
+    std::vector< ::yuan::buffer::ByteBuffer> *WebSocketConnection::get_output_buffers()
+    {
+        return &output_chunks_;
+    }
+
+    std::vector<ProtoChunk> *WebSocketConnection::get_input_chunks()
+    {
+        return &input_chunks_;
     }
 }

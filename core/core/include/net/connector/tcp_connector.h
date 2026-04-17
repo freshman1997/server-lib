@@ -3,7 +3,7 @@
 #include "connector.h"
 #include <memory>
 
-namespace yuan::net 
+namespace yuan::net
 {
     class TcpConnector : public Connector
     {
@@ -29,7 +29,7 @@ namespace yuan::net
 
         virtual void set_ssl_module(std::shared_ptr<SSLModule> module);
 
-        virtual int get_retry_count();
+        virtual int get_retry_count() const override;
 
         virtual void cancel();
 
@@ -42,4 +42,4 @@ namespace yuan::net
     };
 }
 
-#endif 
+#endif

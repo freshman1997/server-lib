@@ -7,7 +7,8 @@
 
 namespace yuan::net::websocket
 {
-    WebSocketPacketParser::WebSocketPacketParser() : use_mask_(false)
+    WebSocketPacketParser::WebSocketPacketParser()
+        : use_mask_(false)
     {
         if (use_mask_) {
             update_mask();
@@ -16,7 +17,7 @@ namespace yuan::net::websocket
 
     WebSocketPacketParser::~WebSocketPacketParser() = default;
 
-    int WebSocketPacketParser::read_chunk(ProtoChunk *chunk, yuan::buffer::ByteBuffer &buff)
+    int WebSocketPacketParser::read_chunk(ProtoChunk * chunk, yuan::buffer::ByteBuffer & buff)
     {
         const std::size_t from = buff.read_offset();
         if (!chunk->has_set_head_) {
@@ -76,7 +77,7 @@ namespace yuan::net::websocket
         return 0;
     }
 
-    void WebSocketPacketParser::apply_mask(yuan::buffer::ByteBuffer &buff, uint32_t buffSize, uint8_t *mask, uint32_t len)
+    void WebSocketPacketParser::apply_mask(yuan::buffer::ByteBuffer & buff, uint32_t buffSize, uint8_t * mask, uint32_t len)
     {
         auto *p = buff.read_ptr();
         auto *end = p + buffSize;
@@ -85,7 +86,7 @@ namespace yuan::net::websocket
         }
     }
 
-    void WebSocketPacketParser::apply_mask(const yuan::buffer::ByteBuffer &data, yuan::buffer::ByteBuffer &buff, uint32_t buffSize)
+    void WebSocketPacketParser::apply_mask(const yuan::buffer::ByteBuffer & data, yuan::buffer::ByteBuffer & buff, uint32_t buffSize)
     {
         const auto *p = data.read_ptr();
         const auto *end = p + buffSize;
@@ -94,13 +95,8 @@ namespace yuan::net::websocket
         }
     }
 
-    bool WebSocketPacketParser::unpack(WebSocketConnection *conn)
+    bool WebSocketPacketParser::unpack_loop(WebSocketConnection * conn)
     {
-        auto input = conn->get_native_connection()->take_input_byte_buffer();
-        if (!input.empty()) {
-            frame_buffer_.append(input);
-        }
-
         auto chunks = conn->get_input_chunks();
         if (chunks->empty() || chunks->back().head_.is_fin()) {
             chunks->push_back(ProtoChunk());
@@ -146,6 +142,7 @@ namespace yuan::net::websocket
                 if (!chunk.body_.empty() && chunk.head_.need_mask()) {
                     apply_mask(chunk.body_, static_cast<uint32_t>(chunk.body_.readable_bytes()), chunk.head_.masking_key_, 4);
                 }
+                pc->head_.ctrl_code_.fin_ = chunk.head_.ctrl_code_.fin_;
                 pc->head_.extend_pay_load_len_ += chunk.head_.extend_pay_load_len_;
                 pc->body_.append(chunk.body_);
             }
@@ -173,7 +170,26 @@ namespace yuan::net::websocket
         return true;
     }
 
-    bool WebSocketPacketParser::pack_header(yuan::buffer::ByteBuffer &buff, uint8_t type, uint32_t buffSize, bool isEnd, bool isContinueFrame)
+    bool WebSocketPacketParser::unpack_from(WebSocketConnection * conn, const ::yuan::buffer::ByteBuffer & data)
+    {
+        if (!data.empty()) {
+            frame_buffer_.append(data);
+        }
+
+        return unpack_loop(conn);
+    }
+
+    bool WebSocketPacketParser::unpack(WebSocketConnection * conn)
+    {
+        auto input = conn->get_native_connection()->take_input_byte_buffer();
+        if (!input.empty()) {
+            frame_buffer_.append(input);
+        }
+
+        return unpack_loop(conn);
+    }
+
+    bool WebSocketPacketParser::pack_header(yuan::buffer::ByteBuffer & buff, uint8_t type, uint32_t buffSize, bool isEnd, bool isContinueFrame)
     {
         uint8_t head1 = 0x00;
         if (isEnd) {
@@ -181,10 +197,12 @@ namespace yuan::net::websocket
         }
 
         if (!isContinueFrame) {
-            if (type == static_cast<uint8_t>(OpCodeType::type_text_frame)) {
-                head1 |= static_cast<uint8_t>(OpCodeType::type_text_frame) & 0xff;
-            } else if (type == static_cast<uint8_t>(OpCodeType::type_binary_frame)) {
-                head1 |= static_cast<uint8_t>(OpCodeType::type_binary_frame) & 0xff;
+            if (type == static_cast<uint8_t>(OpCodeType::type_text_frame) ||
+                type == static_cast<uint8_t>(OpCodeType::type_binary_frame) ||
+                type == static_cast<uint8_t>(OpCodeType::type_close_frame) ||
+                type == static_cast<uint8_t>(OpCodeType::type_ping_frame) ||
+                type == static_cast<uint8_t>(OpCodeType::type_pong_frame)) {
+                head1 |= type & 0x0f;
             } else {
                 return false;
             }
@@ -195,12 +213,12 @@ namespace yuan::net::websocket
             head2 = 0b10000000;
         }
 
-        if (buffSize <= 0x7f) {
+        if (buffSize <= 125) {
             head2 |= static_cast<uint8_t>(buffSize);
         } else if (buffSize <= 65535) {
-            head2 |= 0x7f - 1;
+            head2 |= 126;
         } else if (buffSize <= PACKET_MAX_BYTE) {
-            head2 |= 0x7f;
+            head2 |= 127;
         } else {
             return false;
         }
@@ -223,7 +241,7 @@ namespace yuan::net::websocket
         return true;
     }
 
-    bool WebSocketPacketParser::pack_frame(const yuan::buffer::ByteBuffer &data, yuan::buffer::ByteBuffer &buff, std::size_t offset, uint32_t size)
+    bool WebSocketPacketParser::pack_frame(const yuan::buffer::ByteBuffer & data, yuan::buffer::ByteBuffer & buff, std::size_t offset, uint32_t size)
     {
         if (offset + size > data.readable_bytes()) {
             return false;
@@ -241,7 +259,7 @@ namespace yuan::net::websocket
         return true;
     }
 
-    bool WebSocketPacketParser::pack(WebSocketConnection *conn, const yuan::buffer::ByteBuffer &data, uint8_t type)
+    bool WebSocketPacketParser::pack(WebSocketConnection * conn, const yuan::buffer::ByteBuffer & data, uint8_t type)
     {
         auto buffers = conn->get_output_buffers();
         uint32_t sz = static_cast<uint32_t>(data.readable_bytes() / PACKET_MAX_BYTE + 1);
@@ -270,17 +288,52 @@ namespace yuan::net::websocket
         return true;
     }
 
+    bool WebSocketPacketParser::pack_control(WebSocketConnection * conn, const yuan::buffer::ByteBuffer & data, uint8_t type)
+    {
+        if (type != static_cast<uint8_t>(OpCodeType::type_close_frame) &&
+            type != static_cast<uint8_t>(OpCodeType::type_ping_frame) &&
+            type != static_cast<uint8_t>(OpCodeType::type_pong_frame)) {
+            return false;
+        }
+
+        const uint32_t payloadSize = static_cast<uint32_t>(data.readable_bytes());
+        if (payloadSize > 125) {
+            return false;
+        }
+
+        auto buffers = conn->get_output_buffers();
+
+        const int headSize = ProtoChunk::calc_head_size(payloadSize, use_mask_);
+        if (headSize < 0) {
+            return false;
+        }
+
+        yuan::buffer::ByteBuffer buff(payloadSize + headSize);
+        if (!pack_header(buff, type, payloadSize, true, false)) {
+            return false;
+        }
+
+        if (payloadSize > 0) {
+            if (!pack_frame(data, buff, 0, payloadSize)) {
+                return false;
+            }
+        }
+
+        buffers->push_back(std::move(buff));
+        return true;
+    }
+
     static uint32_t generateMask()
     {
-        static std::mt19937_64 generator(std::random_device{}());
-        static std::uniform_int_distribution<uint32_t> distribution;
+        static thread_local std::mt19937_64 generator(std::random_device {}());
+        static thread_local std::uniform_int_distribution<uint32_t> distribution;
         return distribution(generator);
     }
 
     void WebSocketPacketParser::update_mask()
     {
         for (int i = 0; i < 4; ++i) {
-            mask_[i] = generateMask() % 0xff;
+            mask_[i] = generateMask() % 256;
         }
     }
 

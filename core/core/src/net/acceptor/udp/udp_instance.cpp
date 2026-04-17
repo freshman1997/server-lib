@@ -10,9 +10,10 @@
 #include <cassert>
 #include <utility>
 
-namespace yuan::net 
+namespace yuan::net
 {
-    UdpInstance::UdpInstance(DatagramEndpoint *acceptor) : acceptor_(acceptor), adapter_type_(UdpAdapterType::none), is_closing_(false)
+    UdpInstance::UdpInstance(DatagramEndpoint * acceptor)
+        : acceptor_(acceptor), adapter_type_(UdpAdapterType::none), is_closing_(false)
     {
     }
 
@@ -25,12 +26,12 @@ namespace yuan::net
         conns_.clear();
     }
 
-    void UdpInstance::set_acceptor(DatagramEndpoint *acceptor)
+    void UdpInstance::set_acceptor(DatagramEndpoint * acceptor)
     {
         acceptor_ = acceptor;
     }
 
-    std::pair<bool, Connection *> UdpInstance::on_recv(const InetAddress &address)
+    std::pair<bool, Connection *> UdpInstance::on_recv(const InetAddress & address)
     {
         auto it = conns_.find(address);
         if (it == conns_.end()) {
@@ -39,7 +40,7 @@ namespace yuan::net
                 UdpAdapter *adapter = new KcpAdapter;
                 udpConn = create_datagram_connection(address, adapter);
                 if (!adapter->init(udpConn, acceptor_->endpoint_timer_manager())) {
-                    return {false, udpConn};
+                    return { false, udpConn };
                 }
             } else {
                 udpConn = create_datagram_connection(address);
@@ -54,7 +55,7 @@ namespace yuan::net
         }
     }
 
-    int UdpInstance::on_send(Connection *conn, const yuan::buffer::ByteBuffer &buff)
+    int UdpInstance::on_send(Connection * conn, const yuan::buffer::ByteBuffer & buff)
     {
         assert(acceptor_);
         return acceptor_->send_datagram(conn, buff);
@@ -65,7 +66,7 @@ namespace yuan::net
         auto it = conns_.begin();
         while (it != conns_.end()) {
             auto current = it;
-            ++it;  // advance before processing, as on_write_event/flush may delete the connection
+            ++it; // advance before processing, as on_write_event/flush may delete the connection
             if (current->second->is_connected()) {
                 current->second->on_write_event();
             } else {
@@ -74,7 +75,7 @@ namespace yuan::net
         }
     }
 
-    void UdpInstance::on_connection_close(Connection *conn)
+    void UdpInstance::on_connection_close(Connection * conn)
     {
         if (is_closing_) {
             return;
@@ -86,7 +87,7 @@ namespace yuan::net
         }
     }
 
-    timer::TimerManager * UdpInstance::get_timer_manager()
+    timer::TimerManager *UdpInstance::get_timer_manager() const
     {
         return acceptor_ ? acceptor_->endpoint_timer_manager() : nullptr;
     }

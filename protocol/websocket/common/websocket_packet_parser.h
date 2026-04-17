@@ -3,7 +3,7 @@
 #include "buffer/byte_buffer.h"
 #include "websocket_protocol.h"
 
-namespace yuan::net::websocket 
+namespace yuan::net::websocket
 {
     class WebSocketConnection;
 
@@ -15,14 +15,20 @@ namespace yuan::net::websocket
 
         bool unpack(WebSocketConnection *conn);
 
+        bool unpack_from(WebSocketConnection *conn, const ::yuan::buffer::ByteBuffer &data);
+
         bool pack(WebSocketConnection *conn, const ::yuan::buffer::ByteBuffer &buff, uint8_t type);
+
+        bool pack_control(WebSocketConnection *conn, const ::yuan::buffer::ByteBuffer &buff, uint8_t type);
 
         void update_mask();
 
         void use_mask(bool use);
-        
+
     private:
         int read_chunk(ProtoChunk *chunk, ::yuan::buffer::ByteBuffer &buff);
+
+        bool unpack_loop(WebSocketConnection *conn);
 
         void apply_mask(const ::yuan::buffer::ByteBuffer &data, ::yuan::buffer::ByteBuffer &buff, uint32_t buffSize);
 
@@ -34,7 +40,7 @@ namespace yuan::net::websocket
 
     private:
         bool use_mask_;
-        uint8_t mask_[7];
+        uint8_t mask_[4];
         ::yuan::buffer::ByteBuffer frame_buffer_;
     };
 }

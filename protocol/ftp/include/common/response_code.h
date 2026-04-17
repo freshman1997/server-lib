@@ -1,5 +1,5 @@
-#ifndef __NET_FTP_RESPONSE_CODE_H__
-#define __NET_FTP_RESPONSE_CODE_H__
+#ifndef NET_FTP_RESPONSE_CODE_H
+#define NET_FTP_RESPONSE_CODE_H
 
 namespace yuan::net::ftp
 {

@@ -1,5 +1,5 @@
-#ifndef _NET_FTP_COMMON_FILE_UTIL_H__
-#define _NET_FTP_COMMON_FILE_UTIL_H__
+#ifndef NET_FTP_COMMON_FILE_UTIL_H
+#define NET_FTP_COMMON_FILE_UTIL_H
 #include <string>
 
 #include "def.h"

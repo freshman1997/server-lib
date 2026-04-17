@@ -5,6 +5,7 @@
 #include "stream_transport.h"
 #include "net/handler/select_handler.h"
 #include <memory>
+#include <string>
 
 namespace yuan::net
 {
@@ -17,11 +18,11 @@ namespace yuan::net
 
         virtual ~TcpConnection();
 
-        virtual ConnectionState get_connection_state();
+        virtual ConnectionState get_connection_state() const override;
 
-        virtual bool is_connected();
+        virtual bool is_connected() const override;
 
-        virtual const InetAddress & get_remote_address();
+        virtual const InetAddress &get_remote_address() const override;
 
         virtual void write(const ::yuan::buffer::ByteBuffer &buffer);
 
@@ -35,13 +36,33 @@ namespace yuan::net
         // 发送完数据后返回
         virtual void close();
 
-        Channel *stream_channel() override;
+        Channel *stream_channel() const override;
 
         virtual void set_connection_handler(ConnectionHandler *connectionHandler);
 
-        virtual ConnectionHandler * get_connection_handler();
+        virtual ConnectionHandler *get_connection_handler() const override;
 
         virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler);
+
+        virtual std::shared_ptr<SSLHandler> get_ssl_handler() const override
+        {
+            return ssl_handler_;
+        }
+
+        virtual bool is_ssl_handshaking() const override
+        {
+            return ssl_handshaking_;
+        }
+
+        virtual void set_ssl_handshaking(bool handshaking) override
+        {
+            ssl_handshaking_ = handshaking;
+        }
+
+        virtual void set_ssl_handshake_callback(SslHandshakeCallback callback) override
+        {
+            ssl_handshake_callback_ = std::move(callback);
+        }
 
     public: // select handler
         virtual void on_read_event();
@@ -62,7 +83,9 @@ namespace yuan::net
         ConnectionHandler *connectionHandler_;
         EventHandler *eventHandler_;
         std::shared_ptr<SSLHandler> ssl_handler_;
-        bool is_closing_;  // 防止重复调用 do_close 导致 double-free
+        bool is_closing_;
+        bool ssl_handshaking_ = false;
+        SslHandshakeCallback ssl_handshake_callback_;
     };
 }
 

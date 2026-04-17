@@ -2,11 +2,11 @@
 #include "common/file_stream.h"
 #include "net/connection/connection_factory.h"
 #include "net/acceptor/tcp_acceptor.h"
-#include "event/event_loop.h"
 #include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
 #include "common/session.h"
 #include "handler/ftp_app.h"
+#include "net/runtime/network_runtime.h"
 
 #include <cassert>
 #include <cstring>
@@ -38,43 +38,60 @@ namespace yuan::net::ftp
                 assert(socket_);
 
                 while (true) {
-                    sockaddr_in peer_addr{};
-                    memset(&peer_addr, 0, sizeof(sockaddr_in));
-                    int conn_fd = socket_->accept(peer_addr);
+                    sockaddr_storage peer_storage{};
+                    memset(&peer_storage, 0, sizeof(sockaddr_storage));
+                    int conn_fd = socket_->accept(peer_storage);
                     if (conn_fd < 0) {
-                    #ifdef _DEBUG
+#ifdef _DEBUG
                         if (errno != EAGAIN && errno != ECONNABORTED && errno != EPROTO && errno != EINTR) {
                             LOG_WARN("error connection {}", errno);
                         }
-                    #endif
+#endif
                         break;
                     }
+
+                    InetAddress peer_addr(peer_storage);
 
                     std::shared_ptr<SSLHandler> sslHandler = nullptr;
                     if (ssl_module_) {
                         sslHandler = ssl_module_->create_handler(conn_fd, SSLHandler::SSLMode::acceptor_);
-                        if (!sslHandler || sslHandler->ssl_init_action() <= 0) {
+                        if (!sslHandler) {
                             if (auto msg = ssl_module_->get_error_message()) {
                                 LOG_ERROR("ssl error: {}", msg->c_str());
                             }
                             ::close(conn_fd);
-                            return;
+                            continue;
                         }
                     }
 
-                    auto *conn = create_stream_connection(::inet_ntoa(peer_addr.sin_addr), ntohs(peer_addr.sin_port), conn_fd);
+                    auto *conn = create_stream_connection(peer_addr.get_ip(), peer_addr.get_port(), conn_fd);
                     conn->set_event_handler(handler_);
                     conn->set_connection_handler(conn_handler_);
+
                     if (sslHandler) {
                         conn->set_ssl_handler(sslHandler);
+                        conn->set_ssl_handshaking(true);
+                        int ret = sslHandler->ssl_init_action();
+                        if (ret > 0) {
+                            conn->set_ssl_handshaking(false);
+                        } else if (!sslHandler->ssl_want_read() && !sslHandler->ssl_want_write()) {
+                            if (auto msg = ssl_module_->get_error_message()) {
+                                LOG_ERROR("ssl handshake error: {}", msg->c_str());
+                            }
+                            conn->set_ssl_handshaking(false);
+                            conn->abort();
+                            continue;
+                        }
                     }
+
                     handler_->on_new_connection(conn);
                 }
             }
         };
     }
 
-    ServerFtpFileStream::ServerFtpFileStream(FtpSession *session) : FtpFileStream(session)
+    ServerFtpFileStream::ServerFtpFileStream(FtpSession * session)
+        : FtpFileStream(session)
     {
         acceptor_ = nullptr;
     }
@@ -87,12 +104,12 @@ namespace yuan::net::ftp
         }
     }
 
-    void ServerFtpFileStream::on_connected(Connection *conn)
+    void ServerFtpFileStream::on_connected(Connection * conn)
     {
         FtpFileStream::on_connected(conn);
     }
 
-    bool ServerFtpFileStream::start(const InetAddress &addr)
+    bool ServerFtpFileStream::start(const InetAddress & addr)
     {
         assert(session_);
         if (acceptor_) {
@@ -120,16 +137,15 @@ namespace yuan::net::ftp
             return false;
         }
 
-        auto evHandler = session_->get_app()->get_event_handler();
-        assert(evHandler);
+        auto *runtime = session_->get_app()->get_runtime();
+        assert(runtime);
 
-        acceptor_->set_event_handler(evHandler);
-        acceptor_->set_connection_handler(this);
+        runtime->register_acceptor(acceptor_, this);
 
         return true;
     }
 
-    void ServerFtpFileStream::quit(const InetAddress &addr)
+    void ServerFtpFileStream::quit(const InetAddress & addr)
     {
         FtpFileStream::quit(addr);
     }

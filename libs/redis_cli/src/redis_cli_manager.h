@@ -3,10 +3,12 @@
 #include "option.h"
 #include "redis_client.h"
 #include "singleton/singleton.h"
+#include <atomic>
+#include <mutex>
 #include <utility>
 #include <vector>
 
-namespace yuan::redis 
+namespace yuan::redis
 {
     class RedisCliManager : public singleton::Singleton<RedisCliManager>
     {
@@ -16,15 +18,16 @@ namespace yuan::redis
         std::shared_ptr<RedisClient> get_random_redis_client();
 
         std::shared_ptr<RedisClient> get_round_robin_redis_client();
-        
+
         RedisCliManager() = default;
         ~RedisCliManager() = default;
 
         void release_all();
-        
+
     private:
-        int m_redis_cli_idx_ = 0;
-        std::vector<std::pair<Option, std::shared_ptr<RedisClient>>> m_redis_cli_map;
+        std::atomic<int> m_redis_cli_idx_{ 0 };
+        std::mutex m_mutex_;
+        std::vector<std::pair<Option, std::shared_ptr<RedisClient> > > m_redis_cli_map;
     };
 }
 

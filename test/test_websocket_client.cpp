@@ -26,7 +26,6 @@ public:
 
     virtual void on_close(net::websocket::WebSocketConnection *wsConn)
     {
-
     }
 };
 
@@ -34,7 +33,7 @@ int main()
 {
 #ifdef _WIN32
     WSADATA wsa;
-    if (const int iResult = WSAStartup(MAKEWORD(2, 2), &wsa);iResult != NO_ERROR) {
+    if (const int iResult = WSAStartup(MAKEWORD(2, 2), &wsa); iResult != NO_ERROR) {
         wprintf(L"WSAStartup failed with error: %d\n", iResult);
         return 1;
     }
@@ -44,11 +43,14 @@ int main()
 
     TestClient tc;
     net::websocket::WebSocketClient client;
-    if (!client.init() || !client.connect({"localhost", 12211})) {
+    if (!client.init()) {
         return -1;
     }
 
     client.set_data_handler(&tc);
+    if (!client.connect({ "localhost", 12211 })) {
+        return -1;
+    }
     client.run();
 
 #ifdef _WIN32

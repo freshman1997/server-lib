@@ -2,15 +2,15 @@
 #define __SESSION_H__
 #include <string>
 #include <unordered_map>
+#include <functional>
 
 #include "common.h"
+#include "coroutine/runtime.h"
 #include "timer/timer.h"
-#include "timer/timer_manager.h"
 
-namespace yuan::net::http 
+namespace yuan::net::http
 {
-    enum class SessionItemType : char
-    {
+    enum class SessionItemType : char {
         invalid = -1,
         ival,
         sz_val,
@@ -22,15 +22,123 @@ namespace yuan::net::http
     struct SessionItem
     {
         SessionItemType type = SessionItemType::invalid;
-        union 
+        union
         {
-            int     ival;
+            int ival;
             std::size_t sz_val;
-            double  dval;
-            void    *pval;
-        } 
-        number;
+            double dval;
+            void *pval;
+        } number;
         std::string sval;
+        std::function<void(void *)> pval_deleter;
+
+        SessionItem()
+        {
+            number.pval = nullptr;
+        }
+
+        ~SessionItem()
+        {
+            destroy();
+        }
+
+        SessionItem(const SessionItem &other)
+            : type(other.type), sval(other.sval), pval_deleter(other.pval_deleter)
+        {
+            copy_union(other);
+        }
+
+        SessionItem(SessionItem &&other) noexcept
+            : type(other.type),
+              sval(std::move(other.sval)),
+              pval_deleter(std::move(other.pval_deleter))
+        {
+            move_union(std::move(other));
+        }
+
+        SessionItem &operator=(const SessionItem &other)
+        {
+            if (this != &other) {
+                destroy();
+                type = other.type;
+                sval = other.sval;
+                pval_deleter = other.pval_deleter;
+                copy_union(other);
+            }
+            return *this;
+        }
+
+        SessionItem &operator=(SessionItem &&other) noexcept
+        {
+            if (this != &other) {
+                destroy();
+                type = other.type;
+                sval = std::move(other.sval);
+                pval_deleter = std::move(other.pval_deleter);
+                move_union(std::move(other));
+            }
+            return *this;
+        }
+
+    private:
+        void destroy()
+        {
+            if (type == SessionItemType::pval && number.pval) {
+                if (pval_deleter) {
+                    pval_deleter(number.pval);
+                }
+                number.pval = nullptr;
+            }
+            type = SessionItemType::invalid;
+        }
+
+        void copy_union(const SessionItem &other)
+        {
+            switch (other.type) {
+            case SessionItemType::ival:
+                number.ival = other.number.ival;
+                break;
+            case SessionItemType::sz_val:
+                number.sz_val = other.number.sz_val;
+                break;
+            case SessionItemType::dval:
+                number.dval = other.number.dval;
+                break;
+            case SessionItemType::sval:
+                break;
+            case SessionItemType::pval:
+                number.pval = other.number.pval;
+                break;
+            default:
+                number.pval = nullptr;
+                break;
+            }
+        }
+
+        void move_union(SessionItem &&other)
+        {
+            switch (other.type) {
+            case SessionItemType::ival:
+                number.ival = other.number.ival;
+                break;
+            case SessionItemType::sz_val:
+                number.sz_val = other.number.sz_val;
+                break;
+            case SessionItemType::dval:
+                number.dval = other.number.dval;
+                break;
+            case SessionItemType::sval:
+                break;
+            case SessionItemType::pval:
+                number.pval = other.number.pval;
+                other.number.pval = nullptr;
+                other.type = SessionItemType::invalid;
+                break;
+            default:
+                number.pval = nullptr;
+                break;
+            }
+        }
     };
 
     class HttpSessionContext;
@@ -38,37 +146,38 @@ namespace yuan::net::http
     class HttpSession
     {
     public:
-        HttpSession(uint64_t id, HttpSessionContext *context, timer::TimerManager *timer_manager);
+        HttpSession(uint64_t id, HttpSessionContext *context, coroutine::RuntimeView runtime);
         ~HttpSession();
-        
+
+        HttpSession(const HttpSession &) = delete;
+        HttpSession &operator=(const HttpSession &) = delete;
+
         void add_session_value(const std::string &key, int ival);
         void add_session_value(const std::string &key, std::size_t sz);
         void add_session_value(const std::string &key, double dval);
-        void add_session_value(const std::string &key, void *pval);
+        void add_session_value(const std::string &key, void *pval, std::function<void(void *)> deleter = nullptr);
         void add_session_value(const std::string &key, const std::string &sval);
 
-        SessionItem * get_session_value(const std::string &key);
+        SessionItem *get_session_value(const std::string &key);
 
-        const std::unordered_map<std::string, SessionItem> & get_session_values();
+        const std::unordered_map<std::string, SessionItem> &get_session_values();
 
         void remove_session_value(const std::string &key)
         {
-            session_items_.erase(key);
+            auto it = session_items_.find(key);
+            if (it != session_items_.end()) {
+                session_items_.erase(it);
+            }
         }
 
-        uint64_t get_session_id() const 
+        uint64_t get_session_id() const
         {
             return session_id_;
         }
 
-        HttpSessionContext * get_context()
+        HttpSessionContext *get_context()
         {
             return context_;
-        }
-
-        timer::TimerManager * get_timer_manager()
-        {
-            return timer_manager_;
         }
 
         void set_close_call_back(close_callback ccb)
@@ -77,7 +186,7 @@ namespace yuan::net::http
         }
 
     public:
-        void on_timer(timer::Timer *timer);
+        void on_idle_timeout();
 
     public:
         void reset_timer();
@@ -86,9 +195,10 @@ namespace yuan::net::http
         uint64_t session_id_;
         std::unordered_map<std::string, SessionItem> session_items_;
         HttpSessionContext *context_;
-        timer::TimerManager *timer_manager_;
+        coroutine::RuntimeView runtime_;
         timer::Timer *conn_timer_;
         close_callback close_cb_;
+        bool alive_ = true;
     };
 }
 

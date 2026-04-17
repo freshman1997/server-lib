@@ -5,7 +5,6 @@
 #include <filesystem>
 namespace yuan::net::ftp
 {
-    REGISTER_COMMAND_IMPL(CommandCwd);
     FtpCommandResponse CommandCwd::execute(FtpSession *session, const std::string &args)
     {
         FtpCommandResponse denied{FtpResponseCode::invalid, ""};
@@ -20,5 +19,5 @@ namespace yuan::net::ftp
         return {FtpResponseCode::__250__, "Directory changed successfully."};
     }
     CommandType CommandCwd::get_command_type() { return CommandType::cmd_cwd; }
-    std::string CommandCwd::get_comand_name() { return "CWD"; }
+    std::string CommandCwd::get_command_name() { return "CWD"; }
 }

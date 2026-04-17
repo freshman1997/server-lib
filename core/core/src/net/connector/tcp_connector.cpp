@@ -6,6 +6,9 @@
 #include "net/connection/stream_transport.h"
 #include "net/handler/connector_handler.h"
 #include "net/handler/event_handler.h"
+#include "net/secuity/ssl_handler.h"
+#include "net/secuity/ssl_module.h"
+#include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
 #include "timer/timer_manager.h"
 #include "timer/timer_util.hpp"
@@ -13,7 +16,7 @@
 #include <cassert>
 #include <memory>
 
-namespace yuan::net 
+namespace yuan::net
 {
     class TcpConnector::TcpConnectorData
     {
@@ -50,13 +53,14 @@ namespace yuan::net
         bool connected_ = false;
     };
 
-    TcpConnector::TcpConnector() : data_(std::make_unique<TcpConnectorData>())
+    TcpConnector::TcpConnector()
+        : data_(std::make_unique<TcpConnectorData>())
     {
     }
 
     TcpConnector::~TcpConnector() = default;
 
-    void TcpConnector::on_connected(Connection *conn)
+    void TcpConnector::on_connected(Connection * conn)
     {
         data_->conn_ = conn;
         if (data_->ssl_module) {
@@ -75,13 +79,36 @@ namespace yuan::net
                 return;
             }
 
-            if (!sslHandler->ssl_init_action()) {
+            conn->set_ssl_handler(sslHandler);
+            conn->set_ssl_handshaking(true);
+
+            int ret = sslHandler->ssl_init_action();
+            if (ret > 0) {
+                conn->set_ssl_handshaking(false);
+            } else if (sslHandler->ssl_want_read() || sslHandler->ssl_want_write()) {
+                if (sslHandler->ssl_want_write()) {
+                    channel->enable_write();
+                    if (conn->get_connection_handler() && data_->event_handler_) {
+                        data_->event_handler_->update_channel(channel);
+                    }
+                }
+                conn->set_ssl_handshake_callback([this, conn](bool success) {
+                    if (success) {
+                        data_->cancel_timer();
+                        data_->connected_ = true;
+                        data_->connector_handler_->on_connected_success(conn);
+                    } else {
+                        data_->reset_connection_state();
+                        data_->connector_handler_->on_connect_failed(conn);
+                    }
+                });
+                return;
+            } else {
+                conn->set_ssl_handshaking(false);
                 data_->reset_connection_state();
                 data_->connector_handler_->on_connect_failed(conn);
                 return;
             }
-
-            conn->set_ssl_handler(sslHandler);
         }
 
         data_->cancel_timer();
@@ -90,16 +117,22 @@ namespace yuan::net
         data_->connector_handler_->on_connected_success(conn);
     }
 
-    void TcpConnector::on_error(Connection *conn)
+    void TcpConnector::on_error(Connection * conn)
     {
         data_->reset_connection_state();
     }
 
-    void TcpConnector::on_read(Connection *conn) {}
+    void TcpConnector::on_read(Connection * conn)
+    {
+        (void)conn;
+    }
 
-    void TcpConnector::on_write(Connection *conn) {}
+    void TcpConnector::on_write(Connection * conn)
+    {
+        (void)conn;
+    }
 
-    void TcpConnector::on_close(Connection *conn) 
+    void TcpConnector::on_close(Connection * conn)
     {
         data_->reset_connection_state();
         if (data_->suppress_failure_callback_) {
@@ -115,7 +148,7 @@ namespace yuan::net
         data_->connector_handler_->on_connect_failed(conn);
     }
 
-    bool TcpConnector::connect(const InetAddress &address, int timeout /*= 10 * 1000*/, int retryCount /*= 3*/)
+    bool TcpConnector::connect(const InetAddress & address, int timeout /*= 10 * 1000*/, int retryCount /*= 3*/)
     {
         assert(data_->connector_handler_ && data_->timer_manager_ && data_->event_handler_);
 
@@ -146,7 +179,7 @@ namespace yuan::net
         return true;
     }
 
-    void TcpConnector::set_data(timer::TimerManager *timerManager, ConnectorHandler *connectorHandler, EventHandler *eventHander)
+    void TcpConnector::set_data(timer::TimerManager * timerManager, ConnectorHandler * connectorHandler, EventHandler * eventHander)
     {
         data_->timer_manager_ = timerManager;
         data_->connector_handler_ = connectorHandler;
@@ -158,7 +191,7 @@ namespace yuan::net
         data_->ssl_module = module;
     }
 
-    int TcpConnector::get_retry_count()
+    int TcpConnector::get_retry_count() const
     {
         return data_->retry_count_;
     }
@@ -173,7 +206,7 @@ namespace yuan::net
         }
     }
 
-    void TcpConnector::on_connect_timeout(timer::Timer *timer)
+    void TcpConnector::on_connect_timeout(timer::Timer * timer)
     {
         data_->cancel_timer();
         if (data_->retry_count_ > 0) {

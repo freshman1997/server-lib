@@ -2,12 +2,13 @@
 #define __SOCKET_H__
 #include "net/secuity/ssl_handler.h"
 #include <memory>
+#include <netinet/in.h>
 #include <string_view>
 
 namespace yuan::net
 {
     class InetAddress;
-    
+
     class Socket
     {
     public:
@@ -15,15 +16,15 @@ namespace yuan::net
         ~Socket();
 
         Socket(const Socket &) = delete;
-        Socket & operator=(const Socket &) = delete;
+        Socket &operator=(const Socket &) = delete;
         Socket(Socket &&) = delete;
-        Socket & operator=(Socket &&) = delete;
+        Socket &operator=(Socket &&) = delete;
 
         bool bind() const;
 
         bool listen() const;
 
-        int accept(struct sockaddr_in &peer_addr) const;
+        int accept(struct sockaddr_storage &peer_addr) const;
 
         bool connect(const std::shared_ptr<SSLHandler> &sslModule = nullptr) const;
 
@@ -47,7 +48,7 @@ namespace yuan::net
             return fd_ >= 0;
         }
 
-        InetAddress * get_address() 
+        InetAddress *get_address() const
         {
             return addr_.get();
         }
