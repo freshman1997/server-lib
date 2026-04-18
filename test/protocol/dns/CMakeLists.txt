@@ -1,0 +1,17 @@
+add_executable(test_dns test_dns.cpp)
+add_executable(test_dns_simple test_dns_simple.cpp)
+add_executable(test_dns_regression test_dns_regression.cpp)
+add_executable(test_dns_e2e test_dns_e2e.cpp)
+add_executable(dns_server test_dns_server.cpp)
+add_executable(dns_client test_dns_client.cpp)
+
+target_link_libraries(test_dns PUBLIC DnsProto)
+target_link_libraries(test_dns_simple PUBLIC DnsProto)
+target_link_libraries(test_dns_regression PUBLIC DnsProto)
+target_link_libraries(test_dns_e2e PUBLIC DnsProto)
+target_link_libraries(dns_server PUBLIC DnsProto)
+target_link_libraries(dns_client PUBLIC DnsProto)
+
+if(BUILD_TESTING)
+    add_test(NAME dns_regression COMMAND test_dns_regression)
+endif()

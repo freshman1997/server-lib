@@ -4,6 +4,7 @@
 #include <string>
 #ifdef _WIN32
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #else
 #include <netinet/in.h>
@@ -23,11 +24,11 @@ namespace yuan::net
 
         InetAddress(std::string ip, int port);
 
-        InetAddress(const struct sockaddr_in &addr);
+        InetAddress(const ::sockaddr_in &addr);
 
-        InetAddress(const struct sockaddr_in6 &addr);
+        InetAddress(const ::sockaddr_in6 &addr);
 
-        InetAddress(const struct sockaddr_storage &addr);
+        InetAddress(const ::sockaddr_storage &addr);
 
         InetAddress(const InetAddress &addr);
 
@@ -77,11 +78,11 @@ namespace yuan::net
 
         uint32_t get_net_ip() const;
 
-        struct sockaddr_in to_ipv4_address() const;
+        ::sockaddr_in to_ipv4_address() const;
 
-        struct sockaddr_in6 to_ipv6_address() const;
+        ::sockaddr_in6 to_ipv6_address() const;
 
-        struct sockaddr_storage to_sockaddr() const;
+        ::sockaddr_storage to_sockaddr() const;
 
         std::string to_address_key() const
         {
@@ -102,7 +103,7 @@ namespace yuan::net
 
     private:
         int port_;
-        struct sockaddr_storage addr_;
+        ::sockaddr_storage addr_;
         AddressFamily family_;
         std::string ip_;
     };

@@ -80,6 +80,11 @@ namespace yuan::net
         return address_;
     }
 
+    const InetAddress &UdpConnection::get_local_address() const
+    {
+        return address_;
+    }
+
     const InetAddress &UdpConnection::peer_address() const
     {
         return address_;
@@ -283,14 +288,18 @@ namespace yuan::net
 
     void UdpConnection::set_datagram_state(ConnectionState state)
     {
-        if (state_ == ConnectionState::connected) {
+        if (state_ == state) {
             return;
         }
 
         state_ = state;
         if (state_ == ConnectionState::connected) {
-            connectionHandler_->on_connected(this);
-            alive_timer_ = instance_->get_timer_manager()->interval(0, 10 * 1000, this, -1);
+            if (connectionHandler_) {
+                connectionHandler_->on_connected(this);
+            }
+            if (instance_ && instance_->get_timer_manager()) {
+                alive_timer_ = instance_->get_timer_manager()->interval(0, 10 * 1000, this, -1);
+            }
         }
     }
 

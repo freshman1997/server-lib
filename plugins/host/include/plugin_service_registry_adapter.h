@@ -34,7 +34,7 @@ namespace yuan::app
         std::vector<plugin::PluginServiceDescriptor> list_public_services() const;
 
         bool init_plugin_services(const std::string &plugin_name, const plugin::PluginContext &context);
-        void start_plugin_services(const std::string &plugin_name);
+        bool start_plugin_services(const std::string &plugin_name);
         void stop_plugin_services(const std::string &plugin_name);
         void stop_all_plugin_services();
 

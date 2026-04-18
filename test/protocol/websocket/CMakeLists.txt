@@ -1,0 +1,5 @@
+add_executable(ws_svr test_websocket_server.cpp)
+add_executable(ws_cli test_websocket_client.cpp)
+
+target_link_libraries(ws_svr PUBLIC WebSocketProto ServerServices)
+target_link_libraries(ws_cli PUBLIC WebSocketProto)

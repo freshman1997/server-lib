@@ -7,7 +7,9 @@
 #include "algorithm/ssh_algorithm_registry.h"
 #include "crypto/ssh_crypto.h"
 #include "hostkey/ssh_host_key_provider.h"
+#if YUAN_ENABLE_SSH_SFTP
 #include "sftp/ssh_file_system.h"
+#endif
 #include "buffer/byte_buffer.h"
 #include "coroutine/task.h"
 #include "net/async/async_listener_host.h"
@@ -18,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 
 namespace yuan::net::ssh
 {
@@ -89,7 +92,9 @@ namespace yuan::net::ssh
         SshHandler *handler_ = nullptr;
         std::atomic<bool> running_{ false };
 
+#if YUAN_ENABLE_SSH_SFTP
         std::unique_ptr<SshFileSystem> file_system_;
+#endif
         std::unordered_map<std::string, SshConnectionManager::SubsystemFactory> subsystem_factories_;
     };
 }

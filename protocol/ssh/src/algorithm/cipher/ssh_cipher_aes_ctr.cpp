@@ -1,6 +1,7 @@
 #include "algorithm/ssh_cipher.h"
 #include <openssl/evp.h>
 #include <cstring>
+#include <memory>
 
 namespace yuan::net::ssh
 {
@@ -90,6 +91,29 @@ namespace yuan::net::ssh
             EVP_EncryptFinal_ex(dec_ctx_, out.data() + outlen, &tmplen);
             out.resize(static_cast<size_t>(outlen + tmplen));
             return out;
+        }
+
+        bool decrypt_length(const uint8_t *enc_length, size_t enc_length_len,
+                            const uint8_t *seq_bytes,
+                            uint8_t *out_length) const override
+        {
+            (void)seq_bytes;
+            if (!dec_ctx_ || enc_length_len < 4 || !out_length)
+                return false;
+
+            EVP_CIPHER_CTX *peek_ctx = EVP_CIPHER_CTX_new();
+            if (!peek_ctx)
+                return false;
+
+            if (EVP_CIPHER_CTX_copy(peek_ctx, dec_ctx_) != 1) {
+                EVP_CIPHER_CTX_free(peek_ctx);
+                return false;
+            }
+
+            int outlen = 0;
+            bool ok = EVP_EncryptUpdate(peek_ctx, out_length, &outlen, enc_length, 4) == 1 && outlen == 4;
+            EVP_CIPHER_CTX_free(peek_ctx);
+            return ok;
         }
 
     private:

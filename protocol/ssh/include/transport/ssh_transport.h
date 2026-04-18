@@ -5,6 +5,7 @@
 #include "algorithm/ssh_host_key_algorithm.h"
 #include "algorithm/ssh_algorithm_registry.h"
 #include "crypto/ssh_crypto.h"
+#include "ssh_config.h"
 #include "protocol/ssh_constants.h"
 #include "protocol/ssh_structures.h"
 #include "transport/ssh_cipher_context.h"
@@ -19,6 +20,8 @@
 
 namespace yuan::net::ssh
 {
+    using ::yuan::buffer::ByteBuffer;
+
     enum class SshTransportState {
         disconnected,
         version_exchange,
@@ -116,7 +119,14 @@ namespace yuan::net::ssh
 
         void set_host_key_algorithm(std::unique_ptr<SshHostKeyAlgorithm> algo)
         {
-            host_key_algo_ = std::move(algo);
+            owned_host_key_algo_ = std::move(algo);
+            host_key_algo_ = owned_host_key_algo_.get();
+        }
+
+        void set_host_key_algorithm(SshHostKeyAlgorithm * algo)
+        {
+            owned_host_key_algo_.reset();
+            host_key_algo_ = algo;
         }
         void set_client_version(const std::string &v)
         {
@@ -140,6 +150,8 @@ namespace yuan::net::ssh
             peer_kex_init_raw_ = std::move(raw);
         }
 
+        bool consume_pending_kex_guess();
+
         void reset_for_rekey();
 
     private:
@@ -149,7 +161,8 @@ namespace yuan::net::ssh
         SshCrypto *crypto_ = nullptr;
 
         std::unique_ptr<SshKexAlgorithm> kex_algo_;
-        std::unique_ptr<SshHostKeyAlgorithm> host_key_algo_;
+        std::unique_ptr<SshHostKeyAlgorithm> owned_host_key_algo_;
+        SshHostKeyAlgorithm *host_key_algo_ = nullptr;
 
         std::vector<uint8_t> session_id_;
         std::vector<uint8_t> exchange_hash_;
@@ -165,6 +178,7 @@ namespace yuan::net::ssh
         std::vector<uint8_t> peer_kex_init_raw_;
 
         SshNegotiatedAlgorithms negotiated_;
+        bool ignore_next_kex_packet_ = false;
 
         bool we_are_server_ = true;
     };

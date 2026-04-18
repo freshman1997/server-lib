@@ -3,6 +3,7 @@
 
 #include "buffer/byte_buffer.h"
 #include "coroutine/runtime.h"
+#include "coroutine/task.h"
 #include "coroutine/stream_io_awaitable.h"
 #include "coroutine/datagram_io_awaitable.h"
 #include "net/connection/connection.h"

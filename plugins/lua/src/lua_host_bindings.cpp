@@ -8,6 +8,7 @@
 #include "logger.h"
 
 #include "lua_lib.h"
+#include "nlohmann/json.hpp"
 
 #include <any>
 #include <climits>

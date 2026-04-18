@@ -3,13 +3,64 @@
 #include "auth/ssh_auth_publickey.h"
 #include "auth/ssh_auth_keyboard_interactive.h"
 #include "connection/ssh_port_forwarding.h"
+#include "crypto/ssh_crypto_openssl.h"
+#if YUAN_ENABLE_SSH_SFTP
 #include "sftp/ssh_sftp_subsystem.h"
+#endif
 #include "protocol/ssh_message_codec.h"
 #include "transport/ssh_version_exchange.h"
 #include "transport/ssh_packet_codec.h"
 
+#include <cctype>
+#include <filesystem>
+#include <iostream>
+#include <string_view>
+
 namespace yuan::net::ssh
 {
+    namespace
+    {
+        bool contains_token_ci(const std::string & text, std::string_view token)
+        {
+            if (token.empty() || text.size() < token.size()) {
+                return false;
+            }
+
+            for (size_t i = 0; i + token.size() <= text.size(); ++i) {
+                size_t j = 0;
+                while (j < token.size()) {
+                    const auto lhs = static_cast<unsigned char>(text[i + j]);
+                    const auto rhs = static_cast<unsigned char>(token[j]);
+                    if (std::tolower(lhs) != std::tolower(rhs)) {
+                        break;
+                    }
+                    ++j;
+                }
+                if (j == token.size()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        SshHostKeyType infer_host_key_type(const std::string & path)
+        {
+            if (contains_token_ci(path, "ed25519")) {
+                return SshHostKeyType::ED25519;
+            }
+            if (contains_token_ci(path, "ecdsa") && contains_token_ci(path, "521")) {
+                return SshHostKeyType::ECDSA_P521;
+            }
+            if (contains_token_ci(path, "ecdsa") && contains_token_ci(path, "384")) {
+                return SshHostKeyType::ECDSA_P384;
+            }
+            if (contains_token_ci(path, "ecdsa")) {
+                return SshHostKeyType::ECDSA_P256;
+            }
+            return SshHostKeyType::RSA;
+        }
+    }
+
     SshServer::SshServer()
         : config_(), crypto_(std::make_unique<SshCryptoOpenSSL>())
     {
@@ -27,32 +78,44 @@ namespace yuan::net::ssh
 
     bool SshServer::init(int port)
     {
+        config_.port = static_cast<uint16_t>(port);
         auto runtime = std::make_unique<NetworkRuntime>();
-        if (!runtime->init()) {
-            return false;
-        }
-
         owned_runtime_ = std::move(runtime);
         return init(port, *owned_runtime_);
     }
 
     bool SshServer::init(int port, NetworkRuntime & runtime)
     {
+        config_.port = static_cast<uint16_t>(port);
         init_default_algorithms();
 
+        bool loaded_host_key = false;
         for (const auto &path : config_.host_key_paths) {
-            host_key_provider_.load_key(path);
+            loaded_host_key = host_key_provider_.load_key(path, infer_host_key_type(path)) || loaded_host_key;
+        }
+
+        if (!loaded_host_key && !config_.host_key_paths.empty()) {
+            return false;
         }
 
         if (config_.enable_sftp) {
+#if YUAN_ENABLE_SSH_SFTP
             if (!file_system_) {
+#ifdef _WIN32
+                const std::string sftp_root = config_.sftp_root_dir.empty()
+                                                  ? std::filesystem::current_path().string()
+                                                  : config_.sftp_root_dir;
+#else
+                const std::string sftp_root = config_.sftp_root_dir.empty() ? "/" : config_.sftp_root_dir;
+#endif
                 file_system_ = std::make_unique<SshLocalFileSystem>(
-                    config_.sftp_root_dir.empty() ? "/" : config_.sftp_root_dir);
+                    sftp_root);
             }
             auto *fs = file_system_.get();
             register_subsystem("sftp", [fs]()->std::unique_ptr<SshChannelHandler> {
                 return std::make_unique<SshSftpSubsystem>(fs);
             });
+#endif
         }
 
         if (!listener_.bind(port, runtime)) {
@@ -74,6 +137,10 @@ namespace yuan::net::ssh
         auto task = listener_.run_async();
         task.resume();
         task.detach();
+
+        if (owned_runtime_) {
+            owned_runtime_->run();
+        }
     }
 
     void SshServer::stop()
@@ -87,7 +154,7 @@ namespace yuan::net::ssh
         session_mgr_.close_all();
 
         if (owned_runtime_) {
-            owned_runtime_->shutdown();
+            owned_runtime_->stop();
         }
     }
 
@@ -98,6 +165,9 @@ namespace yuan::net::ssh
 
     coroutine::Task<void> SshServer::handle_connection(AsyncConnectionContext ctx)
     {
+        std::cout << "ssh handle_connection entered" << std::endl;
+        auto *effective_handler = handler_ ? handler_ : &SshHandler::default_handler();
+
         if (session_mgr_.session_limit_reached(config_.max_sessions)) {
             co_return;
         }
@@ -125,14 +195,17 @@ namespace yuan::net::ssh
         auto server_version = session->transport().build_version_string(config_.software_version);
         session->transport().set_server_version(server_version.substr(0, server_version.size() - 2));
         {
-            ByteBuffer version_buf(server_version);
-            co_await ctx.write_async(version_buf);
+            ByteBuffer version_buf{std::string_view(server_version)};
+            std::cout << "ssh sending version: " << server_version << std::endl;
+            ctx.write_and_flush(version_buf);
         }
 
         // 2. Read client version
         {
+            std::cout << "ssh waiting for client version" << std::endl;
             auto read_result = co_await ctx.read_async(config_.idle_timeout_ms);
             if (read_result.status != coroutine::IoStatus::success) {
+                std::cout << "ssh client version read failed: " << static_cast<int>(read_result.status) << std::endl;
                 session_mgr_.remove_session(session->session_id());
                 co_return;
             }
@@ -163,7 +236,7 @@ namespace yuan::net::ssh
             auto packet = session->transport().encode_packet(
                 reinterpret_cast<const uint8_t *>(kex_init_buf.read_ptr()), kex_init_buf.readable_bytes());
             session->transport().increment_send_seq();
-            co_await ctx.write_async(packet);
+            ctx.write_and_flush(packet);
         }
 
         // 4. Main packet processing loop
@@ -176,8 +249,9 @@ namespace yuan::net::ssh
                 auto packet = session->transport().encode_packet(
                     reinterpret_cast<const uint8_t *>(buf.read_ptr()), buf.readable_bytes());
                 session->transport().increment_send_seq();
-                co_await ctx.write_async(packet);
+                ctx.write_and_flush(packet);
             }
+            co_return;
         };
 
         auto send_packet = [&](const ByteBuffer & buf)->coroutine::Task<void>
@@ -185,7 +259,8 @@ namespace yuan::net::ssh
             auto packet = session->transport().encode_packet(
                 reinterpret_cast<const uint8_t *>(buf.read_ptr()), buf.readable_bytes());
             session->transport().increment_send_seq();
-            co_await ctx.write_async(packet);
+            ctx.write_and_flush(packet);
+            co_return;
         };
 
         while (session->state() != SshSession::State::disconnected && running_.load(std::memory_order_relaxed)) {
@@ -199,6 +274,12 @@ namespace yuan::net::ssh
 
             while (recv_buf.readable_bytes() > 0) {
                 auto parse = session->transport().try_parse_packet(recv_buf);
+                if (parse.invalid) {
+                    auto disc = session->build_disconnect(
+                        SshDisconnectReason::SSH_DISCONNECT_PROTOCOL_ERROR, "Invalid SSH packet");
+                    co_await send_packet(disc);
+                    goto session_end;
+                }
                 if (!parse.complete) {
                     auto read_result = co_await ctx.read_async(config_.idle_timeout_ms);
                     if (read_result.status != coroutine::IoStatus::success) {
@@ -248,6 +329,11 @@ namespace yuan::net::ssh
                         if (!negotiated) {
                             goto session_end;
                         }
+                        auto *host_key_algorithm = host_key_provider_.find_algorithm(negotiated->host_key_name);
+                        if (!host_key_algorithm) {
+                            goto session_end;
+                        }
+                        session->transport().set_host_key_algorithm(host_key_algorithm);
 
                         // For rekey, send our KEXINIT in response
                         if (session->pre_rekey_state() != SshSession::State::connected) {
@@ -264,8 +350,21 @@ namespace yuan::net::ssh
                 if (session->state() == SshSession::State::kex_init &&
                     (msg_type == SshMessageType::SSH_MSG_KEX_ECDH_INIT ||
                      msg_type == SshMessageType::SSH_MSG_KEXDH_INIT)) {
-                    size_t offset = 1;
-                    auto client_public = SshMessageCodec::read_mpint(payload->data(), payload->size(), offset);
+                    if (session->transport().consume_pending_kex_guess()) {
+                        continue;
+                    }
+
+                    std::optional<std::vector<uint8_t>> client_public;
+                    if (msg_type == SshMessageType::SSH_MSG_KEX_ECDH_INIT) {
+                        auto ecdh_init = SshMessageCodec::decode_kex_ecdh_init(payload->data(), payload->size());
+                        if (ecdh_init) {
+                            client_public = std::move(ecdh_init->client_public_key);
+                        }
+                    } else {
+                        size_t offset = 1;
+                        client_public = SshMessageCodec::read_mpint(payload->data(), payload->size(), offset);
+                    }
+
                     if (client_public) {
                         auto reply = session->transport().process_kex_init_message(
                             *client_public,
@@ -310,7 +409,7 @@ namespace yuan::net::ssh
                 }
 
                 // Dispatch non-KEX messages to session
-                session->dispatch(msg_type, *payload, handler_);
+                session->dispatch(msg_type, *payload, effective_handler);
 
                 // Send responses based on session state changes
                 if (session->state() == SshSession::State::auth_start) {
@@ -320,9 +419,7 @@ namespace yuan::net::ssh
                     auto success = session->build_userauth_success();
                     co_await send_packet(success);
 
-                    if (handler_) {
-                        handler_->on_session_opened(session);
-                    }
+                    effective_handler->on_session_opened(session);
                 } else if (session->state() == SshSession::State::auth_need_more) {
                     auto pending = session->authenticator().pending_auth_response();
                     if (pending == SshAuthenticator::PendingAuthResponse::pk_ok) {
@@ -349,9 +446,7 @@ namespace yuan::net::ssh
         }
 
     session_end:
-        if (handler_) {
-            handler_->on_session_closed(session);
-        }
+        effective_handler->on_session_closed(session);
         session->set_state(SshSession::State::disconnected);
         session_mgr_.remove_session(session->session_id());
     }

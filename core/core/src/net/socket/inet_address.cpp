@@ -33,7 +33,7 @@ namespace yuan::net
         init_address();
     }
 
-    InetAddress::InetAddress(const struct sockaddr_in & addr4)
+    InetAddress::InetAddress(const ::sockaddr_in & addr4)
     {
         ::memset(&addr_, 0, sizeof(addr_));
         ::memcpy(&addr_, &addr4, sizeof(addr4));
@@ -45,7 +45,7 @@ namespace yuan::net
         }
     }
 
-    InetAddress::InetAddress(const struct sockaddr_in6 & addr6)
+    InetAddress::InetAddress(const ::sockaddr_in6 & addr6)
     {
         ::memset(&addr_, 0, sizeof(addr_));
         ::memcpy(&addr_, &addr6, sizeof(addr6));
@@ -57,7 +57,7 @@ namespace yuan::net
         }
     }
 
-    InetAddress::InetAddress(const struct sockaddr_storage & storage)
+    InetAddress::InetAddress(const ::sockaddr_storage & storage)
     {
         ::memset(&addr_, 0, sizeof(addr_));
         ::memcpy(&addr_, &storage, sizeof(storage));
@@ -96,27 +96,27 @@ namespace yuan::net
         ::memcpy(&this->addr_, &other.addr_, sizeof(addr_));
     }
 
-    struct sockaddr_in InetAddress::to_ipv4_address() const
+    ::sockaddr_in InetAddress::to_ipv4_address() const
     {
         assert(family_ == AddressFamily::ipv4);
-        struct sockaddr_in addr;
+        ::sockaddr_in addr;
         ::memset(&addr, 0, sizeof(addr));
         const auto *stored = reinterpret_cast<const sockaddr_in *>(&addr_);
         addr = *stored;
         return addr;
     }
 
-    struct sockaddr_in6 InetAddress::to_ipv6_address() const
+    ::sockaddr_in6 InetAddress::to_ipv6_address() const
     {
         assert(family_ == AddressFamily::ipv6);
-        struct sockaddr_in6 addr;
+        ::sockaddr_in6 addr;
         ::memset(&addr, 0, sizeof(addr));
         const auto *stored = reinterpret_cast<const sockaddr_in6 *>(&addr_);
         addr = *stored;
         return addr;
     }
 
-    struct sockaddr_storage InetAddress::to_sockaddr() const
+    ::sockaddr_storage InetAddress::to_sockaddr() const
     {
         return addr_;
     }

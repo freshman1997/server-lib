@@ -3,6 +3,8 @@
 #include "logger.h"
 
 #include "quickjs_lib.h"
+#include <cassert>
+#include "nlohmann/json.hpp"
 
 #include <chrono>
 #include <cstdint>

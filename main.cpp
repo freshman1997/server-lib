@@ -1,7 +1,6 @@
 #include "application.h"
 #include "bootstrap.h"
 #include "dns_service.h"
-#include "socks5_service.h"
 #include "logger.h"
 
 #include <chrono>
@@ -10,11 +9,6 @@
 #include <iostream>
 #include <memory>
 #include <thread>
-
-#ifdef _WIN32
-#include <WS2tcpip.h>
-#include <winsock2.h>
-#endif
 
 namespace
 {
@@ -26,14 +20,6 @@ namespace
         g_should_exit = 1;
     }
 
-#ifdef _WIN32
-    bool init_winsock()
-    {
-        WSADATA wsa;
-        return WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
-    }
-#endif
-
 } // namespace
 
 int main()
@@ -42,11 +28,6 @@ int main()
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGPIPE, SIG_IGN);
-#else
-    if (!init_winsock()) {
-        std::cerr << "winsock init failed\n";
-        return 1;
-    }
 #endif
 
     yuan::app::RuntimeContext context;
@@ -61,33 +42,12 @@ int main()
              "server.dns",
              1)) {
         std::cerr << "failed to register dns service\n";
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return 1;
-    }
-
-    yuan::net::socks5::Socks5ServerConfig socks5_config;
-    socks5_config.enable_auth = false;
-    socks5_config.enable_connect = true;
-    if (!application.add_typed_service<yuan::server::Socks5Service>(
-             "socks5",
-             std::make_shared<yuan::server::Socks5Service>(1080, socks5_config),
-             "server.socks5",
-             1)) {
-        std::cerr << "failed to register socks5 service\n";
-#ifdef _WIN32
-        WSACleanup();
-#endif
         return 1;
     }
 
     yuan::app::Bootstrap bootstrap(application);
     if (!bootstrap.run()) {
         std::cerr << "application bootstrap failed\n";
-#ifdef _WIN32
-        WSACleanup();
-#endif
         return 1;
     }
 
@@ -129,10 +89,6 @@ int main()
     }
 
     bootstrap.shutdown();
-
-#ifdef _WIN32
-    WSACleanup();
-#endif
 
     return 0;
 }

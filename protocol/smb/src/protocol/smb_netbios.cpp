@@ -3,6 +3,8 @@
 
 namespace yuan::net::smb
 {
+    using ::yuan::buffer::ByteBuffer;
+
     std::optional<NetBiosHeader> SmbNetbios::decode(const uint8_t * data, size_t len)
     {
         if (len < 4) {

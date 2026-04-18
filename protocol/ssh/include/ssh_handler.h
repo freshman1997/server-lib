@@ -17,6 +17,8 @@ namespace yuan::net::ssh
     public:
         virtual ~SshHandler() = default;
 
+        static SshHandler &default_handler();
+
         virtual SshAuthResult on_authenticate(SshSession *session,
                                               const std::string &username,
                                               const std::string &method,
@@ -153,6 +155,37 @@ namespace yuan::net::ssh
             return false;
         }
     };
+
+    class SshDefaultHandler final : public SshHandler
+    {
+    public:
+        bool on_channel_open(SshSession *session,
+                             const std::string &channel_type,
+                             SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return channel_type == SSH_CHANNEL_SESSION;
+        }
+
+        bool on_direct_tcpip(SshSession *session,
+                             SshChannel *channel,
+                             const std::string &target_host,
+                             uint16_t target_port) override
+        {
+            (void)session;
+            (void)channel;
+            (void)target_host;
+            (void)target_port;
+            return false;
+        }
+    };
+
+    inline SshHandler &SshHandler::default_handler()
+    {
+        static SshDefaultHandler handler;
+        return handler;
+    }
 }
 
 #endif

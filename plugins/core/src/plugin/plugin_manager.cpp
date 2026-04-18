@@ -37,6 +37,25 @@ namespace yuan::plugin
             return (std::filesystem::path(base) / relative).string();
         }
 
+        static std::string find_manifest_config_path(const std::string &base_path,
+                                                     const std::string &plugin_name)
+        {
+            std::error_code ec;
+
+            const auto flat_path = std::filesystem::path(base_path) / (plugin_name + ".json");
+            if (std::filesystem::exists(flat_path, ec) && !ec) {
+                return flat_path.string();
+            }
+
+            ec.clear();
+            const auto dir_path = std::filesystem::path(base_path) / plugin_name / "plugin.json";
+            if (std::filesystem::exists(dir_path, ec) && !ec) {
+                return dir_path.string();
+            }
+
+            return {};
+        }
+
         void apply_permission_boundary(PluginContext &context)
         {
             if (!has_permission(context.granted_permissions, PluginPermission::use_event_bus)) {
@@ -200,16 +219,17 @@ namespace yuan::plugin
         context.plugin_name = plugin_name;
         context.plugin_root_path = data_->plugin_path_;
         context.extension_point_registry = &extension_point_registry_;
-        context.storage = nullptr;
+        context.plugin_config_path = join_path(data_->plugin_path_, plugin_name + ".json");
 
-        auto config = find_plugin_manifest_config(plugin_name);
-        if (!config.loaded()) {
-            context.plugin_config_path = join_path(data_->plugin_path_, plugin_name + ".json");
-        } else {
-            context.config = std::move(config);
-            std::string run_mode_str = context.config.get_string("run_mode", "");
-            if (run_mode_str == "script") {
-                context.plugin_root_path = join_path(data_->plugin_path_, plugin_name);
+        const std::string config_path = find_manifest_config_path(data_->plugin_path_, plugin_name);
+        if (!config_path.empty()) {
+            context.plugin_config_path = config_path;
+            context.config = load_plugin_config(config_path);
+            if (context.config.loaded()) {
+                std::string run_mode_str = context.config.get_string("run_mode", "");
+                if (run_mode_str == "script") {
+                    context.plugin_root_path = join_path(data_->plugin_path_, plugin_name);
+                }
             }
         }
 
@@ -225,14 +245,33 @@ namespace yuan::plugin
 
     bool PluginManager::initialize_plugin(const std::string & plugin_name, Plugin * plugin)
     {
-        plugin->on_loaded();
+        PluginManifest manifest = plugin->manifest();
+        if (manifest.api_version > HOST_API_VERSION) {
+            LOG_ERROR("plugin '{}' requires api_version {} but host provides {}",
+                      plugin_name, manifest.api_version, HOST_API_VERSION);
+            return false;
+        }
+
+        try
+        {
+            plugin->on_loaded();
+        }
+        catch (const std::exception &ex)
+        {
+            LOG_ERROR("plugin '{}' on_loaded() threw: {}", plugin_name, ex.what());
+            return false;
+        }
+        catch (...)
+        {
+            LOG_ERROR("plugin '{}' on_loaded() threw unknown exception", plugin_name);
+            return false;
+        }
 
         auto context = make_plugin_context(plugin_name);
 
         if (context.granted_permissions == PluginPermission::none &&
             permission_guard_is_available(context)) {
-            PluginMeta meta = plugin->meta();
-            context.granted_permissions = meta.required_permissions;
+            context.granted_permissions = manifest.required_permissions;
         }
 
         if (context.permission_guard && context.granted_permissions != PluginPermission::none) {
@@ -248,13 +287,6 @@ namespace yuan::plugin
         }
 
         apply_permission_boundary(context);
-
-        PluginManifest manifest = plugin->manifest();
-        if (manifest.api_version > HOST_API_VERSION) {
-            LOG_ERROR("plugin '{}' requires api_version {} but host provides {}",
-                      plugin_name, manifest.api_version, HOST_API_VERSION);
-            return false;
-        }
 
         for (const auto &ep : manifest.extension_points) {
             extension_point_registry_.register_extension_point(plugin_name, ep);
@@ -287,14 +319,8 @@ namespace yuan::plugin
 
     PluginConfigView PluginManager::find_plugin_manifest_config(const std::string & plugin_name) const
     {
-        std::string json_path = join_path(data_->plugin_path_, plugin_name + ".json");
-        auto config = load_plugin_config(json_path);
-        if (config.loaded()) {
-            return config;
-        }
-
-        std::string dir_json_path = join_path(join_path(data_->plugin_path_, plugin_name), "plugin.json");
-        return load_plugin_config(dir_json_path);
+        const std::string config_path = find_manifest_config_path(data_->plugin_path_, plugin_name);
+        return load_plugin_config(config_path);
     }
 
     bool PluginManager::load_native_plugin(const std::string & pluginName)
@@ -444,6 +470,11 @@ namespace yuan::plugin
 
         std::vector<PendingPlugin> pending;
         pending.reserve(plugin_names.size());
+        std::unordered_set<std::string> available_names;
+        available_names.reserve(data_->plugins_.size() + plugin_names.size());
+        for (const auto &item : data_->plugins_) {
+            available_names.insert(item.first);
+        }
 
         for (const auto &name : plugin_names) {
             if (data_->plugins_.count(name)) {
@@ -504,6 +535,34 @@ namespace yuan::plugin
             }
         }
 
+        for (const auto &p : pending) {
+            available_names.insert(p.name);
+        }
+
+        bool has_missing_dependency = false;
+        for (auto &p : pending) {
+            for (const auto &dep : p.depends_on) {
+                if (!available_names.count(dep)) {
+                    LOG_ERROR("plugin '{}' depends on '{}' which is not available", p.name, dep);
+                    has_missing_dependency = true;
+                    break;
+                }
+            }
+        }
+
+        if (has_missing_dependency) {
+            for (auto &p : pending) {
+                if (p.plugin) {
+                    p.plugin->on_release();
+                    delete p.plugin;
+                }
+                if (p.handle) {
+                    PluginSymbolSolver::release_native_lib(p.handle);
+                }
+            }
+            return false;
+        }
+
         std::vector<std::string> sorted_names;
         sorted_names.reserve(pending.size());
         for (const auto &p : pending) {
@@ -535,9 +594,11 @@ namespace yuan::plugin
         }
 
         std::unordered_set<std::string> loaded_during_this_call;
+        std::vector<std::string> loaded_order;
 
         auto rollback = [&]() {
-            for (const auto &loaded_name : loaded_during_this_call) {
+            for (auto it = loaded_order.rbegin(); it != loaded_order.rend(); ++it) {
+                const auto &loaded_name = *it;
                 release_plugin(loaded_name);
             }
             for (auto &up : pending) {
@@ -568,9 +629,11 @@ namespace yuan::plugin
                     return false;
                 }
                 loaded_during_this_call.insert(p.name);
+                loaded_order.push_back(p.name);
             } else {
                 data_->plugins_[p.name] = { p.handle, p.plugin };
                 loaded_during_this_call.insert(p.name);
+                loaded_order.push_back(p.name);
 
                 lifecycle_manager_.register_instance(p.name, p.plugin, p.handle);
 
@@ -633,14 +696,19 @@ namespace yuan::plugin
     void PluginManager::release_all()
     {
         std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
-        std::vector<std::string> pluginNames;
-        pluginNames.reserve(data_->plugins_.size());
-        for (const auto &item : data_->plugins_) {
-            pluginNames.push_back(item.first);
+        std::vector<std::string> pluginNames = lifecycle_manager_.all_plugins();
+        if (pluginNames.empty()) {
+            pluginNames.reserve(data_->plugins_.size());
+            for (const auto &item : data_->plugins_) {
+                pluginNames.push_back(item.first);
+            }
         }
 
-        for (const auto &pluginName : pluginNames) {
-            release_plugin(pluginName);
+        std::unordered_set<std::string> seen;
+        for (auto it = pluginNames.rbegin(); it != pluginNames.rend(); ++it) {
+            if (seen.insert(*it).second) {
+                release_plugin(*it);
+            }
         }
     }
 
@@ -652,7 +720,7 @@ namespace yuan::plugin
             return {};
         }
 
-        const std::string config_path = join_path(data_->plugin_path_, plugin_name + ".json");
+        const std::string config_path = find_manifest_config_path(data_->plugin_path_, plugin_name);
         return load_plugin_config(config_path);
     }
 

@@ -11,6 +11,8 @@
 
 namespace yuan::net::mqtt
 {
+    using ByteBuffer = ::yuan::buffer::ByteBuffer;
+
     struct UserProperty
     {
         std::string key;

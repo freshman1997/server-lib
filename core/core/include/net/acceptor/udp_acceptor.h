@@ -44,6 +44,10 @@ namespace yuan::net
         virtual void set_event_handler(EventHandler *eventHandler);
 
         virtual void set_connection_handler(ConnectionHandler *connHandler);
+        virtual ConnectionHandler *connection_handler() const override
+        {
+            return conn_handler_;
+        }
 
         virtual void set_ssl_module(std::shared_ptr<SSLModule> module)
         {

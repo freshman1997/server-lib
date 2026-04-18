@@ -8,6 +8,11 @@ namespace yuan::net::websocket
 {
     constexpr uint32_t PACKET_MAX_BYTE = 1024 * 1024;
 
+    enum class WorkMode : uint8_t {
+        client_,
+        server_
+    };
+
     enum class OpCodeType : uint8_t {
         type_continue_frame = 0x00,
         type_text_frame = 0x01,

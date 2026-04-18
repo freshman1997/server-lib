@@ -1,76 +1,203 @@
 #include "sftp/ssh_file_system.h"
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <dirent.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <cerrno>
-#include <cstring>
+
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <iomanip>
 #include <sstream>
+#include <system_error>
+
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace yuan::net::ssh
 {
-    static std::string handle_id_to_string(uint64_t id)
+    namespace
     {
-        std::string s(8, '\0');
-        s[0] = static_cast<char>((id >> 56) & 0xFF);
-        s[1] = static_cast<char>((id >> 48) & 0xFF);
-        s[2] = static_cast<char>((id >> 40) & 0xFF);
-        s[3] = static_cast<char>((id >> 32) & 0xFF);
-        s[4] = static_cast<char>((id >> 24) & 0xFF);
-        s[5] = static_cast<char>((id >> 16) & 0xFF);
-        s[6] = static_cast<char>((id >> 8) & 0xFF);
-        s[7] = static_cast<char>(id & 0xFF);
-        return s;
-    }
+        using FsPath = std::filesystem::path;
 
-    static SftpStatus errno_to_status(int err)
-    {
-        switch (err) {
-        case ENOENT:
-            return SftpStatus::SSH_FX_NO_SUCH_FILE;
-        case EACCES:
-            return SftpStatus::SSH_FX_PERMISSION_DENIED;
-        case EEXIST:
-            return SftpStatus::SSH_FX_FILE_ALREADY_EXISTS;
-        case ENOTDIR:
-            return SftpStatus::SSH_FX_NOT_A_DIRECTORY;
-        case ENOTEMPTY:
-            return SftpStatus::SSH_FX_DIR_NOT_EMPTY;
-        case EINVAL:
-            return SftpStatus::SSH_FX_BAD_MESSAGE;
-        case ENOSPC:
-            return SftpStatus::SSH_FX_NO_SPACE_ON_FILESYSTEM;
-        case EROFS:
-            return SftpStatus::SSH_FX_WRITE_PROTECT;
-        case ELOOP:
-            return SftpStatus::SSH_FX_LINK_LOOP;
-        case ENAMETOOLONG:
-            return SftpStatus::SSH_FX_INVALID_FILENAME;
-        default:
-            return SftpStatus::SSH_FX_FAILURE;
+        std::string handle_id_to_string(uint64_t id)
+        {
+            std::string s(8, '\0');
+            s[0] = static_cast<char>((id >> 56) & 0xFF);
+            s[1] = static_cast<char>((id >> 48) & 0xFF);
+            s[2] = static_cast<char>((id >> 40) & 0xFF);
+            s[3] = static_cast<char>((id >> 32) & 0xFF);
+            s[4] = static_cast<char>((id >> 24) & 0xFF);
+            s[5] = static_cast<char>((id >> 16) & 0xFF);
+            s[6] = static_cast<char>((id >> 8) & 0xFF);
+            s[7] = static_cast<char>(id & 0xFF);
+            return s;
+        }
+
+        SftpStatus errno_to_status(int err)
+        {
+            switch (err) {
+            case ENOENT:
+                return SftpStatus::SSH_FX_NO_SUCH_FILE;
+            case EACCES:
+            case EPERM:
+                return SftpStatus::SSH_FX_PERMISSION_DENIED;
+            case EEXIST:
+                return SftpStatus::SSH_FX_FILE_ALREADY_EXISTS;
+            case ENOTDIR:
+                return SftpStatus::SSH_FX_NOT_A_DIRECTORY;
+            case ENOTEMPTY:
+                return SftpStatus::SSH_FX_DIR_NOT_EMPTY;
+            case EINVAL:
+                return SftpStatus::SSH_FX_BAD_MESSAGE;
+            case ENOSPC:
+                return SftpStatus::SSH_FX_NO_SPACE_ON_FILESYSTEM;
+            case EROFS:
+                return SftpStatus::SSH_FX_WRITE_PROTECT;
+#ifdef ELOOP
+            case ELOOP:
+                return SftpStatus::SSH_FX_LINK_LOOP;
+#endif
+            case ENAMETOOLONG:
+                return SftpStatus::SSH_FX_INVALID_FILENAME;
+            default:
+                return SftpStatus::SSH_FX_FAILURE;
+            }
+        }
+
+        SftpStatus error_code_to_status(const std::error_code & ec)
+        {
+            if (!ec) {
+                return SftpStatus::SSH_FX_OK;
+            }
+            if (ec == std::make_error_code(std::errc::function_not_supported) ||
+                ec == std::make_error_code(std::errc::operation_not_supported) ||
+                ec == std::make_error_code(std::errc::not_supported)) {
+                return SftpStatus::SSH_FX_OP_UNSUPPORTED;
+            }
+            return errno_to_status(ec.value());
+        }
+
+        std::string status_message_from_error(const std::error_code & ec, const char * fallback)
+        {
+            if (ec) {
+                return ec.message();
+            }
+            return fallback;
+        }
+
+        bool seek_file(std::FILE * file, uint64_t offset)
+        {
+            if (!file) {
+                return false;
+            }
+#ifdef _WIN32
+            return _fseeki64(file, static_cast<__int64>(offset), SEEK_SET) == 0;
+#else
+            return fseeko(file, static_cast<off_t>(offset), SEEK_SET) == 0;
+#endif
+        }
+
+        uint64_t file_size_from_path(const FsPath & path)
+        {
+            std::error_code ec;
+            auto size = std::filesystem::file_size(path, ec);
+            return ec ? 0 : static_cast<uint64_t>(size);
+        }
+
+        uint32_t perms_to_sftp(std::filesystem::perms perms, bool is_dir, bool is_symlink)
+        {
+            uint32_t mode = 0;
+            mode |= is_dir ? 0040000u : is_symlink ? 0120000u : 0100000u;
+
+            if ((perms & std::filesystem::perms::owner_read) != std::filesystem::perms::none) mode |= 0400u;
+            if ((perms & std::filesystem::perms::owner_write) != std::filesystem::perms::none) mode |= 0200u;
+            if ((perms & std::filesystem::perms::owner_exec) != std::filesystem::perms::none) mode |= 0100u;
+            if ((perms & std::filesystem::perms::group_read) != std::filesystem::perms::none) mode |= 0040u;
+            if ((perms & std::filesystem::perms::group_write) != std::filesystem::perms::none) mode |= 0020u;
+            if ((perms & std::filesystem::perms::group_exec) != std::filesystem::perms::none) mode |= 0010u;
+            if ((perms & std::filesystem::perms::others_read) != std::filesystem::perms::none) mode |= 0004u;
+            if ((perms & std::filesystem::perms::others_write) != std::filesystem::perms::none) mode |= 0002u;
+            if ((perms & std::filesystem::perms::others_exec) != std::filesystem::perms::none) mode |= 0001u;
+            return mode;
+        }
+
+        std::string perms_to_longname(uint32_t permissions)
+        {
+            std::array<char, 11> mode_str = { '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '\0' };
+            const uint32_t file_type = permissions & 0170000u;
+            mode_str[0] = (file_type == 0040000u) ? 'd' : (file_type == 0120000u) ? 'l' : '-';
+            mode_str[1] = (permissions & 0400u) ? 'r' : '-';
+            mode_str[2] = (permissions & 0200u) ? 'w' : '-';
+            mode_str[3] = (permissions & 0100u) ? 'x' : '-';
+            mode_str[4] = (permissions & 0040u) ? 'r' : '-';
+            mode_str[5] = (permissions & 0020u) ? 'w' : '-';
+            mode_str[6] = (permissions & 0010u) ? 'x' : '-';
+            mode_str[7] = (permissions & 0004u) ? 'r' : '-';
+            mode_str[8] = (permissions & 0002u) ? 'w' : '-';
+            mode_str[9] = (permissions & 0001u) ? 'x' : '-';
+            return std::string(mode_str.data());
+        }
+
+        uint32_t file_time_to_unix_seconds(std::filesystem::file_time_type ft)
+        {
+            using namespace std::chrono;
+            const auto system_now = system_clock::now();
+            const auto file_now = std::filesystem::file_time_type::clock::now();
+            const auto system_tp = time_point_cast<system_clock::duration>(ft - file_now + system_now);
+            const auto seconds = duration_cast<std::chrono::seconds>(system_tp.time_since_epoch()).count();
+            return seconds < 0 ? 0u : static_cast<uint32_t>(seconds);
+        }
+
+        std::filesystem::file_time_type unix_seconds_to_file_time(uint32_t value)
+        {
+            using namespace std::chrono;
+            const auto system_tp = system_clock::time_point{} + seconds(value);
+            const auto system_now = system_clock::now();
+            const auto file_now = std::filesystem::file_time_type::clock::now();
+            return time_point_cast<std::filesystem::file_time_type::duration>(system_tp - system_now + file_now);
+        }
+
+        std::string to_generic_string(const FsPath & path)
+        {
+            return path.generic_string();
         }
     }
 
     SshLocalFileSystem::SshLocalFileSystem(const std::string & root_dir)
         : root_dir_(root_dir)
     {
-        if (!root_dir_.empty() && root_dir_.back() == '/') {
-            root_dir_.pop_back();
+        if (root_dir_.empty()) {
+#ifdef _WIN32
+            root_dir_ = std::filesystem::current_path().generic_string();
+#else
+            root_dir_ = "/";
+#endif
         }
     }
 
     SshLocalFileSystem::~SshLocalFileSystem()
     {
-        for (auto &kv : file_handles_) {
-            ::close(kv.second);
+        for (auto & kv : file_handles_) {
+            if (kv.second.file) {
+                std::fclose(kv.second.file);
+            }
         }
         file_handles_.clear();
-        for (auto &kv : dir_handles_) {
-            closedir(static_cast<DIR *>(kv.second));
-        }
         dir_handles_.clear();
+    }
+
+    std::filesystem::path SshLocalFileSystem::normalized_root_path() const
+    {
+        std::error_code ec;
+        auto root = std::filesystem::absolute(FsPath(root_dir_), ec);
+        if (ec) {
+            root = FsPath(root_dir_);
+        }
+        root = root.lexically_normal();
+        return root;
     }
 
     std::string SshLocalFileSystem::resolve_path(const std::string & path) const
@@ -79,162 +206,190 @@ namespace yuan::net::ssh
             return "";
         }
 
-        std::vector<std::string> parts;
-        std::istringstream iss(path);
-        std::string part;
-        while (std::getline(iss, part, '/')) {
-            if (part.empty() || part == ".")
+        const auto root = normalized_root_path();
+        FsPath relative;
+        for (const auto & part : FsPath(path).lexically_normal()) {
+            if (part == "/" || part == ".") {
                 continue;
+            }
             if (part == "..") {
-                if (!parts.empty())
-                    parts.pop_back();
-            } else {
-                parts.push_back(part);
-            }
-        }
-
-        if (parts.empty())
-            return root_dir_.empty() ? "/" : root_dir_;
-
-        std::string result = root_dir_.empty() ? "" : root_dir_;
-        for (const auto &p : parts) {
-            result += '/' + p;
-        }
-
-        char buf[PATH_MAX] = {};
-        char *real = ::realpath(result.c_str(), buf);
-        if (real) {
-            std::string resolved = real;
-            if (!root_dir_.empty() && resolved.size() >= root_dir_.size() &&
-                resolved.compare(0, root_dir_.size(), root_dir_) == 0) {
-                return resolved;
-            }
-            if (!root_dir_.empty()) {
                 return "";
             }
-            return resolved;
+            relative /= part;
         }
 
-        return result;
+        const auto candidate = (root / relative).lexically_normal();
+
+        auto root_it = root.begin();
+        auto cand_it = candidate.begin();
+        for (; root_it != root.end() && cand_it != candidate.end(); ++root_it, ++cand_it) {
+            if (*root_it != *cand_it) {
+                return "";
+            }
+        }
+        if (root_it != root.end()) {
+            return "";
+        }
+
+        return candidate.make_preferred().string();
     }
 
-    SftpFileAttrs SshLocalFileSystem::stat_to_attrs(const struct stat & st) const
+    SftpFileAttrs SshLocalFileSystem::stat_to_attrs(const FsPath & path,
+                                                    const std::filesystem::file_status & status,
+                                                    bool follow_symlinks) const
     {
         SftpFileAttrs attrs;
-        attrs.flags = SSH_FILEXFER_ATTR_SIZE | SSH_FILEXFER_ATTR_UIDGID |
-                      SSH_FILEXFER_ATTR_PERMISSIONS | SSH_FILEXFER_ATTR_ACMODTIME;
-        attrs.size = static_cast<uint64_t>(st.st_size);
-        attrs.uid = static_cast<uint32_t>(st.st_uid);
-        attrs.gid = static_cast<uint32_t>(st.st_gid);
-        attrs.permissions = static_cast<uint32_t>(st.st_mode);
-        attrs.atime = static_cast<uint32_t>(st.st_atime);
-        attrs.mtime = static_cast<uint32_t>(st.st_mtime);
+        attrs.flags = SSH_FILEXFER_ATTR_SIZE | SSH_FILEXFER_ATTR_PERMISSIONS | SSH_FILEXFER_ATTR_ACMODTIME;
+
+        const bool is_dir = std::filesystem::is_directory(status);
+        const bool is_symlink = std::filesystem::is_symlink(status);
+        if (!is_dir && follow_symlinks) {
+            attrs.size = file_size_from_path(path);
+        } else if (!is_dir && !is_symlink) {
+            attrs.size = file_size_from_path(path);
+        }
+
+        attrs.permissions = perms_to_sftp(status.permissions(), is_dir, is_symlink);
+
+        std::error_code ec;
+        attrs.mtime = file_time_to_unix_seconds(std::filesystem::last_write_time(path, ec));
+        attrs.atime = attrs.mtime;
         return attrs;
     }
 
-    std::string SshLocalFileSystem::build_longname(const std::string & filename, const struct stat & st) const
+    std::string SshLocalFileSystem::build_longname(const std::string & filename,
+                                                   const FsPath & path,
+                                                   const std::filesystem::file_status & status) const
     {
-        char mode_str[12] = {};
-        mode_t m = st.st_mode;
-        mode_str[0] = S_ISDIR(m) ? 'd' : S_ISLNK(m) ? 'l' : '-';
-        mode_str[1] = (m & S_IRUSR) ? 'r' : '-';
-        mode_str[2] = (m & S_IWUSR) ? 'w' : '-';
-        mode_str[3] = (m & S_IXUSR) ? 'x' : '-';
-        mode_str[4] = (m & S_IRGRP) ? 'r' : '-';
-        mode_str[5] = (m & S_IWGRP) ? 'w' : '-';
-        mode_str[6] = (m & S_IXGRP) ? 'x' : '-';
-        mode_str[7] = (m & S_IROTH) ? 'r' : '-';
-        mode_str[8] = (m & S_IWOTH) ? 'w' : '-';
-        mode_str[9] = (m & S_IXOTH) ? 'x' : '-';
-
+        const auto attrs = stat_to_attrs(path, status, true);
+        const auto timestamp = static_cast<std::time_t>(attrs.mtime);
         char time_buf[64] = {};
-        struct tm tmbuf;
-        localtime_r(&st.st_mtime, &tmbuf);
-        strftime(time_buf, sizeof(time_buf), "%b %e %H:%M", &tmbuf);
+        std::tm tm_buf = {};
+#ifdef _WIN32
+        localtime_s(&tm_buf, &timestamp);
+#else
+        localtime_r(&timestamp, &tm_buf);
+#endif
+        std::strftime(time_buf, sizeof(time_buf), "%b %e %H:%M", &tm_buf);
 
-        char longname[512] = {};
-        snprintf(longname, sizeof(longname), "%s %3lu %5u %5u %10llu %s %s",
-                 mode_str,
-                 static_cast<unsigned long>(st.st_nlink),
-                 static_cast<unsigned>(st.st_uid),
-                 static_cast<unsigned>(st.st_gid),
-                 static_cast<unsigned long long>(st.st_size),
-                 time_buf,
-                 filename.c_str());
-        return std::string(longname);
+        std::ostringstream oss;
+        oss << perms_to_longname(attrs.permissions)
+            << "   1 "
+            << "     0 "
+            << "     0 "
+            << std::setw(10) << attrs.size
+            << ' ' << time_buf
+            << ' ' << filename;
+        return oss.str();
     }
 
     SshFsOpenResult SshLocalFileSystem::open(const std::string & path, uint32_t pflags, const SftpFileAttrs &)
     {
         SshFsOpenResult result;
-        auto resolved = resolve_path(path);
+        const auto resolved = resolve_path(path);
         if (resolved.empty()) {
             result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
             result.status_message = "Invalid path";
             return result;
         }
 
-        int flags = 0;
-        if ((pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_READ)) &&
-            (pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_WRITE))) {
-            flags |= O_RDWR;
-        } else if (pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_WRITE)) {
-            flags |= O_WRONLY;
-        } else {
-            flags |= O_RDONLY;
+        const FsPath fs_path(resolved);
+        const bool want_read = (pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_READ)) != 0;
+        const bool want_write = (pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_WRITE)) != 0;
+        const bool want_append = (pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_APPEND)) != 0;
+        const bool want_create = (pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_CREAT)) != 0;
+        const bool want_trunc = (pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_TRUNC)) != 0;
+        const bool want_excl = (pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_EXCL)) != 0;
+
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(fs_path, ec);
+        if (ec) {
+            result.status = error_code_to_status(ec);
+            result.status_message = ec.message();
+            return result;
         }
 
-        if (pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_CREAT)) {
-            flags |= O_CREAT;
-        }
-        if (pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_TRUNC)) {
-            flags |= O_TRUNC;
-        }
-        if (pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_EXCL)) {
-            flags |= O_EXCL;
-        }
-        if (pflags & static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_APPEND)) {
-            flags |= O_APPEND;
+        if (want_excl && want_create && exists) {
+            result.status = SftpStatus::SSH_FX_FILE_ALREADY_EXISTS;
+            result.status_message = "Target already exists";
+            return result;
         }
 
-        int fd = ::open(resolved.c_str(), flags, 0644);
-        if (fd < 0) {
+        if (!exists && !want_create) {
+            result.status = SftpStatus::SSH_FX_NO_SUCH_FILE;
+            result.status_message = "No such file";
+            return result;
+        }
+
+        if (!exists && want_create) {
+            std::FILE * create_file = std::fopen(fs_path.string().c_str(), "w+b");
+            if (!create_file) {
+                result.status = errno_to_status(errno);
+                result.status_message = std::strerror(errno);
+                return result;
+            }
+            std::fclose(create_file);
+        }
+
+        const char * mode = (want_read || !want_write) ? "r+b" : "r+b";
+        if (!std::filesystem::exists(fs_path, ec)) {
+            mode = "w+b";
+        }
+
+        std::FILE * file = std::fopen(fs_path.string().c_str(), mode);
+        if (!file && want_create) {
+            file = std::fopen(fs_path.string().c_str(), "w+b");
+        }
+        if (!file && !want_write && want_read) {
+            file = std::fopen(fs_path.string().c_str(), "rb");
+        }
+        if (!file) {
             result.status = errno_to_status(errno);
             result.status_message = std::strerror(errno);
             return result;
         }
 
-        uint64_t hid = next_handle_id_++;
-        std::string handle = handle_id_to_string(hid);
-        file_handles_[handle] = fd;
+        if (want_trunc) {
+            std::error_code truncate_ec;
+            std::filesystem::resize_file(fs_path, 0, truncate_ec);
+            if (truncate_ec) {
+                std::fclose(file);
+                result.status = error_code_to_status(truncate_ec);
+                result.status_message = truncate_ec.message();
+                return result;
+            }
+        }
 
+        const auto handle = handle_id_to_string(next_handle_id_++);
+        file_handles_[handle] = FileHandleState{ file, fs_path, want_append };
         result.success = true;
-        result.handle = std::move(handle);
+        result.handle = handle;
+        result.status = SftpStatus::SSH_FX_OK;
         return result;
     }
 
     SshFsSimpleResult SshLocalFileSystem::close(const std::string & handle)
     {
         SshFsSimpleResult result;
-        auto it = file_handles_.find(handle);
-        if (it == file_handles_.end()) {
-            auto dit = dir_handles_.find(handle);
-            if (dit != dir_handles_.end()) {
-                closedir(static_cast<DIR *>(dit->second));
-                dir_handles_.erase(dit);
-                result.success = true;
-                result.status = SftpStatus::SSH_FX_OK;
-                return result;
-            }
-            result.status = SftpStatus::SSH_FX_INVALID_HANDLE;
-            result.status_message = "Invalid handle";
+        auto fit = file_handles_.find(handle);
+        if (fit != file_handles_.end()) {
+            std::fclose(fit->second.file);
+            file_handles_.erase(fit);
+            result.success = true;
+            result.status = SftpStatus::SSH_FX_OK;
             return result;
         }
 
-        ::close(it->second);
-        file_handles_.erase(it);
-        result.success = true;
-        result.status = SftpStatus::SSH_FX_OK;
+        auto dit = dir_handles_.find(handle);
+        if (dit != dir_handles_.end()) {
+            dir_handles_.erase(dit);
+            result.success = true;
+            result.status = SftpStatus::SSH_FX_OK;
+            return result;
+        }
+
+        result.status = SftpStatus::SSH_FX_INVALID_HANDLE;
+        result.status_message = "Invalid handle";
         return result;
     }
 
@@ -248,28 +403,31 @@ namespace yuan::net::ssh
             return result;
         }
 
-        if (len > SFTP_MAX_READ_SIZE) {
-            len = SFTP_MAX_READ_SIZE;
-        }
-
-        std::vector<uint8_t> buf(len);
-        ssize_t n = ::pread(it->second, buf.data(), len, static_cast<off_t>(offset));
-        if (n < 0) {
+        len = std::min<uint32_t>(len, SFTP_MAX_READ_SIZE);
+        if (!seek_file(it->second.file, offset)) {
             result.status = errno_to_status(errno);
             result.status_message = std::strerror(errno);
             return result;
         }
 
-        if (n == 0) {
+        std::vector<uint8_t> buffer(len);
+        const size_t count = std::fread(buffer.data(), 1, len, it->second.file);
+        if (count == 0 && std::ferror(it->second.file)) {
+            result.status = errno_to_status(errno);
+            result.status_message = std::strerror(errno);
+            return result;
+        }
+
+        if (count == 0) {
             result.eof = true;
             result.status = SftpStatus::SSH_FX_EOF;
             result.status_message = "End of file";
             return result;
         }
 
-        buf.resize(static_cast<size_t>(n));
+        buffer.resize(count);
         result.success = true;
-        result.data = std::move(buf);
+        result.data = std::move(buffer);
         result.status = SftpStatus::SSH_FX_OK;
         return result;
     }
@@ -284,16 +442,23 @@ namespace yuan::net::ssh
             return result;
         }
 
-        ssize_t n = ::pwrite(it->second, data, len, static_cast<off_t>(offset));
-        if (n < 0) {
+        auto & state = it->second;
+        uint64_t write_offset = offset;
+        if (state.append) {
+            write_offset = file_size_from_path(state.path);
+        }
+
+        if (!seek_file(state.file, write_offset)) {
             result.status = errno_to_status(errno);
             result.status_message = std::strerror(errno);
             return result;
         }
 
-        if (static_cast<uint32_t>(n) != len) {
-            result.status = SftpStatus::SSH_FX_FAILURE;
-            result.status_message = "Short write";
+        const size_t written = std::fwrite(data, 1, len, state.file);
+        std::fflush(state.file);
+        if (written != len) {
+            result.status = errno_to_status(errno);
+            result.status_message = written == 0 ? std::strerror(errno) : "Short write";
             return result;
         }
 
@@ -305,22 +470,23 @@ namespace yuan::net::ssh
     SshFsStatResult SshLocalFileSystem::lstat(const std::string & path)
     {
         SshFsStatResult result;
-        auto resolved = resolve_path(path);
+        const auto resolved = resolve_path(path);
         if (resolved.empty()) {
             result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
             result.status_message = "Invalid path";
             return result;
         }
 
-        struct stat st;
-        if (::lstat(resolved.c_str(), &st) < 0) {
-            result.status = errno_to_status(errno);
-            result.status_message = std::strerror(errno);
+        std::error_code ec;
+        const auto status = std::filesystem::symlink_status(resolved, ec);
+        if (ec || status.type() == std::filesystem::file_type::not_found) {
+            result.status = error_code_to_status(ec ? ec : std::make_error_code(std::errc::no_such_file_or_directory));
+            result.status_message = status_message_from_error(ec, "No such path");
             return result;
         }
 
         result.success = true;
-        result.attrs = stat_to_attrs(st);
+        result.attrs = stat_to_attrs(resolved, status, false);
         result.status = SftpStatus::SSH_FX_OK;
         return result;
     }
@@ -335,15 +501,16 @@ namespace yuan::net::ssh
             return result;
         }
 
-        struct stat st;
-        if (::fstat(it->second, &st) < 0) {
-            result.status = errno_to_status(errno);
-            result.status_message = std::strerror(errno);
+        std::error_code ec;
+        const auto status = std::filesystem::status(it->second.path, ec);
+        if (ec) {
+            result.status = error_code_to_status(ec);
+            result.status_message = ec.message();
             return result;
         }
 
         result.success = true;
-        result.attrs = stat_to_attrs(st);
+        result.attrs = stat_to_attrs(it->second.path, status, true);
         result.status = SftpStatus::SSH_FX_OK;
         return result;
     }
@@ -351,48 +518,48 @@ namespace yuan::net::ssh
     SshFsSimpleResult SshLocalFileSystem::setstat(const std::string & path, const SftpFileAttrs & attrs)
     {
         SshFsSimpleResult result;
-        auto resolved = resolve_path(path);
+        const auto resolved = resolve_path(path);
         if (resolved.empty()) {
             result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
             result.status_message = "Invalid path";
             return result;
         }
 
-        if (attrs.flags & SSH_FILEXFER_ATTR_SIZE) {
-            if (::truncate(resolved.c_str(), static_cast<off_t>(attrs.size)) < 0) {
-                result.status = errno_to_status(errno);
-                result.status_message = std::strerror(errno);
-                return result;
-            }
-        }
+        const FsPath fs_path(resolved);
+        std::error_code ec;
 
-        if (attrs.flags & SSH_FILEXFER_ATTR_UIDGID) {
-            if (::chown(resolved.c_str(), static_cast<uid_t>(attrs.uid), static_cast<gid_t>(attrs.gid)) < 0) {
-                result.status = errno_to_status(errno);
-                result.status_message = std::strerror(errno);
+        if (attrs.flags & SSH_FILEXFER_ATTR_SIZE) {
+            std::filesystem::resize_file(fs_path, attrs.size, ec);
+            if (ec) {
+                result.status = error_code_to_status(ec);
+                result.status_message = ec.message();
                 return result;
             }
         }
 
         if (attrs.flags & SSH_FILEXFER_ATTR_PERMISSIONS) {
-            if (::chmod(resolved.c_str(), static_cast<mode_t>(attrs.permissions)) < 0) {
-                result.status = errno_to_status(errno);
-                result.status_message = std::strerror(errno);
+            const auto perms = static_cast<std::filesystem::perms>(attrs.permissions & 0777u);
+            std::filesystem::permissions(fs_path, perms, std::filesystem::perm_options::replace, ec);
+            if (ec) {
+                result.status = error_code_to_status(ec);
+                result.status_message = ec.message();
                 return result;
             }
         }
 
         if (attrs.flags & SSH_FILEXFER_ATTR_ACMODTIME) {
-            struct timespec ts[2];
-            ts[0].tv_sec = static_cast<time_t>(attrs.atime);
-            ts[0].tv_nsec = 0;
-            ts[1].tv_sec = static_cast<time_t>(attrs.mtime);
-            ts[1].tv_nsec = 0;
-            if (::utimensat(AT_FDCWD, resolved.c_str(), ts, 0) < 0) {
-                result.status = errno_to_status(errno);
-                result.status_message = std::strerror(errno);
+            std::filesystem::last_write_time(fs_path, unix_seconds_to_file_time(attrs.mtime), ec);
+            if (ec) {
+                result.status = error_code_to_status(ec);
+                result.status_message = ec.message();
                 return result;
             }
+        }
+
+        if (attrs.flags & SSH_FILEXFER_ATTR_UIDGID) {
+            result.status = SftpStatus::SSH_FX_OP_UNSUPPORTED;
+            result.status_message = "UID/GID updates are not supported by the local SFTP filesystem";
+            return result;
         }
 
         result.success = true;
@@ -402,81 +569,72 @@ namespace yuan::net::ssh
 
     SshFsSimpleResult SshLocalFileSystem::fsetstat(const std::string & handle, const SftpFileAttrs & attrs)
     {
-        SshFsSimpleResult result;
         auto it = file_handles_.find(handle);
         if (it == file_handles_.end()) {
+            SshFsSimpleResult result;
             result.status = SftpStatus::SSH_FX_INVALID_HANDLE;
             result.status_message = "Invalid handle";
             return result;
         }
 
-        int fd = it->second;
-
-        if (attrs.flags & SSH_FILEXFER_ATTR_SIZE) {
-            if (::ftruncate(fd, static_cast<off_t>(attrs.size)) < 0) {
-                result.status = errno_to_status(errno);
-                result.status_message = std::strerror(errno);
-                return result;
-            }
+        std::string logical_path = "/";
+        const auto root = normalized_root_path();
+        std::error_code ec;
+        auto relative = std::filesystem::relative(it->second.path, root, ec);
+        if (!ec) {
+            logical_path += relative.generic_string();
         }
-
-        if (attrs.flags & SSH_FILEXFER_ATTR_UIDGID) {
-            if (::fchown(fd, static_cast<uid_t>(attrs.uid), static_cast<gid_t>(attrs.gid)) < 0) {
-                result.status = errno_to_status(errno);
-                result.status_message = std::strerror(errno);
-                return result;
-            }
-        }
-
-        if (attrs.flags & SSH_FILEXFER_ATTR_PERMISSIONS) {
-            if (::fchmod(fd, static_cast<mode_t>(attrs.permissions)) < 0) {
-                result.status = errno_to_status(errno);
-                result.status_message = std::strerror(errno);
-                return result;
-            }
-        }
-
-        if (attrs.flags & SSH_FILEXFER_ATTR_ACMODTIME) {
-            struct timespec ts[2];
-            ts[0].tv_sec = static_cast<time_t>(attrs.atime);
-            ts[0].tv_nsec = 0;
-            ts[1].tv_sec = static_cast<time_t>(attrs.mtime);
-            ts[1].tv_nsec = 0;
-            if (::futimens(fd, ts) < 0) {
-                result.status = errno_to_status(errno);
-                result.status_message = std::strerror(errno);
-                return result;
-            }
-        }
-
-        result.success = true;
-        result.status = SftpStatus::SSH_FX_OK;
-        return result;
+        return setstat(logical_path, attrs);
     }
 
     SshFsOpenResult SshLocalFileSystem::opendir(const std::string & path)
     {
         SshFsOpenResult result;
-        auto resolved = resolve_path(path);
+        const auto resolved = resolve_path(path);
         if (resolved.empty()) {
             result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
             result.status_message = "Invalid path";
             return result;
         }
 
-        DIR *dir = ::opendir(resolved.c_str());
-        if (!dir) {
-            result.status = errno_to_status(errno);
-            result.status_message = std::strerror(errno);
+        std::error_code ec;
+        if (!std::filesystem::is_directory(resolved, ec) || ec) {
+            result.status = ec ? error_code_to_status(ec) : SftpStatus::SSH_FX_NOT_A_DIRECTORY;
+            result.status_message = ec ? ec.message() : "Not a directory";
             return result;
         }
 
-        uint64_t hid = next_handle_id_++;
-        std::string handle = handle_id_to_string(hid);
-        dir_handles_[handle] = dir;
+        DirHandleState state;
+        for (const auto & entry : std::filesystem::directory_iterator(resolved, ec)) {
+            if (ec) {
+                result.status = error_code_to_status(ec);
+                result.status_message = ec.message();
+                return result;
+            }
 
+            const auto filename = entry.path().filename().string();
+            if (filename == "." || filename == "..") {
+                continue;
+            }
+
+            SftpNameEntry name_entry;
+            name_entry.filename = filename;
+            const auto status = entry.symlink_status(ec);
+            if (!ec) {
+                name_entry.attrs = stat_to_attrs(entry.path(), status, false);
+                name_entry.longname = build_longname(filename, entry.path(), status);
+            } else {
+                name_entry.longname = filename;
+                ec.clear();
+            }
+            state.entries.push_back(std::move(name_entry));
+        }
+
+        const auto handle = handle_id_to_string(next_handle_id_++);
+        dir_handles_[handle] = std::move(state);
         result.success = true;
-        result.handle = std::move(handle);
+        result.handle = handle;
+        result.status = SftpStatus::SSH_FX_OK;
         return result;
     }
 
@@ -490,43 +648,19 @@ namespace yuan::net::ssh
             return result;
         }
 
-        DIR *dir = static_cast<DIR *>(it->second);
-        std::vector<SftpNameEntry> entries;
-        struct dirent *de = nullptr;
-
-        for (int i = 0; i < 128; ++i) {
-            errno = 0;
-            de = ::readdir(dir);
-            if (!de)
-                break;
-
-            if (std::strcmp(de->d_name, ".") == 0 || std::strcmp(de->d_name, "..") == 0)
-                continue;
-
-            SftpNameEntry entry;
-            entry.filename = de->d_name;
-
-            struct stat st;
-            if (::fstatat(dirfd(dir), de->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-                entry.attrs = stat_to_attrs(st);
-                entry.longname = build_longname(de->d_name, st);
-            } else {
-                entry.attrs.flags = 0;
-                entry.longname = de->d_name;
-            }
-
-            entries.push_back(std::move(entry));
-        }
-
-        if (entries.empty() && de == nullptr) {
+        auto & state = it->second;
+        if (state.cursor >= state.entries.size()) {
             result.eof = true;
             result.status = SftpStatus::SSH_FX_EOF;
             result.status_message = "End of directory";
             return result;
         }
 
+        const size_t batch_end = std::min(state.cursor + 128u, state.entries.size());
+        result.entries.assign(state.entries.begin() + static_cast<std::ptrdiff_t>(state.cursor),
+                              state.entries.begin() + static_cast<std::ptrdiff_t>(batch_end));
+        state.cursor = batch_end;
         result.success = true;
-        result.entries = std::move(entries);
         result.status = SftpStatus::SSH_FX_OK;
         return result;
     }
@@ -534,16 +668,17 @@ namespace yuan::net::ssh
     SshFsSimpleResult SshLocalFileSystem::remove(const std::string & path)
     {
         SshFsSimpleResult result;
-        auto resolved = resolve_path(path);
+        const auto resolved = resolve_path(path);
         if (resolved.empty()) {
             result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
             result.status_message = "Invalid path";
             return result;
         }
 
-        if (::unlink(resolved.c_str()) < 0) {
-            result.status = errno_to_status(errno);
-            result.status_message = std::strerror(errno);
+        std::error_code ec;
+        if (!std::filesystem::remove(resolved, ec)) {
+            result.status = ec ? error_code_to_status(ec) : SftpStatus::SSH_FX_NO_SUCH_FILE;
+            result.status_message = ec ? ec.message() : "No such file";
             return result;
         }
 
@@ -555,22 +690,25 @@ namespace yuan::net::ssh
     SshFsSimpleResult SshLocalFileSystem::mkdir(const std::string & path, const SftpFileAttrs & attrs)
     {
         SshFsSimpleResult result;
-        auto resolved = resolve_path(path);
+        const auto resolved = resolve_path(path);
         if (resolved.empty()) {
             result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
             result.status_message = "Invalid path";
             return result;
         }
 
-        mode_t mode = 0755;
-        if (attrs.flags & SSH_FILEXFER_ATTR_PERMISSIONS) {
-            mode = static_cast<mode_t>(attrs.permissions);
+        std::error_code ec;
+        if (!std::filesystem::create_directory(resolved, ec)) {
+            result.status = ec ? error_code_to_status(ec) : SftpStatus::SSH_FX_FILE_ALREADY_EXISTS;
+            result.status_message = ec ? ec.message() : "Directory already exists";
+            return result;
         }
 
-        if (::mkdir(resolved.c_str(), mode) < 0) {
-            result.status = errno_to_status(errno);
-            result.status_message = std::strerror(errno);
-            return result;
+        if (attrs.flags & SSH_FILEXFER_ATTR_PERMISSIONS) {
+            std::filesystem::permissions(resolved,
+                                         static_cast<std::filesystem::perms>(attrs.permissions & 0777u),
+                                         std::filesystem::perm_options::replace,
+                                         ec);
         }
 
         result.success = true;
@@ -581,16 +719,17 @@ namespace yuan::net::ssh
     SshFsSimpleResult SshLocalFileSystem::rmdir(const std::string & path)
     {
         SshFsSimpleResult result;
-        auto resolved = resolve_path(path);
+        const auto resolved = resolve_path(path);
         if (resolved.empty()) {
             result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
             result.status_message = "Invalid path";
             return result;
         }
 
-        if (::rmdir(resolved.c_str()) < 0) {
-            result.status = errno_to_status(errno);
-            result.status_message = std::strerror(errno);
+        std::error_code ec;
+        if (!std::filesystem::remove(resolved, ec)) {
+            result.status = ec ? error_code_to_status(ec) : SftpStatus::SSH_FX_DIR_NOT_EMPTY;
+            result.status_message = ec ? ec.message() : "Directory not empty";
             return result;
         }
 
@@ -602,34 +741,31 @@ namespace yuan::net::ssh
     SshFsRealPathResult SshLocalFileSystem::realpath(const std::string & path)
     {
         SshFsRealPathResult result;
-        auto resolved = resolve_path(path);
+        const auto resolved = resolve_path(path);
         if (resolved.empty()) {
             result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
             result.status_message = "Invalid path";
             return result;
         }
 
-        char buf[PATH_MAX] = {};
-        if (!::realpath(resolved.c_str(), buf)) {
-            result.status = errno_to_status(errno);
-            result.status_message = std::strerror(errno);
+        std::error_code ec;
+        auto canonical = std::filesystem::weakly_canonical(resolved, ec);
+        if (ec) {
+            result.status = error_code_to_status(ec);
+            result.status_message = ec.message();
             return result;
         }
 
-        std::string real = buf;
-        if (real.size() >= root_dir_.size() && real.compare(0, root_dir_.size(), root_dir_) == 0) {
-            real = real.substr(root_dir_.size());
-            if (real.empty())
-                real = "/";
-        }
+        const auto root = normalized_root_path();
+        auto relative = std::filesystem::relative(canonical, root, ec);
+        result.path = ec ? "/" : (relative.empty() ? "/" : "/" + relative.generic_string());
 
-        struct stat st;
-        if (::stat(resolved.c_str(), &st) == 0) {
-            result.attrs = stat_to_attrs(st);
+        const auto status = std::filesystem::status(canonical, ec);
+        if (!ec) {
+            result.attrs = stat_to_attrs(canonical, status, true);
         }
 
         result.success = true;
-        result.path = std::move(real);
         result.status = SftpStatus::SSH_FX_OK;
         return result;
     }
@@ -637,22 +773,23 @@ namespace yuan::net::ssh
     SshFsStatResult SshLocalFileSystem::stat(const std::string & path)
     {
         SshFsStatResult result;
-        auto resolved = resolve_path(path);
+        const auto resolved = resolve_path(path);
         if (resolved.empty()) {
             result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
             result.status_message = "Invalid path";
             return result;
         }
 
-        struct stat st;
-        if (::stat(resolved.c_str(), &st) < 0) {
-            result.status = errno_to_status(errno);
-            result.status_message = std::strerror(errno);
+        std::error_code ec;
+        const auto status = std::filesystem::status(resolved, ec);
+        if (ec || status.type() == std::filesystem::file_type::not_found) {
+            result.status = error_code_to_status(ec ? ec : std::make_error_code(std::errc::no_such_file_or_directory));
+            result.status_message = status_message_from_error(ec, "No such path");
             return result;
         }
 
         result.success = true;
-        result.attrs = stat_to_attrs(st);
+        result.attrs = stat_to_attrs(resolved, status, true);
         result.status = SftpStatus::SSH_FX_OK;
         return result;
     }
@@ -660,16 +797,21 @@ namespace yuan::net::ssh
     SshFsSimpleResult SshLocalFileSystem::rename(const std::string & old_path, const std::string & new_path, uint32_t flags)
     {
         SshFsSimpleResult result;
-        auto resolved_old = resolve_path(old_path);
-        auto resolved_new = resolve_path(new_path);
+        const auto resolved_old = resolve_path(old_path);
+        const auto resolved_new = resolve_path(new_path);
         if (resolved_old.empty() || resolved_new.empty()) {
             result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
             result.status_message = "Invalid path";
             return result;
         }
 
-        struct stat new_st;
-        bool new_exists = (::stat(resolved_new.c_str(), &new_st) == 0);
+        std::error_code ec;
+        const bool new_exists = std::filesystem::exists(resolved_new, ec);
+        if (ec) {
+            result.status = error_code_to_status(ec);
+            result.status_message = ec.message();
+            return result;
+        }
 
         if (new_exists) {
             if (!(flags & static_cast<uint32_t>(SftpRenameFlags::SSH_FXP_RENAME_OVERWRITE))) {
@@ -678,16 +820,24 @@ namespace yuan::net::ssh
                 return result;
             }
 
-            if (S_ISDIR(new_st.st_mode)) {
+            if (std::filesystem::is_directory(resolved_new, ec)) {
                 result.status = SftpStatus::SSH_FX_FAILURE;
                 result.status_message = "Cannot overwrite directory";
                 return result;
             }
+
+            std::filesystem::remove(resolved_new, ec);
+            if (ec) {
+                result.status = error_code_to_status(ec);
+                result.status_message = ec.message();
+                return result;
+            }
         }
 
-        if (::rename(resolved_old.c_str(), resolved_new.c_str()) < 0) {
-            result.status = errno_to_status(errno);
-            result.status_message = std::strerror(errno);
+        std::filesystem::rename(resolved_old, resolved_new, ec);
+        if (ec) {
+            result.status = error_code_to_status(ec);
+            result.status_message = ec.message();
             return result;
         }
 
@@ -699,30 +849,49 @@ namespace yuan::net::ssh
     SshFsReadLinkResult SshLocalFileSystem::readlink(const std::string & path)
     {
         SshFsReadLinkResult result;
-        auto resolved = resolve_path(path);
+        const auto resolved = resolve_path(path);
         if (resolved.empty()) {
             result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
             result.status_message = "Invalid path";
             return result;
         }
 
-        char buf[PATH_MAX] = {};
-        ssize_t n = ::readlink(resolved.c_str(), buf, sizeof(buf) - 1);
-        if (n < 0) {
-            result.status = errno_to_status(errno);
-            result.status_message = std::strerror(errno);
+        std::error_code ec;
+        const auto target = std::filesystem::read_symlink(resolved, ec);
+        if (ec) {
+            result.status = error_code_to_status(ec);
+            result.status_message = ec.message();
             return result;
         }
 
-        buf[n] = '\0';
+        const auto status = std::filesystem::symlink_status(resolved, ec);
+        if (!ec) {
+            result.attrs = stat_to_attrs(resolved, status, false);
+        }
 
-        struct stat st;
-        if (::lstat(resolved.c_str(), &st) == 0) {
-            result.attrs = stat_to_attrs(st);
+        std::string exposed_target = to_generic_string(target);
+        const auto root = normalized_root_path();
+        const auto target_candidate = target.is_absolute()
+                                          ? target.lexically_normal()
+                                          : (FsPath(resolved).parent_path() / target).lexically_normal();
+        auto root_it = root.begin();
+        auto candidate_it = target_candidate.begin();
+        for (; root_it != root.end() && candidate_it != target_candidate.end(); ++root_it, ++candidate_it) {
+            if (*root_it != *candidate_it) {
+                candidate_it = target_candidate.end();
+                break;
+            }
+        }
+        if (root_it == root.end() && candidate_it != target_candidate.end()) {
+            std::error_code relative_ec;
+            const auto logical = std::filesystem::relative(target_candidate, root, relative_ec);
+            if (!relative_ec) {
+                exposed_target = logical.empty() ? "/" : "/" + logical.generic_string();
+            }
         }
 
         result.success = true;
-        result.link_target = std::string(buf, static_cast<size_t>(n));
+        result.link_target = std::move(exposed_target);
         result.status = SftpStatus::SSH_FX_OK;
         return result;
     }
@@ -730,26 +899,48 @@ namespace yuan::net::ssh
     SshFsSimpleResult SshLocalFileSystem::symlink(const std::string & link_path, const std::string & target_path)
     {
         SshFsSimpleResult result;
-        auto resolved_link = resolve_path(link_path);
+        const auto resolved_link = resolve_path(link_path);
         if (resolved_link.empty()) {
             result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
             result.status_message = "Invalid link path";
             return result;
         }
 
-        std::string resolved_target = target_path;
+        FsPath link_target = target_path;
         if (!target_path.empty() && target_path[0] == '/') {
-            resolved_target = resolve_path(target_path);
+            const auto resolved_target = resolve_path(target_path);
             if (resolved_target.empty()) {
                 result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
                 result.status_message = "Invalid target path";
                 return result;
             }
+            std::error_code relative_ec;
+            link_target = std::filesystem::relative(
+                FsPath(resolved_target),
+                FsPath(resolved_link).parent_path(),
+                relative_ec);
+            if (relative_ec) {
+                result.status = error_code_to_status(relative_ec);
+                result.status_message = relative_ec.message();
+                return result;
+            }
         }
 
-        if (::symlink(resolved_target.c_str(), resolved_link.c_str()) < 0) {
-            result.status = errno_to_status(errno);
-            result.status_message = std::strerror(errno);
+        std::error_code ec;
+        const bool target_is_directory = std::filesystem::is_directory(link_target, ec);
+        ec.clear();
+#ifdef _WIN32
+        if (target_is_directory) {
+            std::filesystem::create_directory_symlink(link_target, resolved_link, ec);
+        } else {
+            std::filesystem::create_symlink(link_target, resolved_link, ec);
+        }
+#else
+        std::filesystem::create_symlink(link_target, resolved_link, ec);
+#endif
+        if (ec) {
+            result.status = error_code_to_status(ec);
+            result.status_message = ec.message();
             return result;
         }
 

@@ -2,8 +2,12 @@
 #include "request.h"
 #include "response.h"
 #include "service_registry.h"
-#include "proxy/websocket_proxy.h"
 #include "proxy.h"
+
+#if __has_include("proxy/websocket_proxy.h")
+#include "proxy/websocket_proxy.h"
+#define YUAN_HAS_WEBSOCKET_PROXY 1
+#endif
 
 namespace yuan::server
 {
@@ -32,10 +36,12 @@ namespace yuan::server
         }
 
         if (ok) {
+#ifdef YUAN_HAS_WEBSOCKET_PROXY
             auto *proxy = server_->get_proxy();
             if (proxy) {
                 yuan::net::websocket::WebSocketProxy::install(*server_, *proxy);
             }
+#endif
         }
 
         return ok;

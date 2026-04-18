@@ -3,6 +3,7 @@
 
 #include "plugin/script_plugin_adapter.h"
 #include "plugin/plugin_context.h"
+#include "lua_lib.h"
 
 #include <cstddef>
 #include <mutex>

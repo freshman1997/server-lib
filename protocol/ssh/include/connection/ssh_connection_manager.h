@@ -5,6 +5,7 @@
 #include "protocol/ssh_constants.h"
 #include "protocol/ssh_structures.h"
 #include "ssh_channel_handler.h"
+#include "buffer/byte_buffer.h"
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -15,6 +16,8 @@
 
 namespace yuan::net::ssh
 {
+    using ::yuan::buffer::ByteBuffer;
+
     class SshSession;
     class SshHandler;
 

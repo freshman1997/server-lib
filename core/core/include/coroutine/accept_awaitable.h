@@ -33,7 +33,7 @@ namespace yuan::coroutine
             }
 
             handle_ = handle;
-            original_handler_ = nullptr;
+            original_handler_ = acceptor_->connection_handler();
             proxy_ = std::make_unique<AcceptProxyHandler>(*this);
             acceptor_->set_connection_handler(proxy_.get());
             return true;
@@ -41,7 +41,7 @@ namespace yuan::coroutine
 
         net::Connection *await_resume() noexcept
         {
-            if (proxy_ && acceptor_) {
+            if (acceptor_) {
                 acceptor_->set_connection_handler(original_handler_);
             }
             proxy_.reset();
@@ -51,13 +51,10 @@ namespace yuan::coroutine
     private:
         void on_connection_accepted(net::Connection *conn) noexcept
         {
-            accepted_conn_ = conn;
             if (conn) {
                 conn->set_connection_handler(original_handler_);
-                if (original_handler_) {
-                    original_handler_->on_connected(conn);
-                }
             }
+            accepted_conn_ = conn;
             resume();
         }
 
@@ -82,45 +79,34 @@ namespace yuan::coroutine
 
             void on_connected(net::Connection *conn) override
             {
-                if (!owner_.original_handler_) {
-                    owner_.original_handler_ = conn->get_connection_handler();
-                }
                 owner_.on_connection_accepted(conn);
             }
 
             void on_error(net::Connection *conn) override
             {
-                if (owner_.original_handler_) {
-                    owner_.original_handler_->on_error(conn);
-                }
+                (void)conn;
             }
 
             void on_read(net::Connection *conn) override
             {
-                if (owner_.original_handler_) {
-                    owner_.original_handler_->on_read(conn);
-                }
+                (void)conn;
             }
 
             void on_write(net::Connection *conn) override
             {
-                if (owner_.original_handler_) {
-                    owner_.original_handler_->on_write(conn);
-                }
+                (void)conn;
             }
 
             void on_close(net::Connection *conn) override
             {
-                if (owner_.original_handler_) {
-                    owner_.original_handler_->on_close(conn);
-                }
+                (void)conn;
             }
 
         private:
             AcceptAwaitable &owner_;
         };
 
-        RuntimeView runtime_{};
+        RuntimeView runtime_{}; 
         net::StreamAcceptor *acceptor_ = nullptr;
         net::ConnectionHandler *original_handler_ = nullptr;
         net::Connection *accepted_conn_ = nullptr;

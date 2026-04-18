@@ -243,7 +243,7 @@ namespace yuan::net::smb
         if (!req)
             return make_error(header, NtStatus::INVALID_PARAMETER);
 
-        std::string path = Smb2Codec::utf16le_to_utf8(req.path);
+        std::string path = Smb2Codec::utf16le_to_utf8(req->path);
 
         std::string share_name;
         size_t last_sep = path.find_last_of("\\/");
@@ -326,7 +326,7 @@ namespace yuan::net::smb
         if (!tree)
             return make_error(header, NtStatus::NETWORK_NAME_DELETED);
 
-        std::string file_path = Smb2Codec::utf16le_to_utf8(req.buffer);
+        std::string file_path = Smb2Codec::utf16le_to_utf8(req->buffer);
 
         if (tree->share->type() == ShareType::PIPE) {
             if (handler_ && !handler_->on_pipe_open(&session, file_path)) {
@@ -728,8 +728,9 @@ namespace yuan::net::smb
         resp.file_id = req->file_id;
 
         if (req->ctl_code == FSCTL_DFS_GET_REFERRALS || req->ctl_code == FSCTL_DFS_GET_REFERRALS_EX) {
+            const auto input_span = req->input_buffer.readable_span();
             auto referral = dfs_resolver_.resolve(
-                std::string(req->input_buffer.begin(), req->input_buffer.end()));
+                std::string(input_span.begin(), input_span.end()));
             if (referral) {
                 if (handler_) {
                     auto resolved = handler_->on_dfs_resolve(&session, referral->dfs_path);

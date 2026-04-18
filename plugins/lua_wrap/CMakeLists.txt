@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.12)
 project(lua54)
 
 set(LUA_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/lua-5.4.8/src)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/lua-5.4.8/src)
 
 set(src_code
         ${LUA_SRC_DIR}/lapi.c ${LUA_SRC_DIR}/lcode.c ${LUA_SRC_DIR}/lctype.c ${LUA_SRC_DIR}/ldebug.c
@@ -17,7 +18,8 @@ set(src_lib
 add_library(lua_static STATIC ${src_code} ${src_lib})
 
 target_include_directories(lua_static PUBLIC
-    "$<BUILD_INTERFACE:${LUA_SRC_DIR}/..>"
+    "$<BUILD_INTERFACE:${LUA_SRC_DIR}>"
+    "$<BUILD_INTERFACE:${LUA_SRC_DIR}/include>"
 )
 
 set_target_properties(lua_static PROPERTIES

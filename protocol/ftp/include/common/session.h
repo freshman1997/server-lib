@@ -4,7 +4,9 @@
 #include "net/handler/connection_handler.h"
 #include "net/connection/connection.h"
 #include "net/socket/inet_address.h"
+#include "net/async/async_listener_host.h"
 #include "net/runtime/network_runtime.h"
+#include "common/def.h"
 #include "file_manager.h"
 #include "handler/file_stream_event.h"
 #include "timer/timer_task.h"
@@ -15,11 +17,6 @@
 #include <string>
 #include <type_traits>
 #include <unordered_map>
-
-namespace yuan::net
-{
-    class AsyncListenerHost;
-}
 
 namespace yuan::net::ftp
 {

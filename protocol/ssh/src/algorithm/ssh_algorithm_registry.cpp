@@ -5,6 +5,39 @@
 
 namespace yuan::net::ssh
 {
+    std::unique_ptr<SshKexAlgorithm> create_kex_curve25519();
+    std::unique_ptr<SshKexAlgorithm> create_kex_curve25519_libssh();
+    std::unique_ptr<SshKexAlgorithm> create_kex_ecdh_nistp256();
+    std::unique_ptr<SshKexAlgorithm> create_kex_ecdh_nistp384();
+    std::unique_ptr<SshKexAlgorithm> create_kex_ecdh_nistp521();
+    std::unique_ptr<SshKexAlgorithm> create_kex_dh_group14();
+    std::unique_ptr<SshKexAlgorithm> create_kex_dh_group16();
+    std::unique_ptr<SshKexAlgorithm> create_kex_dh_group18();
+
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_ed25519();
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_ecdsa_nistp256();
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_ecdsa_nistp384();
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_ecdsa_nistp521();
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_rsa_sha512();
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_rsa_sha256();
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_rsa();
+
+    std::unique_ptr<SshCipher> create_cipher_chacha20_poly1305();
+    std::unique_ptr<SshCipher> create_cipher_aes128_gcm();
+    std::unique_ptr<SshCipher> create_cipher_aes256_gcm();
+    std::unique_ptr<SshCipher> create_cipher_aes128_ctr();
+    std::unique_ptr<SshCipher> create_cipher_aes192_ctr();
+    std::unique_ptr<SshCipher> create_cipher_aes256_ctr();
+
+    std::unique_ptr<SshMac> create_mac_hmac_sha2_256();
+    std::unique_ptr<SshMac> create_mac_hmac_sha2_512();
+    std::unique_ptr<SshMac> create_mac_hmac_sha1();
+
+#if YUAN_SSH_HAS_ZLIB
+    std::unique_ptr<SshCompression> create_compression_zlib();
+    std::unique_ptr<SshCompression> create_compression_zlib_openssh();
+#endif
+
     void SshAlgorithmRegistry::register_kex(const std::string & name, KexFactory factory)
     {
         kex_factories_[name] = std::move(factory);
@@ -304,11 +337,13 @@ namespace yuan::net::ssh
             return create_mac_hmac_sha1();
         });
 
+#if YUAN_SSH_HAS_ZLIB
         register_compression("zlib", []()->std::unique_ptr<SshCompression> {
             return create_compression_zlib();
         });
         register_compression("zlib@openssh.com", []()->std::unique_ptr<SshCompression> {
             return create_compression_zlib_openssh();
         });
+#endif
     }
 }

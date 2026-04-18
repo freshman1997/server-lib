@@ -11,12 +11,15 @@
 
 namespace yuan::net::ssh
 {
+    using ::yuan::buffer::ByteBuffer;
+
     class SshPacketCodec
     {
     public:
         struct ParseResult
         {
             bool complete = false;
+            bool invalid = false;
             size_t total_bytes = 0;
         };
 

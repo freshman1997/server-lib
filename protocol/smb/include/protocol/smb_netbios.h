@@ -6,6 +6,8 @@
 #include <vector>
 #include "buffer/byte_buffer.h"
 
+using ByteBuffer = ::yuan::buffer::ByteBuffer;
+
 namespace yuan::net::smb
 {
     struct NetBiosHeader

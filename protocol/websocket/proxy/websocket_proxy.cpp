@@ -112,7 +112,7 @@ namespace yuan::net::websocket
         resp_str += "\r\n";
 
         ::yuan::buffer::ByteBuffer resp_buf(resp_str.size());
-        resp_buf.append(resp_str);
+        resp_buf.append(std::string_view(resp_str));
         auto write_result = co_await client_ctx.write_async(resp_buf);
         if (write_result.status != coroutine::IoStatus::success) {
             client_ctx.close();
@@ -175,7 +175,7 @@ namespace yuan::net::websocket
         req_str += "\r\n";
 
         ::yuan::buffer::ByteBuffer req_buf(req_str.size());
-        req_buf.append(req_str);
+        req_buf.append(std::string_view(req_str));
         auto write_result = co_await session.write_async(req_buf);
         if (write_result.status != coroutine::IoStatus::success) {
             co_return result;

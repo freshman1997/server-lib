@@ -1,6 +1,7 @@
 #include "algorithm/ssh_cipher.h"
 #include <openssl/evp.h>
 #include <cstring>
+#include <memory>
 
 namespace yuan::net::ssh
 {

@@ -109,6 +109,11 @@ namespace yuan::net
         return res == 0;
     }
 
+    InetAddress Socket::get_local_address() const
+    {
+        return socket::get_local_address(fd_);
+    }
+
     int Socket::last_error() const
     {
         return socket::get_last_error();

@@ -56,7 +56,7 @@ namespace yuan::net::ssh
         auto host = SshMessageCodec::read_string(msg.type_specific_data.data(),
                                                  msg.type_specific_data.size(), offset);
         if (!host) {
-            return {};
+            return ByteBuffer();
         }
 
         uint32_t port = 0;
@@ -74,13 +74,13 @@ namespace yuan::net::ssh
         }
 
         if (port == 0) {
-            return {};
+            return ByteBuffer();
         }
 
         if (handler) {
             bool allowed = handler->on_direct_tcpip(session_, nullptr, *host, static_cast<uint16_t>(port));
             if (!allowed) {
-                return {};
+                return ByteBuffer();
             }
         }
 

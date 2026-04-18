@@ -12,6 +12,8 @@
 
 namespace yuan::net::ssh
 {
+    using ::yuan::buffer::ByteBuffer;
+
     class SshSftpSubsystem : public SshChannelHandler
     {
     public:

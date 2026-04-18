@@ -14,8 +14,14 @@ set(QJS_SRC
 
 add_library(quickjs_static STATIC ${QJS_SRC})
 
+set(QUICKJS_VERSION "2025-09-13")
+
 target_include_directories(quickjs_static PUBLIC
-    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/quickjs>"
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+)
+
+target_include_directories(quickjs_static PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/quickjs"
 )
 
 set_target_properties(quickjs_static PROPERTIES
@@ -38,4 +44,8 @@ target_compile_options(quickjs_static PRIVATE
     -Wno-infinite-recursion
     -Wno-array-bounds
     -Wno-format-truncation
+)
+
+target_compile_definitions(quickjs_static PUBLIC
+    CONFIG_VERSION=\"${QUICKJS_VERSION}\"
 )

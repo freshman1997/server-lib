@@ -14,6 +14,8 @@
 
 namespace yuan::net::mqtt
 {
+    using ByteBuffer = ::yuan::buffer::ByteBuffer;
+
     class MqttCodec
     {
     public:
@@ -43,6 +45,8 @@ namespace yuan::net::mqtt
         static ByteBuffer encode_pingresp();
         static ByteBuffer encode_disconnect(uint8_t reason_code, ProtocolLevel level, const MqttProperties &props);
 
+        static ByteBuffer build_fixed_header(PacketType type, uint8_t flags, size_t remaining_length);
+
     private:
         static size_t encode_remaining_length(uint32_t value, uint8_t *out);
         static std::optional<uint32_t> decode_remaining_length(const uint8_t *data, size_t len, size_t &bytes_consumed);
@@ -52,8 +56,6 @@ namespace yuan::net::mqtt
 
         static std::optional<std::vector<uint8_t> > read_binary_data(const uint8_t *data, size_t len, size_t &offset);
         static void write_binary_data(ByteBuffer &buf, const std::vector<uint8_t> &data);
-
-        static ByteBuffer build_fixed_header(PacketType type, uint8_t flags, size_t remaining_length);
     };
 }
 

@@ -1,6 +1,7 @@
 #include "algorithm/ssh_compression.h"
 #include <zlib.h>
 #include <cstring>
+#include <memory>
 
 namespace yuan::net::ssh
 {

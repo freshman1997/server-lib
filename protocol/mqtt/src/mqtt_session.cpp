@@ -1,6 +1,7 @@
 #include "mqtt_session.h"
 #include <algorithm>
 #include <atomic>
+#include <memory>
 
 namespace yuan::net::mqtt
 {
@@ -127,7 +128,7 @@ namespace yuan::net::mqtt
         return nullptr;
     }
 
-    std::vector<MqttSession *> MqttSessionManager::all_sessions()
+    std::vector<MqttSession *> MqttSessionManager::all_sessions() const
     {
         std::vector<MqttSession *> result;
         result.reserve(sessions_.size());

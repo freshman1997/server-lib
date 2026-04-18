@@ -28,10 +28,15 @@ namespace yuan::net
         virtual bool is_connected() const override;
 
         virtual const InetAddress &get_remote_address() const override;
+        virtual const InetAddress &get_local_address() const override;
 
         const InetAddress &peer_address() const override;
         void attach_datagram_instance(UdpInstance *instance) override;
         void set_datagram_state(ConnectionState state) override;
+        UdpInstance *datagram_instance() const
+        {
+            return instance_;
+        }
 
         virtual void write(const ::yuan::buffer::ByteBuffer &buffer);
 

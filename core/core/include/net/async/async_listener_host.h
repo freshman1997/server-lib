@@ -23,7 +23,7 @@ namespace yuan::net
     class AsyncListenerHost
     {
     public:
-        using ConnectionHandler = std::function<coroutine::Task<void>(AsyncConnectionContext)>;
+        using AsyncConnectionHandler = std::function<coroutine::Task<void>(AsyncConnectionContext)>;
 
         AsyncListenerHost() = default;
 
@@ -59,7 +59,7 @@ namespace yuan::net
             ssl_module_ = std::move(ssl_module);
         }
 
-        void set_connection_handler(ConnectionHandler handler)
+        void set_connection_handler(AsyncConnectionHandler handler)
         {
             conn_handler_ = std::move(handler);
         }
@@ -164,7 +164,7 @@ namespace yuan::net
             return true;
         }
 
-        class DefaultHandler final : public ConnectionHandler
+        class DefaultHandler final : public yuan::net::ConnectionHandler
         {
         public:
             void on_connected(Connection *) override
@@ -190,7 +190,7 @@ namespace yuan::net
         NetworkRuntime *runtime_ = nullptr;
         StreamAcceptor *acceptor_ = nullptr;
         std::shared_ptr<SSLModule> ssl_module_;
-        ConnectionHandler conn_handler_;
+        AsyncConnectionHandler conn_handler_;
         DefaultHandler default_handler_;
     };
 

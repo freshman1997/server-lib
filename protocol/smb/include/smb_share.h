@@ -4,6 +4,7 @@
 #include "smb_config.h"
 #include "protocol/smb2_constants.h"
 #include "protocol/smb2_structures.h"
+#include "smb_file_system.h"
 #include <cstdint>
 #include <mutex>
 #include <string>

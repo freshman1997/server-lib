@@ -28,10 +28,7 @@ namespace yuan::net::websocket
         friend class WebSocketPacketParser;
 
     public:
-        enum class WorkMode {
-            client_,
-            server_
-        };
+        using WorkMode = ::yuan::net::websocket::WorkMode;
 
         enum class State {
             connecting_,

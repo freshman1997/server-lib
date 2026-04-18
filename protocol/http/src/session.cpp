@@ -39,7 +39,10 @@ namespace yuan::net::http
 
     void HttpSession::add_session_value(const std::string & key, int ival)
     {
-        session_items_[key] = { SessionItemType::ival, ival, {} };
+        SessionItem item;
+        item.type = SessionItemType::ival;
+        item.number.ival = ival;
+        session_items_[key] = std::move(item);
     }
 
     void HttpSession::add_session_value(const std::string & key, std::size_t sz)
@@ -60,7 +63,10 @@ namespace yuan::net::http
 
     void HttpSession::add_session_value(const std::string & key, const std::string & sval)
     {
-        session_items_[key] = { SessionItemType::sval, {}, sval };
+        SessionItem item;
+        item.type = SessionItemType::sval;
+        item.sval = sval;
+        session_items_[key] = std::move(item);
     }
 
     void HttpSession::add_session_value(const std::string & key, void * pval, std::function<void(void *)> deleter)

@@ -1,0 +1,7 @@
+if(TARGET SmbProto)
+    add_executable(test_smb test_smb.cpp)
+    target_link_libraries(test_smb PUBLIC SmbProto)
+    if(BUILD_TESTING)
+        add_test(NAME smb COMMAND test_smb)
+    endif()
+endif()

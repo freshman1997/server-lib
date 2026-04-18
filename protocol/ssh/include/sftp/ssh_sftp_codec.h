@@ -10,6 +10,8 @@
 
 namespace yuan::net::ssh
 {
+    using ::yuan::buffer::ByteBuffer;
+
     enum class SftpPacketType : uint8_t {
         SSH_FXP_INIT = 1,
         SSH_FXP_VERSION = 2,

@@ -1,7 +1,7 @@
 #include "utils.h"
+#include "base/utils/string_util.h"
 #include "base/time.h"
 #include "openssl/sha.h"
-#include <cstring>
 #include <random>
 
 namespace yuan::net::bit_torrent
@@ -21,33 +21,17 @@ std::vector<uint8_t> sha1_hash(const std::string &data)
 
 std::string to_hex(const std::vector<uint8_t> &bytes)
 {
-    return to_hex(bytes.data(), bytes.size());
+    return yuan::base::util::to_hex(bytes);
 }
 
 std::string to_hex(const uint8_t *data, size_t len)
 {
-    std::string hex;
-    hex.reserve(len * 2);
-    for (size_t i = 0; i < len; i++)
-    {
-        char buf[3];
-        snprintf(buf, sizeof(buf), "%02x", data[i]);
-        hex += buf;
-    }
-    return hex;
+    return yuan::base::util::to_hex(data, len);
 }
 
 std::vector<uint8_t> from_hex(const std::string &hex)
 {
-    std::vector<uint8_t> bytes;
-    bytes.reserve(hex.size() / 2);
-    for (size_t i = 0; i + 1 < hex.size(); i += 2)
-    {
-        unsigned int byte;
-        sscanf(hex.c_str() + i, "%02x", &byte);
-        bytes.push_back(static_cast<uint8_t>(byte));
-    }
-    return bytes;
+    return yuan::base::util::from_hex(hex);
 }
 
 std::string url_encode(const std::string &str)

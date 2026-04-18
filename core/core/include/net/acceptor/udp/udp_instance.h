@@ -58,6 +58,11 @@ namespace yuan::net
 
         void set_acceptor(DatagramEndpoint *acceptor);
 
+        DatagramEndpoint *acceptor() const
+        {
+            return acceptor_;
+        }
+
         timer::TimerManager *get_timer_manager() const;
 
         void enable_rw_events();

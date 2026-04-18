@@ -444,8 +444,12 @@ luaL_unref(L_, LUA_REGISTRYINDEX, ref);
 bool PluginManager::load(const std::string &pluginName)
 {
     // 1. 尝试查找 plugin.json（脚本插件描述文件）
-    std::string json_path = data_->plugin_path_ + pluginName + ".json";
+    std::string json_path = (std::filesystem::path(data_->plugin_path_) / (pluginName + ".json")).string();
     auto config = load_plugin_config(json_path);
+    if (!config.loaded()) {
+        json_path = (std::filesystem::path(data_->plugin_path_) / pluginName / "plugin.json").string();
+        config = load_plugin_config(json_path);
+    }
 
     if (config.loaded()) {
         std::string run_mode_str = config.get_string("run_mode", "native");
@@ -610,6 +614,7 @@ return plugin
 ctx.app_name          -- string
 ctx.plugin_name       -- string
 ctx.plugin_root_path  -- string
+ctx.plugin_config_path -- string
 ctx.worker_threads    -- number
 ctx.worker_index      -- number
 ctx.is_worker_process -- boolean
@@ -618,11 +623,11 @@ ctx.is_worker_process -- boolean
 ctx.logger            -- Logger 对象（需 use_logger 权限）
 ctx.event_bus         -- EventBus 对象（需 use_event_bus 权限）
 ctx.scheduler         -- Scheduler 对象（需 use_scheduler 权限）
-ctx.storage           -- Storage 对象（需 use_storage 权限）
+ctx.storage           -- Storage 对象（需 use_storage 权限，且宿主已注入）
 ctx.resource_guard    -- ResourceGuard 对象
 
 -- 配置
-ctx.config            -- 配置表（从 plugin.json 加载）
+ctx.config            -- 配置表（从 plugin_name.json 或 plugin_name/plugin.json 加载）
 ```
 
 ### 10.3 Logger API

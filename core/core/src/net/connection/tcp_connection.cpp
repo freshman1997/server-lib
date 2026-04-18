@@ -27,6 +27,7 @@ namespace yuan::net
     {
         socket_ = std::make_unique<Socket>(ip, port, false, fd);
         init();
+        state_ = ConnectionState::connected;
     }
 
     TcpConnection::TcpConnection(Socket * sock)
@@ -90,6 +91,11 @@ namespace yuan::net
     }
 
     const InetAddress &TcpConnection::get_remote_address() const
+    {
+        return *socket_->get_address();
+    }
+
+    const InetAddress &TcpConnection::get_local_address() const
     {
         return *socket_->get_address();
     }

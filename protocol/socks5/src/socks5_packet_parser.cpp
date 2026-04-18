@@ -21,7 +21,7 @@ namespace yuan::net::socks5
             return std::nullopt;
         }
 
-        const uint8_t *data = span.data();
+        const uint8_t *data = reinterpret_cast<const uint8_t *>(span.data());
         if (data[0] != static_cast<uint8_t>(SocksVersion::v5)) {
             return std::nullopt;
         }
@@ -45,19 +45,23 @@ namespace yuan::net::socks5
             return std::nullopt;
         }
 
-        const uint8_t *data = span.data();
-        uint8_t ulen = data[0];
-        if (span.size() < static_cast<size_t>(1 + ulen + 1)) {
+        const uint8_t *data = reinterpret_cast<const uint8_t *>(span.data());
+        if (data[0] != 0x01) {
             return std::nullopt;
         }
 
-        std::string username(reinterpret_cast<const char *>(data + 1), ulen);
-        uint8_t plen = data[1 + ulen];
-        if (span.size() < static_cast<size_t>(1 + ulen + 1 + plen)) {
+        uint8_t ulen = data[1];
+        if (span.size() < static_cast<size_t>(2 + ulen + 1)) {
             return std::nullopt;
         }
 
-        std::string password(reinterpret_cast<const char *>(data + 1 + ulen + 1), plen);
+        std::string username(reinterpret_cast<const char *>(data + 2), ulen);
+        uint8_t plen = data[2 + ulen];
+        if (span.size() < static_cast<size_t>(3 + ulen + plen)) {
+            return std::nullopt;
+        }
+
+        std::string password(reinterpret_cast<const char *>(data + 3 + ulen), plen);
         return std::make_pair(std::move(username), std::move(password));
     }
 
@@ -117,7 +121,7 @@ namespace yuan::net::socks5
             return std::nullopt;
         }
 
-        const uint8_t *data = span.data();
+        const uint8_t *data = reinterpret_cast<const uint8_t *>(span.data());
         if (data[0] != static_cast<uint8_t>(SocksVersion::v5)) {
             return std::nullopt;
         }
@@ -157,7 +161,7 @@ namespace yuan::net::socks5
     ::yuan::buffer::ByteBuffer Socks5PacketParser::build_auth_reply(bool success)
     {
         ::yuan::buffer::ByteBuffer buf(2);
-        buf.append_u8(static_cast<uint8_t>(SocksVersion::v5));
+        buf.append_u8(0x01);
         buf.append_u8(success ? 0x00 : 0x01);
         return buf;
     }
@@ -209,7 +213,7 @@ namespace yuan::net::socks5
             return std::nullopt;
         }
 
-        const uint8_t *data = span.data();
+        const uint8_t *data = reinterpret_cast<const uint8_t *>(span.data());
 
         Socks5UdpHeader header;
         uint16_t reserved = 0;

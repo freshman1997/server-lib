@@ -162,6 +162,11 @@ namespace yuan::net::bit_torrent
             return std::vector<std::pair<std::string, BaseData *> >(datas_.begin(), datas_.end());
         }
 
+        std::vector<std::pair<std::string, BaseData *> > get_data() const
+        {
+            return get_items();
+        }
+
         std::string to_string();
 
     private:

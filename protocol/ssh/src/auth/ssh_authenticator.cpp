@@ -29,6 +29,7 @@ namespace yuan::net::ssh
         SshHandler * handler,
         const SshUserauthRequestMessage & msg)
     {
+        auto *effective_handler = handler ? handler : &SshHandler::default_handler();
         pending_auth_response_ = PendingAuthResponse::none;
 
         if (state_ == State::authenticated)
@@ -148,7 +149,7 @@ namespace yuan::net::ssh
             }
         }
 
-        SshAuthResult handler_result = handler->on_authenticate(session, username_, msg.method_name, creds);
+        SshAuthResult handler_result = effective_handler->on_authenticate(session, username_, msg.method_name, creds);
 
         if (handler_result == SshAuthResult::FAILURE && active_method_) {
             handler_result = active_method_->authenticate(session, username_, creds);
@@ -185,6 +186,7 @@ namespace yuan::net::ssh
         SshHandler * handler,
         const SshUserauthInfoResponseMessage & msg)
     {
+        auto *effective_handler = handler ? handler : &SshHandler::default_handler();
         pending_auth_response_ = PendingAuthResponse::none;
 
         if (state_ != State::authenticating || !active_method_)
@@ -193,7 +195,7 @@ namespace yuan::net::ssh
         SshAuthCredentials creds;
         creds.kb_interactive_responses = msg.responses;
 
-        SshAuthResult handler_result = handler->on_authenticate(
+        SshAuthResult handler_result = effective_handler->on_authenticate(
             session, username_, current_method_, creds);
 
         if (handler_result == SshAuthResult::FAILURE && active_method_) {

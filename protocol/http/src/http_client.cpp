@@ -2,6 +2,7 @@
 #include "coroutine/runtime.h"
 #include "coroutine/sync_wait.h"
 #include "coroutine/stream_io_awaitable.h"
+#include "net/channel/channel.h"
 #include "net/runtime/network_runtime.h"
 #include "net/connection/stream_transport.h"
 #include "context.h"

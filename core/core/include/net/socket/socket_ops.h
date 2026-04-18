@@ -24,6 +24,8 @@ namespace yuan::net::socket
 
     int connect(int fd, const InetAddress & addr);
 
+    InetAddress get_local_address(int fd);
+
     int get_last_error();
 
     bool set_reuse(int fd, bool on, bool exclude = false);

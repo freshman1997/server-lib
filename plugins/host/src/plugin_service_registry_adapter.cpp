@@ -195,7 +195,7 @@ namespace yuan::app
         return true;
     }
 
-    void PluginServiceRegistryAdapter::start_plugin_services(const std::string & plugin_name)
+    bool PluginServiceRegistryAdapter::start_plugin_services(const std::string & plugin_name)
     {
         std::vector<std::pair<std::string, std::shared_ptr<plugin::PluginService> > > services;
 
@@ -203,7 +203,7 @@ namespace yuan::app
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = plugin_services_.find(plugin_name);
             if (it == plugin_services_.end()) {
-                return;
+                return true;
             }
 
             services.reserve(it->second.size());
@@ -219,6 +219,9 @@ namespace yuan::app
             }
         }
 
+        std::vector<std::string> started_names;
+        started_names.reserve(services.size());
+
         for (const auto & [
                               name,
                               service
@@ -231,16 +234,65 @@ namespace yuan::app
                 if (service_it != services_.end()) {
                     service_it->second.running = true;
                 }
+                started_names.push_back(name);
             }
             catch (const std::exception &e)
             {
                 LOG_ERROR("plugin service '{}' start error for plugin '{}': {}", name, plugin_name, e.what());
+                for (auto rit = started_names.rbegin(); rit != started_names.rend(); ++rit) {
+                    try
+                    {
+                        auto stop_it = services_.find(*rit);
+                        if (stop_it != services_.end() && stop_it->second.managed_service) {
+                            stop_it->second.managed_service->stop();
+                        }
+                    }
+                    catch (const std::exception &stop_ex)
+                    {
+                        LOG_ERROR("plugin service '{}' rollback stop error for plugin '{}': {}", *rit, plugin_name, stop_ex.what());
+                    }
+                    catch (...)
+                    {
+                        LOG_ERROR("plugin service '{}' rollback stop unknown error for plugin '{}'", *rit, plugin_name);
+                    }
+
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    auto stop_it = services_.find(*rit);
+                    if (stop_it != services_.end()) {
+                        stop_it->second.running = false;
+                        stop_it->second.initialized = false;
+                    }
+                }
+                return false;
             }
             catch (...)
             {
                 LOG_ERROR("plugin service '{}' start unknown error for plugin '{}'", name, plugin_name);
+                for (auto rit = started_names.rbegin(); rit != started_names.rend(); ++rit) {
+                    try
+                    {
+                        auto stop_it = services_.find(*rit);
+                        if (stop_it != services_.end() && stop_it->second.managed_service) {
+                            stop_it->second.managed_service->stop();
+                        }
+                    }
+                    catch (...)
+                    {
+                        LOG_ERROR("plugin service '{}' rollback stop unknown error for plugin '{}'", *rit, plugin_name);
+                    }
+
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    auto stop_it = services_.find(*rit);
+                    if (stop_it != services_.end()) {
+                        stop_it->second.running = false;
+                        stop_it->second.initialized = false;
+                    }
+                }
+                return false;
             }
         }
+
+        return true;
     }
 
     void PluginServiceRegistryAdapter::stop_plugin_services(const std::string & plugin_name)

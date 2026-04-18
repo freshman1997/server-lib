@@ -1,6 +1,7 @@
 #include "redis_cli_manager.h"
 #include "base/time.h"
 #include <random>
+#include <thread>
 
 namespace yuan::redis
 {

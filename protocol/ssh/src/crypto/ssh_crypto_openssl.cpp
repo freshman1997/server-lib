@@ -299,13 +299,11 @@ namespace yuan::net::ssh
         const std::vector<uint8_t> & prime,
         std::vector<uint8_t> & public_key_out)
     {
-        DH *dh = DH_new();
-        BIGNUM *p = BN_bin2bn(prime.data(), static_cast<int>(prime.size()), nullptr);
-        BIGNUM *g = BN_bin2bn(generator.data(), static_cast<int>(generator.size()), nullptr);
-
         OSSL_PARAM params[3];
-        params[0] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_FFC_P, p, BN_num_bytes(p));
-        params[1] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_FFC_G, g, BN_num_bytes(g));
+        auto prime_copy = prime;
+        auto generator_copy = generator;
+        params[0] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_FFC_P, prime_copy.data(), prime_copy.size());
+        params[1] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_FFC_G, generator_copy.data(), generator_copy.size());
         params[2] = OSSL_PARAM_construct_end();
 
         EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(nullptr, "DH", nullptr);
@@ -327,11 +325,8 @@ namespace yuan::net::ssh
 
         BN_free(pub_key);
         BN_free(priv_key);
-        BN_free(p);
-        BN_free(g);
         EVP_PKEY_free(pkey);
         EVP_PKEY_CTX_free(ctx);
-        DH_free(dh);
 
         return private_key;
     }
@@ -441,10 +436,6 @@ namespace yuan::net::ssh
         if (peer_public_key.size() < 1 + 2 * coord_len)
             return {};
 
-        BIGNUM *pub_x = BN_bin2bn(peer_public_key.data() + 1, static_cast<int>(coord_len), nullptr);
-        BIGNUM *pub_y = BN_bin2bn(peer_public_key.data() + 1 + coord_len, static_cast<int>(coord_len), nullptr);
-        BIGNUM *priv = BN_bin2bn(private_key.data(), static_cast<int>(private_key.size()), nullptr);
-
         const char *group_name = (nid == NID_X9_62_prime256v1) ? "prime256v1"
                                                                : (nid == NID_secp384r1) ? "secp384r1"
                                                                                         : "secp521r1";
@@ -452,8 +443,11 @@ namespace yuan::net::ssh
         OSSL_PARAM params[4];
         params[0] = OSSL_PARAM_construct_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME,
                                                      const_cast<char *>(group_name), 0);
-        params[1] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_EC_PUB_X, pub_x, BN_num_bytes(pub_x));
-        params[2] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_EC_PUB_Y, pub_y, BN_num_bytes(pub_y));
+        std::vector<uint8_t> pub_x(peer_public_key.begin() + 1, peer_public_key.begin() + 1 + coord_len);
+        std::vector<uint8_t> pub_y(peer_public_key.begin() + 1 + coord_len, peer_public_key.begin() + 1 + 2 * coord_len);
+        auto private_key_copy = private_key;
+        params[1] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_EC_PUB_X, pub_x.data(), pub_x.size());
+        params[2] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_EC_PUB_Y, pub_y.data(), pub_y.size());
         params[3] = OSSL_PARAM_construct_end();
 
         EVP_PKEY_CTX *pkey_ctx = EVP_PKEY_CTX_new_from_name(nullptr, "EC", nullptr);
@@ -464,7 +458,8 @@ namespace yuan::net::ssh
         OSSL_PARAM priv_params[3];
         priv_params[0] = OSSL_PARAM_construct_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME,
                                                           const_cast<char *>(group_name), 0);
-        priv_params[1] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_PRIV_KEY, priv, BN_num_bytes(priv));
+        priv_params[1] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_PRIV_KEY,
+                                                 private_key_copy.data(), private_key_copy.size());
         priv_params[2] = OSSL_PARAM_construct_end();
 
         EVP_PKEY_CTX *priv_ctx = EVP_PKEY_CTX_new_from_name(nullptr, "EC", nullptr);
@@ -487,9 +482,6 @@ namespace yuan::net::ssh
         EVP_PKEY_CTX_free(priv_ctx);
         EVP_PKEY_free(peer_pkey);
         EVP_PKEY_CTX_free(pkey_ctx);
-        BN_free(pub_x);
-        BN_free(pub_y);
-        BN_free(priv);
 
         return shared_secret;
     }
@@ -753,8 +745,8 @@ namespace yuan::net::ssh
         EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
         EVP_PKEY_keygen_init(ctx);
         OSSL_PARAM params[2];
-        params[0] = OSSL_PARAM_construct_size_t(OSSL_PKEY_PARAM_BITS,
-                                                static_cast<size_t>(bits));
+        size_t bits_value = static_cast<size_t>(bits);
+        params[0] = OSSL_PARAM_construct_size_t(OSSL_PKEY_PARAM_BITS, &bits_value);
         params[1] = OSSL_PARAM_construct_end();
         EVP_PKEY_CTX_set_params(ctx, params);
         EVP_PKEY_generate(ctx, &pkey);

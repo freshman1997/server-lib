@@ -2,10 +2,41 @@
 #include "protocol/ssh_message_codec.h"
 #include "crypto/ssh_key_derivation.h"
 #include "ssh_config.h"
+#include <algorithm>
 #include <cstring>
 
 namespace yuan::net::ssh
 {
+    namespace
+    {
+        std::string first_name_in_list(const std::string & names)
+        {
+            const auto pos = names.find(',');
+            if (pos == std::string::npos) {
+                return names;
+            }
+            return names.substr(0, pos);
+        }
+
+        std::vector<std::string> filter_supported_algorithms(
+            const std::vector<std::string> & preferred,
+            const std::vector<std::string> & supported)
+        {
+            if (supported.empty()) {
+                return preferred;
+            }
+
+            std::vector<std::string> filtered;
+            filtered.reserve(preferred.size());
+            for (const auto & name : preferred) {
+                if (std::find(supported.begin(), supported.end(), name) != supported.end()) {
+                    filtered.push_back(name);
+                }
+            }
+            return filtered;
+        }
+    }
+
     SshTransport::SshTransport(SshAlgorithmRegistry * registry,
                                SshCrypto * crypto,
                                bool we_are_server)
@@ -53,40 +84,41 @@ namespace yuan::net::ssh
 
         msg.kex_algorithms = join_names(config.kex_algorithms);
         msg.server_host_key_algorithms = join_names(config.host_key_algorithms);
+        msg.encryption_algorithms_client_to_server = join_names(config.cipher_algorithms);
+        msg.encryption_algorithms_server_to_client = join_names(config.cipher_algorithms);
+        msg.mac_algorithms_client_to_server = join_names(config.mac_algorithms);
+        msg.mac_algorithms_server_to_client = join_names(config.mac_algorithms);
+        msg.compression_algorithms_client_to_server = join_names(config.compression_algorithms);
+        msg.compression_algorithms_server_to_client = join_names(config.compression_algorithms);
 
         if (registry_) {
-            auto kex_names = registry_->supported_kex_names();
-            if (!kex_names.empty())
+            auto kex_names = filter_supported_algorithms(config.kex_algorithms, registry_->supported_kex_names());
+            if (!kex_names.empty()) {
                 msg.kex_algorithms = join_names(kex_names);
+            }
 
-            auto hk_names = registry_->supported_host_key_names();
-            if (!hk_names.empty())
+            auto hk_names = filter_supported_algorithms(config.host_key_algorithms, registry_->supported_host_key_names());
+            if (!hk_names.empty()) {
                 msg.server_host_key_algorithms = join_names(hk_names);
+            }
 
-            auto cipher_names = registry_->supported_cipher_names();
+            auto cipher_names = filter_supported_algorithms(config.cipher_algorithms, registry_->supported_cipher_names());
             if (!cipher_names.empty()) {
                 msg.encryption_algorithms_client_to_server = join_names(cipher_names);
                 msg.encryption_algorithms_server_to_client = join_names(cipher_names);
             }
 
-            auto mac_names = registry_->supported_mac_names();
+            auto mac_names = filter_supported_algorithms(config.mac_algorithms, registry_->supported_mac_names());
             if (!mac_names.empty()) {
                 msg.mac_algorithms_client_to_server = join_names(mac_names);
                 msg.mac_algorithms_server_to_client = join_names(mac_names);
             }
 
-            auto comp_names = registry_->supported_compression_names();
+            auto comp_names = filter_supported_algorithms(config.compression_algorithms, registry_->supported_compression_names());
             if (!comp_names.empty()) {
                 msg.compression_algorithms_client_to_server = join_names(comp_names);
                 msg.compression_algorithms_server_to_client = join_names(comp_names);
             }
-        } else {
-            msg.encryption_algorithms_client_to_server = join_names(config.cipher_algorithms);
-            msg.encryption_algorithms_server_to_client = join_names(config.cipher_algorithms);
-            msg.mac_algorithms_client_to_server = join_names(config.mac_algorithms);
-            msg.mac_algorithms_server_to_client = join_names(config.mac_algorithms);
-            msg.compression_algorithms_client_to_server = join_names(config.compression_algorithms);
-            msg.compression_algorithms_server_to_client = join_names(config.compression_algorithms);
         }
 
         msg.languages_client_to_server = "";
@@ -112,11 +144,11 @@ namespace yuan::net::ssh
             return std::nullopt;
 
         auto result = registry_->negotiate(
-            config.kex_algorithms,
-            config.host_key_algorithms,
-            config.cipher_algorithms,
-            config.mac_algorithms,
-            config.compression_algorithms,
+            filter_supported_algorithms(config.kex_algorithms, registry_->supported_kex_names()),
+            filter_supported_algorithms(config.host_key_algorithms, registry_->supported_host_key_names()),
+            filter_supported_algorithms(config.cipher_algorithms, registry_->supported_cipher_names()),
+            filter_supported_algorithms(config.mac_algorithms, registry_->supported_mac_names()),
+            filter_supported_algorithms(config.compression_algorithms, registry_->supported_compression_names()),
             msg.kex_algorithms,
             msg.server_host_key_algorithms,
             msg.encryption_algorithms_client_to_server,
@@ -129,6 +161,10 @@ namespace yuan::net::ssh
         if (result) {
             negotiated_ = *result;
             kex_algo_ = registry_->create_kex(result->kex_name);
+            ignore_next_kex_packet_ =
+                msg.first_kex_packet_follows &&
+                (first_name_in_list(msg.kex_algorithms) != result->kex_name ||
+                 first_name_in_list(msg.server_host_key_algorithms) != result->host_key_name);
             state_ = SshTransportState::kex_init;
         }
 
@@ -166,11 +202,14 @@ namespace yuan::net::ssh
         if (!kex_algo_->compute_shared_secret(client_public, shared_secret_))
             return std::nullopt;
 
+        const auto & client_kex_init = we_are_server_ ? peer_kex_init_raw_ : our_kex_init_raw_;
+        const auto & server_kex_init = we_are_server_ ? our_kex_init_raw_ : peer_kex_init_raw_;
+
         exchange_hash_ = kex_algo_->compute_exchange_hash(
             client_version,
             server_version,
-            our_kex_init_raw_,
-            peer_kex_init_raw_,
+            client_kex_init,
+            server_kex_init,
             host_key_algo_->public_key_blob(),
             client_public,
             server_public,
@@ -219,6 +258,16 @@ namespace yuan::net::ssh
         return SshPacketCodec::try_parse(buf, is_encrypted(), &cipher_ctx_, recv_seq_);
     }
 
+    bool SshTransport::consume_pending_kex_guess()
+    {
+        if (!ignore_next_kex_packet_) {
+            return false;
+        }
+
+        ignore_next_kex_packet_ = false;
+        return true;
+    }
+
     void SshTransport::reset_for_rekey()
     {
         kex_algo_.reset();
@@ -226,6 +275,7 @@ namespace yuan::net::ssh
         exchange_hash_.clear();
         our_kex_init_raw_.clear();
         peer_kex_init_raw_.clear();
+        ignore_next_kex_packet_ = false;
         state_ = SshTransportState::kex_init;
     }
 }

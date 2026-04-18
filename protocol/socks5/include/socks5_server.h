@@ -83,7 +83,24 @@ namespace yuan::net::socks5
         class RelayHandler final : public ConnectionHandler
         {
         public:
+            void on_connected(Connection *conn) override
+            {
+                (void)conn;
+            }
             void on_error(Connection *conn) override
+            {
+                if (conn)
+                    conn->close();
+            }
+            void on_read(Connection *conn) override
+            {
+                (void)conn;
+            }
+            void on_write(Connection *conn) override
+            {
+                (void)conn;
+            }
+            void on_close(Connection *conn) override
             {
                 if (conn)
                     conn->close();
@@ -94,8 +111,21 @@ namespace yuan::net::socks5
         {
         public:
             explicit UdpRelayHandler(Socks5Server &server);
+            void on_connected(Connection *conn) override
+            {
+                (void)conn;
+            }
             void on_read(Connection *conn) override;
             void on_error(Connection *conn) override;
+            void on_write(Connection *conn) override
+            {
+                (void)conn;
+            }
+            void on_close(Connection *conn) override
+            {
+                if (conn)
+                    conn->close();
+            }
 
         private:
             Socks5Server &server_;

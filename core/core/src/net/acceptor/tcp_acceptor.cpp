@@ -150,6 +150,9 @@ namespace yuan::net
             }
 
             handler_->on_new_connection(conn);
+            if (conn_handler_) {
+                conn_handler_->on_connected(conn);
+            }
         }
     }
 

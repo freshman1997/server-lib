@@ -4,6 +4,7 @@
 #include "connection/ssh_global_request.h"
 #include "protocol/ssh_constants.h"
 #include "protocol/ssh_structures.h"
+#include "buffer/byte_buffer.h"
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -12,6 +13,8 @@
 
 namespace yuan::net::ssh
 {
+    using ::yuan::buffer::ByteBuffer;
+
     class SshSession;
     class SshHandler;
 

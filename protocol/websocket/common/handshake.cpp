@@ -19,7 +19,11 @@ namespace yuan::net::websocket
     {
         if (a.size() != b.size())
             return false;
-        return std::strcasecmp(a.c_str(), b.c_str()) == 0;
+#ifdef _WIN32
+        return _stricmp(a.c_str(), b.c_str()) == 0;
+#else
+        return strcasecmp(a.c_str(), b.c_str()) == 0;
+#endif
     }
 
     WebSocketHandshaker::WebSocketHandshaker()
@@ -27,11 +31,11 @@ namespace yuan::net::websocket
     {
     }
 
-    bool WebSocketHandshaker::on_handshake(http::HttpRequest * req, http::HttpResponse * resp, WebSocketConnection::WorkMode workMode, bool isResp)
+    bool WebSocketHandshaker::on_handshake(http::HttpRequest * req, http::HttpResponse * resp, WorkMode workMode, bool isResp)
     {
         ok_ = false;
 
-        if (workMode == WebSocketConnection::WorkMode::server_) {
+        if (workMode == WorkMode::server_) {
             return do_handshake_server(req, resp);
         } else {
             return do_handshake_client(req, resp, isResp);

@@ -175,7 +175,7 @@ namespace yuan::net::mqtt
             connack.properties.wildcard_subscription_available = config_.wildcard_subscription_available ? 1 : 0;
             connack.properties.subscription_identifier_available = config_.subscription_identifier_available ? 1 : 0;
             connack.properties.shared_subscription_available = config_.shared_subscription_available ? 1 : 0;
-            connack.properties.maximum_packet_size = config_.maximum_packet_size;
+            connack.properties.maximum_packet_size = config_.max_packet_size;
             connack.properties.assigned_client_identifier = connect.client_id;
             if (connect.keep_alive == 0 && config_.keep_alive_default != MQTT_KEEP_ALIVE_DEFAULT) {
                 connack.properties.server_keep_alive = config_.keep_alive_default;

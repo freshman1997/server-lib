@@ -3,6 +3,7 @@
 
 #include "plugin/script_plugin_adapter.h"
 #include "plugin/plugin_context.h"
+#include "quickjs_lib.h"
 #include "ts_host_bindings.h"
 
 #include <atomic>

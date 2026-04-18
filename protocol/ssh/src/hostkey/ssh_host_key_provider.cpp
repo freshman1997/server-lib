@@ -4,11 +4,22 @@
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/bio.h>
+#include <openssl/core_names.h>
+#include <openssl/params.h>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 
 namespace yuan::net::ssh
 {
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_ed25519();
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_rsa_sha512();
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_rsa_sha256();
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_rsa();
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_ecdsa_nistp256();
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_ecdsa_nistp384();
+    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_ecdsa_nistp521();
+
     namespace
     {
         std::string key_type_to_algorithm_name(SshHostKeyType type)
@@ -56,15 +67,70 @@ namespace yuan::net::ssh
                        std::istreambuf_iterator<char>());
             return true;
         }
-    }
 
-    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_ed25519();
-    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_rsa_sha512();
-    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_rsa_sha256();
-    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_rsa();
-    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_ecdsa_nistp256();
-    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_ecdsa_nistp384();
-    std::unique_ptr<SshHostKeyAlgorithm> create_host_key_ecdsa_nistp521();
+        EVP_PKEY *generate_pkey(SshHostKeyType type)
+        {
+            const char *algorithm = nullptr;
+            OSSL_PARAM params[2];
+            params[0] = OSSL_PARAM_construct_end();
+            params[1] = OSSL_PARAM_construct_end();
+
+            size_t bits_value = 3072;
+            char p256_name[] = "prime256v1";
+            char p384_name[] = "secp384r1";
+            char p521_name[] = "secp521r1";
+
+            switch (type) {
+            case SshHostKeyType::ED25519:
+                algorithm = "ED25519";
+                break;
+            case SshHostKeyType::ECDSA_P256:
+                algorithm = "EC";
+                params[0] = OSSL_PARAM_construct_utf8_string(
+                    OSSL_PKEY_PARAM_GROUP_NAME, p256_name, 0);
+                break;
+            case SshHostKeyType::ECDSA_P384:
+                algorithm = "EC";
+                params[0] = OSSL_PARAM_construct_utf8_string(
+                    OSSL_PKEY_PARAM_GROUP_NAME, p384_name, 0);
+                break;
+            case SshHostKeyType::ECDSA_P521:
+                algorithm = "EC";
+                params[0] = OSSL_PARAM_construct_utf8_string(
+                    OSSL_PKEY_PARAM_GROUP_NAME, p521_name, 0);
+                break;
+            case SshHostKeyType::RSA:
+                algorithm = "RSA";
+                params[0] = OSSL_PARAM_construct_size_t(OSSL_PKEY_PARAM_BITS, &bits_value);
+                break;
+            default:
+                return nullptr;
+            }
+
+            EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(nullptr, algorithm, nullptr);
+            if (!ctx)
+                return nullptr;
+
+            EVP_PKEY *pkey = nullptr;
+            if (EVP_PKEY_keygen_init(ctx) <= 0) {
+                EVP_PKEY_CTX_free(ctx);
+                return nullptr;
+            }
+
+            if (params[0].key != nullptr && EVP_PKEY_CTX_set_params(ctx, params) <= 0) {
+                EVP_PKEY_CTX_free(ctx);
+                return nullptr;
+            }
+
+            if (EVP_PKEY_generate(ctx, &pkey) <= 0) {
+                EVP_PKEY_CTX_free(ctx);
+                return nullptr;
+            }
+
+            EVP_PKEY_CTX_free(ctx);
+            return pkey;
+        }
+    }
 
     bool SshHostKeyProvider::load_key(const std::string & path, SshHostKeyType type)
     {
@@ -162,36 +228,14 @@ namespace yuan::net::ssh
 
     bool SshHostKeyProvider::generate_key(SshHostKeyType type, const std::string & path)
     {
-        SshCryptoOpenSSL crypto;
-        SshKeyPair keypair;
-
-        switch (type) {
-        case SshHostKeyType::ED25519:
-            keypair = crypto.generate_ed25519_key_pair();
-            break;
-        case SshHostKeyType::ECDSA_P256:
-            keypair = crypto.generate_ecdsa_key_pair("P-256");
-            break;
-        case SshHostKeyType::ECDSA_P384:
-            keypair = crypto.generate_ecdsa_key_pair("P-384");
-            break;
-        case SshHostKeyType::ECDSA_P521:
-            keypair = crypto.generate_ecdsa_key_pair("P-521");
-            break;
-        case SshHostKeyType::RSA:
-            keypair = crypto.generate_rsa_key_pair(3072);
-            break;
-        default:
-            return false;
-        }
-
-        if (keypair.private_key.empty())
-            return false;
-
-        const uint8_t *p = keypair.private_key.data();
-        EVP_PKEY *pkey = d2i_AutoPrivateKey(nullptr, &p, static_cast<long>(keypair.private_key.size()));
+        EVP_PKEY *pkey = generate_pkey(type);
         if (!pkey)
             return false;
+
+        std::error_code ec;
+        const std::filesystem::path key_path(path);
+        if (key_path.has_parent_path())
+            std::filesystem::create_directories(key_path.parent_path(), ec);
 
         BIO *bio = BIO_new_file(path.c_str(), "w");
         if (!bio) {
@@ -199,10 +243,10 @@ namespace yuan::net::ssh
             return false;
         }
 
-        PEM_write_bio_PrivateKey(bio, pkey, nullptr, nullptr, 0, nullptr, nullptr);
+        const bool wrote_key = PEM_write_bio_PrivateKey(bio, pkey, nullptr, nullptr, 0, nullptr, nullptr) == 1;
         BIO_free(bio);
         EVP_PKEY_free(pkey);
-        return true;
+        return wrote_key;
     }
 
     std::string SshHostKeyProvider::default_key_path(SshHostKeyType type)

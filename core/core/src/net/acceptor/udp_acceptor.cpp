@@ -15,6 +15,7 @@
 #else
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <io.h>
 #endif
@@ -156,6 +157,9 @@ namespace yuan::net
                     res.second->set_connection_handler(conn_handler_);
                     res.second->set_event_handler(handler_);
                     handler_->on_new_connection(res.second);
+                    if (conn_handler_) {
+                        conn_handler_->on_connected(res.second);
+                    }
                     datagram->set_datagram_state(ConnectionState::connected);
                 }
                 res.second->on_read_event();
@@ -182,7 +186,7 @@ namespace yuan::net
     int UdpAcceptor::send_to(const InetAddress & address, const ::yuan::buffer::ByteBuffer & buff)
     {
         sockaddr_storage addr_storage = address.to_sockaddr();
-        socklen_t addr_len = address.is_ipv6() ? sizeof(sockaddr_in6) : sizeof(sockaddr_in);
+        socklen_t addr_len = address.is_ipv6() ? sizeof(::sockaddr_in6) : sizeof(::sockaddr_in);
         const auto send_size = (std::min)(buff.readable_bytes(), static_cast<std::size_t>(UDP_DATA_LIMIT));
         return ::sendto(sock_->get_fd(), buff.read_ptr(), static_cast<int>(send_size),
                         0, (struct sockaddr *)&addr_storage, addr_len);

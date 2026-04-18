@@ -28,6 +28,14 @@ namespace yuan::net::ssh
         }
     }
 
+    static std::vector<uint8_t> to_bytes(const ByteBuffer & buf)
+    {
+        const auto span = buf.readable_span();
+        return std::vector<uint8_t>(
+            reinterpret_cast<const uint8_t *>(span.data()),
+            reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+    }
+
     static bool read_u32_be(const uint8_t * data, size_t len, size_t & offset, uint32_t & out)
     {
         if (offset + 4 > len)
@@ -116,7 +124,7 @@ namespace yuan::net::ssh
         payload_size += packet.payload.size();
 
         write_u32_be(buf, static_cast<uint32_t>(payload_size));
-        buf.append(static_cast<uint8_t>(packet.type));
+        buf.append_u8(static_cast<uint8_t>(packet.type));
 
         if (packet.type != SftpPacketType::SSH_FXP_INIT && packet.type != SftpPacketType::SSH_FXP_VERSION) {
             write_u32_be(buf, packet.request_id);
@@ -134,7 +142,7 @@ namespace yuan::net::ssh
         ByteBuffer buf;
         size_t payload_size = 1 + 4;
         write_u32_be(buf, static_cast<uint32_t>(payload_size));
-        buf.append(static_cast<uint8_t>(SftpPacketType::SSH_FXP_VERSION));
+        buf.append_u8(static_cast<uint8_t>(SftpPacketType::SSH_FXP_VERSION));
         write_u32_be(buf, version);
         return buf;
     }
@@ -150,7 +158,7 @@ namespace yuan::net::ssh
         SftpPacket pkt;
         pkt.type = SftpPacketType::SSH_FXP_STATUS;
         pkt.request_id = request_id;
-        pkt.payload.assign(payload.read_ptr(), payload.read_ptr() + payload.readable_bytes());
+        pkt.payload = to_bytes(payload);
         return encode(pkt);
     }
 
@@ -162,7 +170,7 @@ namespace yuan::net::ssh
         SftpPacket pkt;
         pkt.type = SftpPacketType::SSH_FXP_HANDLE;
         pkt.request_id = request_id;
-        pkt.payload.assign(payload.read_ptr(), payload.read_ptr() + payload.readable_bytes());
+        pkt.payload = to_bytes(payload);
         return encode(pkt);
     }
 
@@ -177,7 +185,7 @@ namespace yuan::net::ssh
         SftpPacket pkt;
         pkt.type = SftpPacketType::SSH_FXP_DATA;
         pkt.request_id = request_id;
-        pkt.payload.assign(payload.read_ptr(), payload.read_ptr() + payload.readable_bytes());
+        pkt.payload = to_bytes(payload);
         return encode(pkt);
     }
 
@@ -194,7 +202,7 @@ namespace yuan::net::ssh
         SftpPacket pkt;
         pkt.type = SftpPacketType::SSH_FXP_NAME;
         pkt.request_id = request_id;
-        pkt.payload.assign(payload.read_ptr(), payload.read_ptr() + payload.readable_bytes());
+        pkt.payload = to_bytes(payload);
         return encode(pkt);
     }
 
@@ -206,7 +214,7 @@ namespace yuan::net::ssh
         SftpPacket pkt;
         pkt.type = SftpPacketType::SSH_FXP_ATTRS;
         pkt.request_id = request_id;
-        pkt.payload.assign(payload.read_ptr(), payload.read_ptr() + payload.readable_bytes());
+        pkt.payload = to_bytes(payload);
         return encode(pkt);
     }
 

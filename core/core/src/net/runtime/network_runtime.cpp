@@ -125,7 +125,7 @@ namespace yuan::net
     void NetworkRuntime::dispatch(std::function<void()> callback)
     {
         if (loop_ && callback) {
-            loop_->run_in_loop(std::move(callback));
+            loop_->queue_in_loop(std::move(callback));
         }
     }
 

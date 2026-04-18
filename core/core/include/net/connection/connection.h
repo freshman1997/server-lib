@@ -61,6 +61,7 @@ namespace yuan::net
         virtual ConnectionState get_connection_state() const = 0;
         virtual bool is_connected() const = 0;
         virtual const InetAddress &get_remote_address() const = 0;
+        virtual const InetAddress &get_local_address() const = 0;
 
         virtual void write(const ::yuan::buffer::ByteBuffer &buffer) = 0;
 

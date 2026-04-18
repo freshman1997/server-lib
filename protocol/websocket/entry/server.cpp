@@ -8,6 +8,7 @@
 #include "context.h"
 #include "session.h"
 #include "response_code.h"
+#include "net/secuity/ssl_module.h"
 
 #if defined(WS_USE_SSL)
 #include "net/secuity/openssl.h"

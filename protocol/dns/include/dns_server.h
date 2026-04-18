@@ -5,6 +5,7 @@
 #include "net/session/connection_context.h"
 #include "net/session/datagram_server_session.h"
 #include "dns_packet.h"
+#include <atomic>
 #include <functional>
 #include <map>
 #include <string>

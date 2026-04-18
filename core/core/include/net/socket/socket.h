@@ -2,8 +2,14 @@
 #define __SOCKET_H__
 #include "net/secuity/ssl_handler.h"
 #include <memory>
-#include <netinet/in.h>
 #include <string_view>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <netinet/in.h>
+#endif
 
 namespace yuan::net
 {
@@ -52,6 +58,8 @@ namespace yuan::net
         {
             return addr_.get();
         }
+
+        InetAddress get_local_address() const;
 
     private:
         int fd_;

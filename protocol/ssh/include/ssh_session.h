@@ -20,6 +20,8 @@
 
 namespace yuan::net::ssh
 {
+    using ::yuan::buffer::ByteBuffer;
+
     class SshHandler;
     class SshServer;
 

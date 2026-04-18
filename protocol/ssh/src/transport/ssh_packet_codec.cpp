@@ -36,6 +36,7 @@ namespace yuan::net::ssh
 
             if (packet_length > SSH_MAX_PACKET_SIZE) {
                 result.complete = false;
+                result.invalid = true;
                 return result;
             }
 
@@ -68,6 +69,7 @@ namespace yuan::net::ssh
 
             if (packet_length > SSH_MAX_PACKET_SIZE) {
                 result.complete = false;
+                result.invalid = true;
                 return result;
             }
 
@@ -96,6 +98,7 @@ namespace yuan::net::ssh
 
             if (packet_length > SSH_MAX_PACKET_SIZE) {
                 result.complete = false;
+                result.invalid = true;
                 return result;
             }
 
@@ -110,19 +113,26 @@ namespace yuan::net::ssh
             return result;
         }
 
-        if (buf.readable_bytes() < 4) {
+        size_t preview_len = cipher_ctx->block_size();
+        if (preview_len < 4) {
+            preview_len = 4;
+        }
+
+        if (buf.readable_bytes() < preview_len) {
             result.complete = false;
             return result;
         }
 
         const uint8_t *ptr = reinterpret_cast<const uint8_t *>(buf.read_ptr());
-        uint32_t packet_length = (static_cast<uint32_t>(ptr[0]) << 24) |
-                                 (static_cast<uint32_t>(ptr[1]) << 16) |
-                                 (static_cast<uint32_t>(ptr[2]) << 8) |
-                                 static_cast<uint32_t>(ptr[3]);
+        uint32_t packet_length = 0;
+        if (!cipher_ctx->try_decrypt_packet_length(seq, ptr, preview_len, packet_length)) {
+            result.complete = false;
+            return result;
+        }
 
         if (packet_length > SSH_MAX_PACKET_SIZE) {
             result.complete = false;
+            result.invalid = true;
             return result;
         }
 
@@ -169,12 +179,14 @@ namespace yuan::net::ssh
         const uint8_t *plain_ptr = reinterpret_cast<const uint8_t *>(plaintext.read_ptr());
         auto encrypted = cipher_ctx->encrypt_packet(
             seq,
-            plain_ptr + 4,
-            packet_length,
+            cipher_ctx->is_aead() ? (plain_ptr + 4) : plain_ptr,
+            cipher_ctx->is_aead() ? packet_length : (4 + packet_length),
             static_cast<uint8_t>(padding_len));
 
         ByteBuffer final_out;
-        final_out.ensure_writable(4 + encrypted.size());
+        final_out.ensure_writable(cipher_ctx->is_aead() && !cipher_ctx->is_chacha20_poly1305()
+                                      ? (4 + encrypted.size())
+                                      : encrypted.size());
 
         if (cipher_ctx->is_chacha20_poly1305()) {
             final_out.append(encrypted.data(), encrypted.size());
@@ -182,7 +194,6 @@ namespace yuan::net::ssh
             final_out.append(plain_ptr, 4);
             final_out.append(encrypted.data(), encrypted.size());
         } else {
-            final_out.append(plain_ptr, 4);
             final_out.append(encrypted.data(), encrypted.size());
         }
 
@@ -240,15 +251,15 @@ namespace yuan::net::ssh
             return payload;
         }
 
-        uint32_t packet_length = (static_cast<uint32_t>(data[0]) << 24) |
-                                 (static_cast<uint32_t>(data[1]) << 16) |
-                                 (static_cast<uint32_t>(data[2]) << 8) |
-                                 static_cast<uint32_t>(data[3]);
-
-        if (packet_length > SSH_MAX_PACKET_SIZE)
-            return std::nullopt;
-
         if (cipher_ctx->is_aead()) {
+            uint32_t packet_length = (static_cast<uint32_t>(data[0]) << 24) |
+                                     (static_cast<uint32_t>(data[1]) << 16) |
+                                     (static_cast<uint32_t>(data[2]) << 8) |
+                                     static_cast<uint32_t>(data[3]);
+
+            if (packet_length > SSH_MAX_PACKET_SIZE)
+                return std::nullopt;
+
             size_t encrypted_len = len - 4;
             std::vector<uint8_t> decrypted;
             if (!cipher_ctx->decrypt_packet(seq, data + 4, encrypted_len, decrypted))
@@ -267,25 +278,33 @@ namespace yuan::net::ssh
         }
 
         size_t mac_len = cipher_ctx->mac_size();
-
         if (len < 4 + mac_len)
             return std::nullopt;
 
-        size_t encrypted_len = len - 4 - mac_len;
-
         std::vector<uint8_t> decrypted;
-        if (!cipher_ctx->decrypt_packet(seq, data + 4, encrypted_len, decrypted))
+        if (!cipher_ctx->decrypt_packet(seq, data, len, decrypted))
             return std::nullopt;
 
-        if (decrypted.empty())
+        if (decrypted.size() < 5)
             return std::nullopt;
 
-        uint8_t padding_len = decrypted[0];
-        if (decrypted.size() < 1u + padding_len)
+        uint32_t packet_length = (static_cast<uint32_t>(decrypted[0]) << 24) |
+                                 (static_cast<uint32_t>(decrypted[1]) << 16) |
+                                 (static_cast<uint32_t>(decrypted[2]) << 8) |
+                                 static_cast<uint32_t>(decrypted[3]);
+
+        if (packet_length > SSH_MAX_PACKET_SIZE)
             return std::nullopt;
 
-        size_t payload_len = decrypted.size() - 1 - padding_len;
-        std::vector<uint8_t> payload(decrypted.begin() + 1, decrypted.begin() + 1 + payload_len);
+        if (decrypted.size() != 4u + packet_length)
+            return std::nullopt;
+
+        uint8_t padding_len = decrypted[4];
+        if (packet_length < 1u + padding_len)
+            return std::nullopt;
+
+        size_t payload_len = packet_length - 1 - padding_len;
+        std::vector<uint8_t> payload(decrypted.begin() + 5, decrypted.begin() + 5 + payload_len);
         return payload;
     }
 }

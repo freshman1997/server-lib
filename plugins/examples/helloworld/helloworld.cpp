@@ -134,6 +134,7 @@ yuan::plugin::PluginMeta HelloWorldPlugin::meta() const
 
 bool HelloWorldPlugin::on_init(const yuan::plugin::PluginContext &context)
 {
+    yuan::plugin::PluginContextHelper helper(context);
     event_bus_ = context.event_bus;
     logger_ = context.logger;
     scheduler_ = context.scheduler;
@@ -211,7 +212,7 @@ bool HelloWorldPlugin::on_init(const yuan::plugin::PluginContext &context)
 
     // ---- 定时调度: 使用 context.schedule_interval_task() 自动追踪 ----
     if (scheduler_) {
-        context.schedule_interval_task(
+        helper.schedule_interval_task(
             std::chrono::seconds(10),
             [this]() {
                 if (logger_) {
@@ -227,7 +228,7 @@ bool HelloWorldPlugin::on_init(const yuan::plugin::PluginContext &context)
         std::cout << "scheduled heartbeat task (auto-tracked)\n";
 
         // 演示一次性延迟任务: 3 秒后执行 (自动追踪)
-        context.schedule_task(
+        helper.schedule_task(
             std::chrono::seconds(3),
             []() {
                 std::cout << "[HelloWorld] one-shot delayed task fired!\n";
@@ -239,7 +240,7 @@ bool HelloWorldPlugin::on_init(const yuan::plugin::PluginContext &context)
     if (context.can_use(yuan::plugin::PluginPermission::use_service_registry)) {
         auto greeting = std::make_shared<GreetingService>();
 
-        bool registered = context.register_managed_service(
+        bool registered = helper.register_managed_service(
             "helloworld.greeting",
             std::move(greeting),
             kGreetingServiceContract,
@@ -286,7 +287,7 @@ bool HelloWorldPlugin::on_init(const yuan::plugin::PluginContext &context)
     }
 
     // ---- 事件订阅: 使用 context.subscribe_event() 自动追踪 ----
-    context.subscribe_event(yuan::app::events::application_started, [](const yuan::plugin::HostEvent &event) {
+    helper.subscribe_event(yuan::app::events::application_started, [](const yuan::plugin::HostEvent &event) {
         try {
             const auto &appEvent = std::any_cast<const yuan::app::ApplicationEvent &>(event.payload);
             std::cout << "receive app started event: " << appEvent.app_name
@@ -296,7 +297,7 @@ bool HelloWorldPlugin::on_init(const yuan::plugin::PluginContext &context)
         }
     });
 
-    context.subscribe_event(yuan::plugin::events::plugin_loaded, [](const yuan::plugin::HostEvent &event) {
+    helper.subscribe_event(yuan::plugin::events::plugin_loaded, [](const yuan::plugin::HostEvent &event) {
         try {
             const auto &pluginEvent = std::any_cast<const yuan::plugin::PluginEvent &>(event.payload);
             std::cout << "plugin loaded event: " << pluginEvent.plugin_name

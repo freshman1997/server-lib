@@ -539,131 +539,128 @@ namespace yuan::net::http
     // 核心请求处理入口
     // ------------------------------------------------------------
 
+    void HttpProxy::handle_websocket_upgrade_by_url(HttpRequest * req, HttpResponse * resp, const std::string & route_key)
+    {
+        if (!req || !resp || route_key.empty()) {
+            if (resp)
+                resp->process_error(ResponseCode::bad_gateway);
+            return;
+        }
+
+        auto routeIt = routes_.find(route_key);
+        if (routeIt == routes_.end()) {
+            resp->process_error(ResponseCode::bad_gateway);
+            return;
+        }
+
+        const ProxyRoute &route = routeIt->second;
+        ProxyTarget target = select_target(route);
+        handle_websocket_upgrade(req, resp, route, target);
+    }
+
     void HttpProxy::serve_proxy(HttpRequest * req, HttpResponse * resp)
     {
-
-        void HttpProxy::handle_websocket_upgrade_by_url(HttpRequest * req, HttpResponse * resp, const std::string & route_key)
-        {
-            if (!req || !resp || route_key.empty()) {
-                if (resp)
-                    resp->process_error(ResponseCode::bad_gateway);
-                return;
-            }
-
-            auto routeIt = routes_.find(route_key);
-            if (routeIt == routes_.end()) {
-                resp->process_error(ResponseCode::bad_gateway);
-                return;
-            }
-
-            const ProxyRoute &route = routeIt->second;
-            ProxyTarget target = select_target(route);
-            handle_websocket_upgrade(req, resp, route, target);
+        if (!req || !resp) {
+            return;
         }
 
-        void HttpProxy::serve_proxy(HttpRequest * req, HttpResponse * resp)
+        ++stats_.total_requests;
+
+        auto *ctx = req->get_context();
+        Connection *clientConn = ctx ? ctx->get_connection() : nullptr;
+        if (!clientConn) {
+            resp->process_error(ResponseCode::internal_server_error);
+            ++stats_.failed_requests;
+            return;
+        }
+
+        const std::string route_key = find_proxy_route(req->get_raw_url());
+        if (route_key.empty()) {
+            resp->process_error(ResponseCode::not_found);
+            return;
+        }
+
+        auto routeIt = routes_.find(route_key);
+        if (routeIt == routes_.end()) {
+            resp->process_error(ResponseCode::bad_gateway);
+            ++stats_.failed_requests;
+            return;
+        }
+
+        const ProxyRoute &route = routeIt->second;
+        ProxyTarget target = select_target(route);
+        build_forward_request(req, route, target);
+
         {
-            if (!req || !resp) {
+            std::lock_guard<std::mutex> lock(mapping_mutex_);
+            auto csIt = cs_mapping_.find(clientConn);
+            if (csIt != cs_mapping_.end() && csIt->second) {
+                req->pack_and_send(csIt->second);
+                csIt->second->flush();
                 return;
             }
 
-            ++stats_.total_requests;
-
-            auto *ctx = req->get_context();
-            Connection *clientConn = ctx ? ctx->get_connection() : nullptr;
-            if (!clientConn) {
-                resp->process_error(ResponseCode::internal_server_error);
-                ++stats_.failed_requests;
-                return;
-            }
-
-            const std::string route_key = find_proxy_route(req->get_raw_url());
-            if (route_key.empty()) {
-                resp->process_error(ResponseCode::not_found);
-                return;
-            }
-
-            auto routeIt = routes_.find(route_key);
-            if (routeIt == routes_.end()) {
-                resp->process_error(ResponseCode::bad_gateway);
-                ++stats_.failed_requests;
-                return;
-            }
-
-            const ProxyRoute &route = routeIt->second;
-            ProxyTarget target = select_target(route);
-            build_forward_request(req, route, target);
-
-            {
-                std::lock_guard<std::mutex> lock(mapping_mutex_);
-                auto csIt = cs_mapping_.find(clientConn);
-                if (csIt != cs_mapping_.end() && csIt->second) {
-                    req->pack_and_send(csIt->second);
-                    csIt->second->flush();
-                    return;
+            auto reqIt = pending_requests_.find(clientConn);
+            if (reqIt != pending_requests_.end()) {
+                if (reqIt->second >= config::proxy_max_pending) {
+                    resp->process_error(ResponseCode::service_unavailable);
+                    ++stats_.failed_requests;
+                } else {
+                    ++reqIt->second;
                 }
+                return;
+            }
+        }
 
-                auto reqIt = pending_requests_.find(clientConn);
-                if (reqIt != pending_requests_.end()) {
-                    if (reqIt->second >= config::proxy_max_pending) {
-                        resp->process_error(ResponseCode::service_unavailable);
-                        ++stats_.failed_requests;
-                    } else {
-                        ++reqIt->second;
+        auto pool = get_or_create_pool(target, route);
+        if (pool) {
+            Connection *pooledConn = pool->acquire(this, server_);
+            if (pooledConn) {
+                ++stats_.pool_hits;
+                map_connections(clientConn, pooledConn, route_key);
+                req->pack_and_send(pooledConn);
+                pooledConn->flush();
+                return;
+            }
+        }
+
+        ++stats_.pool_misses;
+
+        Connection *remoteConn = create_remote_connection(target, route.connect_timeout_ms);
+        if (!remoteConn) {
+            resp->process_error(ResponseCode::bad_gateway);
+            ++stats_.failed_requests;
+            return;
+        }
+
+        ++stats_.active_connections;
+
+        auto task = std::make_shared<RemoteConnectTask>(clientConn, req, resp, this, route_key, target);
+        {
+            std::lock_guard<std::mutex> lock(mapping_mutex_);
+            pending_tasks_[clientConn] = task;
+            pending_server_tasks_[remoteConn] = task;
+            pending_requests_[clientConn] = 1;
+        }
+
+        if (server_ && server_->runtime()) {
+            auto weak_task = std::weak_ptr<RemoteConnectTask>(task);
+            auto *timer = server_->runtime()->schedule(
+                static_cast<uint32_t>(route.connect_timeout_ms),
+                [this, weak_task]() {
+                    auto locked_task = weak_task.lock();
+                    if (!locked_task) {
+                        return;
                     }
-                    return;
-                }
-            }
-
-            auto pool = get_or_create_pool(target, route);
-            if (pool) {
-                Connection *pooledConn = pool->acquire(this, server_);
-                if (pooledConn) {
-                    ++stats_.pool_hits;
-                    map_connections(clientConn, pooledConn, route_key);
-                    req->pack_and_send(pooledConn);
-                    pooledConn->flush();
-                    return;
-                }
-            }
-
-            ++stats_.pool_misses;
-
-            Connection *remoteConn = create_remote_connection(target, route.connect_timeout_ms);
-            if (!remoteConn) {
-                resp->process_error(ResponseCode::bad_gateway);
-                ++stats_.failed_requests;
-                return;
-            }
-
-            ++stats_.active_connections;
-
-            auto task = std::make_shared<RemoteConnectTask>(clientConn, req, resp, this, route_key, target);
-            {
-                std::lock_guard<std::mutex> lock(mapping_mutex_);
-                pending_tasks_[clientConn] = task;
-                pending_server_tasks_[remoteConn] = task;
-                pending_requests_[clientConn] = 1;
-            }
-
-            if (server_ && server_->runtime()) {
-                auto weak_task = std::weak_ptr<RemoteConnectTask>(task);
-                auto *timer = server_->runtime()->schedule(
-                    static_cast<uint32_t>(route.connect_timeout_ms),
-                    [this, weak_task]() {
-                auto locked_task = weak_task.lock();
-                if (!locked_task) {
-                    return;
-                }
-                on_connection_timeout(locked_task);
-                if (locked_task->resp_ && locked_task->client_conn_) {
-                    locked_task->resp_->process_error(ResponseCode::gateway_timeout);
-                }
-                    });
-                bind_timer(clientConn, timer);
-                bind_timer(remoteConn, timer);
-            }
+                    on_connection_timeout(locked_task);
+                    if (locked_task->resp_ && locked_task->client_conn_) {
+                        locked_task->resp_->process_error(ResponseCode::gateway_timeout);
+                    }
+                });
+            bind_timer(clientConn, timer);
+            bind_timer(remoteConn, timer);
         }
+    }
 
         // ------------------------------------------------------------
         // 连接建立完成回调

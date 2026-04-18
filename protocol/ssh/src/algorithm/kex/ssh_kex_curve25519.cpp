@@ -2,6 +2,7 @@
 #include "crypto/ssh_crypto.h"
 #include "crypto/ssh_key_derivation.h"
 #include <cstring>
+#include <memory>
 
 namespace yuan::net::ssh
 {

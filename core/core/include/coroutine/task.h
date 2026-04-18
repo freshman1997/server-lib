@@ -112,24 +112,24 @@ namespace yuan::coroutine
             }
         }
 
-        T get_result() const
-        {
-            if (handle_ && handle_.promise().exception_) {
-                std::rethrow_exception(handle_.promise().exception_);
+            T get_result() const
+            {
+                if (handle_ && handle_.promise().exception_) {
+                    std::rethrow_exception(handle_.promise().exception_);
+                }
+                return std::move(handle_.promise().value_);
             }
-            return handle_.promise().value_;
-        }
 
-        T execute()
-        {
-            resume();
-            return get_result();
-        }
+            T execute()
+            {
+                resume();
+                return std::move(handle_.promise().value_);
+            }
 
-        operator T() const
-        {
-            return get_result();
-        }
+            operator T() const
+            {
+                return std::move(handle_.promise().value_);
+            }
 
         class awaiter
         {
@@ -155,7 +155,7 @@ namespace yuan::coroutine
                 if (handle_ && handle_.promise().exception_) {
                     std::rethrow_exception(handle_.promise().exception_);
                 }
-                return handle_.promise().value_;
+                return std::move(handle_.promise().value_);
             }
 
         private:

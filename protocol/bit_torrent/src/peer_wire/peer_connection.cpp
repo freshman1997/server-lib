@@ -51,7 +51,7 @@ namespace yuan::net::bit_torrent
 
             if (parent_->runtime_) {
                 parent_->keepalive_timer_ = parent_->runtime_->schedule_periodic(
-                    120000, 120000, [parent]() { parent_->send_keepalive(); }, -1);
+                    120000, 120000, [parent = parent_]() { parent->send_keepalive(); }, -1);
             }
 
             delete addr_;

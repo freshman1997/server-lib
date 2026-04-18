@@ -4,7 +4,7 @@ namespace yuan::base::util
 {
     static const std::string_view base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-    std::string base64_encode(const std::string& data) {
+    std::string base64_encode(std::span<const std::uint8_t> data) {
         std::string encoded_data;
         int i = 0;
         unsigned char char_array_3[3];
@@ -45,6 +45,12 @@ namespace yuan::base::util
         }
 
         return encoded_data;
+    }
+
+    std::string base64_encode(const std::string& data) {
+        return base64_encode(std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t *>(data.data()),
+            data.size()));
     }
 
     std::string base64_decode(const std::string& data)

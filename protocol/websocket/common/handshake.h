@@ -3,7 +3,7 @@
 #include "context.h"
 #include "request.h"
 #include "response.h"
-#include "websocket_connection.h"
+#include "websocket_protocol.h"
 
 #include <set>
 #include <string>
@@ -19,7 +19,7 @@ namespace yuan::net::websocket
         WebSocketHandshaker();
 
     public:
-        bool on_handshake(http::HttpRequest *req, http::HttpResponse *resp, WebSocketConnection::WorkMode workMode = WebSocketConnection::WorkMode::client_, bool isResp = false);
+        bool on_handshake(http::HttpRequest *req, http::HttpResponse *resp, WorkMode workMode = WorkMode::client_, bool isResp = false);
 
         bool is_handshake_done() const
         {

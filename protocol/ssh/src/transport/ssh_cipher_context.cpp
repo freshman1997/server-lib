@@ -5,6 +5,11 @@
 
 namespace yuan::net::ssh
 {
+    namespace
+    {
+        constexpr size_t kMaxPaddingLength = 255;
+    }
+
     SshCipher *SshCipherContext::outbound_cipher() const
     {
         return we_are_server_ ? server_cipher_.get() : client_cipher_.get();
@@ -37,6 +42,12 @@ namespace yuan::net::ssh
         if (!active_)
             return false;
 
+        uint8_t seq_bytes[4];
+        seq_bytes[0] = static_cast<uint8_t>((seq >> 24) & 0xFF);
+        seq_bytes[1] = static_cast<uint8_t>((seq >> 16) & 0xFF);
+        seq_bytes[2] = static_cast<uint8_t>((seq >> 8) & 0xFF);
+        seq_bytes[3] = static_cast<uint8_t>(seq & 0xFF);
+
         if (is_chacha20_) {
             if (len < 4)
                 return false;
@@ -44,12 +55,6 @@ namespace yuan::net::ssh
             SshCipher *cipher = we_are_server_ ? client_cipher_.get() : server_cipher_.get();
             if (!cipher)
                 return false;
-
-            uint8_t seq_bytes[4];
-            seq_bytes[0] = static_cast<uint8_t>((seq >> 24) & 0xFF);
-            seq_bytes[1] = static_cast<uint8_t>((seq >> 16) & 0xFF);
-            seq_bytes[2] = static_cast<uint8_t>((seq >> 8) & 0xFF);
-            seq_bytes[3] = static_cast<uint8_t>(seq & 0xFF);
 
             uint8_t dec_length[4];
             if (!cipher->decrypt_length(data, 4, seq_bytes, dec_length))
@@ -62,13 +67,18 @@ namespace yuan::net::ssh
             return true;
         }
 
-        if (len < 4)
+        SshCipher *cipher = inbound_cipher();
+        if (!cipher || len < 4)
             return false;
 
-        out_packet_length = (static_cast<uint32_t>(data[0]) << 24) |
-                            (static_cast<uint32_t>(data[1]) << 16) |
-                            (static_cast<uint32_t>(data[2]) << 8) |
-                            static_cast<uint32_t>(data[3]);
+        uint8_t dec_length[4];
+        if (!cipher->decrypt_length(data, len, seq_bytes, dec_length))
+            return false;
+
+        out_packet_length = (static_cast<uint32_t>(dec_length[0]) << 24) |
+                            (static_cast<uint32_t>(dec_length[1]) << 16) |
+                            (static_cast<uint32_t>(dec_length[2]) << 8) |
+                            static_cast<uint32_t>(dec_length[3]);
         return true;
     }
 
@@ -146,6 +156,7 @@ namespace yuan::net::ssh
                                                           const uint8_t * data, size_t len,
                                                           uint8_t padding_len)
     {
+        (void)padding_len;
         if (!active_)
             return std::vector<uint8_t>(data, data + len);
 
@@ -159,7 +170,7 @@ namespace yuan::net::ssh
         seq_bytes[2] = static_cast<uint8_t>((seq >> 8) & 0xFF);
         seq_bytes[3] = static_cast<uint8_t>(seq & 0xFF);
 
-        uint32_t pkt_len = static_cast<uint32_t>(1 + len + padding_len);
+        uint32_t pkt_len = static_cast<uint32_t>(len);
         uint8_t pkt_len_bytes[4];
         pkt_len_bytes[0] = static_cast<uint8_t>((pkt_len >> 24) & 0xFF);
         pkt_len_bytes[1] = static_cast<uint8_t>((pkt_len >> 16) & 0xFF);
@@ -172,36 +183,21 @@ namespace yuan::net::ssh
                 data, len,
                 seq_bytes);
 
-            if (is_chacha20_poly1305_) {
+            if (is_chacha20_) {
                 return encrypted;
             }
-
-            std::vector<uint8_t> result;
-            result.reserve(4 + encrypted.size());
-            result.insert(result.end(), pkt_len_bytes, pkt_len_bytes + 4);
-            result.insert(result.end(), encrypted.begin(), encrypted.end());
-            return result;
+            return encrypted;
         }
 
         auto encrypted = cipher->encrypt(data, len);
 
         SshMac *mac = outbound_mac();
         if (mac) {
-            std::vector<uint8_t> mac_data;
-            mac_data.reserve(4 + 4 + encrypted.size());
-            mac_data.insert(mac_data.end(), seq_bytes, seq_bytes + 4);
-            mac_data.insert(mac_data.end(), pkt_len_bytes, pkt_len_bytes + 4);
-            mac_data.insert(mac_data.end(), encrypted.begin(), encrypted.end());
-
-            auto mac_val = mac->compute(seq, mac_data.data(), mac_data.size());
+            auto mac_val = mac->compute(seq, data, len);
             encrypted.insert(encrypted.end(), mac_val.begin(), mac_val.end());
         }
 
-        std::vector<uint8_t> result;
-        result.reserve(4 + encrypted.size());
-        result.insert(result.end(), pkt_len_bytes, pkt_len_bytes + 4);
-        result.insert(result.end(), encrypted.begin(), encrypted.end());
-        return result;
+        return encrypted;
     }
 
     bool SshCipherContext::decrypt_packet(uint32_t seq,
@@ -226,7 +222,7 @@ namespace yuan::net::ssh
         seq_bytes[3] = static_cast<uint8_t>(seq & 0xFF);
 
         if (cipher->is_aead()) {
-            if (is_chacha20_poly1305_) {
+            if (is_chacha20_) {
                 if (len < 4 + cipher->tag_size())
                     return false;
 
@@ -284,18 +280,14 @@ namespace yuan::net::ssh
         const uint8_t *encrypted_data = data;
         const uint8_t *mac_data_ptr = data + encrypted_len;
 
-        if (mac) {
-            std::vector<uint8_t> mac_input;
-            mac_input.reserve(4 + encrypted_len);
-            mac_input.insert(mac_input.end(), seq_bytes, seq_bytes + 4);
-            mac_input.insert(mac_input.end(), encrypted_data, encrypted_data + encrypted_len);
-
-            if (!mac->verify(seq, mac_input.data(), mac_input.size(),
-                             mac_data_ptr, mac_len))
-                return false;
-        }
-
         auto decrypted = cipher->decrypt(encrypted_data, encrypted_len);
+        if (decrypted.empty())
+            return false;
+
+        if (mac && !mac->verify(seq, decrypted.data(), decrypted.size(),
+                                mac_data_ptr, mac_len))
+            return false;
+
         out_payload = std::move(decrypted);
         return true;
     }
@@ -374,15 +366,15 @@ namespace yuan::net::ssh
     uint8_t SshCipherContext::calculate_padding_length(size_t payload_len) const
     {
         size_t bs = block_size();
-        size_t min_padding = kMinPadding > SSH_PACKET_MIN_PADDING ? kMinPadding : SSH_PACKET_MIN_PADDING;
+        size_t min_padding = SSH_PACKET_MIN_PADDING;
 
         size_t unpadded = 1 + payload_len;
         size_t pad_len = bs - (unpadded % bs);
         if (pad_len < min_padding)
             pad_len += bs;
 
-        if (pad_len > kMaxPadding)
-            pad_len = kMaxPadding;
+        if (pad_len > kMaxPaddingLength)
+            pad_len = kMaxPaddingLength;
 
         return static_cast<uint8_t>(pad_len);
     }

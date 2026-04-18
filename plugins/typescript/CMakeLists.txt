@@ -7,6 +7,7 @@ add_library(PluginTypeScript ${PLUGIN_TYPESCRIPT_SRC})
 target_compile_features(PluginTypeScript PUBLIC cxx_std_20)
 target_link_libraries(PluginTypeScript PUBLIC PluginCore quickjs_static)
 target_include_directories(PluginTypeScript PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/src>"
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
     "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
 )

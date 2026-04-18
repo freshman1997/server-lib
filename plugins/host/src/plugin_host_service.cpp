@@ -13,6 +13,8 @@
 #include "plugin_service_catalog.h"
 #include "plugin_service_registry_adapter.h"
 #include "registry.h"
+#include "lua_plugin_module.h"
+#include "ts_plugin_module.h"
 #include "plugin/plugin_events.h"
 #include "plugin/plugin_manager.h"
 #include "plugin/plugin_state.h"
@@ -224,6 +226,8 @@ namespace yuan::app
                     plugin::events::plugin_load_failed,
                     make_plugin_load_failed_event(runtime_context_, plugin_name, "runtime load failed"));
             }
+            plugin_storages_.erase(plugin_name);
+            pluginManager->set_context(make_base_plugin_context(nullptr));
             return false;
         }
 
@@ -233,20 +237,43 @@ namespace yuan::app
                 cleanup_plugin_resources(plugin_name);
                 pluginManager->release_plugin(plugin_name);
                 plugin_storages_.erase(plugin_name);
+                pluginManager->set_context(make_base_plugin_context(nullptr));
                 return false;
-            }
-            if (started_) {
-                registry->start_plugin_services(plugin_name);
             }
         }
 
         auto &lcm = pluginManager->lifecycle_manager();
-        lcm.activate(plugin_name);
+        if (!lcm.activate(plugin_name)) {
+            LOG_ERROR("failed to activate plugin '{}'", plugin_name);
+            cleanup_plugin_resources(plugin_name);
+            pluginManager->release_plugin(plugin_name);
+            plugin_storages_.erase(plugin_name);
+            pluginManager->set_context(make_base_plugin_context(nullptr));
+            return false;
+        }
 
         auto *plugin = pluginManager->get_plugin(plugin_name);
         if (plugin) {
-            lcm.call_guard().guarded_call_void(plugin_name, lcm.state(plugin_name), "on_enable",
-                                               [plugin]() { plugin->on_enable(); });
+            if (!lcm.call_guard().guarded_call_void(plugin_name, lcm.state(plugin_name), "on_enable",
+                                                    [plugin]() { plugin->on_enable(); })) {
+                LOG_ERROR("plugin '{}' on_enable failed, rolling back", plugin_name);
+                cleanup_plugin_resources(plugin_name);
+                pluginManager->release_plugin(plugin_name);
+                plugin_storages_.erase(plugin_name);
+                pluginManager->set_context(make_base_plugin_context(nullptr));
+                return false;
+            }
+        }
+
+        if (started_ && service_registry_ && lcm.state(plugin_name) == plugin::PluginState::active) {
+            if (!static_cast<PluginServiceRegistryAdapter *>(service_registry_.get())->start_plugin_services(plugin_name)) {
+                LOG_ERROR("plugin '{}' managed services failed to start, rolling back", plugin_name);
+                cleanup_plugin_resources(plugin_name);
+                pluginManager->release_plugin(plugin_name);
+                plugin_storages_.erase(plugin_name);
+                pluginManager->set_context(make_base_plugin_context(nullptr));
+                return false;
+            }
         }
 
         loaded_plugins_.push_back(plugin_name);
@@ -288,6 +315,7 @@ namespace yuan::app
 
         pluginManager->release_plugin(plugin_name);
         plugin_storages_.erase(plugin_name);
+        pluginManager->set_context(make_base_plugin_context(nullptr));
         loaded_plugins_.erase(it);
 
         if (runtime_context_.event_bus) {
@@ -373,6 +401,7 @@ namespace yuan::app
         if (!plugin) {
             return false;
         }
+        auto plugin_context = pluginManager->plugin_context(plugin_name);
 
         auto new_config = pluginManager->reload_plugin_config(plugin_name);
         if (!new_config.loaded()) {
@@ -389,7 +418,7 @@ namespace yuan::app
         if (runtime_context_.event_bus) {
             plugin::PluginConfigChangedEvent event;
             static_cast<plugin::PluginEvent &>(event) = make_plugin_event(plugin_name);
-            event.config_path = plugin_path_ + plugin_name + ".json";
+            event.config_path = plugin_context.plugin_config_path;
             runtime_context_.event_bus->publish(plugin::events::plugin_config_changed, event);
         }
         return true;
@@ -472,6 +501,9 @@ namespace yuan::app
 
     bool PluginHostService::init()
     {
+        plugin::init_lua_plugin_module();
+        plugin::init_ts_plugin_module();
+
         service_catalog_.reset();
         if (runtime_context_.service_registry) {
             service_catalog_ = std::make_unique<PluginServiceCatalog>(runtime_context_.service_registry);
@@ -506,12 +538,14 @@ namespace yuan::app
 
         auto pluginManager = yuan::plugin::PluginManager::get_instance();
         pluginManager->set_plugin_path(plugin_path_);
-        pluginManager->set_context(make_base_plugin_context(nullptr));
 
         setup_lifecycle_callbacks();
 
         loaded_plugins_.clear();
         for (const auto &pluginName : plugin_names_) {
+            auto *plugin_storage = prepare_plugin_storage(pluginName);
+            pluginManager->set_context(make_base_plugin_context(plugin_storage));
+
             if (!pluginManager->load(pluginName)) {
                 LOG_ERROR("plugin host failed to load plugin '{}'", pluginName);
                 if (runtime_context_.event_bus) {
@@ -519,16 +553,17 @@ namespace yuan::app
                         plugin::events::plugin_load_failed,
                         make_plugin_load_failed_event(runtime_context_, pluginName, "plugin manager load returned false"));
                 }
+                plugin_storages_.erase(pluginName);
                 for (auto it = loaded_plugins_.rbegin(); it != loaded_plugins_.rend(); ++it) {
                     cleanup_plugin_resources(*it);
                     pluginManager->release_plugin(*it);
                     plugin_storages_.erase(*it);
                 }
                 loaded_plugins_.clear();
+                pluginManager->set_context(make_base_plugin_context(nullptr));
                 return false;
             }
 
-            auto *plugin_storage = prepare_plugin_storage(pluginName);
             pluginManager->set_plugin_storage(pluginName, plugin_storage);
 
             if (service_registry_) {
@@ -544,6 +579,7 @@ namespace yuan::app
                         plugin_storages_.erase(*rit);
                     }
                     loaded_plugins_.clear();
+                    pluginManager->set_context(make_base_plugin_context(nullptr));
                     return false;
                 }
             }
@@ -568,21 +604,27 @@ namespace yuan::app
         auto pluginManager = yuan::plugin::PluginManager::get_instance();
         auto &lcm = pluginManager->lifecycle_manager();
 
-        if (service_registry_) {
-            auto *registry = static_cast<PluginServiceRegistryAdapter *>(service_registry_.get());
-            for (const auto &plugin_name : loaded_plugins_) {
-                registry->start_plugin_services(plugin_name);
-            }
-        }
-
         for (const auto &plugin_name : loaded_plugins_) {
-            lcm.activate(plugin_name);
+            if (!lcm.activate(plugin_name)) {
+                LOG_WARN("plugin '{}' cannot be activated during start, skipping on_enable", plugin_name);
+                continue;
+            }
 
             auto *plugin = pluginManager->get_plugin(plugin_name);
             if (plugin) {
-                lcm.call_guard().guarded_call_void(
+                if (!lcm.call_guard().guarded_call_void(
                     plugin_name, lcm.state(plugin_name), "on_enable",
-                    [plugin]() { plugin->on_enable(); });
+                    [plugin]() { plugin->on_enable(); })) {
+                    LOG_ERROR("plugin '{}' on_enable failed during start", plugin_name);
+                    lcm.fault(plugin_name, "on_enable failed during start");
+                }
+            }
+
+            if (service_registry_ && lcm.state(plugin_name) == plugin::PluginState::active) {
+                if (!static_cast<PluginServiceRegistryAdapter *>(service_registry_.get())->start_plugin_services(plugin_name)) {
+                    LOG_ERROR("plugin '{}' managed services failed to start during host start", plugin_name);
+                    lcm.fault(plugin_name, "managed services failed to start");
+                }
             }
         }
 
@@ -594,14 +636,6 @@ namespace yuan::app
         auto pluginManager = yuan::plugin::PluginManager::get_instance();
         auto &lcm = pluginManager->lifecycle_manager();
 
-        if (service_registry_) {
-            auto *registry = static_cast<PluginServiceRegistryAdapter *>(service_registry_.get());
-            for (auto it = loaded_plugins_.rbegin(); it != loaded_plugins_.rend(); ++it) {
-                registry->stop_plugin_services(*it);
-            }
-        }
-        started_ = false;
-
         for (auto it = loaded_plugins_.rbegin(); it != loaded_plugins_.rend(); ++it) {
             auto *plugin = pluginManager->get_plugin(*it);
             if (plugin) {
@@ -610,6 +644,14 @@ namespace yuan::app
                     [plugin]() { plugin->on_disable(); });
             }
         }
+
+        if (service_registry_) {
+            auto *registry = static_cast<PluginServiceRegistryAdapter *>(service_registry_.get());
+            for (auto it = loaded_plugins_.rbegin(); it != loaded_plugins_.rend(); ++it) {
+                registry->stop_plugin_services(*it);
+            }
+        }
+        started_ = false;
 
         if (scheduler_) {
             static_cast<PluginHostScheduler *>(scheduler_.get())->shutdown();
@@ -633,6 +675,7 @@ namespace yuan::app
             }
         }
         loaded_plugins_.clear();
+        pluginManager->set_context(make_base_plugin_context(nullptr));
 
         resource_guard_.reset();
         scheduler_.reset();

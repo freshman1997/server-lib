@@ -397,7 +397,7 @@ namespace yuan::net::http
                 break;
             }
 
-            auto *context = session->get_context();
+            auto *context = session_ptr->get_context();
 
             try
             {
@@ -417,7 +417,6 @@ namespace yuan::net::http
                     std::string subproto = std::move(context->ws_subproto_);
                     auto leftover = context->take_leftover_buffer();
                     sessions_.erase(sessionId);
-                    delete session;
 
                     auto proxy_task = ws_proxy_handler_(std::move(ctx), raw_url, route_key, client_key, subproto, std::move(leftover));
                     proxy_task.resume();
@@ -425,7 +424,7 @@ namespace yuan::net::http
                     co_return;
                 }
 
-                finalize_request(sessionId, session, context);
+                finalize_request(sessionId, session_ptr, context);
 
                 while (context->get_response()->is_uploading()) {
                     auto flush_result = co_await ctx.flush_async();
@@ -462,7 +461,6 @@ namespace yuan::net::http
             proxy_->on_client_close(conn);
         }
         sessions_.erase(sessionId);
-        delete session;
 
         co_return;
     }

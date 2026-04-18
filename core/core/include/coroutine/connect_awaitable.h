@@ -57,7 +57,7 @@ namespace yuan::coroutine
         {
             handle_ = handle;
 
-            InetAddress addr{ host_.c_str(), port_ };
+            net::InetAddress addr{ host_.c_str(), port_ };
             if (addr.get_ip().empty()) {
                 result_.result = ConnectResult::invalid_address;
                 return false;

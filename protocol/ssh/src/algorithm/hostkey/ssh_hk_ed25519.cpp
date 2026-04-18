@@ -2,10 +2,13 @@
 #include "crypto/ssh_crypto.h"
 #include "protocol/ssh_message_codec.h"
 #include "buffer/byte_buffer.h"
+#include "base/utils/base64.h"
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/bio.h>
+#include <openssl/core_names.h>
 #include <cstring>
+#include <memory>
 
 namespace yuan::net::ssh
 {
@@ -73,7 +76,7 @@ namespace yuan::net::ssh
             if (!crypto_ || public_key_.empty())
                 return "";
             auto hash = crypto_->sha256(public_key_.data(), public_key_.size());
-            return "SHA256:" + base64_encode(hash);
+            return "SHA256:" + yuan::base::util::base64_encode(hash);
         }
 
         void set_keys(const std::vector<uint8_t> &pub, const std::vector<uint8_t> &priv)
@@ -127,25 +130,6 @@ namespace yuan::net::ssh
         }
 
     private:
-        static std::string base64_encode(const std::vector<uint8_t> &data)
-        {
-            static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-            std::string result;
-            result.reserve((data.size() + 2) / 3 * 4);
-            for (size_t i = 0; i < data.size(); i += 3) {
-                uint32_t n = static_cast<uint32_t>(data[i]) << 16;
-                if (i + 1 < data.size())
-                    n |= static_cast<uint32_t>(data[i + 1]) << 8;
-                if (i + 2 < data.size())
-                    n |= static_cast<uint32_t>(data[i + 2]);
-                result += table[(n >> 18) & 0x3F];
-                result += table[(n >> 12) & 0x3F];
-                result += (i + 1 < data.size()) ? table[(n >> 6) & 0x3F] : '=';
-                result += (i + 2 < data.size()) ? table[n & 0x3F] : '=';
-            }
-            return result;
-        }
-
         SshCrypto *crypto_ = nullptr;
         std::vector<uint8_t> public_key_;
         std::vector<uint8_t> private_key_;

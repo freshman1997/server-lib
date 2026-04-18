@@ -222,6 +222,10 @@ namespace yuan::plugin
             return true;
         }
 
+        if (it->second.state == PluginState::loaded || it->second.state == PluginState::discovered) {
+            return do_transition(name, PluginState::stopped);
+        }
+
         if (!is_operational(it->second.state) &&
             it->second.state != PluginState::faulted &&
             it->second.state != PluginState::quarantined &&

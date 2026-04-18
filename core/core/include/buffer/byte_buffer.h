@@ -20,7 +20,12 @@ class ByteBuffer
 public:
     static constexpr std::size_t kDefaultCapacity = 8192;
 
-    explicit ByteBuffer(std::size_t capacity = 0)
+    ByteBuffer()
+        : storage_(kDefaultCapacity)
+    {
+    }
+
+    explicit ByteBuffer(std::size_t capacity)
         : storage_(capacity == 0 ? kDefaultCapacity : capacity)
     {
     }

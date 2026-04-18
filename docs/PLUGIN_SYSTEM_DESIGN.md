@@ -165,6 +165,8 @@ Stable Plugin SDK Boundary
 
 建议后续统一形成正式 manifest 结构，而不是零散 metadata。
 
+`depends_on` 现在是硬依赖：批量加载时，依赖必须已经存在于当前批次或已加载插件集合中，否则会判定为加载失败并回滚。
+
 ### 6.2 Plugin Loader / Symbol Solver
 
 负责：
@@ -298,6 +300,9 @@ discovered
 ### 8.2 宿主保护分层
 
 建议按以下顺序设计：
+
+宿主建议遵循这个顺序：先让插件完成 `activate` / `on_enable`，再启动其 managed services；停止时则先 `on_disable`，再停止 managed services。
+managed service 启动失败时应回滚已启动的同插件服务，避免插件进入“部分服务已启动”的半完成状态。
 
 #### 层 1：边界捕获
 
@@ -774,7 +779,7 @@ plugins/lua/                                   # Lua 特定实现（可选模块
 
 ### 18.5 Lua 插件定义
 
-Lua 插件通过 `plugin.json` 声明自身，脚本必须返回 `plugin` 表，`on_init` 是唯一必须的函数：
+Lua 插件通过 `plugin_name.json` 或 `plugin_name/plugin.json` 声明自身，脚本必须返回 `plugin` 表，`on_init` 是唯一必须的函数：
 
 ```lua
 local plugin = {}
@@ -812,3 +817,25 @@ return plugin
 - 事件 / 服务 / 资源能力模型
 
 这三件事做实之后，插件系统才真正能成为项目基座，而不只是一个可运行的扩展模块。
+
+### 20. TypeScript 支持
+
+TypeScript 插件和 Lua 采用同一套脚本插件机制：`script` run_mode + `ScriptPluginRegistry`。宿主在启动时注册自己的脚本适配器后，`PluginManager::load_script_plugin()` 会按 `language = "typescript"` 找到对应工厂。
+
+**宿主需要：**
+1. 链接 `PluginTypeScript` 模块。
+2. 在启动时调用 `init_ts_plugin_module()` 注册 TypeScript 工厂。
+3. TypeScript 插件同样继承 `ScriptPluginAdapter` 和 `Plugin` 生命周期。
+
+**实现要点：**
+- 内核基于 QuickJS，以 `JSRuntime` / `JSContext` 执行脚本。
+- 配置项主要包括内存上限、栈深限制、执行超时。
+- `ts_host_bindings` 负责把 Logger / EventBus / Scheduler / Storage / ResourceGuard 绑定到 JS 环境中。
+- 插件支持 `plugin.json` 和 `plugin_name/plugin.json` 两种 manifest 路径。
+- 生命周期仍然遵循 `on_init` / `on_enable` / `on_disable` / `on_release`。
+
+**测试状态：**
+- Lua 和 TypeScript 的宿主 smoke test 已经并入 `test_plugin_contracts.exe`。
+- 这两个测试会直接加载 `plugins/examples/lua_greeter/plugin.json` 和 `plugins/examples/ts_greeter/plugin.json`。
+- `ts_greeter` 的入口文件是 `plugins/examples/ts_greeter/main.ts`，保持与 `language = "typescript"` 一致。
+

@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -209,7 +210,7 @@ namespace yuan::net::mqtt
         void remove_session(uint64_t sid);
         MqttSession *find_by_client_id(const std::string &client_id);
         MqttSession *find_by_connection(TcpConnection *conn);
-        std::vector<MqttSession *> all_sessions();
+        std::vector<MqttSession *> all_sessions() const;
         void cleanup_expired();
 
     private:

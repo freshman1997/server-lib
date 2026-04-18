@@ -2,6 +2,7 @@
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
 #include <cstring>
+#include <memory>
 
 namespace yuan::net::ssh
 {

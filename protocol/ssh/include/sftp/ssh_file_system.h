@@ -2,7 +2,10 @@
 #define __NET_SSH_SFTP_SSH_FILE_SYSTEM_H__
 
 #include "sftp/ssh_sftp_codec.h"
+#include <cstdio>
+#include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -126,13 +129,31 @@ namespace yuan::net::ssh
         SshFsSimpleResult symlink(const std::string &link_path, const std::string &target_path) override;
 
     private:
+        struct FileHandleState
+        {
+            std::FILE *file = nullptr;
+            std::filesystem::path path;
+            bool append = false;
+        };
+
+        struct DirHandleState
+        {
+            std::vector<SftpNameEntry> entries;
+            size_t cursor = 0;
+        };
+
         std::string resolve_path(const std::string &path) const;
-        SftpFileAttrs stat_to_attrs(const struct stat &st) const;
-        std::string build_longname(const std::string &filename, const struct stat &st) const;
+        SftpFileAttrs stat_to_attrs(const std::filesystem::path &path,
+                                    const std::filesystem::file_status &status,
+                                    bool follow_symlinks) const;
+        std::string build_longname(const std::string &filename,
+                                   const std::filesystem::path &path,
+                                   const std::filesystem::file_status &status) const;
+        std::filesystem::path normalized_root_path() const;
 
         std::string root_dir_;
-        std::unordered_map<std::string, int> file_handles_;
-        std::unordered_map<std::string, void *> dir_handles_;
+        std::unordered_map<std::string, FileHandleState> file_handles_;
+        std::unordered_map<std::string, DirHandleState> dir_handles_;
         uint64_t next_handle_id_ = 0;
     };
 }

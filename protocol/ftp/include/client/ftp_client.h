@@ -1,6 +1,7 @@
 #ifndef NET_FTP_FTP_CLIENT_H
 #define NET_FTP_FTP_CLIENT_H
 #include "client/context.h"
+#include "common/def.h"
 #include "coroutine/task.h"
 #include "coroutine/io_result.h"
 #include "net/async/async_client_session.h"
