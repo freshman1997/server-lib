@@ -231,7 +231,9 @@ namespace yuan::net::ssh
             return "";
         }
 
-        return candidate.make_preferred().string();
+        auto preferred = candidate;
+        preferred.make_preferred();
+        return preferred.string();
     }
 
     SftpFileAttrs SshLocalFileSystem::stat_to_attrs(const FsPath & path,

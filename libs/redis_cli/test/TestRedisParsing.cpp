@@ -296,8 +296,6 @@ int main()
 
     SubcribeCmd subscribe_cmd;
     subscribe_cmd.set_args("subscribe", {});
-    subscribe_cmd.set_subscribe_cmd("subscribe");
-    subscribe_cmd.set_message_cmd("message");
     subscribe_cmd.set_channels({"chan1"});
 
     yuan::buffer::ByteBufferReader subscribe_reader;
@@ -337,8 +335,6 @@ int main()
 
     SubcribeCmd psubscribe_cmd;
     psubscribe_cmd.set_args("psubscribe", {});
-    psubscribe_cmd.set_subscribe_cmd("psubscribe");
-    psubscribe_cmd.set_message_cmd("pmessage");
     psubscribe_cmd.set_channels({"test*"});
 
     yuan::buffer::ByteBufferReader psubscribe_reader;

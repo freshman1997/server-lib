@@ -1,13 +1,15 @@
 #include "socks5.h"
 #include "logger.h"
+#include "net/socket/socket.h"
 
 #include <atomic>
 #include <cerrno>
-#include <exception>
 #include <chrono>
 #include <csignal>
 #include <cstring>
+#include <exception>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -21,7 +23,6 @@ using socket_t = SOCKET;
 static constexpr socket_t invalid_socket = INVALID_SOCKET;
 #else
 #include <arpa/inet.h>
-#include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -31,7 +32,9 @@ static constexpr socket_t invalid_socket = -1;
 
 namespace
 {
-    std::atomic_bool g_stop{false};
+    using SocketHandle = std::unique_ptr<yuan::net::Socket>;
+
+    std::atomic_bool g_stop{ false };
 
     void on_signal(int)
     {
@@ -71,9 +74,50 @@ namespace
 #endif
     }
 
+    SocketHandle connect_stream_socket(const std::string &host, uint16_t port)
+    {
+        auto sock = std::make_unique<yuan::net::Socket>(host, static_cast<int>(port));
+        if (!sock->valid()) {
+            return nullptr;
+        }
+        if (!sock->connect()) {
+            return nullptr;
+        }
+        return sock;
+    }
+
+    SocketHandle create_tcp_listener(const std::string &host, uint16_t port, bool non_blocking)
+    {
+        auto sock = std::make_unique<yuan::net::Socket>(host, static_cast<int>(port));
+        if (!sock->valid()) {
+            return nullptr;
+        }
+
+        (void)sock->set_reuse(true);
+        sock->set_none_block(non_blocking);
+        if (!sock->bind() || !sock->listen()) {
+            return nullptr;
+        }
+        return sock;
+    }
+
+    SocketHandle create_udp_bound_socket(const std::string &host, uint16_t port)
+    {
+        auto sock = std::make_unique<yuan::net::Socket>(host, static_cast<int>(port), true);
+        if (!sock->valid()) {
+            return nullptr;
+        }
+
+        (void)sock->set_reuse(true);
+        if (!sock->bind()) {
+            return nullptr;
+        }
+        return sock;
+    }
+
     std::string sockaddr_to_string(const sockaddr_storage &addr)
     {
-        char host[INET6_ADDRSTRLEN] = {0};
+        char host[INET6_ADDRSTRLEN] = { 0 };
         uint16_t port = 0;
 
         if (addr.ss_family == AF_INET) {
@@ -136,105 +180,12 @@ namespace
         return true;
     }
 
-    bool resolve_and_connect(socket_t &sock, const std::string &host, uint16_t port)
-    {
-        addrinfo hints{};
-        hints.ai_family = AF_UNSPEC;
-        hints.ai_socktype = SOCK_STREAM;
-
-        addrinfo *result = nullptr;
-        const std::string port_str = std::to_string(port);
-        if (::getaddrinfo(host.c_str(), port_str.c_str(), &hints, &result) != 0 || !result) {
-            return false;
-        }
-
-        for (auto *ai = result; ai; ai = ai->ai_next) {
-            sock = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-            if (sock == invalid_socket) {
-                continue;
-            }
-
-            if (::connect(sock, ai->ai_addr, static_cast<int>(ai->ai_addrlen)) == 0) {
-                ::freeaddrinfo(result);
-                return true;
-            }
-
-            close_socket(sock);
-            sock = invalid_socket;
-        }
-
-        ::freeaddrinfo(result);
-        return false;
-    }
-
-    bool set_reuse_addr(socket_t sock)
-    {
-        int yes = 1;
-        return ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
-                            reinterpret_cast<const char *>(&yes),
-                            static_cast<int>(sizeof(yes))) == 0;
-    }
-
-    bool set_nonblocking(socket_t sock)
-    {
-#ifdef _WIN32
-        u_long mode = 1;
-        return ::ioctlsocket(sock, FIONBIO, &mode) == 0;
-#else
-        const int flags = ::fcntl(sock, F_GETFL, 0);
-        if (flags < 0) {
-            return false;
-        }
-        return ::fcntl(sock, F_SETFL, flags | O_NONBLOCK) == 0;
-#endif
-    }
-
-    bool bind_listen_socket(socket_t &sock, const std::string &host, uint16_t port, int backlog = 64)
-    {
-        addrinfo hints{};
-        hints.ai_family = AF_UNSPEC;
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_flags = AI_PASSIVE;
-
-        addrinfo *result = nullptr;
-        const std::string port_str = std::to_string(port);
-        const char *bind_host = host.empty() ? nullptr : host.c_str();
-        if (::getaddrinfo(bind_host, port_str.c_str(), &hints, &result) != 0 || !result) {
-            return false;
-        }
-
-        for (auto *ai = result; ai; ai = ai->ai_next) {
-            sock = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-            if (sock == invalid_socket) {
-                continue;
-            }
-
-            (void)set_reuse_addr(sock);
-
-            if (::bind(sock, ai->ai_addr, static_cast<int>(ai->ai_addrlen)) == 0 &&
-                ::listen(sock, backlog) == 0) {
-                ::freeaddrinfo(result);
-                return true;
-            }
-
-            close_socket(sock);
-            sock = invalid_socket;
-        }
-
-        ::freeaddrinfo(result);
-        return false;
-    }
-
     bool read_http_request(socket_t sock, std::string &request)
     {
         request.clear();
         std::vector<char> buffer(4096);
         while (request.size() < 64 * 1024) {
-#ifdef _WIN32
             const int received = ::recv(sock, buffer.data(), static_cast<int>(buffer.size()), 0);
-#else
-            const int received = ::recv(sock, buffer.data(), static_cast<int>(buffer.size()), 0);
-#endif
             if (received <= 0) {
                 return false;
             }
@@ -281,7 +232,7 @@ namespace
             return false;
         }
 
-        if (!target.empty() && target.front() == '[') {
+        if (target.front() == '[') {
             const auto close = target.find(']');
             if (close == std::string::npos || close + 2 >= target.size() || target[close + 1] != ':') {
                 return false;
@@ -309,6 +260,7 @@ namespace
         std::vector<uint8_t> buffer(8192);
         std::size_t left_to_right = 0;
         std::size_t right_to_left = 0;
+
         while (true) {
             fd_set readfds;
             FD_ZERO(&readfds);
@@ -322,28 +274,18 @@ namespace
             }
 
             if (FD_ISSET(left, &readfds)) {
-#ifdef _WIN32
                 const int received = ::recv(left, reinterpret_cast<char *>(buffer.data()), static_cast<int>(buffer.size()), 0);
-#else
-                const int received = ::recv(left, buffer.data(), static_cast<int>(buffer.size()), 0);
-#endif
                 if (received <= 0 || !write_all(right, buffer.data(), static_cast<std::size_t>(received))) {
-                    LOG_INFO("[http-proxy] {} relay left->right closed, transferred={} bytes",
-                             tag, left_to_right);
+                    LOG_INFO("[http-proxy] {} relay left->right closed, transferred={} bytes", tag, left_to_right);
                     break;
                 }
                 left_to_right += static_cast<std::size_t>(received);
             }
 
             if (FD_ISSET(right, &readfds)) {
-#ifdef _WIN32
                 const int received = ::recv(right, reinterpret_cast<char *>(buffer.data()), static_cast<int>(buffer.size()), 0);
-#else
-                const int received = ::recv(right, buffer.data(), static_cast<int>(buffer.size()), 0);
-#endif
                 if (received <= 0 || !write_all(left, buffer.data(), static_cast<std::size_t>(received))) {
-                    LOG_INFO("[http-proxy] {} relay right->left closed, transferred={} bytes",
-                             tag, right_to_left);
+                    LOG_INFO("[http-proxy] {} relay right->left closed, transferred={} bytes", tag, right_to_left);
                     break;
                 }
                 right_to_left += static_cast<std::size_t>(received);
@@ -406,11 +348,10 @@ namespace
             return;
         }
 
-        LOG_INFO("[http-proxy] {} connecting upstream {}:{}",
-                 peer_text, connect_target.host, connect_target.port);
+        LOG_INFO("[http-proxy] {} connecting upstream {}:{}", peer_text, connect_target.host, connect_target.port);
 
-        socket_t upstream = invalid_socket;
-        if (!resolve_and_connect(upstream, connect_target.host, connect_target.port)) {
+        auto upstream = connect_stream_socket(connect_target.host, connect_target.port);
+        if (!upstream) {
             LOG_ERROR("[http-proxy] {} failed to connect upstream {}:{} : {}",
                       peer_text, connect_target.host, connect_target.port, socket_error_message());
             (void)write_http_text(client, 502, "Bad Gateway", "failed to connect upstream");
@@ -418,8 +359,7 @@ namespace
             return;
         }
 
-        LOG_INFO("[http-proxy] {} upstream connected {}:{}",
-                 peer_text, connect_target.host, connect_target.port);
+        LOG_INFO("[http-proxy] {} upstream connected {}:{}", peer_text, connect_target.host, connect_target.port);
 
         const std::string established =
             "HTTP/1.1 200 Connection Established\r\n"
@@ -427,47 +367,17 @@ namespace
             "\r\n";
         if (!write_all(client, reinterpret_cast<const uint8_t *>(established.data()), established.size())) {
             LOG_ERROR("[http-proxy] {} failed to write CONNECT response", peer_text);
-            close_socket(upstream);
             close_socket(client);
             return;
         }
 
-        LOG_INFO("[http-proxy] {} tunnel established {}:{}",
-                 peer_text, connect_target.host, connect_target.port);
+        LOG_INFO("[http-proxy] {} tunnel established {}:{}", peer_text, connect_target.host, connect_target.port);
 
-        (void)relay_bidirectional(client, upstream, peer_text + " -> " + connect_target.host + ':' + std::to_string(connect_target.port));
+        (void)relay_bidirectional(client, static_cast<socket_t>(upstream->get_fd()),
+                                  peer_text + " -> " + connect_target.host + ':' + std::to_string(connect_target.port));
 
-        close_socket(upstream);
         close_socket(client);
         LOG_INFO("[http-proxy] {} connection closed", peer_text);
-    }
-
-    bool bind_udp_socket(socket_t &sock, const std::string &host, uint16_t port)
-    {
-        addrinfo hints{};
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_DGRAM;
-        hints.ai_flags = AI_PASSIVE;
-
-        addrinfo *result = nullptr;
-        const std::string port_str = std::to_string(port);
-        if (::getaddrinfo(host.empty() ? nullptr : host.c_str(), port_str.c_str(), &hints, &result) != 0 || !result) {
-            return false;
-        }
-
-        sock = ::socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-        if (sock == invalid_socket) {
-            ::freeaddrinfo(result);
-            return false;
-        }
-
-        const bool ok = ::bind(sock, result->ai_addr, static_cast<int>(result->ai_addrlen)) == 0;
-        ::freeaddrinfo(result);
-        if (!ok) {
-            close_socket(sock);
-            sock = invalid_socket;
-        }
-        return ok;
     }
 
     bool set_recv_timeout(socket_t sock, int timeout_ms)
@@ -520,15 +430,9 @@ namespace
 
     bool start_http_proxy(uint16_t port)
     {
-        socket_t listen_sock = invalid_socket;
-        if (!bind_listen_socket(listen_sock, "0.0.0.0", port)) {
+        auto listen_socket = create_tcp_listener("0.0.0.0", port, true);
+        if (!listen_socket) {
             LOG_ERROR("failed to bind http proxy on port {}", port);
-            return false;
-        }
-
-        if (!set_nonblocking(listen_sock)) {
-            LOG_ERROR("failed to switch http proxy socket to non-blocking mode");
-            close_socket(listen_sock);
             return false;
         }
 
@@ -541,9 +445,8 @@ namespace
 
         while (!g_stop.load(std::memory_order_relaxed)) {
             sockaddr_storage peer{};
-            socklen_t peer_len = static_cast<socklen_t>(sizeof(peer));
+            const socket_t client = static_cast<socket_t>(listen_socket->accept(peer));
 #ifdef _WIN32
-            const socket_t client = ::accept(listen_sock, reinterpret_cast<sockaddr *>(&peer), &peer_len);
             if (client == invalid_socket) {
                 const int err = ::WSAGetLastError();
                 if (err == WSAEWOULDBLOCK) {
@@ -554,7 +457,6 @@ namespace
                 continue;
             }
 #else
-            const socket_t client = ::accept(listen_sock, reinterpret_cast<sockaddr *>(&peer), &peer_len);
             if (client == invalid_socket) {
                 if (errno == EWOULDBLOCK || errno == EAGAIN) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -573,19 +475,19 @@ namespace
             }).detach();
         }
 
-        close_socket(listen_sock);
         LOG_INFO("[http-proxy] listener stopped");
         return true;
     }
 
     bool start_udp_echo(uint16_t port)
     {
-        socket_t sock = invalid_socket;
-        if (!bind_udp_socket(sock, "127.0.0.1", port)) {
+        auto socket = create_udp_bound_socket("127.0.0.1", port);
+        if (!socket) {
             LOG_ERROR("failed to start udp echo on 127.0.0.1:{}", port);
             return false;
         }
 
+        const socket_t sock = static_cast<socket_t>(socket->get_fd());
         LOG_INFO("UDP echo server listening on 127.0.0.1:{}", port);
         set_recv_timeout(sock, 1000);
 
@@ -593,13 +495,8 @@ namespace
         sockaddr_storage peer{};
         while (!g_stop.load(std::memory_order_relaxed)) {
             socklen_t peer_len = static_cast<socklen_t>(sizeof(peer));
-#ifdef _WIN32
             const int received = ::recvfrom(sock, reinterpret_cast<char *>(buffer.data()), static_cast<int>(buffer.size()), 0,
                                             reinterpret_cast<sockaddr *>(&peer), &peer_len);
-#else
-            const int received = ::recvfrom(sock, buffer.data(), static_cast<int>(buffer.size()), 0,
-                                            reinterpret_cast<sockaddr *>(&peer), &peer_len);
-#endif
             if (received <= 0) {
                 continue;
             }
@@ -613,7 +510,6 @@ namespace
 #endif
         }
 
-        close_socket(sock);
         return true;
     }
 
@@ -621,28 +517,26 @@ namespace
                       const std::string &target_host, uint16_t target_port,
                       const std::string &payload_text)
     {
-        socket_t tcp = invalid_socket;
-        if (!resolve_and_connect(tcp, proxy_host, proxy_port)) {
+        auto tcp_socket = connect_stream_socket(proxy_host, proxy_port);
+        if (!tcp_socket) {
             LOG_ERROR("failed to connect to proxy {}:{}", proxy_host, proxy_port);
             return 1;
         }
+        const socket_t tcp = static_cast<socket_t>(tcp_socket->get_fd());
 
         uint8_t greeting[] = { 0x05, 0x01, 0x00 };
         if (!write_all(tcp, greeting, sizeof(greeting))) {
             LOG_ERROR("failed to send greeting");
-            close_socket(tcp);
             return 1;
         }
 
-        uint8_t greet_reply[2] = {0};
+        uint8_t greet_reply[2] = { 0 };
         if (!read_exact(tcp, greet_reply, sizeof(greet_reply))) {
             LOG_ERROR("failed to read greeting reply");
-            close_socket(tcp);
             return 1;
         }
         if (greet_reply[0] != 0x05 || greet_reply[1] != 0x00) {
             LOG_ERROR("proxy did not accept no-auth greeting");
-            close_socket(tcp);
             return 1;
         }
 
@@ -653,35 +547,31 @@ namespace
         };
         if (!write_all(tcp, udp_assoc, sizeof(udp_assoc))) {
             LOG_ERROR("failed to send udp associate request");
-            close_socket(tcp);
             return 1;
         }
 
-        uint8_t reply[10] = {0};
+        uint8_t reply[10] = { 0 };
         if (!read_exact(tcp, reply, sizeof(reply))) {
             LOG_ERROR("failed to read udp associate reply");
-            close_socket(tcp);
             return 1;
         }
         if (reply[1] != 0x00) {
             LOG_ERROR("udp associate rejected with code {}", static_cast<int>(reply[1]));
-            close_socket(tcp);
             return 1;
         }
 
         const uint16_t relay_port = static_cast<uint16_t>((static_cast<uint16_t>(reply[8]) << 8) | reply[9]);
         if (relay_port == 0) {
             LOG_ERROR("proxy returned relay port 0");
-            close_socket(tcp);
             return 1;
         }
 
-        socket_t udp = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-        if (udp == invalid_socket) {
+        auto udp_socket = std::make_unique<yuan::net::Socket>("0.0.0.0", 0, true);
+        if (!udp_socket || !udp_socket->valid()) {
             LOG_ERROR("failed to create udp socket");
-            close_socket(tcp);
             return 1;
         }
+        const socket_t udp = static_cast<socket_t>(udp_socket->get_fd());
         set_recv_timeout(udp, 4000);
 
         sockaddr_in relay{};
@@ -699,10 +589,9 @@ namespace
         in_addr target_addr{};
         if (::inet_pton(AF_INET, target_host.c_str(), &target_addr) != 1) {
             LOG_ERROR("only ipv4 target is supported in this probe helper");
-            close_socket(udp);
-            close_socket(tcp);
             return 1;
         }
+
         const auto *target_bytes = reinterpret_cast<const uint8_t *>(&target_addr.s_addr);
         packet.insert(packet.end(), target_bytes, target_bytes + 4);
 
@@ -719,40 +608,26 @@ namespace
                      reinterpret_cast<sockaddr *>(&relay), sizeof(relay)) < 0) {
 #endif
             LOG_ERROR("failed to send udp datagram through proxy");
-            close_socket(udp);
-            close_socket(tcp);
             return 1;
         }
 
         std::vector<uint8_t> response(4096);
         sockaddr_storage from{};
         socklen_t from_len = static_cast<socklen_t>(sizeof(from));
-#ifdef _WIN32
         const int received = ::recvfrom(udp, reinterpret_cast<char *>(response.data()), static_cast<int>(response.size()), 0,
                                         reinterpret_cast<sockaddr *>(&from), &from_len);
-#else
-        const int received = ::recvfrom(udp, response.data(), static_cast<int>(response.size()), 0,
-                                        reinterpret_cast<sockaddr *>(&from), &from_len);
-#endif
         if (received <= 0) {
             LOG_ERROR("did not receive udp response from proxy");
-            close_socket(udp);
-            close_socket(tcp);
             return 1;
         }
 
         if (received < 10) {
             LOG_ERROR("udp response too short");
-            close_socket(udp);
-            close_socket(tcp);
             return 1;
         }
 
         const std::string echoed_payload(response.begin() + 10, response.begin() + received);
         LOG_INFO("UDP_OK relay_port={} payload={}", relay_port, echoed_payload);
-
-        close_socket(udp);
-        close_socket(tcp);
         return 0;
     }
 

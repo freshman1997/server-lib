@@ -11,6 +11,7 @@
 #include <thread>
 #include <atomic>
 #include <filesystem>
+#include <fstream>
 #include "common/winsock_guard.h"
 
 #ifndef _WIN32
@@ -601,12 +602,17 @@ bool test_change_notifier()
 
 bool test_ntlm_auth()
 {
-    SmbNtlmAuth ntlm("TESTUSER", "DOMAIN", "password123");
+    SmbNtlmAuth ntlm("TESTSERVER", "DOMAIN");
 
     TEST_ASSERT(ntlm.is_complete() == false, "NTLM auth should not be complete initially");
 
-    auto type1 = ntlm.process_inbound_token({});
-    TEST_ASSERT(!type1.empty(), "Should produce Type1 message");
+    const std::vector<uint8_t> type1 = {
+        'N', 'T', 'L', 'M', 'S', 'S', 'P', '\0',
+        0x01, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00
+    };
+    auto type2 = ntlm.process_inbound_token(type1);
+    TEST_ASSERT(!type2.empty(), "Should produce Type2 challenge");
 
     return true;
 }
@@ -794,8 +800,7 @@ bool test_local_file_system()
     TEST_ASSERT(read_result.success, "Read should succeed");
     TEST_ASSERT(read_result.bytes_read > 0, "Should read some bytes");
 
-    const auto span = read_result.data.readable_span();
-    std::string content(span.begin(), span.end());
+    std::string content(read_result.data.begin(), read_result.data.end());
     TEST_ASSERT(content.find("Hello SMB World!") != std::string::npos,
                 "Read content should match written content");
 

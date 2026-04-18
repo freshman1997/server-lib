@@ -122,15 +122,15 @@ public:
     void send(const std::string& data);
     void flush();
 
-    void on_connect_failed(yuan::net::Connection* conn) override;
-    void on_connect_timeout(yuan::net::Connection* conn) override;
-    void on_connected_success(yuan::net::Connection* conn) override;
+    void on_connect_failed(const std::shared_ptr<yuan::net::Connection>& conn) override;
+    void on_connect_timeout(const std::shared_ptr<yuan::net::Connection>& conn) override;
+    void on_connected_success(const std::shared_ptr<yuan::net::Connection>& conn) override;
 
-    void on_connected(yuan::net::Connection* conn) override;
-    void on_error(yuan::net::Connection* conn) override;
-    void on_read(yuan::net::Connection* conn) override;
-    void on_write(yuan::net::Connection* conn) override;
-    void on_close(yuan::net::Connection* conn) override;
+    void on_connected(const std::shared_ptr<yuan::net::Connection>& conn) override;
+    void on_error(const std::shared_ptr<yuan::net::Connection>& conn) override;
+    void on_read(const std::shared_ptr<yuan::net::Connection>& conn) override;
+    void on_write(const std::shared_ptr<yuan::net::Connection>& conn) override;
+    void on_close(const std::shared_ptr<yuan::net::Connection>& conn) override;
 
 private:
     void start_runtime();
@@ -150,7 +150,7 @@ private:
     std::condition_variable state_cv_;
     std::deque<std::string> pending_messages_;
     std::shared_ptr<yuan::net::TcpConnector> connector_;
-    yuan::net::Connection* connection_ = nullptr;
+    std::shared_ptr<yuan::net::Connection> connection_;
     yuan::net::Poller* poller_ = nullptr;
     yuan::timer::WheelTimerManager* timer_manager_ = nullptr;
     yuan::net::EventLoop* loop_ = nullptr;
@@ -194,7 +194,7 @@ void NetLoggerImpl::stop_runtime()
     yuan::net::Poller* poller = nullptr;
     yuan::timer::WheelTimerManager* timer_manager = nullptr;
     std::shared_ptr<yuan::net::TcpConnector> connector;
-    yuan::net::Connection* connection = nullptr;
+    std::shared_ptr<yuan::net::Connection> connection;
     bool was_connecting = false;
 
     {
@@ -326,7 +326,7 @@ bool NetLoggerImpl::connect()
 void NetLoggerImpl::disconnect()
 {
     std::shared_ptr<yuan::net::TcpConnector> connector;
-    yuan::net::Connection* connection = nullptr;
+    std::shared_ptr<yuan::net::Connection> connection;
     yuan::net::EventLoop* loop = nullptr;
     bool was_connecting = false;
 
@@ -371,7 +371,7 @@ void NetLoggerImpl::queue_send_locked(std::string data)
 
 void NetLoggerImpl::write_on_loop(const std::string& data)
 {
-    yuan::net::Connection* connection = nullptr;
+    std::shared_ptr<yuan::net::Connection> connection;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!connected_ || !connection_) {
@@ -420,7 +420,7 @@ void NetLoggerImpl::flush_pending_locked()
 
 void NetLoggerImpl::flush()
 {
-    yuan::net::Connection* connection = nullptr;
+    std::shared_ptr<yuan::net::Connection> connection;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (connected_) {
@@ -442,7 +442,7 @@ void NetLoggerImpl::fallback_to_stderr(const std::string& data) const
     std::cerr << data << '\n';
 }
 
-void NetLoggerImpl::on_connect_failed(yuan::net::Connection* conn)
+void NetLoggerImpl::on_connect_failed(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     connecting_ = false;
@@ -454,12 +454,12 @@ void NetLoggerImpl::on_connect_failed(yuan::net::Connection* conn)
     state_cv_.notify_all();
 }
 
-void NetLoggerImpl::on_connect_timeout(yuan::net::Connection* conn)
+void NetLoggerImpl::on_connect_timeout(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     on_connect_failed(conn);
 }
 
-void NetLoggerImpl::on_connected_success(yuan::net::Connection* conn)
+void NetLoggerImpl::on_connected_success(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     cancel_reconnect_timer_locked();
@@ -467,12 +467,12 @@ void NetLoggerImpl::on_connected_success(yuan::net::Connection* conn)
     connection_ = conn;
     connected_ = true;
     connecting_ = false;
-    conn->set_connection_handler(this);
+    conn->set_connection_handler(yuan::net::make_non_owning_handler(this));
     flush_pending_locked();
     state_cv_.notify_all();
 }
 
-void NetLoggerImpl::on_connected(yuan::net::Connection* conn)
+void NetLoggerImpl::on_connected(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     cancel_reconnect_timer_locked();
@@ -484,7 +484,7 @@ void NetLoggerImpl::on_connected(yuan::net::Connection* conn)
     state_cv_.notify_all();
 }
 
-void NetLoggerImpl::on_error(yuan::net::Connection* conn)
+void NetLoggerImpl::on_error(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     connected_ = false;
@@ -496,17 +496,17 @@ void NetLoggerImpl::on_error(yuan::net::Connection* conn)
     state_cv_.notify_all();
 }
 
-void NetLoggerImpl::on_read(yuan::net::Connection* conn)
+void NetLoggerImpl::on_read(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     (void)conn;
 }
 
-void NetLoggerImpl::on_write(yuan::net::Connection* conn)
+void NetLoggerImpl::on_write(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     (void)conn;
 }
 
-void NetLoggerImpl::on_close(yuan::net::Connection* conn)
+void NetLoggerImpl::on_close(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     connected_ = false;

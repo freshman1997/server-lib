@@ -1,4 +1,5 @@
 #include "smb_lock_manager.h"
+#include <algorithm>
 #include <cstring>
 #include <functional>
 

@@ -15,6 +15,7 @@ target_link_libraries(${PROJECT_NAME}
     PUBLIC
         CoreBase
         fmt
+        Threads::Threads
 )
 
 target_include_directories(${PROJECT_NAME}
