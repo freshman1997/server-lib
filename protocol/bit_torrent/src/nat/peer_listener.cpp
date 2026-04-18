@@ -19,7 +19,6 @@ namespace yuan::net::bit_torrent
         : listening_(false),
           actual_port_(0),
           acceptor_(nullptr),
-          listen_socket_(nullptr),
           runtime_(nullptr),
           pieces_have_(nullptr)
     {
@@ -74,16 +73,14 @@ namespace yuan::net::bit_torrent
             return false;
         }
 
-        net::StreamAcceptor *acceptor = net::create_stream_acceptor(sock);
+        auto acceptor = std::unique_ptr<net::StreamAcceptor>(net::create_stream_acceptor(sock));
         if (!acceptor->listen()) {
-            delete acceptor;
             return false;
         }
 
-        runtime_->register_acceptor(acceptor, this, acceptor->listener_channel());
+        runtime_->register_acceptor(acceptor.get(), make_non_owning_handler(this), acceptor->listener_channel());
 
-        acceptor_ = acceptor;
-        listen_socket_ = sock;
+        acceptor_ = std::move(acceptor);
         return true;
     }
 
@@ -96,24 +93,24 @@ namespace yuan::net::bit_torrent
         for (auto &p : pending_) {
             if (p.conn)
                 p.conn->close();
-            if (p.peer)
-                delete p.peer;
         }
         pending_.clear();
 
         if (acceptor_) {
             acceptor_->close();
-            acceptor_ = nullptr;
+            acceptor_.reset();
         }
 
-        listen_socket_ = nullptr;
         runtime_ = nullptr;
         pieces_have_ = nullptr;
     }
 
-    void PeerListener::on_connected(net::Connection * conn)
+    void PeerListener::on_connected(const std::shared_ptr<net::Connection> &conn)
     {
-        auto *peer = new PeerConnection();
+        if (!conn) {
+            return;
+        }
+        auto peer = std::make_shared<PeerConnection>();
 
         PendingInbound pending;
         pending.conn = conn;
@@ -121,11 +118,13 @@ namespace yuan::net::bit_torrent
         pending_.push_back(pending);
     }
 
-    void PeerListener::on_error(net::Connection * conn)
+    void PeerListener::on_error(const std::shared_ptr<net::Connection> &conn)
     {
+        if (!conn) {
+            return;
+        }
         for (auto it = pending_.begin(); it != pending_.end(); ++it) {
             if (it->conn == conn) {
-                delete it->peer;
                 pending_.erase(it);
                 break;
             }
@@ -133,8 +132,11 @@ namespace yuan::net::bit_torrent
         conn->close();
     }
 
-    void PeerListener::on_read(net::Connection * conn)
+    void PeerListener::on_read(const std::shared_ptr<net::Connection> &conn)
     {
+        if (!conn) {
+            return;
+        }
         auto byte_buffer = conn->take_input_byte_buffer();
         if (byte_buffer.readable_bytes() == 0)
             return;
@@ -153,41 +155,42 @@ namespace yuan::net::bit_torrent
         entry->inbound_buffer.append(span.data(), span.size());
 
         if (entry->inbound_buffer.readable_bytes() >= HandshakeMessage::HANDSHAKE_SIZE) {
-            handle_inbound_handshake(conn, entry->peer);
+            handle_inbound_handshake(conn.get(), entry->peer);
         }
     }
 
-    void PeerListener::on_write(net::Connection * conn)
+    void PeerListener::on_write(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
 
-    void PeerListener::on_close(net::Connection * conn)
+    void PeerListener::on_close(const std::shared_ptr<net::Connection> &conn)
     {
+        if (!conn) {
+            return;
+        }
         for (auto it = pending_.begin(); it != pending_.end(); ++it) {
             if (it->conn == conn) {
-                delete it->peer;
                 pending_.erase(it);
                 break;
             }
         }
     }
 
-    void PeerListener::handle_inbound_handshake(net::Connection * conn, PeerConnection * peer)
+    void PeerListener::handle_inbound_handshake(net::Connection * conn, std::shared_ptr<PeerConnection> peer)
     {
         // Retrieve and remove the pending entry
         uint8_t hs_data[68] = {};
         bool found = false;
         for (auto it = pending_.begin(); it != pending_.end(); ++it) {
-            if (it->conn == conn && it->peer == peer) {
+            if (it->conn.get() == conn && it->peer == peer) {
                 std::memcpy(hs_data, it->inbound_buffer.read_ptr(), HandshakeMessage::HANDSHAKE_SIZE);
-                it->peer = nullptr; // prevent double-delete
                 pending_.erase(it);
                 found = true;
                 break;
             }
         }
         if (!found) {
-            delete peer;
             return;
         }
 
@@ -195,14 +198,12 @@ namespace yuan::net::bit_torrent
         HandshakeMessage hs;
         if (!hs.deserialize(hs_data, HandshakeMessage::HANDSHAKE_SIZE)) {
             conn->close();
-            delete peer;
             return;
         }
 
         // Verify info_hash matches our torrent
         if (std::memcmp(hs.info_hash_, info_hash_.data(), 20) != 0) {
             conn->close();
-            delete peer;
             return;
         }
 
@@ -223,7 +224,7 @@ namespace yuan::net::bit_torrent
         int32_t total_pieces = static_cast<int32_t>(pieces_have_->size());
 
         // Initialize the PeerConnection for inbound use
-        peer->accept_inbound(conn, remote_peer_id, info_hash_, local_peer_id_,
+        peer->accept_inbound(conn ? conn->shared_from_this() : nullptr, remote_peer_id, info_hash_, local_peer_id_,
                              peer_ip, peer_port, total_pieces,
                              runtime_);
 

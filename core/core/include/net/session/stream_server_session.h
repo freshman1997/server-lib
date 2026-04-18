@@ -50,8 +50,8 @@ namespace yuan::net
         void close()
         {
             if (acceptor_) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_->close();
+                acceptor_.reset();
             }
             runtime_ = nullptr;
         }
@@ -118,41 +118,41 @@ namespace yuan::net
             }
         }
 
-        void on_connected(Connection *conn) override
+        void on_connected(const std::shared_ptr<Connection> &conn) override
         {
-            if (connected_cb_) {
+            if (connected_cb_ && conn) {
                 ConnectionContext ctx(conn);
                 connected_cb_(ctx);
             }
         }
 
-        void on_read(Connection *conn) override
+        void on_read(const std::shared_ptr<Connection> &conn) override
         {
-            if (read_cb_) {
+            if (read_cb_ && conn) {
                 ConnectionContext ctx(conn);
                 read_cb_(ctx);
             }
         }
 
-        void on_write(Connection *conn) override
+        void on_write(const std::shared_ptr<Connection> &conn) override
         {
-            if (write_cb_) {
+            if (write_cb_ && conn) {
                 ConnectionContext ctx(conn);
                 write_cb_(ctx);
             }
         }
 
-        void on_close(Connection *conn) override
+        void on_close(const std::shared_ptr<Connection> &conn) override
         {
-            if (close_cb_) {
+            if (close_cb_ && conn) {
                 ConnectionContext ctx(conn);
                 close_cb_(ctx);
             }
         }
 
-        void on_error(Connection *conn) override
+        void on_error(const std::shared_ptr<Connection> &conn) override
         {
-            if (error_cb_) {
+            if (error_cb_ && conn) {
                 ConnectionContext ctx(conn);
                 error_cb_(ctx);
             }
@@ -186,10 +186,9 @@ namespace yuan::net
                 return false;
             }
 
-            acceptor_ = create_stream_acceptor(sock);
+            acceptor_.reset(create_stream_acceptor(sock));
             if (!acceptor_->listen()) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_.reset();
                 return false;
             }
 
@@ -197,7 +196,7 @@ namespace yuan::net
                 acceptor_->set_ssl_module(ssl_module_);
             }
 
-            acceptor_->set_connection_handler(this);
+            acceptor_->set_connection_handler(make_non_owning_handler(this));
             acceptor_->set_event_handler(loop);
             if (auto *channel = acceptor_->listener_channel()) {
                 loop->update_channel(channel);
@@ -206,7 +205,7 @@ namespace yuan::net
         }
 
         NetworkRuntime *runtime_ = nullptr;
-        StreamAcceptor *acceptor_ = nullptr;
+        std::unique_ptr<StreamAcceptor> acceptor_;
         std::shared_ptr<SSLModule> ssl_module_;
 
         ConnectedCallback connected_cb_;

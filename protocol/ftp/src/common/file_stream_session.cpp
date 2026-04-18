@@ -17,6 +17,7 @@ namespace yuan::net::ftp
         state_ = FileStreamState::init;
         current_file_info_ = nullptr;
         conn_timer_ = nullptr;
+        conn_owner_.reset();
         conn_ = nullptr;
         remote_addr_ = InetAddress{};
         session_ = session;
@@ -36,10 +37,14 @@ namespace yuan::net::ftp
         // Do not notify session here: session notification is performed by quit()
         // to avoid recursive removal/delete cycles.
         session_ = nullptr;
-        if (conn_) {
-            conn_->close();
-            conn_ = nullptr;
+        if (auto c = conn_owner_.lock()) {
+            c->close();
         }
+    }
+
+    void FtpFileStreamSession::on_connected(const std::shared_ptr<Connection> &conn)
+    {
+        on_connected(conn.get());
     }
 
     void FtpFileStreamSession::on_connected(Connection * conn)
@@ -49,11 +54,17 @@ namespace yuan::net::ftp
             return;
         }
         state_ = FileStreamState::connected;
+        conn_owner_ = conn ? conn->shared_from_this() : std::weak_ptr<Connection>{};
         conn_ = conn;
-        remote_addr_ = conn->get_remote_address();
+        remote_addr_ = conn ? conn->get_remote_address() : InetAddress{};
         LOG_DEBUG("file session connected remote={}:{}", remote_addr_.get_ip(), remote_addr_.get_port());
         session_->on_opened(this);
         last_active_time_ = base::time::now();
+    }
+
+    void FtpFileStreamSession::on_error(const std::shared_ptr<Connection> &conn)
+    {
+        on_error(conn.get());
     }
 
     void FtpFileStreamSession::on_error(Connection * conn)
@@ -62,11 +73,16 @@ namespace yuan::net::ftp
         state_ = FileStreamState::connection_error;
         session_->on_error(this);
         // Defer close to avoid use-after-free
-        if (conn_) {
-            auto *c = conn_;
+        if (auto c = conn_owner_.lock()) {
+            conn_owner_.reset();
             conn_ = nullptr;
             session_->get_app()->get_runtime()->dispatch([c]() { c->close(); });
         }
+    }
+
+    void FtpFileStreamSession::on_read(const std::shared_ptr<Connection> &conn)
+    {
+        on_read(conn.get());
     }
 
     void FtpFileStreamSession::on_read(Connection * conn)
@@ -83,8 +99,8 @@ namespace yuan::net::ftp
             state_ = FileStreamState::file_error;
             session_->on_error(this);
             // Defer close to avoid use-after-free (see on_read completion path)
-            if (conn_) {
-                auto *c = conn_;
+            if (auto c = conn_owner_.lock()) {
+                conn_owner_.reset();
                 conn_ = nullptr;
                 session_->get_app()->get_runtime()->dispatch([c]() { c->close(); });
             }
@@ -99,14 +115,19 @@ namespace yuan::net::ftp
             // TcpConnection::on_read_event(), and conn_->close() synchronously
             // deletes the TcpConnection via do_close()->delete this, causing UB
             // when control returns to on_read_event().
-            if (conn_) {
-                auto *c = conn_;
+            if (auto c = conn_owner_.lock()) {
+                conn_owner_.reset();
                 conn_ = nullptr;
                 session_->get_app()->get_runtime()->dispatch([c]() { c->close(); });
             }
             return;
         }
         last_active_time_ = base::time::now();
+    }
+
+    void FtpFileStreamSession::on_write(const std::shared_ptr<Connection> &conn)
+    {
+        on_write(conn.get());
     }
 
     void FtpFileStreamSession::on_write(Connection * conn)
@@ -123,8 +144,8 @@ namespace yuan::net::ftp
             state_ = FileStreamState::file_error;
             session_->on_error(this);
             // Defer close to avoid use-after-free (see on_read above)
-            if (conn_) {
-                auto *c = conn_;
+            if (auto c = conn_owner_.lock()) {
+                conn_owner_.reset();
                 conn_ = nullptr;
                 session_->get_app()->get_runtime()->dispatch([c]() { c->close(); });
             }
@@ -140,8 +161,8 @@ namespace yuan::net::ftp
             session_->on_completed(this);
             current_file_info_ = nullptr;
             // Defer close to avoid use-after-free (see on_read above)
-            if (conn_) {
-                auto *c = conn_;
+            if (auto c = conn_owner_.lock()) {
+                conn_owner_.reset();
                 conn_ = nullptr;
                 session_->get_app()->get_runtime()->dispatch([c]() { c->close(); });
             }
@@ -149,6 +170,11 @@ namespace yuan::net::ftp
         }
         last_active_time_ = base::time::now();
         conn->flush();
+    }
+
+    void FtpFileStreamSession::on_close(const std::shared_ptr<Connection> &conn)
+    {
+        on_close(conn.get());
     }
 
     void FtpFileStreamSession::on_close(Connection * conn)
@@ -164,6 +190,7 @@ namespace yuan::net::ftp
             session_->on_completed(this);
             current_file_info_ = nullptr;
         }
+        conn_owner_.reset();
         conn_ = nullptr;
         quit();
     }
@@ -236,9 +263,8 @@ namespace yuan::net::ftp
             conn_timer_->cancel();
             conn_timer_ = nullptr;
         }
-        if (conn_) {
-            conn_->close();
-            conn_ = nullptr;
+        if (auto c = conn_owner_.lock()) {
+            c->close();
         }
         if (session_) {
             // let the session handle removing this file stream from the owning FtpFileStream

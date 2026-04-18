@@ -25,6 +25,17 @@ This directory is organized by feature area:
   - `.\test\proxy\proxy_tool.exe udp-echo 19090`
   - `.\test\proxy\proxy_tool.exe udp-probe 127.0.0.1 1080 127.0.0.1 19090 PING-UDP`
 
+## Connection Ownership
+
+The networking core now uses shared ownership for live connections:
+
+- `net::ConnectionPtr` is the preferred handle type for newly created connections.
+- `create_stream_connection(...)` and `create_datagram_connection(...)` return `ConnectionPtr`.
+- `async_accept(...)` and `async_connect(...)` now hand back `shared_ptr`-owned connections.
+- `AsyncConnectionContext` keeps the connection alive for the duration of the async session.
+
+For new code, prefer `ConnectionPtr` over raw `Connection*` when you need to retain ownership past the current callback.
+
 ## FTP Scripts
 
 FTP helper scripts live in:

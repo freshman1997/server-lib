@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 #include <unordered_map>
+#include <memory>
 
 namespace yuan::net
 {
@@ -180,25 +181,29 @@ namespace yuan::net::http
         ::yuan::buffer::ByteBuffer take_leftover_buffer();
         void replace_body_buffer(::yuan::buffer::ByteBuffer buffer);
 
-        void set_pre_content_parser(ContentParser *parser)
+        void set_pre_content_parser(ContentParser *parser);
+
+        void set_pre_content_parser(std::shared_ptr<ContentParser> parser)
         {
-            pre_content_parser_ = parser;
+            pre_content_parser_ = std::move(parser);
         }
 
         ContentParser *get_pre_content_parser() const
         {
-            return pre_content_parser_;
+            return pre_content_parser_.get();
         }
 
     public: // task
-        void set_task(HttpTask *task)
+        void set_task(HttpTask *task);
+
+        void set_task(std::shared_ptr<HttpTask> task)
         {
-            task_ = task;
+            task_ = std::move(task);
         }
 
         HttpTask *get_task() const
         {
-            return task_;
+            return task_.get();
         }
 
     public: // original file name
@@ -263,7 +268,7 @@ namespace yuan::net::http
         ContentType content_type_;
         uint32_t body_length_ = 0;
         HttpSessionContext *context_;
-        HttpPacketParser *parser_;
+        std::unique_ptr<HttpPacketParser> parser_;
         std::unordered_map<std::string, std::vector<std::string> > params_;
         std::unordered_map<std::string, std::string> headers_;
         std::string content_type_text_;
@@ -271,8 +276,8 @@ namespace yuan::net::http
         std::unique_ptr<Content> body_content_;
         ::yuan::buffer::ByteBuffer buffer_;
         ::yuan::buffer::ByteBuffer input_cache_;
-        ContentParser *pre_content_parser_ = nullptr;
-        HttpTask *task_ = nullptr;
+        std::shared_ptr<ContentParser> pre_content_parser_;
+        std::shared_ptr<HttpTask> task_;
         std::string chunked_checksum_;
         std::string original_file_name_;
     };

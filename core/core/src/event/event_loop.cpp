@@ -1,4 +1,4 @@
-#include <atomic>
+﻿#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
@@ -45,6 +45,7 @@ namespace yuan::net
         std::unordered_map<int, Channel *> channels_;
         std::queue<std::function<void()>> pending_callbacks_;
         std::queue<std::coroutine_handle<>> pending_coroutines_;
+        std::unordered_map<int, std::shared_ptr<Connection>> connections_;
     };
 
     EventLoop::EventLoop(Poller *poller, timer::TimerManager *timer_manager)
@@ -162,31 +163,41 @@ namespace yuan::net
             : EventLoopExitReason::quit_requested;
     }
 
-    void EventLoop::on_new_connection(Connection *conn)
+    void EventLoop::on_new_connection(const std::shared_ptr<Connection> &conn)
     {
-        if (conn) {
-            const InetAddress &addr = conn->get_remote_address();
-            Channel * channel = nullptr;
+        if (!conn) {
+            return;
+        }
 
-            if (auto *stream = dynamic_cast<StreamTransport *>(conn)) {
-                channel = stream->stream_channel();
-            }
-
+        if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
+            auto *channel = stream->stream_channel();
             if (channel) {
-                LOG_INFO("new connection, ip: {}, port: {}, fd: {}", addr.get_ip(), addr.get_port(), channel->get_fd());
-            } else {
-                LOG_INFO("new connection, ip: {}, port: {}", addr.get_ip(), addr.get_port());
-            }
-        
-            if (auto *stream = dynamic_cast<StreamTransport *>(conn)) {
-                channel = stream->stream_channel();
-                if (!channel) {
-                    return;
-                }
                 std::lock_guard<std::mutex> lock(data_->m);
-                data_->poller_->update_channel(channel);
-                data_->channels_[channel->get_fd()] = channel;
+                data_->connections_[channel->get_fd()] = conn;
             }
+        }
+
+        const InetAddress &addr = conn->get_remote_address();
+        Channel *channel = nullptr;
+
+        if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
+            channel = stream->stream_channel();
+        }
+
+        if (channel) {
+            LOG_INFO("new connection, ip: {}, port: {}, fd: {}", addr.get_ip(), addr.get_port(), channel->get_fd());
+        } else {
+            LOG_INFO("new connection, ip: {}, port: {}", addr.get_ip(), addr.get_port());
+        }
+
+        if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
+            channel = stream->stream_channel();
+            if (!channel) {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(data_->m);
+            data_->poller_->update_channel(channel);
+            data_->channels_[channel->get_fd()] = channel;
         }
     }
 
@@ -203,6 +214,10 @@ namespace yuan::net
         }
 
         std::lock_guard<std::mutex> lock(data_->m);
+        auto conn_it = data_->connections_.find(channel->get_fd());
+        if (conn_it != data_->connections_.end()) {
+            data_->connections_.erase(conn_it);
+        }
         auto it = data_->channels_.find(channel->get_fd());
         if (it != data_->channels_.end()) {
             LOG_INFO("channel closed, fd: {}", channel->get_fd());
@@ -255,3 +270,4 @@ namespace yuan::net
         wakeup();
     }
 }
+

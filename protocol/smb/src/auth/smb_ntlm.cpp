@@ -1,8 +1,8 @@
 #include "auth/smb_ntlm.h"
-#include <openssl/evp.h>
-#include <openssl/hmac.h>
-#include <openssl/md4.h>
-#include <openssl/rand.h>
+#include "openssl/evp.h"
+#include "openssl/hmac.h"
+#include "openssl/md4.h"
+#include "openssl/rand.h"
 #include <cstring>
 #include <algorithm>
 

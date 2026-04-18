@@ -50,9 +50,13 @@ namespace yuan::net
         // 发送完数据后返回
         virtual void close();
 
-        virtual void set_connection_handler(ConnectionHandler *handler);
+        virtual void set_connection_handler(std::shared_ptr<ConnectionHandler> handler) override;
 
         virtual ConnectionHandler *get_connection_handler() const override;
+        virtual std::shared_ptr<ConnectionHandler> get_connection_handler_owner() const override
+        {
+            return connectionHandlerOwner_;
+        }
 
         virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler);
 
@@ -83,9 +87,12 @@ namespace yuan::net
         InetAddress address_;
         std::unique_ptr<UdpAdapter> adapter_;
         ConnectionHandler *connectionHandler_;
+        std::shared_ptr<ConnectionHandler> connectionHandlerOwner_;
         EventHandler *eventHandler_;
         UdpInstance *instance_;
         timer::Timer *alive_timer_;
+        bool cleanup_done_ = false;
+        bool close_notified_ = false;
         ::yuan::buffer::BufferChain pending_output_buffer_;
     };
 }

@@ -45,6 +45,7 @@ namespace yuan::net::mqtt
     {
     public:
         explicit MqttSession(TcpConnection *conn);
+        explicit MqttSession(const std::shared_ptr<TcpConnection> &conn);
 
         uint64_t session_id() const
         {
@@ -171,13 +172,18 @@ namespace yuan::net::mqtt
         void set_topic_alias(uint16_t alias, const std::string &topic);
         std::optional<std::string> resolve_topic_alias(uint16_t alias) const;
 
-        TcpConnection *connection() const
+        std::shared_ptr<TcpConnection> connection() const
         {
-            return conn_;
+            return conn_owner_.lock();
+        }
+        std::shared_ptr<TcpConnection> connection_owner() const
+        {
+            return conn_owner_.lock();
         }
 
     private:
         uint64_t session_id_;
+        std::weak_ptr<TcpConnection> conn_owner_;
         std::string client_id_;
         ProtocolLevel protocol_level_ = ProtocolLevel::V3_1_1;
         MqttSessionState state_ = MqttSessionState::disconnected;
@@ -207,6 +213,7 @@ namespace yuan::net::mqtt
     {
     public:
         MqttSession &create_session(TcpConnection *conn);
+        MqttSession &create_session(const std::shared_ptr<TcpConnection> &conn);
         void remove_session(uint64_t sid);
         MqttSession *find_by_client_id(const std::string &client_id);
         MqttSession *find_by_connection(TcpConnection *conn);

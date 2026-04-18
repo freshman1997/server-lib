@@ -20,8 +20,10 @@ namespace yuan::net
     UdpInstance::~UdpInstance()
     {
         is_closing_ = true;
-        for (auto it : conns_) {
-            it.second->abort();
+        for (auto &it : conns_) {
+            if (it.second) {
+                it.second->abort();
+            }
         }
         conns_.clear();
     }
@@ -31,21 +33,21 @@ namespace yuan::net
         acceptor_ = acceptor;
     }
 
-    std::pair<bool, Connection *> UdpInstance::on_recv(const InetAddress & address)
+    std::pair<bool, std::shared_ptr<Connection>> UdpInstance::on_recv(const InetAddress & address)
     {
         auto it = conns_.find(address);
         if (it == conns_.end()) {
-            Connection *udpConn;
+            std::shared_ptr<Connection> udpConn;
             if (adapter_type_ == UdpAdapterType::kcp) {
                 UdpAdapter *adapter = new KcpAdapter;
                 udpConn = create_datagram_connection(address, adapter);
-                if (!adapter->init(udpConn, acceptor_->endpoint_timer_manager())) {
+                if (!adapter->init(udpConn.get(), acceptor_->endpoint_timer_manager())) {
                     return { false, udpConn };
                 }
             } else {
                 udpConn = create_datagram_connection(address);
             }
-            if (auto *datagram = dynamic_cast<DatagramTransport *>(udpConn)) {
+            if (auto datagram = std::dynamic_pointer_cast<DatagramTransport>(udpConn)) {
                 datagram->attach_datagram_instance(this);
             }
             conns_[address] = udpConn;
@@ -58,7 +60,7 @@ namespace yuan::net
     int UdpInstance::on_send(Connection * conn, const yuan::buffer::ByteBuffer & buff)
     {
         assert(acceptor_);
-        return acceptor_->send_datagram(conn, buff);
+        return acceptor_->send_datagram(conn ? conn->shared_from_this() : nullptr, buff);
     }
 
     void UdpInstance::send()
@@ -75,9 +77,9 @@ namespace yuan::net
         }
     }
 
-    void UdpInstance::on_connection_close(Connection * conn)
+    void UdpInstance::on_connection_close(const std::shared_ptr<Connection> &conn)
     {
-        if (is_closing_) {
+        if (is_closing_ || !conn) {
             return;
         }
 

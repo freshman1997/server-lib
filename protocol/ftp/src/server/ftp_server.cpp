@@ -57,7 +57,7 @@ namespace yuan::net::ftp
 
     coroutine::Task<void> FtpServer::handle_connection(net::AsyncConnectionContext ctx)
     {
-        auto *conn = ctx.native_handle();
+        auto conn = ctx.connection();
         if (!conn) {
             co_return;
         }
@@ -128,7 +128,7 @@ namespace yuan::net::ftp
         FtpFileInfo * file_info,
         net::AsyncConnectionContext & control_ctx)
     {
-        auto *data_conn = co_await listener->accept_async();
+        auto data_conn = co_await listener->accept_async();
         if (!data_conn) {
             if (control_ctx.is_connected()) {
                 control_ctx.append_output("425 Can't open data connection.\r\n");
@@ -137,12 +137,12 @@ namespace yuan::net::ftp
             co_return;
         }
 
-        data_conn->set_connection_handler(nullptr);
+        data_conn->set_connection_handler(std::shared_ptr<net::ConnectionHandler>{});
         rv.register_connection(data_conn, nullptr);
 
         net::AsyncConnectionContext data_ctx(data_conn, rv);
 
-        if (auto *stream = dynamic_cast<StreamTransport *>(data_conn)) {
+        if (auto stream = std::dynamic_pointer_cast<StreamTransport>(data_conn)) {
             if (auto *channel = stream->stream_channel()) {
                 if (file_info->mode_ == StreamMode::Receiver) {
                     channel->disable_write();

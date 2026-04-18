@@ -26,6 +26,7 @@
 #include <vector>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 
 namespace yuan::net::bit_torrent
 {
@@ -33,7 +34,7 @@ namespace yuan::net::bit_torrent
     class NatManager
     {
     public:
-        using PeerCallback = std::function<void(PeerConnection *peer)>;
+        using PeerCallback = std::function<void(std::shared_ptr<PeerConnection> peer)>;
         using DhtPeerCallback = std::function<void(const std::vector<PeerAddress> &peers)>;
 
         NatManager();
@@ -91,7 +92,7 @@ namespace yuan::net::bit_torrent
 
     private:
         void on_upnp_result(bool success, const std::string &ip, uint16_t port);
-        void on_new_tcp_peer(PeerConnection *peer);
+        void on_new_tcp_peer(std::shared_ptr<PeerConnection> peer);
         void on_new_utp_peer(UtpConnection *utp_conn);
         void on_dht_peers(const std::vector<PeerAddress> &peers);
 
@@ -109,6 +110,7 @@ namespace yuan::net::bit_torrent
         std::unique_ptr<UtpManager> utp_manager_;
         std::unique_ptr<DhtNode> dht_node_;
         std::unique_ptr<PexManager> pex_manager_;
+        std::unordered_map<std::string, std::shared_ptr<PeerConnection> > utp_peers_;
 
         // External address (from UPnP or manual)
         std::string external_ip_;

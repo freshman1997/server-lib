@@ -16,31 +16,31 @@ namespace yuan::net::bit_torrent
     class PeerConnectorHandler : public net::ConnectorHandler
     {
     public:
-        PeerConnectorHandler(PeerConnection *p, net::InetAddress *a, net::TcpConnector *c)
-            : parent_(p), addr_(a), connector_(c)
+        explicit PeerConnectorHandler(PeerConnection *p)
+            : parent_(p)
         {
         }
 
-        void on_connect_failed(net::Connection *conn) override
+        void on_connect_failed(const std::shared_ptr<net::Connection> &conn) override
         {
+            (void)conn;
             parent_->state_ = PeerConnection::State::error;
-            delete addr_;
-            delete connector_;
-            delete this;
+            parent_->schedule_connect_cleanup();
         }
 
-        void on_connect_timeout(net::Connection *conn) override
+        void on_connect_timeout(const std::shared_ptr<net::Connection> &conn) override
         {
+            (void)conn;
             parent_->state_ = PeerConnection::State::error;
-            delete addr_;
-            delete connector_;
-            delete this;
+            parent_->schedule_connect_cleanup();
         }
 
-        void on_connected_success(net::Connection *conn) override
+        void on_connected_success(const std::shared_ptr<net::Connection> &conn) override
         {
-            parent_->conn_ = conn;
-            conn->set_connection_handler(parent_);
+            parent_->set_connection(conn);
+            if (conn) {
+                conn->set_connection_handler(make_non_owning_handler(parent_));
+            }
 
             parent_->state_ = PeerConnection::State::handshaking;
             HandshakeMessage hs;
@@ -54,15 +54,11 @@ namespace yuan::net::bit_torrent
                     120000, 120000, [parent = parent_]() { parent->send_keepalive(); }, -1);
             }
 
-            delete addr_;
-            delete connector_;
-            delete this;
+            parent_->schedule_connect_cleanup();
         }
 
     private:
         PeerConnection *parent_;
-        net::InetAddress *addr_;
-        net::TcpConnector *connector_;
     };
 
     PeerConnection::PeerConnection()
@@ -101,13 +97,12 @@ namespace yuan::net::bit_torrent
         inbound_buffer_.clear();
         pending_request_count_ = 0;
         pending_requests_.clear();
+        pending_addr_ = std::make_unique<net::InetAddress>(peer_ip, peer_port);
+        pending_connector_ = std::make_unique<net::TcpConnector>();
+        connector_handler_ = std::make_unique<PeerConnectorHandler>(this);
 
-        auto *connector = new net::TcpConnector();
-        auto *addr = new net::InetAddress(peer_ip, peer_port);
-        auto *handler = new PeerConnectorHandler(this, addr, connector);
-
-        runtime->register_connector(connector, handler);
-        connector->connect(*addr);
+        runtime->register_connector(pending_connector_.get(), connector_handler_.get());
+        pending_connector_->connect(*pending_addr_);
     }
 
     void PeerConnection::accept_inbound(net::Connection * conn,
@@ -119,8 +114,44 @@ namespace yuan::net::bit_torrent
                                         int32_t total_pieces,
                                         net::NetworkRuntime * runtime)
     {
-        conn_ = conn;
-        conn->set_connection_handler(this);
+        set_connection(conn);
+        conn->set_connection_handler(make_non_owning_handler(this));
+
+        remote_peer_id_ = remote_peer_id;
+        info_hash_ = info_hash;
+        local_peer_id_ = local_peer_id;
+        peer_ip_ = peer_ip;
+        peer_port_ = peer_port;
+        total_pieces_ = total_pieces;
+        runtime_ = runtime;
+
+        state_ = State::connected;
+        inbound_buffer_.clear();
+        pending_request_count_ = 0;
+        pending_requests_.clear();
+
+        if (runtime_) {
+            keepalive_timer_ = runtime_->schedule_periodic(
+                120000, 120000, [this]() { send_keepalive(); }, -1);
+        }
+
+        if (on_state_change_)
+            on_state_change_(this);
+    }
+
+    void PeerConnection::accept_inbound(const std::shared_ptr<net::Connection> &conn,
+                                        const std::string &remote_peer_id,
+                                        const std::vector<uint8_t> &info_hash,
+                                        const std::string &local_peer_id,
+                                        const std::string &peer_ip,
+                                        uint16_t peer_port,
+                                        int32_t total_pieces,
+                                        net::NetworkRuntime *runtime)
+    {
+        set_connection(conn);
+        if (conn) {
+            conn->set_connection_handler(make_non_owning_handler(this));
+        }
 
         remote_peer_id_ = remote_peer_id;
         info_hash_ = info_hash;
@@ -210,10 +241,12 @@ namespace yuan::net::bit_torrent
         }
 
         if (conn_) {
-            conn_->set_connection_handler(nullptr);
+            conn_->set_connection_handler(std::shared_ptr<net::ConnectionHandler>{});
             conn_->close();
             conn_ = nullptr;
         }
+
+        cleanup_connect_attempt();
 
         if (on_state_change_) {
             auto cb = std::move(on_state_change_);
@@ -222,28 +255,32 @@ namespace yuan::net::bit_torrent
         }
     }
 
-    void PeerConnection::on_connected(net::Connection * conn)
+    void PeerConnection::on_connected(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
 
-    void PeerConnection::on_error(net::Connection * conn)
+    void PeerConnection::on_error(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
         state_ = State::error;
         pending_request_count_ = 0;
         if (on_state_change_)
             on_state_change_(this);
     }
 
-    void PeerConnection::on_close(net::Connection * conn)
+    void PeerConnection::on_close(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
         state_ = State::closed;
         pending_request_count_ = 0;
         if (on_state_change_)
             on_state_change_(this);
     }
 
-    void PeerConnection::on_write(net::Connection * conn)
+    void PeerConnection::on_write(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
 
     void PeerConnection::on_keepalive_timer(timer::Timer * timer)
@@ -252,8 +289,11 @@ namespace yuan::net::bit_torrent
         send_keepalive();
     }
 
-    void PeerConnection::on_read(net::Connection * conn)
+    void PeerConnection::on_read(const std::shared_ptr<net::Connection> &conn)
     {
+        if (!conn) {
+            return;
+        }
         auto byte_buffer = conn->take_input_byte_buffer();
         if (byte_buffer.readable_bytes() == 0)
             return;
@@ -278,6 +318,25 @@ namespace yuan::net::bit_torrent
         if (state_ == State::connected) {
             handle_message(reinterpret_cast<const uint8_t *>(inbound_buffer_.read_ptr()), inbound_buffer_.readable_bytes());
             inbound_buffer_.compact();
+        }
+    }
+
+    void PeerConnection::cleanup_connect_attempt()
+    {
+        pending_addr_.reset();
+        pending_connector_.reset();
+        connector_handler_.reset();
+    }
+
+    void PeerConnection::schedule_connect_cleanup()
+    {
+        if (runtime_) {
+            auto *self = this;
+            runtime_->dispatch([self]() {
+                self->cleanup_connect_attempt();
+            });
+        } else {
+            cleanup_connect_attempt();
         }
     }
 

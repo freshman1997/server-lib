@@ -728,9 +728,8 @@ namespace yuan::net::smb
         resp.file_id = req->file_id;
 
         if (req->ctl_code == FSCTL_DFS_GET_REFERRALS || req->ctl_code == FSCTL_DFS_GET_REFERRALS_EX) {
-            const auto input_span = req->input_buffer.readable_span();
             auto referral = dfs_resolver_.resolve(
-                std::string(input_span.begin(), input_span.end()));
+                std::string(req->input_buffer.data(), req->input_buffer.data() + req->input_buffer.size()));
             if (referral) {
                 if (handler_) {
                     auto resolved = handler_->on_dfs_resolve(&session, referral->dfs_path);

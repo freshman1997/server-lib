@@ -55,6 +55,11 @@ namespace yuan::net::websocket
         WebSocketConnection &operator=(const WebSocketConnection &) = delete;
 
         void bind_connection(Connection *conn);
+        void bind_connection(const std::shared_ptr<Connection> &conn);
+        std::shared_ptr<Connection> connection() const
+        {
+            return conn_owner_.lock();
+        }
 
         void set_config(WebSocketConfigManager *config);
 
@@ -63,7 +68,7 @@ namespace yuan::net::websocket
 
         void close(WebSocketCloseCode code = WebSocketCloseCode::normal_close_);
 
-        Connection *get_native_connection();
+        std::shared_ptr<Connection> get_native_connection();
 
         const std::string &get_url() const;
         void set_url(const std::string &url);
@@ -81,6 +86,7 @@ namespace yuan::net::websocket
         void try_set_heartbeat_timer(NetworkRuntime *runtime);
 
         FrameDispatchResult dispatch_frames(Connection *conn);
+        FrameDispatchResult dispatch_frames(const std::shared_ptr<Connection> &conn);
 
     public:
         WebSocketHandshaker &handshaker();
@@ -94,8 +100,11 @@ namespace yuan::net::websocket
         bool pack_control_frame(const ::yuan::buffer::ByteBuffer &data, uint8_t type, std::vector< ::yuan::buffer::ByteBuffer> &output);
 
         void send_ping_frame_to(Connection *conn);
+        void send_ping_frame_to(const std::shared_ptr<Connection> &conn);
         void send_pong_frame_to(Connection *conn, const ::yuan::buffer::ByteBuffer &payload = {});
+        void send_pong_frame_to(const std::shared_ptr<Connection> &conn, const ::yuan::buffer::ByteBuffer &payload = {});
         void send_close_frame_to(Connection *conn, uint16_t code);
+        void send_close_frame_to(const std::shared_ptr<Connection> &conn, uint16_t code);
 
         DataCallback on_data;
         std::function<void(WebSocketConnection *)> on_connected_cb;
@@ -109,6 +118,7 @@ namespace yuan::net::websocket
         WorkMode mode_;
         State state_;
         std::string url_;
+        std::weak_ptr<Connection> conn_owner_;
         Connection *conn_;
         timer::Timer *heartbeat_timer_;
         WebSocketHandshaker handshaker_;

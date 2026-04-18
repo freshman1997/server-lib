@@ -2,6 +2,7 @@
 #include "smb_file_system.h"
 #include "protocol/smb2_constants.h"
 #include "crypto/smb_crypto_openssl.h"
+#include <random>
 #include <cstring>
 
 namespace yuan::net::smb
@@ -72,7 +73,7 @@ namespace yuan::net::smb
 
     coroutine::Task<void> SmbServer::handle_connection(AsyncConnectionContext ctx)
     {
-        SmbSession *session = session_mgr_.create_session(ctx.native_handle());
+        SmbSession *session = session_mgr_.create_session(ctx.connection());
 
         ByteBuffer recv_buf;
 

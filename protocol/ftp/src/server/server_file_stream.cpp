@@ -2,6 +2,7 @@
 #include "common/file_stream.h"
 #include "net/connection/connection_factory.h"
 #include "net/acceptor/tcp_acceptor.h"
+#include "event/event_loop.h"
 #include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
 #include "common/session.h"
@@ -10,6 +11,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <memory>
 #include "logger.h"
 
 #ifndef _WIN32
@@ -64,9 +66,9 @@ namespace yuan::net::ftp
                         }
                     }
 
-                    auto *conn = create_stream_connection(peer_addr.get_ip(), peer_addr.get_port(), conn_fd);
+                    auto conn = create_stream_connection(peer_addr.get_ip(), peer_addr.get_port(), conn_fd);
                     conn->set_event_handler(handler_);
-                    conn->set_connection_handler(conn_handler_);
+                    conn->set_connection_handler(make_non_owning_handler(conn_handler_));
 
                     if (sslHandler) {
                         conn->set_ssl_handler(sslHandler);
@@ -84,7 +86,11 @@ namespace yuan::net::ftp
                         }
                     }
 
-                    handler_->on_new_connection(conn);
+                    if (auto *loop = dynamic_cast<net::EventLoop *>(handler_)) {
+                        loop->on_new_connection(conn);
+                    } else if (handler_) {
+                        handler_->on_new_connection(conn);
+                    }
                 }
             }
         };
@@ -93,14 +99,13 @@ namespace yuan::net::ftp
     ServerFtpFileStream::ServerFtpFileStream(FtpSession * session)
         : FtpFileStream(session)
     {
-        acceptor_ = nullptr;
     }
 
     ServerFtpFileStream::~ServerFtpFileStream()
     {
         if (acceptor_) {
             acceptor_->close();
-            acceptor_ = nullptr;
+            acceptor_.reset();
         }
     }
 
@@ -116,31 +121,28 @@ namespace yuan::net::ftp
             return true;
         }
 
-        Socket *sock = new Socket("", addr.get_port());
+        auto sock = std::make_unique<Socket>("", addr.get_port());
         if (!sock->valid()) {
             LOG_ERROR("cant create socket file descriptor!");
-            delete sock;
             return false;
         }
 
         if (!sock->bind()) {
             LOG_ERROR("cant bind port: {}!", addr.get_port());
-            delete sock;
             return false;
         }
 
-        acceptor_ = new PassiveTcpAcceptor(sock);
+        acceptor_.reset(new PassiveTcpAcceptor(sock.release()));
         if (!acceptor_->listen()) {
             LOG_ERROR("cant listen on port: {}!", addr.get_port());
-            delete acceptor_;
-            acceptor_ = nullptr;
+            acceptor_.reset();
             return false;
         }
 
         auto *runtime = session_->get_app()->get_runtime();
         assert(runtime);
 
-        runtime->register_acceptor(acceptor_, this);
+        runtime->register_acceptor(acceptor_.get(), make_non_owning_handler(this));
 
         return true;
     }

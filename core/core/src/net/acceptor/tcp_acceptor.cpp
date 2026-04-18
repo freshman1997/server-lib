@@ -23,6 +23,7 @@
 #include "net/handler/connection_handler.h"
 #include "net/secuity/ssl_handler.h"
 #include "net/secuity/ssl_module.h"
+#include "event/event_loop.h"
 
 namespace yuan::net
 {
@@ -78,14 +79,13 @@ namespace yuan::net
 
     void TcpAcceptor::close()
     {
-        if (handler_) {
-            handler_->queue_in_loop([this]() {
-                delete this;
-            });
-            return;
+        if (channel_) {
+            channel_->disable_all();
+            if (handler_) {
+                handler_->close_channel(channel_.get());
+                channel_->set_handler(nullptr);
+            }
         }
-
-        delete this;
     }
 
     void TcpAcceptor::update_channel()
@@ -127,11 +127,15 @@ namespace yuan::net
                 }
             }
 
-            Connection *conn = create_stream_connection(peer_addr.get_ip(),
-                                                        peer_addr.get_port(), conn_fd);
+            auto conn = create_stream_connection(peer_addr.get_ip(),
+                                                 peer_addr.get_port(), conn_fd);
 
             conn->set_event_handler(handler_);
-            conn->set_connection_handler(conn_handler_);
+            if (conn_handler_owner_) {
+                conn->set_connection_handler(conn_handler_owner_);
+            } else {
+                conn->set_connection_handler(make_non_owning_handler(conn_handler_));
+            }
 
             if (sslHandler) {
                 conn->set_ssl_handler(sslHandler);
@@ -149,7 +153,11 @@ namespace yuan::net
                 }
             }
 
-            handler_->on_new_connection(conn);
+            if (auto *loop = dynamic_cast<EventLoop *>(handler_)) {
+                loop->on_new_connection(conn);
+            } else if (handler_) {
+                handler_->on_new_connection(conn);
+            }
             if (conn_handler_) {
                 conn_handler_->on_connected(conn);
             }
@@ -170,9 +178,10 @@ namespace yuan::net
         }
     }
 
-    void TcpAcceptor::set_connection_handler(ConnectionHandler * connHandler)
+    void TcpAcceptor::set_connection_handler(std::shared_ptr<ConnectionHandler> connHandler)
     {
-        this->conn_handler_ = connHandler;
+        this->conn_handler_owner_ = std::move(connHandler);
+        this->conn_handler_ = conn_handler_owner_.get();
     }
 
     void TcpAcceptor::set_ssl_module(std::shared_ptr<SSLModule> module)

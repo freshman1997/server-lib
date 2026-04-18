@@ -37,31 +37,22 @@ namespace yuan::redis
         ~Impl() override = default;
 
     public:
-        void on_connected(net::Connection *conn) override;
+        void on_connected(const std::shared_ptr<net::Connection> &conn) override;
 
-        void on_error(net::Connection *conn) override
-        {
-            conn_ = nullptr;
-            set_mask(RedisState::closed);
-            completion_event_.notify();
-        }
+        void on_error(const std::shared_ptr<net::Connection> &conn) override;
 
-        void on_read(net::Connection *conn) override;
+    public:
+        void on_read(const std::shared_ptr<net::Connection> &conn) override;
 
-        void on_write(net::Connection *conn) override;
+        void on_write(const std::shared_ptr<net::Connection> &conn) override;
 
-        void on_close(net::Connection *conn) override
-        {
-            conn_ = nullptr;
-            set_mask(RedisState::closed, true);
-            completion_event_.notify();
-        }
+        void on_close(const std::shared_ptr<net::Connection> &conn) override;
 
     public:
         void on_timer(timer::Timer *timer) override;
 
     public:
-        void on_do_connect(net::Connection *conn);
+        void on_do_connect(std::shared_ptr<net::Connection> conn);
 
         void close();
 
@@ -122,7 +113,7 @@ namespace yuan::redis
         uint8_t mask_ = 0;
         RedisClient *client_ = nullptr;
         Option option_;
-        net::Connection *conn_ = nullptr;
+        std::shared_ptr<net::Connection> conn_;
         std::shared_ptr<Command> last_cmd_;
         std::shared_ptr<MultiCmd> multi_cmd_;
         std::shared_ptr<SubcribeCmd> subcribe_cmd;

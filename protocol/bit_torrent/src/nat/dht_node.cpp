@@ -172,15 +172,14 @@ namespace yuan::net::bit_torrent
         sock->set_reuse(true);
         sock->set_none_block(true);
 
-        acceptor_ = net::create_datagram_acceptor(sock, runtime_->runtime_view());
+        acceptor_.reset(net::create_datagram_acceptor(sock, runtime_->runtime_view()));
         if (!acceptor_->listen()) {
-            delete acceptor_;
-            acceptor_ = nullptr;
+            acceptor_.reset();
             delete sock;
             return false;
         }
 
-        runtime_->register_acceptor(acceptor_, this, acceptor_->endpoint_channel());
+        runtime_->register_acceptor(acceptor_.get(), make_non_owning_handler(this), acceptor_->endpoint_channel());
 
         port_ = bind_port;
         running_ = true;
@@ -213,8 +212,7 @@ namespace yuan::net::bit_torrent
 
         if (acceptor_) {
             acceptor_->close();
-            delete acceptor_;
-            acceptor_ = nullptr;
+            acceptor_.reset();
         }
 
         pending_queries_.clear();
@@ -1029,20 +1027,25 @@ namespace yuan::net::bit_torrent
     }
 
     // ConnectionHandler stubs (DHT uses UDP)
-    void DhtNode::on_connected(net::Connection * conn)
+    void DhtNode::on_connected(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
-    void DhtNode::on_error(net::Connection * conn)
+    void DhtNode::on_error(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
-    void DhtNode::on_read(net::Connection * conn)
+    void DhtNode::on_read(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
-    void DhtNode::on_write(net::Connection * conn)
+    void DhtNode::on_write(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
-    void DhtNode::on_close(net::Connection * conn)
+    void DhtNode::on_close(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
 
 } // namespace yuan::net::bit_torrent

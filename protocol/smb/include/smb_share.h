@@ -6,6 +6,7 @@
 #include "protocol/smb2_structures.h"
 #include "smb_file_system.h"
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>

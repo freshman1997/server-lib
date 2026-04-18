@@ -21,7 +21,6 @@ namespace yuan::net::http
 
     HttpClient::~HttpClient()
     {
-        delete last_session_;
         session_.close();
     }
 
@@ -105,7 +104,7 @@ namespace yuan::net::http
             co_return nullptr;
         }
 
-        Connection *conn = session_.native_handle();
+        auto conn = session_.context().connection();
         if (!conn) {
             co_return nullptr;
         }
@@ -120,7 +119,7 @@ namespace yuan::net::http
                 }
             }
 
-            auto *stream = dynamic_cast<StreamTransport *>(conn);
+            auto *stream = dynamic_cast<StreamTransport *>(conn.get());
             auto *channel = stream ? stream->stream_channel() : nullptr;
             if (!channel) {
                 co_return nullptr;
@@ -142,9 +141,8 @@ namespace yuan::net::http
         HttpSessionContext *httpCtx = new HttpSessionContext(conn);
         httpCtx->set_mode(Mode::client);
 
-        delete last_session_;
-        last_session_ = nullptr;
-        HttpSession *httpSession = new HttpSession(reinterpret_cast<uintptr_t>(conn), httpCtx, runtime);
+        last_session_.reset();
+        auto httpSession = std::make_unique<HttpSession>(reinterpret_cast<uintptr_t>(conn.get()), httpCtx, runtime);
 
         ccb(httpCtx->get_request());
 
@@ -175,16 +173,13 @@ namespace yuan::net::http
                 (void)httpCtx->try_parse_request_content();
 
                 if (httpCtx->is_completed()) {
-                    last_session_ = httpSession;
-                    httpSession = nullptr;
+                    last_session_ = std::move(httpSession);
                     co_return last_session_->get_context()->get_response();
                 }
             }
 
             httpSession->reset_timer();
         }
-
-        delete httpSession;
         co_return nullptr;
     }
 

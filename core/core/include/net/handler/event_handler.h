@@ -2,6 +2,7 @@
 #define __EVENT_HANDLER_H__
 
 #include <functional>
+#include <memory>
 
 namespace yuan::net
 {
@@ -12,7 +13,7 @@ namespace yuan::net
     class EventHandler
     {
     public:
-        virtual void on_new_connection(Connection *conn) = 0;
+        virtual void on_new_connection(const std::shared_ptr<Connection> &conn) = 0;
 
         virtual void close_channel(Channel *channel) = 0;
 

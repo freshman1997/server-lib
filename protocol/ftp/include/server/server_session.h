@@ -11,6 +11,7 @@ namespace yuan::net::ftp
     {
     public:
         ServerFtpSession(Connection *conn, FtpApp *app, bool keepUtilSent = false, bool async_mode = false);
+        ServerFtpSession(const std::shared_ptr<Connection> &conn, FtpApp *app, bool keepUtilSent = false, bool async_mode = false);
         ~ServerFtpSession();
 
     public:

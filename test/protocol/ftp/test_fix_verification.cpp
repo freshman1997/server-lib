@@ -92,7 +92,6 @@ int main()
     fs::remove_all(root, ec);
     fs::remove_all(downloadDir, ec);
 
-#ifdef _WIN32
     std::cout << "✓ All tests passed successfully\n";
     return 0;
 }

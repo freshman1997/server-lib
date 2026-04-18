@@ -2,6 +2,7 @@
 #define __NET_HTTP_CONTENT_PARSER_FACTORY_H__
 #include <unordered_map>
 #include <memory>
+#include <vector>
 
 
 #include "content_type.h"
@@ -24,6 +25,7 @@ namespace yuan::net::http
     private:
         std::unordered_map<ContentType, ContentParser*> parsers_;
         ContentParser* text_parser_instance = nullptr;
+        std::vector<std::shared_ptr<ContentParser> > owned_parsers_;
     };
 }
 

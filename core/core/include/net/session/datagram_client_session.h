@@ -53,10 +53,10 @@ namespace yuan::net
 
         void close()
         {
-            connection_ = nullptr;
+            connection_.reset();
             if (acceptor_) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_->close();
+                acceptor_.reset();
             }
             if (timeout_timer_) {
                 timeout_timer_->cancel();
@@ -186,11 +186,12 @@ namespace yuan::net
             co_return true;
         }
 
-        void on_connected(Connection *conn) override
+        void on_connected(const std::shared_ptr<Connection> &conn) override
         {
+            (void)conn;
         }
 
-        void on_error(Connection *conn) override
+        void on_error(const std::shared_ptr<Connection> &conn) override
         {
             if (completion_event_.completed()) {
                 return;
@@ -198,20 +199,21 @@ namespace yuan::net
             completion_event_.notify();
         }
 
-        void on_read(Connection *conn) override
+        void on_read(const std::shared_ptr<Connection> &conn) override
         {
             if (!completion_event_.completed()) {
                 completion_event_.notify();
             }
         }
 
-        void on_write(Connection *conn) override
+        void on_write(const std::shared_ptr<Connection> &conn) override
         {
+            (void)conn;
         }
 
-        void on_close(Connection *conn) override
+        void on_close(const std::shared_ptr<Connection> &conn) override
         {
-            connection_ = nullptr;
+            connection_.reset();
             if (completion_event_.completed()) {
                 return;
             }
@@ -239,34 +241,33 @@ namespace yuan::net
                 return false;
             }
 
-            acceptor_ = create_datagram_acceptor(sock, tm);
+            acceptor_.reset(create_datagram_acceptor(sock, tm));
             if (!acceptor_->listen()) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_.reset();
                 return false;
             }
 
-            acceptor_->set_connection_handler(this);
+            acceptor_->set_connection_handler(make_non_owning_handler(this));
             acceptor_->set_event_handler(loop);
             loop->update_channel(acceptor_->endpoint_channel());
 
             auto instance = acceptor_->get_udp_instance();
-            const auto &res = instance->on_recv(*sock->get_address());
+            auto res = instance->on_recv(*sock->get_address());
             if (!res.first || !res.second) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_->close();
+                acceptor_.reset();
                 return false;
             }
 
-            Connection *conn = res.second;
-            auto *datagram = dynamic_cast<DatagramTransport *>(conn);
+            auto conn = res.second;
+            auto datagram = std::dynamic_pointer_cast<DatagramTransport>(conn);
             if (!datagram) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_->close();
+                acceptor_.reset();
                 return false;
             }
 
-            conn->set_connection_handler(this);
+            conn->set_connection_handler(make_non_owning_handler(this));
             conn->set_event_handler(loop);
             datagram->attach_datagram_instance(instance);
             datagram->set_datagram_state(ConnectionState::connected);
@@ -281,8 +282,8 @@ namespace yuan::net
         EventLoop *external_loop_ = nullptr;
         timer::TimerManager *external_timer_manager_ = nullptr;
 
-        Connection *connection_ = nullptr;
-        DatagramAcceptor *acceptor_ = nullptr;
+        std::shared_ptr<Connection> connection_;
+        std::unique_ptr<DatagramAcceptor> acceptor_;
         timer::Timer *timeout_timer_ = nullptr;
         coroutine::CompletionEvent completion_event_;
     };

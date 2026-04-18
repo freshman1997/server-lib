@@ -23,9 +23,18 @@ namespace yuan::redis
         }
     }
 
-    void RedisClient::Impl::on_connected(net::Connection * conn)
+    void RedisClient::Impl::on_connected(const std::shared_ptr<net::Connection> &conn)
     {
+        conn_ = conn;
         set_mask(RedisState::connected);
+        completion_event_.notify();
+    }
+
+    void RedisClient::Impl::on_error(const std::shared_ptr<net::Connection> &conn)
+    {
+        (void)conn;
+        conn_.reset();
+        set_mask(RedisState::closed);
         completion_event_.notify();
     }
 
@@ -38,13 +47,16 @@ namespace yuan::redis
         set_mask(RedisState::closed, true);
         if (conn_) {
             conn_->close();
-            conn_ = nullptr;
+            conn_.reset();
         }
         completion_event_.notify();
     }
 
-    void RedisClient::Impl::on_read(net::Connection * conn)
+    void RedisClient::Impl::on_read(const std::shared_ptr<net::Connection> &conn)
     {
+        if (!conn) {
+            return;
+        }
         if ((!last_cmd_ && !subcribe_cmd) || !is_connected()) {
             return;
         }
@@ -89,8 +101,17 @@ namespace yuan::redis
         }
     }
 
-    void RedisClient::Impl::on_write(net::Connection * conn)
+    void RedisClient::Impl::on_write(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
+    }
+
+    void RedisClient::Impl::on_close(const std::shared_ptr<net::Connection> &conn)
+    {
+        (void)conn;
+        conn_.reset();
+        set_mask(RedisState::closed, true);
+        completion_event_.notify();
     }
 
     std::shared_ptr<RedisValue> RedisClient::Impl::execute_command(std::shared_ptr<Command> cmd)
@@ -167,11 +188,11 @@ namespace yuan::redis
         return res;
     }
 
-    void RedisClient::Impl::on_do_connect(net::Connection * conn)
+    void RedisClient::Impl::on_do_connect(std::shared_ptr<net::Connection> conn)
     {
         clear_mask();
         set_mask(RedisState::connecting);
-        conn_ = conn;
+        conn_ = std::move(conn);
 
         if (option_.timeout_ms_ > 0) {
             last_check_time_ = base::time::now();

@@ -12,6 +12,11 @@ namespace yuan::net::mqtt
     {
     }
 
+    MqttSession::MqttSession(const std::shared_ptr<TcpConnection> &conn)
+        : session_id_(global_session_id.fetch_add(1)), last_activity_(std::chrono::steady_clock::now()), conn_owner_(conn), conn_(conn.get())
+    {
+    }
+
     uint16_t MqttSession::next_packet_id()
     {
         uint16_t id = next_packet_id_++;
@@ -97,6 +102,14 @@ namespace yuan::net::mqtt
         return ref;
     }
 
+    MqttSession &MqttSessionManager::create_session(const std::shared_ptr<TcpConnection> &conn)
+    {
+        auto session = std::make_unique<MqttSession>(conn);
+        auto &ref = *session;
+        sessions_[ref.session_id()] = std::move(session);
+        return ref;
+    }
+
     void MqttSessionManager::remove_session(uint64_t sid)
     {
         auto it = sessions_.find(sid);
@@ -122,7 +135,7 @@ namespace yuan::net::mqtt
     MqttSession *MqttSessionManager::find_by_connection(TcpConnection * conn)
     {
         for (auto &pair : sessions_) {
-            if (pair.second->connection() == conn)
+            if (auto current = pair.second->connection(); current && current.get() == conn)
                 return pair.second.get();
         }
         return nullptr;

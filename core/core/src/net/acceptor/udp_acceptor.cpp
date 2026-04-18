@@ -73,14 +73,13 @@ namespace yuan::net
 
     void UdpAcceptor::close()
     {
-        if (handler_) {
-            handler_->queue_in_loop([this]() {
-                delete this;
-            });
-            return;
+        if (channel_) {
+            channel_->disable_all();
+            if (handler_) {
+                handler_->close_channel(channel_.get());
+                channel_->set_handler(nullptr);
+            }
         }
-
-        delete this;
     }
 
     void UdpAcceptor::update_channel()
@@ -149,12 +148,16 @@ namespace yuan::net
             auto res = instance_->on_recv(addr);
             if (res.first && res.second) {
                 if (!res.second->is_connected()) {
-                    auto *datagram = dynamic_cast<DatagramTransport *>(res.second);
+                    auto *datagram = dynamic_cast<DatagramTransport *>(res.second.get());
                     if (!datagram) {
                         res.second->abort();
                         break;
                     }
-                    res.second->set_connection_handler(conn_handler_);
+                    if (conn_handler_owner_) {
+                        res.second->set_connection_handler(conn_handler_owner_);
+                    } else {
+                        res.second->set_connection_handler(make_non_owning_handler(conn_handler_));
+                    }
                     res.second->set_event_handler(handler_);
                     handler_->on_new_connection(res.second);
                     if (conn_handler_) {
@@ -206,8 +209,9 @@ namespace yuan::net
         }
     }
 
-    void UdpAcceptor::set_connection_handler(ConnectionHandler * connHandler)
+    void UdpAcceptor::set_connection_handler(std::shared_ptr<ConnectionHandler> connHandler)
     {
-        conn_handler_ = connHandler;
+        conn_handler_owner_ = std::move(connHandler);
+        conn_handler_ = conn_handler_owner_.get();
     }
 }

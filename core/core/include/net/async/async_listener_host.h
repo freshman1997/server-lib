@@ -1,4 +1,4 @@
-#ifndef __YUAN_NET_ASYNC_ASYNC_LISTENER_HOST_H__
+﻿#ifndef __YUAN_NET_ASYNC_ASYNC_LISTENER_HOST_H__
 #define __YUAN_NET_ASYNC_ASYNC_LISTENER_HOST_H__
 
 #include <functional>
@@ -48,8 +48,8 @@ namespace yuan::net
         void close()
         {
             if (acceptor_) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_->close();
+                acceptor_.reset();
             }
             runtime_ = nullptr;
         }
@@ -64,14 +64,14 @@ namespace yuan::net
             conn_handler_ = std::move(handler);
         }
 
-        coroutine::Task<Connection *> accept_async()
+        coroutine::Task<std::shared_ptr<Connection>> accept_async()
         {
             if (!acceptor_ || !runtime_) {
-                co_return nullptr;
+                co_return std::shared_ptr<Connection>{};
             }
 
             auto rv = runtime_->runtime_view();
-            auto *conn = co_await coroutine::async_accept(rv, acceptor_);
+            auto conn = co_await coroutine::async_accept(rv, acceptor_.get());
             co_return conn;
         }
 
@@ -79,15 +79,15 @@ namespace yuan::net
         {
             auto rv = runtime_->runtime_view();
             while (true) {
-                auto *conn = co_await coroutine::async_accept(rv, acceptor_);
+                auto conn = co_await coroutine::async_accept(rv, acceptor_.get());
                 if (!conn) {
                     break;
                 }
 
                 conn->set_event_handler(runtime_->event_loop());
-                conn->set_connection_handler(&default_handler_);
+                conn->set_connection_handler(make_non_owning_handler(&default_handler_));
 
-                if (auto *stream = dynamic_cast<StreamTransport *>(conn)) {
+                if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
                     if (auto *channel = stream->stream_channel()) {
                         runtime_->event_loop()->update_channel(channel);
                     }
@@ -114,7 +114,7 @@ namespace yuan::net
 
         StreamAcceptor *acceptor() const noexcept
         {
-            return acceptor_;
+            return acceptor_.get();
         }
 
     private:
@@ -145,10 +145,9 @@ namespace yuan::net
                 return false;
             }
 
-            acceptor_ = create_stream_acceptor(sock);
+            acceptor_.reset(create_stream_acceptor(sock));
             if (!acceptor_->listen()) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_.reset();
                 return false;
             }
 
@@ -156,7 +155,7 @@ namespace yuan::net
                 acceptor_->set_ssl_module(ssl_module_);
             }
 
-            acceptor_->set_connection_handler(&default_handler_);
+            acceptor_->set_connection_handler(make_non_owning_handler(&default_handler_));
             acceptor_->set_event_handler(loop);
             if (auto *channel = acceptor_->listener_channel()) {
                 loop->update_channel(channel);
@@ -167,28 +166,28 @@ namespace yuan::net
         class DefaultHandler final : public yuan::net::ConnectionHandler
         {
         public:
-            void on_connected(Connection *) override
+            void on_connected(const std::shared_ptr<Connection> &) override
             {
             }
-            void on_error(Connection *conn) override
+            void on_error(const std::shared_ptr<Connection> &conn) override
             {
                 if (conn) {
                     conn->close();
                 }
             }
-            void on_read(Connection *) override
+            void on_read(const std::shared_ptr<Connection> &) override
             {
             }
-            void on_write(Connection *) override
+            void on_write(const std::shared_ptr<Connection> &) override
             {
             }
-            void on_close(Connection *) override
+            void on_close(const std::shared_ptr<Connection> &) override
             {
             }
         };
 
         NetworkRuntime *runtime_ = nullptr;
-        StreamAcceptor *acceptor_ = nullptr;
+        std::unique_ptr<StreamAcceptor> acceptor_;
         std::shared_ptr<SSLModule> ssl_module_;
         AsyncConnectionHandler conn_handler_;
         DefaultHandler default_handler_;
@@ -197,3 +196,4 @@ namespace yuan::net
 } // namespace yuan::net
 
 #endif
+

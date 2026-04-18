@@ -18,6 +18,7 @@ namespace yuan::net
 {
     class Connection;
     class TcpConnector;
+    class InetAddress;
     class ConnectorHandler;
     class EventLoop;
     class Poller;
@@ -82,13 +83,24 @@ namespace yuan::net::bit_torrent
         PeerConnection();
         ~PeerConnection();
 
+        void set_connection(const std::shared_ptr<net::Connection> &conn)
+        {
+            conn_owner_ = conn;
+            conn_ = conn_owner_.get();
+        }
+        void set_connection(net::Connection *conn)
+        {
+            conn_owner_.reset(conn, [](net::Connection *) {});
+            conn_ = conn;
+        }
+
     public:
         // ConnectionHandler interface
-        void on_connected(net::Connection *conn) override;
-        void on_error(net::Connection *conn) override;
-        void on_read(net::Connection *conn) override;
-        void on_write(net::Connection *conn) override;
-        void on_close(net::Connection *conn) override;
+        void on_connected(const std::shared_ptr<net::Connection> &conn) override;
+        void on_error(const std::shared_ptr<net::Connection> &conn) override;
+        void on_read(const std::shared_ptr<net::Connection> &conn) override;
+        void on_write(const std::shared_ptr<net::Connection> &conn) override;
+        void on_close(const std::shared_ptr<net::Connection> &conn) override;
 
     public:
         // Initiate outbound connection to a peer
@@ -99,6 +111,14 @@ namespace yuan::net::bit_torrent
                      net::NetworkRuntime *runtime);
 
         void accept_inbound(net::Connection *conn,
+                            const std::string &remote_peer_id,
+                            const std::vector<uint8_t> &info_hash,
+                            const std::string &local_peer_id,
+                            const std::string &peer_ip,
+                            uint16_t peer_port,
+                            int32_t total_pieces,
+                            net::NetworkRuntime *runtime);
+        void accept_inbound(const std::shared_ptr<net::Connection> &conn,
                             const std::string &remote_peer_id,
                             const std::vector<uint8_t> &info_hash,
                             const std::string &local_peer_id,
@@ -222,6 +242,8 @@ namespace yuan::net::bit_torrent
         std::vector<PieceBlockRequest> take_pending_requests();
 
     private:
+        void schedule_connect_cleanup();
+        void cleanup_connect_attempt();
         void on_keepalive_timer(timer::Timer *timer);
         void handle_handshake(const uint8_t *data, size_t len);
         void handle_message(const uint8_t *data, size_t len);
@@ -236,8 +258,12 @@ namespace yuan::net::bit_torrent
         std::vector<uint8_t> info_hash_;
 
         net::Connection *conn_;
+        std::shared_ptr<net::Connection> conn_owner_;
         net::NetworkRuntime *runtime_;
         timer::Timer *keepalive_timer_;
+        std::unique_ptr<net::InetAddress> pending_addr_;
+        std::unique_ptr<net::TcpConnector> pending_connector_;
+        std::unique_ptr<PeerConnectorHandler> connector_handler_;
 
         PeerState peer_state_;
         yuan::buffer::ByteBuffer inbound_buffer_;

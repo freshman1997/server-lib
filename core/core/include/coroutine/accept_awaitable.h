@@ -1,4 +1,4 @@
-#ifndef __YUAN_COROUTINE_ACCEPT_AWAITABLE_H__
+﻿#ifndef __YUAN_COROUTINE_ACCEPT_AWAITABLE_H__
 #define __YUAN_COROUTINE_ACCEPT_AWAITABLE_H__
 
 #include <coroutine>
@@ -34,25 +34,34 @@ namespace yuan::coroutine
 
             handle_ = handle;
             original_handler_ = acceptor_->connection_handler();
-            proxy_ = std::make_unique<AcceptProxyHandler>(*this);
-            acceptor_->set_connection_handler(proxy_.get());
+            original_handler_owner_ = acceptor_->connection_handler_owner();
+            proxy_ = std::make_shared<AcceptProxyHandler>(*this);
+            acceptor_->set_connection_handler(proxy_);
             return true;
         }
 
-        net::Connection *await_resume() noexcept
+        std::shared_ptr<net::Connection> await_resume() noexcept
         {
             if (acceptor_) {
-                acceptor_->set_connection_handler(original_handler_);
+                if (original_handler_owner_) {
+                    acceptor_->set_connection_handler(original_handler_owner_);
+                } else {
+                    acceptor_->set_connection_handler(make_non_owning_handler(original_handler_));
+                }
             }
             proxy_.reset();
             return accepted_conn_;
         }
 
     private:
-        void on_connection_accepted(net::Connection *conn) noexcept
+        void on_connection_accepted(std::shared_ptr<net::Connection> conn) noexcept
         {
             if (conn) {
-                conn->set_connection_handler(original_handler_);
+                if (original_handler_owner_) {
+                    conn->set_connection_handler(original_handler_owner_);
+                } else {
+                    conn->set_connection_handler(make_non_owning_handler(original_handler_));
+                }
             }
             accepted_conn_ = conn;
             resume();
@@ -77,27 +86,27 @@ namespace yuan::coroutine
             {
             }
 
-            void on_connected(net::Connection *conn) override
+            void on_connected(const std::shared_ptr<net::Connection> &conn) override
             {
-                owner_.on_connection_accepted(conn);
+                owner_.on_connection_accepted(conn ? conn->shared_from_this() : std::shared_ptr<net::Connection>{});
             }
 
-            void on_error(net::Connection *conn) override
-            {
-                (void)conn;
-            }
-
-            void on_read(net::Connection *conn) override
+            void on_error(const std::shared_ptr<net::Connection> &conn) override
             {
                 (void)conn;
             }
 
-            void on_write(net::Connection *conn) override
+            void on_read(const std::shared_ptr<net::Connection> &conn) override
             {
                 (void)conn;
             }
 
-            void on_close(net::Connection *conn) override
+            void on_write(const std::shared_ptr<net::Connection> &conn) override
+            {
+                (void)conn;
+            }
+
+            void on_close(const std::shared_ptr<net::Connection> &conn) override
             {
                 (void)conn;
             }
@@ -109,10 +118,11 @@ namespace yuan::coroutine
         RuntimeView runtime_{}; 
         net::StreamAcceptor *acceptor_ = nullptr;
         net::ConnectionHandler *original_handler_ = nullptr;
-        net::Connection *accepted_conn_ = nullptr;
+        std::shared_ptr<net::ConnectionHandler> original_handler_owner_;
+        std::shared_ptr<net::Connection> accepted_conn_;
 
         std::coroutine_handle<> handle_{};
-        std::unique_ptr<AcceptProxyHandler> proxy_;
+        std::shared_ptr<AcceptProxyHandler> proxy_;
         bool completed_ = false;
     };
 
@@ -126,3 +136,4 @@ namespace yuan::coroutine
 } // namespace yuan::coroutine
 
 #endif
+

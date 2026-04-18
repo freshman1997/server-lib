@@ -46,15 +46,20 @@ namespace yuan::net::smb
         };
 
         SmbSession(uint64_t session_id, Connection *conn);
+        SmbSession(uint64_t session_id, const std::shared_ptr<Connection> &conn);
         ~SmbSession();
 
         uint64_t session_id() const
         {
             return session_id_;
         }
-        Connection *connection() const
+        std::shared_ptr<Connection> connection() const
         {
-            return conn_;
+            return conn_owner_.lock();
+        }
+        std::shared_ptr<Connection> connection_owner() const
+        {
+            return conn_owner_.lock();
         }
         State state() const
         {
@@ -205,6 +210,7 @@ namespace yuan::net::smb
 
     private:
         uint64_t session_id_;
+        std::weak_ptr<Connection> conn_owner_;
         Connection *conn_;
         State state_ = State::connected;
         DialectRevision dialect_ = DialectRevision::SMB_2_002;
@@ -233,6 +239,7 @@ namespace yuan::net::smb
         ~SmbSessionManager() = default;
 
         SmbSession *create_session(Connection *conn);
+        SmbSession *create_session(const std::shared_ptr<Connection> &conn);
         SmbSession *find_session(uint64_t session_id);
         void remove_session(uint64_t session_id);
         void close_all();

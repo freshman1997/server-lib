@@ -7,6 +7,11 @@ namespace yuan::net::smb
     {
     }
 
+    SmbSession::SmbSession(uint64_t session_id, const std::shared_ptr<Connection> &conn)
+        : session_id_(session_id), conn_owner_(conn), conn_(conn.get())
+    {
+    }
+
     SmbSession::~SmbSession() = default;
 
     uint16_t SmbSession::consume_credits(uint16_t n)
@@ -81,6 +86,16 @@ namespace yuan::net::smb
     }
 
     SmbSession *SmbSessionManager::create_session(Connection * conn)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        uint64_t sid = next_session_id_.fetch_add(1);
+        auto session = std::make_unique<SmbSession>(sid, conn);
+        auto *ptr = session.get();
+        sessions_[sid] = std::move(session);
+        return ptr;
+    }
+
+    SmbSession *SmbSessionManager::create_session(const std::shared_ptr<Connection> &conn)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         uint64_t sid = next_session_id_.fetch_add(1);

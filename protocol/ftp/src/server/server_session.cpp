@@ -10,6 +10,12 @@ namespace yuan::net::ftp
         : FtpSession(conn, app, WorkMode::server, keepUtilSent, async_mode)
     {
     }
+
+    ServerFtpSession::ServerFtpSession(const std::shared_ptr<Connection> &conn, FtpApp *app, bool keepUtilSent, bool async_mode)
+        : FtpSession(conn, app, WorkMode::server, keepUtilSent, async_mode)
+    {
+    }
+
     ServerFtpSession::~ServerFtpSession()
     {
     }

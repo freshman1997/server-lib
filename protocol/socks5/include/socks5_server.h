@@ -17,6 +17,8 @@
 
 #include <memory>
 #include <unordered_map>
+#include <atomic>
+#include <functional>
 
 namespace yuan::net
 {
@@ -28,8 +30,8 @@ namespace yuan::net::socks5
 {
     struct UdpAssociation
     {
-        Connection *client_conn;
-        DatagramAcceptor *udp_acceptor;
+        std::shared_ptr<Connection> client_conn;
+        std::unique_ptr<DatagramAcceptor> udp_acceptor;
         InetAddress client_udp_addr;
         InetAddress target_addr;
         timer::Timer *idle_timer;
@@ -67,9 +69,17 @@ namespace yuan::net::socks5
 
     private:
         coroutine::Task<void> handle_connection(AsyncConnectionContext ctx);
-        coroutine::Task<void> relay_pipe(coroutine::RuntimeView rv, Connection *src, Connection *dst);
+        coroutine::Task<void> relay_pipe(coroutine::RuntimeView rv,
+                                         std::shared_ptr<Connection> src,
+                                         std::shared_ptr<Connection> dst,
+                                         std::function<void()> close_both,
+                                         std::atomic_bool *dst_alive);
 
         void send_reply(Connection *conn, ReplyCode reply,
+                        AddressType atyp = AddressType::ipv4,
+                        const std::string &bind_addr = "0.0.0.0",
+                        uint16_t bind_port = 0);
+        void send_reply(const std::shared_ptr<Connection> &conn, ReplyCode reply,
                         AddressType atyp = AddressType::ipv4,
                         const std::string &bind_addr = "0.0.0.0",
                         uint16_t bind_port = 0);
@@ -78,32 +88,31 @@ namespace yuan::net::socks5
         void forward_udp_to_target(UdpAssociation *assoc, const Socks5UdpHeader &header, const ::yuan::buffer::ByteBuffer &payload);
         void forward_udp_to_client(UdpAssociation *assoc, const InetAddress &target_addr, const ::yuan::buffer::ByteBuffer &payload);
         void close_udp_association(Connection *client_conn);
+        void close_udp_association(const std::shared_ptr<Connection> &client_conn);
 
     private:
         class RelayHandler final : public ConnectionHandler
         {
         public:
-            void on_connected(Connection *conn) override
+            void on_connected(const std::shared_ptr<Connection> &conn) override
             {
                 (void)conn;
             }
-            void on_error(Connection *conn) override
-            {
-                if (conn)
-                    conn->close();
-            }
-            void on_read(Connection *conn) override
+            void on_error(const std::shared_ptr<Connection> &conn) override
             {
                 (void)conn;
             }
-            void on_write(Connection *conn) override
+            void on_read(const std::shared_ptr<Connection> &conn) override
             {
                 (void)conn;
             }
-            void on_close(Connection *conn) override
+            void on_write(const std::shared_ptr<Connection> &conn) override
             {
-                if (conn)
-                    conn->close();
+                (void)conn;
+            }
+            void on_close(const std::shared_ptr<Connection> &conn) override
+            {
+                (void)conn;
             }
         };
 
@@ -111,20 +120,19 @@ namespace yuan::net::socks5
         {
         public:
             explicit UdpRelayHandler(Socks5Server &server);
-            void on_connected(Connection *conn) override
+            void on_connected(const std::shared_ptr<Connection> &conn) override
             {
                 (void)conn;
             }
-            void on_read(Connection *conn) override;
-            void on_error(Connection *conn) override;
-            void on_write(Connection *conn) override
+            void on_read(const std::shared_ptr<Connection> &conn) override;
+            void on_error(const std::shared_ptr<Connection> &conn) override;
+            void on_write(const std::shared_ptr<Connection> &conn) override
             {
                 (void)conn;
             }
-            void on_close(Connection *conn) override
+            void on_close(const std::shared_ptr<Connection> &conn) override
             {
-                if (conn)
-                    conn->close();
+                (void)conn;
             }
 
         private:

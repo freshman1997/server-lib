@@ -371,7 +371,7 @@ namespace yuan::net::http
 
     coroutine::Task<void> HttpServer::handle_connection(net::AsyncConnectionContext ctx)
     {
-        auto *conn = ctx.native_handle();
+        auto conn = ctx.connection();
         if (!conn) {
             co_return;
         }
@@ -736,7 +736,7 @@ namespace yuan::net::http
         std::size_t sz = file.tellg();
         file.close();
 
-        const auto task = new net::http::HttpUploadFileTask([resp, filePath]() {
+        auto task = std::make_unique<net::http::HttpUploadFileTask>([resp, filePath]() {
             LOG_INFO("Download completed: {}", filePath);
             resp->set_upload_file(false);
         });
@@ -748,7 +748,6 @@ namespace yuan::net::http
 
         if (!task->init()) {
             resp->process_error(ResponseCode::internal_server_error);
-            delete task;
             return;
         }
 
@@ -757,7 +756,7 @@ namespace yuan::net::http
         resp->set_response_code(ResponseCode::ok_);
         resp->add_header("Content-Length", std::to_string(sz));
 
-        resp->set_task(task);
+        resp->set_task(task.release());
         resp->set_upload_file(true);
         resp->send();
     }

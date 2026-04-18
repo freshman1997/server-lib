@@ -42,7 +42,7 @@ namespace yuan::net
 
     using SslHandshakeCallback = std::function<void(bool success)>;
 
-    class Connection : public SelectHandler
+    class Connection : public SelectHandler, public std::enable_shared_from_this<Connection>
     {
     public:
         Connection()
@@ -71,8 +71,12 @@ namespace yuan::net
         virtual void abort() = 0;
         virtual void close() = 0;
 
-        virtual void set_connection_handler(ConnectionHandler *handler) = 0;
+        virtual void set_connection_handler(std::shared_ptr<ConnectionHandler> handler) = 0;
         virtual ConnectionHandler *get_connection_handler() const = 0;
+        virtual std::shared_ptr<ConnectionHandler> get_connection_handler_owner() const
+        {
+            return nullptr;
+        }
         virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler) = 0;
 
         virtual std::shared_ptr<SSLHandler> get_ssl_handler() const
@@ -170,6 +174,8 @@ namespace yuan::net
         ::yuan::buffer::ByteBuffer input_buffer_;
         ::yuan::buffer::BufferChain output_buffer_;
     };
+
+    using ConnectionPtr = std::shared_ptr<Connection>;
 }
 
 #endif

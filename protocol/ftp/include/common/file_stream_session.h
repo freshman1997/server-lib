@@ -26,14 +26,19 @@ namespace yuan::net::ftp
         ~FtpFileStreamSession();
 
     public:
+        virtual void on_connected(const std::shared_ptr<Connection> &conn);
         virtual void on_connected(Connection *conn);
 
+        virtual void on_error(const std::shared_ptr<Connection> &conn);
         virtual void on_error(Connection *conn);
 
+        virtual void on_read(const std::shared_ptr<Connection> &conn);
         virtual void on_read(Connection *conn);
 
+        virtual void on_write(const std::shared_ptr<Connection> &conn);
         virtual void on_write(Connection *conn);
 
+        virtual void on_close(const std::shared_ptr<Connection> &conn);
         virtual void on_close(Connection *conn);
 
     public:
@@ -61,7 +66,8 @@ namespace yuan::net::ftp
         std::size_t write_buff_size_;
         uint32_t last_active_time_;
         FtpFileInfo *current_file_info_;
-        Connection *conn_;
+        std::weak_ptr<Connection> conn_owner_;
+        Connection *conn_ = nullptr;
         InetAddress remote_addr_;
         timer::Timer *conn_timer_;
         FtpSession *session_;

@@ -4,6 +4,7 @@
 #include "socks5_protocol.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace yuan::net
@@ -27,24 +28,24 @@ namespace yuan::net::socks5
         };
 
     public:
-        explicit Socks5Session(Connection *client_conn);
+        explicit Socks5Session(std::shared_ptr<Connection> client_conn);
         ~Socks5Session();
 
         Socks5Session(const Socks5Session &) = delete;
         Socks5Session &operator=(const Socks5Session &) = delete;
 
     public:
-        Connection *client_connection() const
+        const std::shared_ptr<Connection> &client_connection() const
         {
             return client_conn_;
         }
-        Connection *remote_connection() const
+        const std::shared_ptr<Connection> &remote_connection() const
         {
             return remote_conn_;
         }
-        void set_remote_connection(Connection *conn)
+        void set_remote_connection(std::shared_ptr<Connection> conn)
         {
-            remote_conn_ = conn;
+            remote_conn_ = std::move(conn);
         }
 
         State state() const
@@ -111,8 +112,8 @@ namespace yuan::net::socks5
         }
 
     private:
-        Connection *client_conn_;
-        Connection *remote_conn_;
+        std::shared_ptr<Connection> client_conn_;
+        std::shared_ptr<Connection> remote_conn_;
         State state_;
         std::string target_host_;
         uint16_t target_port_;

@@ -20,8 +20,12 @@ namespace yuan::net
 
         virtual void update_channel() = 0;
 
-        virtual void set_connection_handler(ConnectionHandler *connHandler) = 0;
+        virtual void set_connection_handler(std::shared_ptr<ConnectionHandler> connHandler) = 0;
         virtual ConnectionHandler *connection_handler() const = 0;
+        virtual std::shared_ptr<ConnectionHandler> connection_handler_owner() const
+        {
+            return nullptr;
+        }
 
         virtual void set_ssl_module(std::shared_ptr<SSLModule> module) = 0;
     };

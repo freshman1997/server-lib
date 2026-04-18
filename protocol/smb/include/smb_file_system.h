@@ -5,6 +5,7 @@
 #include "protocol/smb2_structures.h"
 #include "buffer/byte_buffer.h"
 #include <cstdint>
+#include <ctime>
 #include <optional>
 #include <string>
 #include <vector>
@@ -116,8 +117,8 @@ namespace yuan::net::smb
         std::string root_path_;
         std::string resolve(const std::string &relative) const;
         static uint64_t filetime_now();
-        static uint64_t filetime_from_timespec(const struct timespec &ts);
-        uint32_t posix_to_file_attributes(mode_t mode) const;
+        static uint64_t filetime_from_unix_time(std::time_t sec, long nsec = 0);
+        uint32_t posix_to_file_attributes(unsigned int mode) const;
     };
 }
 #endif

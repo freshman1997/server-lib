@@ -125,11 +125,11 @@ namespace yuan::net::bit_torrent
         size_t routing_table_size() const;
 
         // ConnectionHandler interface (for datagram endpoint events)
-        void on_connected(net::Connection *conn) override;
-        void on_error(net::Connection *conn) override;
-        void on_read(net::Connection *conn) override;
-        void on_write(net::Connection *conn) override;
-        void on_close(net::Connection *conn) override;
+        void on_connected(const std::shared_ptr<net::Connection> &conn) override;
+        void on_error(const std::shared_ptr<net::Connection> &conn) override;
+        void on_read(const std::shared_ptr<net::Connection> &conn) override;
+        void on_write(const std::shared_ptr<net::Connection> &conn) override;
+        void on_close(const std::shared_ptr<net::Connection> &conn) override;
 
     private:
         // Routing table management
@@ -206,7 +206,7 @@ namespace yuan::net::bit_torrent
         bool running_ = false;
         int32_t port_ = 0;
 
-        net::DatagramAcceptor *acceptor_ = nullptr;
+        std::unique_ptr<net::DatagramAcceptor> acceptor_;
         net::NetworkRuntime *runtime_ = nullptr;
 
         DhtNodeId node_id_;

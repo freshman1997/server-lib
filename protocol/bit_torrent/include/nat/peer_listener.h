@@ -30,7 +30,7 @@ namespace yuan::net::bit_torrent
     class PeerListener : public net::ConnectionHandler
     {
     public:
-        using NewPeerCallback = std::function<void(PeerConnection *peer)>;
+        using NewPeerCallback = std::function<void(std::shared_ptr<PeerConnection> peer)>;
 
         PeerListener();
         ~PeerListener();
@@ -58,23 +58,22 @@ namespace yuan::net::bit_torrent
         }
 
         // ConnectionHandler interface
-        void on_connected(net::Connection *conn) override;
-        void on_error(net::Connection *conn) override;
-        void on_read(net::Connection *conn) override;
-        void on_write(net::Connection *conn) override;
-        void on_close(net::Connection *conn) override;
+        void on_connected(const std::shared_ptr<net::Connection> &conn) override;
+        void on_error(const std::shared_ptr<net::Connection> &conn) override;
+        void on_read(const std::shared_ptr<net::Connection> &conn) override;
+        void on_write(const std::shared_ptr<net::Connection> &conn) override;
+        void on_close(const std::shared_ptr<net::Connection> &conn) override;
 
     private:
         bool try_bind_and_listen(int32_t port);
 
-        void handle_inbound_handshake(net::Connection *conn, PeerConnection *peer);
+        void handle_inbound_handshake(net::Connection *conn, std::shared_ptr<PeerConnection> peer);
 
     private:
         bool listening_ = false;
         int32_t actual_port_ = 0;
 
-        net::StreamAcceptor *acceptor_ = nullptr;
-        net::Socket *listen_socket_ = nullptr;
+        std::unique_ptr<net::StreamAcceptor> acceptor_;
 
         net::NetworkRuntime *runtime_ = nullptr;
 
@@ -87,8 +86,8 @@ namespace yuan::net::bit_torrent
         // Pending inbound connections being handshaked
         struct PendingInbound
         {
-            net::Connection *conn;
-            PeerConnection *peer;
+            std::shared_ptr<net::Connection> conn;
+            std::shared_ptr<PeerConnection> peer;
             yuan::buffer::ByteBuffer inbound_buffer;
         };
         std::vector<PendingInbound> pending_;

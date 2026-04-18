@@ -520,15 +520,14 @@ namespace yuan::net::bit_torrent
         sock->set_reuse(true);
         sock->set_none_block(true);
 
-        acceptor_ = net::create_datagram_acceptor(sock, runtime_->runtime_view());
+        acceptor_.reset(net::create_datagram_acceptor(sock, runtime_->runtime_view()));
         if (!acceptor_->listen()) {
-            delete acceptor_;
-            acceptor_ = nullptr;
+            acceptor_.reset();
             delete sock;
             return false;
         }
 
-        runtime_->register_acceptor(acceptor_, this, acceptor_->endpoint_channel());
+        runtime_->register_acceptor(acceptor_.get(), make_non_owning_handler(this), acceptor_->endpoint_channel());
 
         port_ = bind_port;
         running_ = true;
@@ -543,20 +542,17 @@ namespace yuan::net::bit_torrent
 
         for (auto &pair : connections_) {
             pair.second->close();
-            delete pair.second;
         }
         connections_.clear();
 
         for (auto &pair : pending_syn_) {
             pair.second->close();
-            delete pair.second;
         }
         pending_syn_.clear();
 
         if (acceptor_) {
             acceptor_->close();
-            delete acceptor_;
-            acceptor_ = nullptr;
+            acceptor_.reset();
         }
     }
 
@@ -572,14 +568,15 @@ namespace yuan::net::bit_torrent
         // For outgoing connections:
         //   recv_conn_id: we use this to send to the peer
         //   send_conn_id: we expect this from the peer (= recv_conn_id + 1)
-        auto *conn = new UtpConnection(ip, port, info_hash, peer_id,
-                                       conn_id, conn_id + 1,
-                                       acceptor_, runtime_);
+        auto conn = std::make_unique<UtpConnection>(ip, port, info_hash, peer_id,
+                                                    conn_id, conn_id + 1,
+                                                    acceptor_.get(), runtime_);
 
-        connections_[conn_id] = conn;
-        conn->send_syn();
+        auto *conn_ptr = conn.get();
+        connections_[conn_id] = std::move(conn);
+        conn_ptr->send_syn();
 
-        return conn;
+        return conn_ptr;
     }
 
     void UtpManager::on_udp_data(const uint8_t * data, size_t len,
@@ -620,7 +617,6 @@ namespace yuan::net::bit_torrent
 
             // Clean up closed connections
             if (it->second->get_state() == UtpConnection::State::closed) {
-                delete it->second;
                 connections_.erase(it);
             }
             return;
@@ -636,8 +632,8 @@ namespace yuan::net::bit_torrent
             if (pit->second->get_state() == UtpConnection::State::connected ||
                 pit->second->get_state() == UtpConnection::State::syn_recv) {
                 uint32_t id = pit->second->get_send_conn_id();
-                auto conn_ptr = pit->second;
-                connections_[id] = conn_ptr;
+                auto conn_ptr = pit->second.get();
+                connections_[id] = std::move(pit->second);
                 pending_syn_.erase(pit);
 
                 if (new_peer_cb_)
@@ -664,27 +660,28 @@ namespace yuan::net::bit_torrent
         uint32_t our_recv_id = their_recv_id + 1;
 
         // Create a new UtpConnection to handle this
-        auto *conn = new UtpConnection(remote_ip, remote_port,
-                                       std::vector<uint8_t>(),
-                                       "",
-                                       our_recv_id,
-                                       their_recv_id,
-                                       acceptor_, runtime_);
+        auto conn = std::make_unique<UtpConnection>(remote_ip, remote_port,
+                                                     std::vector<uint8_t>(),
+                                                     "",
+                                                     our_recv_id,
+                                                     their_recv_id,
+                                                     acceptor_.get(), runtime_);
 
         conn->on_packet_received(
             reinterpret_cast<const uint8_t *>(&hdr), UTP_HEADER_SIZE + len);
 
         std::string key = remote_ip + ":" + std::to_string(remote_port);
-        pending_syn_[key] = conn;
+        auto *conn_ptr = conn.get();
+        pending_syn_[key] = std::move(conn);
 
-        if (conn->get_state() == UtpConnection::State::connected ||
-            conn->get_state() == UtpConnection::State::syn_recv) {
-            uint32_t id = conn->get_send_conn_id();
-            connections_[id] = conn;
+        if (conn_ptr->get_state() == UtpConnection::State::connected ||
+            conn_ptr->get_state() == UtpConnection::State::syn_recv) {
+            uint32_t id = conn_ptr->get_send_conn_id();
+            connections_[id] = std::move(pending_syn_[key]);
             pending_syn_.erase(key);
 
             if (new_peer_cb_)
-                new_peer_cb_(conn);
+                new_peer_cb_(conn_ptr);
         }
     }
 
@@ -698,26 +695,30 @@ namespace yuan::net::bit_torrent
         auto it = connections_.find(conn_id);
         if (it != connections_.end()) {
             it->second->close();
-            delete it->second;
             connections_.erase(it);
         }
     }
 
     // ConnectionHandler stubs (uTP uses UDP, not TCP connections)
-    void UtpManager::on_connected(net::Connection * conn)
+    void UtpManager::on_connected(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
-    void UtpManager::on_error(net::Connection * conn)
+    void UtpManager::on_error(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
-    void UtpManager::on_read(net::Connection * conn)
+    void UtpManager::on_read(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
-    void UtpManager::on_write(net::Connection * conn)
+    void UtpManager::on_write(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
-    void UtpManager::on_close(net::Connection * conn)
+    void UtpManager::on_close(const std::shared_ptr<net::Connection> &conn)
     {
+        (void)conn;
     }
 
 } // namespace yuan::net::bit_torrent

@@ -46,7 +46,7 @@ namespace yuan::app
         net::Poller *poller_ = nullptr;
         net::EventLoop *loop_ = nullptr;
         timer::TimerManager *timer_manager_ = nullptr;
-        net::Acceptor *acceptor_ = nullptr;
+        std::unique_ptr<net::Acceptor> acceptor_;
         net::StreamAcceptor *stream_acceptor_ = nullptr;
         net::DatagramAcceptor *datagram_acceptor_ = nullptr;
     };
@@ -84,7 +84,7 @@ namespace yuan::app
 
         if (data_->acceptor_) {
             data_->acceptor_->close();
-            data_->acceptor_ = nullptr;
+            data_->acceptor_.reset();
         }
         data_->stream_acceptor_ = nullptr;
         data_->datagram_acceptor_ = nullptr;
@@ -172,15 +172,17 @@ namespace yuan::app
         }
 
         if (data_->option_.protocol == TransportProtocol::udp) {
-            data_->datagram_acceptor_ = net::create_datagram_acceptor(socket, data_->timer_manager_);
-            data_->acceptor_ = data_->datagram_acceptor_;
+            data_->acceptor_.reset(net::create_datagram_acceptor(socket, data_->timer_manager_));
+            data_->datagram_acceptor_ = static_cast<net::DatagramAcceptor *>(data_->acceptor_.get());
         } else {
-            data_->stream_acceptor_ = net::create_stream_acceptor(socket);
-            data_->acceptor_ = data_->stream_acceptor_;
+            data_->acceptor_.reset(net::create_stream_acceptor(socket));
+            data_->stream_acceptor_ = static_cast<net::StreamAcceptor *>(data_->acceptor_.get());
         }
 
         if (!data_->acceptor_->listen()) {
-            data_->acceptor_ = nullptr;
+            data_->acceptor_.reset();
+            data_->stream_acceptor_ = nullptr;
+            data_->datagram_acceptor_ = nullptr;
             if (data_->loop_) {
                 delete data_->loop_;
                 data_->loop_ = nullptr;
@@ -196,7 +198,7 @@ namespace yuan::app
             return false;
         }
 
-        data_->acceptor_->set_connection_handler(this);
+        data_->acceptor_->set_connection_handler(net::make_non_owning_handler(this));
         data_->acceptor_->set_event_handler(data_->loop_);
 
         if (data_->stream_acceptor_) {
@@ -247,7 +249,7 @@ namespace yuan::app
 
         if (data_->acceptor_) {
             data_->acceptor_->close();
-            data_->acceptor_ = nullptr;
+            data_->acceptor_.reset();
         }
         data_->stream_acceptor_ = nullptr;
         data_->datagram_acceptor_ = nullptr;
@@ -276,22 +278,22 @@ namespace yuan::app
         return data_->timer_manager_;
     }
 
-    void App::on_connected(net::Connection *conn)
+    void App::on_connected(const std::shared_ptr<net::Connection> &conn)
     {
         if (!conn) {
             return;
         }
 
         conn->set_max_packet_size(data_->option_.max_packet_size);
-        on_connection_open(conn);
+        on_connection_open(conn.get());
     }
 
-    void App::on_error(net::Connection *conn)
+    void App::on_error(const std::shared_ptr<net::Connection> &conn)
     {
-        on_connection_error(conn);
+        on_connection_error(conn.get());
     }
 
-    void App::on_read(net::Connection *conn)
+    void App::on_read(const std::shared_ptr<net::Connection> &conn)
     {
         if (!conn) {
             return;
@@ -302,17 +304,17 @@ namespace yuan::app
             return;
         }
 
-        on_packet(conn, packet);
+        on_packet(conn.get(), packet);
     }
 
-    void App::on_write(net::Connection *conn)
+    void App::on_write(const std::shared_ptr<net::Connection> &conn)
     {
-        on_connection_write(conn);
+        on_connection_write(conn.get());
     }
 
-    void App::on_close(net::Connection *conn)
+    void App::on_close(const std::shared_ptr<net::Connection> &conn)
     {
-        on_connection_close(conn);
+        on_connection_close(conn.get());
     }
 
     void App::set_option(const AppOption &option)

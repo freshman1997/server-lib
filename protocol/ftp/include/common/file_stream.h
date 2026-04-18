@@ -3,6 +3,7 @@
 #include "net/handler/connection_handler.h"
 #include "net/socket/inet_address.h"
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -20,14 +21,19 @@ namespace yuan::net::ftp
         virtual ~FtpFileStream();
 
     public:
+        virtual void on_connected(const std::shared_ptr<Connection> &conn);
         virtual void on_connected(Connection *conn);
 
+        virtual void on_error(const std::shared_ptr<Connection> &conn);
         virtual void on_error(Connection *conn);
 
+        virtual void on_read(const std::shared_ptr<Connection> &conn);
         virtual void on_read(Connection *conn);
 
+        virtual void on_write(const std::shared_ptr<Connection> &conn);
         virtual void on_write(Connection *conn);
 
+        virtual void on_close(const std::shared_ptr<Connection> &conn);
         virtual void on_close(Connection *conn);
 
     public:
@@ -44,9 +50,9 @@ namespace yuan::net::ftp
 
     protected:
         FtpSession *session_;
-        std::unordered_map<std::string, FtpFileStreamSession *> last_sessions_;
+        std::unordered_map<std::string, std::shared_ptr<FtpFileStreamSession> > last_sessions_;
         std::unordered_map<std::string, FtpFileInfo *> pending_files_;
-        std::unordered_map<std::string, FtpFileStreamSession *> file_stream_sessions_;
+        std::unordered_map<std::string, std::shared_ptr<FtpFileStreamSession> > file_stream_sessions_;
     };
 }
 

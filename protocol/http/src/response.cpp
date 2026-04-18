@@ -10,7 +10,7 @@ namespace yuan::net::http
 {
     HttpResponse::HttpResponse(HttpSessionContext *context) : HttpPacket(context)
     {
-        parser_ = new HttpResponseParser(this);
+        parser_ = std::make_unique<HttpResponseParser>(this);
         reset();
     }
 
@@ -174,6 +174,7 @@ namespace yuan::net::http
         // SSE事件需要立即发�?        pack_and_send(context_->get_connection());
     }
 }
+
 
 
 

@@ -23,11 +23,16 @@ namespace yuan::net::ftp
         }
     }
 
+    void FtpFileStream::on_connected(const std::shared_ptr<Connection> &conn)
+    {
+        on_connected(conn.get());
+    }
+
     void FtpFileStream::on_connected(Connection * conn)
     {
         LOG_DEBUG("data stream connected ip: {}", conn->get_remote_address().get_ip());
         assert(session_);
-        auto *stream_session = new FtpFileStreamSession(session_);
+        auto stream_session = std::make_shared<FtpFileStreamSession>(session_);
         const auto ip = conn->get_remote_address().get_ip();
         const auto addr_key = conn->get_remote_address().to_address_key();
 
@@ -35,7 +40,7 @@ namespace yuan::net::ftp
             LOG_WARN("file stream last_sessions_ collision for ip={}, overwriting", ip);
         }
         last_sessions_[ip] = stream_session;
-        conn->set_connection_handler(stream_session);
+        conn->set_connection_handler(make_aliasing_handler(stream_session, stream_session.get()));
         file_stream_sessions_[addr_key] = stream_session;
         stream_session->on_connected(conn);
 
@@ -51,9 +56,19 @@ namespace yuan::net::ftp
         }
     }
 
+    void FtpFileStream::on_error(const std::shared_ptr<Connection> &conn)
+    {
+        on_error(conn.get());
+    }
+
     void FtpFileStream::on_error(Connection * conn)
     {
         LOG_WARN("file stream on_error ip={}", conn ? conn->get_remote_address().get_ip() : "null");
+    }
+
+    void FtpFileStream::on_read(const std::shared_ptr<Connection> &conn)
+    {
+        on_read(conn.get());
     }
 
     void FtpFileStream::on_read(Connection * conn)
@@ -61,9 +76,19 @@ namespace yuan::net::ftp
         LOG_DEBUG("file stream on_read ip={}", conn ? conn->get_remote_address().get_ip() : "null");
     }
 
+    void FtpFileStream::on_write(const std::shared_ptr<Connection> &conn)
+    {
+        on_write(conn.get());
+    }
+
     void FtpFileStream::on_write(Connection * conn)
     {
         LOG_DEBUG("file stream on_write ip={}", conn ? conn->get_remote_address().get_ip() : "null");
+    }
+
+    void FtpFileStream::on_close(const std::shared_ptr<Connection> &conn)
+    {
+        on_close(conn.get());
     }
 
     void FtpFileStream::on_close(Connection * conn)
@@ -75,31 +100,24 @@ namespace yuan::net::ftp
     {
         auto it = file_stream_sessions_.find(addr.to_address_key());
         if (it != file_stream_sessions_.end()) {
-            FtpFileStreamSession *sess = it->second;
             // erase mapping first to avoid reentrancy issues
             file_stream_sessions_.erase(it);
             pending_files_.erase(addr.get_ip());
             last_sessions_.erase(addr.get_ip());
-            // delete the session object (its destructor won't notify session again)
-            delete sess;
-        }
-
-        if (file_stream_sessions_.empty()) {
-            delete this;
         }
     }
 
     void FtpFileStream::remove_session(FtpFileStreamSession * fs)
     {
         for (auto it = file_stream_sessions_.begin(); it != file_stream_sessions_.end(); ++it) {
-            if (it->second == fs) {
+            if (it->second.get() == fs) {
                 file_stream_sessions_.erase(it);
                 break;
             }
         }
 
         for (auto it = last_sessions_.begin(); it != last_sessions_.end(); ++it) {
-            if (it->second == fs) {
+            if (it->second.get() == fs) {
                 last_sessions_.erase(it);
                 break;
             }
@@ -114,11 +132,6 @@ namespace yuan::net::ftp
             }
         }
 
-        delete fs;
-
-        if (file_stream_sessions_.empty()) {
-            delete this;
-        }
     }
 
     bool FtpFileStream::set_work_file(FtpFileInfo * file, const std::string & ip)

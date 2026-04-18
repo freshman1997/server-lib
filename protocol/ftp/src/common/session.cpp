@@ -40,7 +40,7 @@ namespace yuan::net::ftp
     {
         if (file_stream_) {
             file_stream_->quit(conn_ ? conn_->get_remote_address() : InetAddress{});
-            file_stream_ = nullptr;
+            file_stream_.reset();
         }
         Connection *conn = conn_;
         conn_ = nullptr;
@@ -51,7 +51,7 @@ namespace yuan::net::ftp
             app->on_session_closed(instance_);
         }
         if (conn) {
-            conn->set_connection_handler(nullptr);
+            conn->set_connection_handler(std::shared_ptr<ConnectionHandler>{});
             conn->close();
         }
     }
@@ -59,10 +59,28 @@ namespace yuan::net::ftp
     FtpSession::FtpSession(Connection * conn, FtpApp * app, WorkMode mode, bool keepUtilSent, bool async_mode)
         : work_mode_(mode), keep_util_sent_(keepUtilSent), close_(false), async_mode_(async_mode)
     {
+        conn_owner_.reset(conn, [](Connection *) {});
         context_.conn_ = conn;
         context_.app_ = app;
         if (!async_mode_) {
-            context_.conn_->set_connection_handler(this);
+            context_.conn_->set_connection_handler(make_non_owning_handler(this));
+        }
+        context_.instance_ = this;
+        if (work_mode_ == WorkMode::server) {
+            context_.root_dir_ = normalize_dir(ServerContext::get_instance()->get_server_work_dir());
+        } else {
+            context_.root_dir_ = normalize_dir("");
+        }
+        context_.cwd_ = "/";
+    }
+
+    FtpSession::FtpSession(const std::shared_ptr<Connection> &conn, FtpApp *app, WorkMode mode, bool keepUtilSent, bool async_mode)
+        : work_mode_(mode), keep_util_sent_(keepUtilSent), close_(false), async_mode_(async_mode), conn_owner_(conn)
+    {
+        context_.conn_ = conn_owner_.get();
+        context_.app_ = app;
+        if (!async_mode_) {
+            context_.conn_->set_connection_handler(make_non_owning_handler(this));
         }
         context_.instance_ = this;
         if (work_mode_ == WorkMode::server) {
@@ -78,7 +96,7 @@ namespace yuan::net::ftp
         if (async_mode_) {
             context_.conn_ = nullptr;
             context_.app_ = nullptr;
-            context_.file_stream_ = nullptr;
+            context_.file_stream_.reset();
             context_.passive_addr_.reset();
         } else {
             context_.close();
@@ -86,17 +104,44 @@ namespace yuan::net::ftp
         LOG_DEBUG("ftp session closed");
     }
 
+    void FtpSession::on_connected(const std::shared_ptr<Connection> &conn)
+    {
+        on_connected(conn.get());
+    }
+
     void FtpSession::on_connected(Connection * conn)
     {
         (void)conn;
     }
+
+    void FtpSession::on_error(const std::shared_ptr<Connection> &conn)
+    {
+        on_error(conn.get());
+    }
+
     void FtpSession::on_error(Connection * conn)
     {
         (void)conn;
     }
+
+    void FtpSession::on_read(const std::shared_ptr<Connection> &conn)
+    {
+        on_read(conn.get());
+    }
+
+    void FtpSession::on_write(const std::shared_ptr<Connection> &conn)
+    {
+        on_write(conn.get());
+    }
+
     void FtpSession::on_write(Connection * conn)
     {
         (void)conn;
+    }
+
+    void FtpSession::on_close(const std::shared_ptr<Connection> &conn)
+    {
+        on_close(conn.get());
     }
 
     void FtpSession::on_close(Connection * conn)
@@ -111,14 +156,14 @@ namespace yuan::net::ftp
         close_ = true;
         auto *app = context_.app_;
         auto *instance = this;
-        auto *file_stream = context_.file_stream_;
-        auto *pending_ffs = pending_file_stream_cleanup_;
+        auto file_stream = context_.file_stream_;
+        auto pending_ffs = pending_file_stream_cleanup_;
         InetAddress remote_addr = context_.conn_ ? context_.conn_->get_remote_address() : InetAddress{};
         context_.app_ = nullptr;
         context_.conn_ = nullptr;
         context_.passive_addr_.reset();
-        context_.file_stream_ = nullptr;
-        pending_file_stream_cleanup_ = nullptr;
+        context_.file_stream_.reset();
+        pending_file_stream_cleanup_.reset();
         if (app) {
             app->get_runtime()->dispatch([app, instance, file_stream, pending_ffs, remote_addr]() {
                 if (file_stream) {
@@ -187,7 +232,7 @@ namespace yuan::net::ftp
             context_.file_manager_.reset();
         }
         pending_file_stream_cleanup_ = context_.file_stream_;
-        context_.file_stream_ = nullptr;
+        context_.file_stream_.reset();
         clear_passive_addr();
     }
 
@@ -196,8 +241,8 @@ namespace yuan::net::ftp
         if (async_mode_)
             return;
         if (pending_file_stream_cleanup_ && fs) {
-            auto *ffs = pending_file_stream_cleanup_;
-            pending_file_stream_cleanup_ = nullptr;
+            auto ffs = pending_file_stream_cleanup_;
+            pending_file_stream_cleanup_.reset();
             auto *app = context_.app_;
             if (app) {
                 app->get_runtime()->dispatch([ffs, fs]() {
@@ -227,22 +272,22 @@ namespace yuan::net::ftp
             pending_file_info_ = nullptr;
             context_.conn_ = nullptr;
             context_.app_ = nullptr;
-            context_.file_stream_ = nullptr;
+            context_.file_stream_.reset();
             context_.passive_addr_.reset();
             return;
         }
 
         Connection *conn = context_.conn_;
         FtpApp *app = context_.app_;
-        FtpFileStream *ffs = context_.file_stream_;
-        FtpFileStream *pending_ffs = pending_file_stream_cleanup_;
+        auto ffs = context_.file_stream_;
+        auto pending_ffs = pending_file_stream_cleanup_;
         InetAddress remote_addr = conn ? conn->get_remote_address() : InetAddress{};
 
         context_.conn_ = nullptr;
         context_.app_ = nullptr;
-        context_.file_stream_ = nullptr;
+        context_.file_stream_.reset();
         context_.passive_addr_.reset();
-        pending_file_stream_cleanup_ = nullptr;
+        pending_file_stream_cleanup_.reset();
 
         if (ffs) {
             ffs->quit(remote_addr);
@@ -254,11 +299,11 @@ namespace yuan::net::ftp
         if (conn && app) {
             app->get_runtime()->dispatch([conn, app, this]() {
                 app->on_session_closed(this);
-                conn->set_connection_handler(nullptr);
+                conn->set_connection_handler(std::shared_ptr<ConnectionHandler>{});
                 conn->close();
             });
         } else if (conn) {
-            conn->set_connection_handler(nullptr);
+            conn->set_connection_handler(std::shared_ptr<ConnectionHandler>{});
             conn->close();
         } else if (app) {
             app->on_session_closed(this);
@@ -303,10 +348,9 @@ namespace yuan::net::ftp
         if (context_.file_stream_) {
             return true;
         }
-        context_.file_stream_ = new ServerFtpFileStream(this);
+        context_.file_stream_ = std::make_shared<ServerFtpFileStream>(this);
         if (!context_.file_stream_->start(addr)) {
-            delete context_.file_stream_;
-            context_.file_stream_ = nullptr;
+            context_.file_stream_.reset();
             return false;
         }
         return true;
@@ -362,8 +406,8 @@ namespace yuan::net::ftp
 
     void FtpSession::on_file_stream_close(FtpFileStream * ffs)
     {
-        if (context_.file_stream_ == ffs) {
-            context_.file_stream_ = nullptr;
+        if (context_.file_stream_.get() == ffs) {
+            context_.file_stream_.reset();
         }
     }
 
@@ -371,7 +415,7 @@ namespace yuan::net::ftp
     {
         context_.conn_ = nullptr;
         context_.app_ = nullptr;
-        context_.file_stream_ = nullptr;
+        context_.file_stream_.reset();
         context_.passive_addr_.reset();
         data_listener_.reset();
         pending_file_info_ = nullptr;

@@ -1,6 +1,7 @@
-#include <cassert>
+﻿#include <cassert>
 #include <cstdlib>
 #include <ctime>
+#include <memory>
 #include "logger.h"
 #include <algorithm>
 
@@ -33,7 +34,7 @@ namespace yuan::net::http
     }
 
     // ============================================================
-    // PooledConnection 辅助方法
+    // PooledConnection 杈呭姪鏂规硶
     // ============================================================
 
     bool PooledConnection::is_expired(uint64_t max_idle_ms) const
@@ -51,7 +52,7 @@ namespace yuan::net::http
     }
 
     // ============================================================
-    // TargetConnectionPool 实现
+    // TargetConnectionPool 瀹炵幇
     // ============================================================
 
     TargetConnectionPool::TargetConnectionPool(const ProxyTarget & target, size_t max_size,
@@ -69,7 +70,7 @@ namespace yuan::net::http
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        // 1. 尝试从池中找一个可用的空闲连接（轮询策略）
+        // 1. 灏濊瘯浠庢睜涓壘涓€涓彲鐢ㄧ殑绌洪棽杩炴帴锛堣疆璇㈢瓥鐣ワ級
         size_t start = rr_index_.load(std::memory_order_relaxed);
         size_t count = connections_.size();
 
@@ -81,19 +82,19 @@ namespace yuan::net::http
             if (!pc.in_use.load(std::memory_order_acquire) &&
                 pc.in_use.compare_exchange_strong(expected, true,
                                                   std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                // 成功获取
+                // 鎴愬姛鑾峰彇
                 pc.mark_used();
                 rr_index_.store((idx + 1) % count, std::memory_order_relaxed);
                 return pc.conn;
             }
         }
 
-        // 2. 池中没有可用连接，如果未达上限则新建一个连接
+        // 2. 姹犱腑娌℃湁鍙敤杩炴帴锛屽鏋滄湭杈句笂闄愬垯鏂板缓涓€涓繛鎺?
         if (connections_.size() < max_size_) {
             return create_new_connection(proxy, server);
         }
 
-        // 3. 池已满，返回nullptr让调用者决定处理方式
+        // 3. 姹犲凡婊★紝杩斿洖nullptr璁╄皟鐢ㄨ€呭喅瀹氬鐞嗘柟寮?
         return nullptr;
     }
 
@@ -110,8 +111,8 @@ namespace yuan::net::http
             }
         }
 
-        // 未找到，说明可能已被移除，直接关闭
-        // 这种情况不应该发生，但做防御性处理
+        // 鏈壘鍒帮紝璇存槑鍙兘宸茶绉婚櫎锛岀洿鎺ュ叧闂?
+        // 杩欑鎯呭喌涓嶅簲璇ュ彂鐢燂紝浣嗗仛闃插尽鎬у鐞?
     }
     void TargetConnectionPool::remove(Connection * conn)
     {
@@ -151,7 +152,7 @@ namespace yuan::net::http
                     ++it;
                 }
             }
-            // 重置轮询索引
+            // 閲嶇疆杞绱㈠紩
             if (!connections_.empty()) {
                 rr_index_.store(0, std::memory_order_relaxed);
             }
@@ -226,20 +227,20 @@ namespace yuan::net::http
             return nullptr;
         }
 
-        Connection *conn = create_stream_connection(sock);
-        runtime->register_connection(conn, proxy);
+        auto conn = create_stream_connection(sock);
+        runtime->register_connection(conn, make_non_owning_handler(proxy));
 
         PooledConnection pc;
-        pc.conn = conn;
+        pc.conn = conn.get();
         pc.created_at_ms = base::time::steady_now_ms();
-        pc.mark_used(); // 新创建的连接立即标记为使用中
+        pc.mark_used(); // 鏂板垱寤虹殑杩炴帴绔嬪嵆鏍囪涓轰娇鐢ㄤ腑
 
         connections_.push_back(std::move(pc));
-        return conn;
+        return conn.get();
     }
 
     // ============================================================
-    // HttpProxy 核心实现
+    // HttpProxy 鏍稿績瀹炵幇
     // ============================================================
 
     HttpProxy::HttpProxy()
@@ -317,16 +318,21 @@ namespace yuan::net::http
     }
 
     // ------------------------------------------------------------
+    // ------------------------------------------------------------
     // ConnectionHandler 接口实现
     // ------------------------------------------------------------
 
-    void HttpProxy::on_connected(Connection * conn)
+    void HttpProxy::on_connected(const std::shared_ptr<Connection> &conn)
     {
-        // 检查是否有待完成的远程连接任务
+        if (!conn) {
+            return;
+        }
+
+        auto *conn_ptr = conn.get();
         RemoteConnectTask::Ptr task;
         {
             std::lock_guard<std::mutex> lock(mapping_mutex_);
-            auto it = pending_server_tasks_.find(conn);
+            auto it = pending_server_tasks_.find(conn_ptr);
             if (it != pending_server_tasks_.end()) {
                 task = it->second;
                 pending_server_tasks_.erase(it);
@@ -334,83 +340,82 @@ namespace yuan::net::http
         }
 
         if (task) {
-            on_connection_established(task, conn);
+            on_connection_established(task, conn_ptr);
         }
     }
 
-    void HttpProxy::on_error(Connection * conn)
+    void HttpProxy::on_error(const std::shared_ptr<Connection> &conn)
     {
-        // 连接出错时清理相关资源   // 可能是远程连接断开、网络错误等
-        unmap_and_close_peer(conn, false); // 假设是服务端连接出错
+        if (!conn) {
+            return;
+        }
+
+        unmap_and_close_peer(conn.get(), false);
     }
 
-    void HttpProxy::on_read(Connection * conn)
+    void HttpProxy::on_read(const std::shared_ptr<Connection> &conn)
     {
-        // 确定这是服务端连接还是客户端连接，然后转发数据
+        if (!conn) {
+            return;
+        }
+
+        auto *conn_ptr = conn.get();
         ServerMapping mapping;
         bool is_server = false;
 
         {
             std::lock_guard<std::mutex> lock(mapping_mutex_);
 
-            auto server_it = sc_mapping_.find(conn);
+            auto server_it = sc_mapping_.find(conn_ptr);
             if (server_it != sc_mapping_.end()) {
                 mapping = server_it->second;
                 is_server = true;
             } else {
-                // 这是客户端连接，查找对应的服务端连接
-                auto client_it = cs_mapping_.find(conn);
+                auto client_it = cs_mapping_.find(conn_ptr);
                 if (client_it != cs_mapping_.end() && client_it->second) {
-                    forward_data(conn, client_it->second);
+                    forward_data(conn_ptr, client_it->second);
                     client_it->second->flush();
                     return;
                 } else {
-                    // 无映射关系，可能是已关闭的客户端连接
                     return;
                 }
             }
         }
 
-        // 服务端有数据 -> 转发给客户端
         if (is_server && mapping.client_conn) {
-            forward_data(conn, mapping.client_conn);
+            forward_data(conn_ptr, mapping.client_conn);
             mapping.client_conn->flush();
         }
     }
 
-    void HttpProxy::on_write(Connection * conn)
+    void HttpProxy::on_write(const std::shared_ptr<Connection> &conn)
     {
-        // 通常不需要特殊处理，数据转发由on_read驱动
+        (void)conn;
     }
 
-    void HttpProxy::on_close(Connection * conn)
+    void HttpProxy::on_close(const std::shared_ptr<Connection> &conn)
     {
-        // 远程连接关闭了，需要：
-        // 1. 取消关联的超时定时器
-        // 2. 清理连接映射
-        // 3. 从连接池中移除
-        // 4. 通知对端关闭
+        if (!conn) {
+            return;
+        }
 
-        // 取消定时器
-        timer::Timer *timer_to_cancel = take_timer(conn);
+        auto *conn_ptr = conn.get();
+        timer::Timer *timer_to_cancel = take_timer(conn_ptr);
         if (timer_to_cancel) {
             timer_to_cancel->cancel();
         }
-        // 判断是服务端还是客户端连接并分别处理
+
         bool is_server = false;
         {
             std::lock_guard<std::mutex> lock(mapping_mutex_);
-            is_server = (sc_mapping_.find(conn) != sc_mapping_.end());
+            is_server = (sc_mapping_.find(conn_ptr) != sc_mapping_.end());
         }
 
-        unmap_and_close_peer(conn, is_server);
-
-        // 从连接池中移除
-        remove_connection_from_pools(conn);
+        unmap_and_close_peer(conn_ptr, is_server);
+        remove_connection_from_pools(conn_ptr);
     }
 
-    // ------------------------------------------------------------
-    // 配置加载
+    // 閰嶇疆鍔犺浇
     // ------------------------------------------------------------
 
     bool HttpProxy::load_proxy_config_and_init()
@@ -519,7 +524,7 @@ namespace yuan::net::http
     }
 
     // ------------------------------------------------------------
-    // URL 匹配和路由查询
+    // URL 鍖归厤鍜岃矾鐢辨煡璇?
     // ------------------------------------------------------------
 
     std::string HttpProxy::find_proxy_route(const std::string & url) const
@@ -536,7 +541,7 @@ namespace yuan::net::http
     }
 
     // ------------------------------------------------------------
-    // 核心请求处理入口
+    // 鏍稿績璇锋眰澶勭悊鍏ュ彛
     // ------------------------------------------------------------
 
     void HttpProxy::handle_websocket_upgrade_by_url(HttpRequest * req, HttpResponse * resp, const std::string & route_key)
@@ -663,14 +668,14 @@ namespace yuan::net::http
     }
 
         // ------------------------------------------------------------
-        // 连接建立完成回调
+        // 杩炴帴寤虹珛瀹屾垚鍥炶皟
         // ------------------------------------------------------------
         void HttpProxy::on_connection_established(RemoteConnectTask::Ptr task, Connection * remoteConn)
         {
             if (!task || !remoteConn)
                 return;
 
-            // 取消超时定时�?
+            // 鍙栨秷瓒呮椂瀹氭椂锟?
             timer::Timer *timer_to_cancel = take_timer(task->client_conn_);
             timer::Timer *remote_timer = take_timer(remoteConn);
             if (timer_to_cancel && remote_timer && timer_to_cancel != remote_timer) {
@@ -682,10 +687,10 @@ namespace yuan::net::http
                 timer_to_cancel->cancel();
             }
 
-            // 建立连接映射
+            // 寤虹珛杩炴帴鏄犲皠
             map_connections(task->client_conn_, remoteConn, task->route_key_);
 
-            // 清理pending状态
+            // 娓呯悊pending鐘舵€?
             {
                 std::lock_guard<std::mutex> lock(mapping_mutex_);
                 pending_tasks_.erase(task->client_conn_);
@@ -693,7 +698,7 @@ namespace yuan::net::http
                 pending_server_tasks_.erase(remoteConn);
             }
 
-            // 发送之前缓存的请求
+            // 鍙戦€佷箣鍓嶇紦瀛樼殑璇锋眰
             if (task->req_ && remoteConn) {
                 task->req_->pack_and_send(remoteConn);
                 remoteConn->flush();
@@ -701,7 +706,7 @@ namespace yuan::net::http
         }
 
         // ------------------------------------------------------------
-        // 连接超时回调
+        // 杩炴帴瓒呮椂鍥炶皟
         // ------------------------------------------------------------
 
         void HttpProxy::on_connection_timeout(RemoteConnectTask::Ptr task)
@@ -714,13 +719,13 @@ namespace yuan::net::http
             Connection *clientConn = task->client_conn_;
             Connection *remoteConn = nullptr;
 
-            // 查找对应的服务端连接（通过pending_server_tasks_反向查找）
+            // 鏌ユ壘瀵瑰簲鐨勬湇鍔＄杩炴帴锛堥€氳繃pending_server_tasks_鍙嶅悜鏌ユ壘锛?
             {
                 std::lock_guard<std::mutex> lock(mapping_mutex_);
-                // 从pending_tasks_中移�?
+                // 浠巔ending_tasks_涓Щ锟?
                 pending_tasks_.erase(clientConn);
 
-                // 找到远程连接
+                // 鎵惧埌杩滅▼杩炴帴
                 for (auto it = pending_server_tasks_.begin(); it != pending_server_tasks_.end(); ++it) {
                     if (it->second.get() == task.get()) {
                         remoteConn = it->first;
@@ -730,15 +735,15 @@ namespace yuan::net::http
                 }
             }
 
-            // 清理定时器
+            // 娓呯悊瀹氭椂鍣?
             (void)take_timer(clientConn);
             if (remoteConn) {
                 (void)take_timer(remoteConn);
             }
 
-            // 关闭远程连接
+            // 鍏抽棴杩滅▼杩炴帴
             if (remoteConn) {
-                // 从连接池中移除（如果有的话）
+                // 浠庤繛鎺ユ睜涓Щ闄わ紙濡傛灉鏈夌殑璇濓級
                 remove_connection_from_pools(remoteConn);
                 remoteConn->close();
             }
@@ -749,29 +754,34 @@ namespace yuan::net::http
 
         void HttpProxy::check_response_timer(Connection * conn)
         {
-            // 检查连接是否还有待处理的响应定时器
-            // 主要用于检测长时间无响应的代理请求
+            // 妫€鏌ヨ繛鎺ユ槸鍚﹁繕鏈夊緟澶勭悊鐨勫搷搴斿畾鏃跺櫒
+            // 涓昏鐢ㄤ簬妫€娴嬮暱鏃堕棿鏃犲搷搴旂殑浠ｇ悊璇锋眰
             std::lock_guard<std::mutex> lock(timer_mutex_);
             auto it = conn_timers_.find(conn);
             if (it != conn_timers_.end() && it->second) {
-                // 定时器仍然存在，说明响应还未到达
-                // 可以在这里添加额外检查逻辑（如更新超时时间等）
+                // 瀹氭椂鍣ㄤ粛鐒跺瓨鍦紝璇存槑鍝嶅簲杩樻湭鍒拌揪
+                // 鍙互鍦ㄨ繖閲屾坊鍔犻澶栨鏌ラ€昏緫锛堝鏇存柊瓒呮椂鏃堕棿绛夛級
             }
         }
 
         // ------------------------------------------------------------
-        // 客户端连接关闭
+        // 瀹㈡埛绔繛鎺ュ叧闂?
         // ------------------------------------------------------------
 
-        void HttpProxy::on_client_close(Connection * conn)
+        void HttpProxy::on_client_close(const std::shared_ptr<Connection> &conn)
         {
-            unmap_and_close_peer(conn, true); // 客户端关闭
+            if (!conn) {
+                return;
+            }
+
+            auto *conn_ptr = conn.get();
+            unmap_and_close_peer(conn_ptr, true);
             std::lock_guard<std::mutex> lock(mapping_mutex_);
-            pending_requests_.erase(conn);
+            pending_requests_.erase(conn_ptr);
         }
 
         // ------------------------------------------------------------
-        // 负载均衡：选择目标后端
+        // 璐熻浇鍧囪　锛氶€夋嫨鐩爣鍚庣
         // ------------------------------------------------------------
 
         ProxyTarget HttpProxy::select_target(const ProxyRoute & route)
@@ -821,7 +831,7 @@ namespace yuan::net::http
 
         ProxyTarget HttpProxy::select_least_connections(const ProxyRoute & route)
         {
-            // 遍历各目标对应的连接池，选活跃连接数最少的
+            // 閬嶅巻鍚勭洰鏍囧搴旂殑杩炴帴姹狅紝閫夋椿璺冭繛鎺ユ暟鏈€灏戠殑
             ProxyTarget best = route.targets[0];
             size_t min_active = SIZE_MAX;
 
@@ -837,7 +847,7 @@ namespace yuan::net::http
                         best = target;
                     }
                 } else {
-                    // 没有池子说明还没有连接过，优先选择
+                    // 娌℃湁姹犲瓙璇存槑杩樻病鏈夎繛鎺ヨ繃锛屼紭鍏堥€夋嫨
                     best = target;
                     min_active = 0;
                     break;
@@ -848,16 +858,16 @@ namespace yuan::net::http
         }
 
         // ------------------------------------------------------------
-        // 请求构建和头改写
+        // 璇锋眰鏋勫缓鍜屽ご鏀瑰啓
         // ------------------------------------------------------------
 
         void HttpProxy::build_forward_request(HttpRequest * orig_req, const ProxyRoute & route,
                                               const ProxyTarget & target, bool is_websocket)
         {
-            // 1. 设置正确的Host头
+            // 1. 璁剧疆姝ｇ‘鐨凥ost澶?
             orig_req->add_header("Host", target.host + ":" + std::to_string(target.port));
 
-            // 2. 添加X-Forwarded-For（追加客户端IP）
+            // 2. 娣诲姞X-Forwarded-For锛堣拷鍔犲鎴风IP锛?
             auto *xff = orig_req->get_header("x-forwarded-for");
             if (xff && orig_req->get_context() && orig_req->get_context()->get_connection()) {
                 const auto &addr = orig_req->get_context()->get_connection()->get_remote_address();
@@ -870,17 +880,17 @@ namespace yuan::net::http
                 orig_req->add_header("X-Forwarded-For", addr.to_address_key());
             }
 
-            // 3. 添加X-Real-IP
+            // 3. 娣诲姞X-Real-IP
             if (orig_req->get_context() && orig_req->get_context()->get_connection()) {
                 const auto &addr = orig_req->get_context()->get_connection()->get_remote_address();
                 orig_req->add_header("X-Real-IP", addr.to_address_key());
             }
 
-            // 4. 添加X-Forwarded-Proto
+            // 4. 娣诲姞X-Forwarded-Proto
             orig_req->add_header("X-Forwarded-Proto", "http");
 
-            // 5. 移除hop-by-hop头（逐跳头不应被转发）
-            // WebSocket升级请求必须保留 Connection 和 Upgrade 头
+            // 5. 绉婚櫎hop-by-hop澶达紙閫愯烦澶翠笉搴旇杞彂锛?
+            // WebSocket鍗囩骇璇锋眰蹇呴』淇濈暀 Connection 鍜?Upgrade 澶?
             if (!is_websocket) {
                 orig_req->remove_header("connection");
                 orig_req->remove_header("upgrade");
@@ -895,31 +905,29 @@ namespace yuan::net::http
         }
 
         // ------------------------------------------------------------
-        // 连接管理内部方法
+        // 杩炴帴绠＄悊鍐呴儴鏂规硶
         // ------------------------------------------------------------
 
         Connection *HttpProxy::create_remote_connection(const ProxyTarget & target, int timeout_ms)
         {
-            auto sock = new net::Socket(target.host.c_str(), target.port);
+            auto sock = std::make_unique<net::Socket>(target.host.c_str(), target.port);
             if (!sock->valid()) {
-                delete sock;
                 LOG_ERROR_TAG("create_remote_connection", "[Proxy] create socket failed: {}:{}", target.host, target.port);
                 return nullptr;
             }
 
             if (!sock->connect()) {
-                delete sock;
                 LOG_ERROR_TAG("create_remote_connection", "[Proxy] connect failed: {}:{}", target.host, target.port);
                 return nullptr;
             }
 
-            auto conn = create_stream_connection(sock);
+            auto conn = create_stream_connection(sock.release());
 
             if (server_ && server_->runtime()) {
-                server_->runtime()->register_connection(conn, this);
+                server_->runtime()->register_connection(conn, make_non_owning_handler(this));
             }
 
-            return conn;
+            return conn.get();
         }
 
         void HttpProxy::map_connections(Connection * clientConn, Connection * serverConn, const std::string & routeKey)
@@ -940,7 +948,7 @@ namespace yuan::net::http
                 std::lock_guard<std::mutex> lock(mapping_mutex_);
 
                 if (is_client) {
-                    // 客户端关闭 -> 关闭对应的服务端连接
+                    // 瀹㈡埛绔叧闂?-> 鍏抽棴瀵瑰簲鐨勬湇鍔＄杩炴帴
                     auto it = cs_mapping_.find(conn);
                     if (it != cs_mapping_.end()) {
                         Connection *serverConn = it->second;
@@ -955,7 +963,7 @@ namespace yuan::net::http
                         }
                     }
                 } else {
-                    // 服务端关闭 -> 关闭对应的客户端连接
+                    // 鏈嶅姟绔叧闂?-> 鍏抽棴瀵瑰簲鐨勫鎴风杩炴帴
                     auto it = sc_mapping_.find(conn);
                     if (it != sc_mapping_.end()) {
                         Connection *clientConn = it->second.client_conn;
@@ -989,7 +997,7 @@ namespace yuan::net::http
         }
 
         // ------------------------------------------------------------
-        // WebSocket升级支持
+        // WebSocket鍗囩骇鏀寔
         // ------------------------------------------------------------
 
         bool HttpProxy::handle_websocket_upgrade(HttpRequest * req, HttpResponse * resp,
@@ -1069,7 +1077,7 @@ namespace yuan::net::http
         }
 
         // ------------------------------------------------------------
-        // 连接池管理公共接�?// ------------------------------------------------------------
+        // 杩炴帴姹犵鐞嗗叕鍏辨帴锟?// ------------------------------------------------------------
 
         void HttpProxy::cleanup_idle_connections()
         {
@@ -1115,10 +1123,10 @@ namespace yuan::net::http
 
             {
                 std::lock_guard<std::mutex> lock(pools_mutex_);
-                // 双重检查，避免重复创建池子
+                // 鍙岄噸妫€鏌ワ紝閬垮厤閲嶅鍒涘缓姹犲瓙
                 auto it = pools_.find(pool_id);
                 if (it != pools_.end() && it->second) {
-                    return it->second; // 另一个线程已经创建了
+                    return it->second; // 鍙︿竴涓嚎绋嬪凡缁忓垱寤轰簡
                 }
                 pools_[pool_id] = pool;
             }

@@ -1,7 +1,9 @@
 #ifndef __NET_UDP_INSTANCE_H___
 #define __NET_UDP_INSTANCE_H___
 #include <unordered_map>
+#include <memory>
 #include "buffer/byte_buffer.h"
+#include "net/connection/connection.h"
 #include "net/socket/inet_address.h"
 #include "timer/timer_manager.h"
 
@@ -11,7 +13,6 @@ namespace yuan::buffer
 
 namespace yuan::net
 {
-    class Connection;
     class DatagramEndpoint;
     class UdpAdapter;
 
@@ -39,7 +40,7 @@ namespace yuan::net
 
     public:
         void send();
-        std::pair<bool, Connection *> on_recv(const InetAddress &address);
+        std::pair<bool, std::shared_ptr<Connection>> on_recv(const InetAddress &address);
         int on_send(Connection *conn, const ::yuan::buffer::ByteBuffer &buff);
 
         void set_input_packet(::yuan::buffer::ByteBuffer packet)
@@ -54,7 +55,13 @@ namespace yuan::net
             return packet;
         }
 
-        void on_connection_close(Connection *conn);
+        void on_connection_close(Connection *conn)
+        {
+            if (conn) {
+                on_connection_close(conn->shared_from_this());
+            }
+        }
+        void on_connection_close(const std::shared_ptr<Connection> &conn);
 
         void set_acceptor(DatagramEndpoint *acceptor);
 
@@ -82,7 +89,7 @@ namespace yuan::net
         UdpAdapterType adapter_type_;
         DatagramEndpoint *acceptor_;
         ::yuan::buffer::ByteBuffer input_packet_;
-        std::unordered_map<InetAddress, Connection *> conns_;
+        std::unordered_map<InetAddress, std::shared_ptr<Connection>> conns_;
     };
 }
 

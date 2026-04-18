@@ -23,9 +23,9 @@ namespace yuan::coroutine
     class ConnectionEventAwaiter
     {
     public:
-        ConnectionEventAwaiter(RuntimeView runtime, net::Connection *connection, ConnectionEventKind event_kind) noexcept
+        ConnectionEventAwaiter(RuntimeView runtime, std::shared_ptr<net::Connection> connection, ConnectionEventKind event_kind) noexcept
             : runtime_(runtime),
-              connection_(connection),
+              connection_(std::move(connection)),
               event_kind_(event_kind)
         {
         }
@@ -42,8 +42,10 @@ namespace yuan::coroutine
             }
 
             handle_ = handle;
-            proxy_ = std::make_unique<ProxyHandler>(*this, connection_, connection_->get_connection_handler());
-            connection_->set_connection_handler(proxy_.get());
+            proxy_ = std::make_shared<ProxyHandler>(*this, connection_,
+                                                    connection_->get_connection_handler(),
+                                                    connection_->get_connection_handler_owner());
+            connection_->set_connection_handler(proxy_);
             return true;
         }
 
@@ -60,14 +62,17 @@ namespace yuan::coroutine
         public:
             friend class ConnectionEventAwaiter;
 
-            ProxyHandler(ConnectionEventAwaiter &owner, net::Connection *connection, net::ConnectionHandler *next) noexcept
+            ProxyHandler(ConnectionEventAwaiter &owner, std::shared_ptr<net::Connection> connection,
+                         net::ConnectionHandler *next,
+                         std::shared_ptr<net::ConnectionHandler> next_owner) noexcept
                 : owner_(owner),
-                  connection_(connection),
-                  next_(next)
+                  connection_(std::move(connection)),
+                  next_(next),
+                  next_owner_(std::move(next_owner))
             {
             }
 
-            void on_connected(net::Connection *conn) override
+            void on_connected(const std::shared_ptr<net::Connection> &conn) override
             {
                 notify(ConnectionEventKind::connected);
                 if (next_) {
@@ -75,7 +80,7 @@ namespace yuan::coroutine
                 }
             }
 
-            void on_error(net::Connection *conn) override
+            void on_error(const std::shared_ptr<net::Connection> &conn) override
             {
                 notify(ConnectionEventKind::error, true);
                 if (next_) {
@@ -83,7 +88,7 @@ namespace yuan::coroutine
                 }
             }
 
-            void on_read(net::Connection *conn) override
+            void on_read(const std::shared_ptr<net::Connection> &conn) override
             {
                 notify(ConnectionEventKind::readable);
                 if (next_) {
@@ -91,7 +96,7 @@ namespace yuan::coroutine
                 }
             }
 
-            void on_write(net::Connection *conn) override
+            void on_write(const std::shared_ptr<net::Connection> &conn) override
             {
                 notify(ConnectionEventKind::writable);
                 if (next_) {
@@ -99,7 +104,7 @@ namespace yuan::coroutine
                 }
             }
 
-            void on_close(net::Connection *conn) override
+            void on_close(const std::shared_ptr<net::Connection> &conn) override
             {
                 notify(ConnectionEventKind::closed, true);
                 if (next_) {
@@ -127,8 +132,9 @@ namespace yuan::coroutine
             }
 
             ConnectionEventAwaiter &owner_;
-            net::Connection *connection_ = nullptr;
+            std::shared_ptr<net::Connection> connection_;
             net::ConnectionHandler *next_ = nullptr;
+            std::shared_ptr<net::ConnectionHandler> next_owner_;
         };
 
         void restore_handler_if_needed() noexcept
@@ -138,24 +144,28 @@ namespace yuan::coroutine
             }
 
             if (connection_->get_connection_handler() == proxy_.get()) {
-                connection_->set_connection_handler(proxy_->next_);
+                if (proxy_->next_owner_) {
+                    connection_->set_connection_handler(proxy_->next_owner_);
+                } else {
+                    connection_->set_connection_handler(make_non_owning_handler(proxy_->next_));
+                }
             }
             handler_restored_ = true;
         }
 
         RuntimeView runtime_{};
-        net::Connection *connection_ = nullptr;
+        std::shared_ptr<net::Connection> connection_;
         ConnectionEventKind event_kind_ = ConnectionEventKind::connected;
         bool handler_restored_ = false;
         bool completed_ = false;
         net::EventLoopExitReason exit_reason_ = net::EventLoopExitReason::quit_requested;
         std::coroutine_handle<> handle_{};
-        std::unique_ptr<ProxyHandler> proxy_;
+        std::shared_ptr<ProxyHandler> proxy_;
     };
 
     inline ConnectionEventAwaiter wait_for_connection_event(
         RuntimeView runtime,
-        net::Connection * connection,
+        const std::shared_ptr<net::Connection> &connection,
         ConnectionEventKind event_kind) noexcept
     {
         return ConnectionEventAwaiter(runtime, connection, event_kind);
@@ -163,35 +173,35 @@ namespace yuan::coroutine
 
     inline ConnectionEventAwaiter wait_connected(
         RuntimeView runtime,
-        net::Connection * connection) noexcept
+        const std::shared_ptr<net::Connection> &connection) noexcept
     {
         return wait_for_connection_event(runtime, connection, ConnectionEventKind::connected);
     }
 
     inline ConnectionEventAwaiter wait_readable(
         RuntimeView runtime,
-        net::Connection * connection) noexcept
+        const std::shared_ptr<net::Connection> &connection) noexcept
     {
         return wait_for_connection_event(runtime, connection, ConnectionEventKind::readable);
     }
 
     inline ConnectionEventAwaiter wait_writable(
         RuntimeView runtime,
-        net::Connection * connection) noexcept
+        const std::shared_ptr<net::Connection> &connection) noexcept
     {
         return wait_for_connection_event(runtime, connection, ConnectionEventKind::writable);
     }
 
     inline ConnectionEventAwaiter wait_closed(
         RuntimeView runtime,
-        net::Connection * connection) noexcept
+        const std::shared_ptr<net::Connection> &connection) noexcept
     {
         return wait_for_connection_event(runtime, connection, ConnectionEventKind::closed);
     }
 
     inline ConnectionEventAwaiter wait_error(
         RuntimeView runtime,
-        net::Connection * connection) noexcept
+        const std::shared_ptr<net::Connection> &connection) noexcept
     {
         return wait_for_connection_event(runtime, connection, ConnectionEventKind::error);
     }

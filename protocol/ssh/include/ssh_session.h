@@ -101,14 +101,20 @@ namespace yuan::net::ssh
             return server_;
         }
 
+        void set_client_connection(const std::shared_ptr<net::Connection> &conn)
+        {
+            client_conn_owner_ = conn;
+            client_conn_ = conn.get();
+        }
         void set_client_connection(net::Connection *conn)
         {
+            client_conn_owner_.reset();
             client_conn_ = conn;
         }
 
-        net::Connection *client_connection() const
+        std::shared_ptr<net::Connection> client_connection() const
         {
-            return client_conn_;
+            return client_conn_owner_.lock();
         }
 
         void set_runtime(coroutine::RuntimeView rv)
@@ -149,6 +155,7 @@ namespace yuan::net::ssh
         SshAuthenticator authenticator_;
         SshConnectionManager conn_mgr_;
 
+        std::weak_ptr<net::Connection> client_conn_owner_;
         net::Connection *client_conn_ = nullptr;
         coroutine::RuntimeView runtime_;
 

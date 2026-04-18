@@ -6,6 +6,7 @@
 #include "net/connection/stream_transport.h"
 #include "net/handler/connector_handler.h"
 #include "net/handler/event_handler.h"
+#include "event/event_loop.h"
 #include "net/secuity/ssl_handler.h"
 #include "net/secuity/ssl_module.h"
 #include "net/socket/inet_address.h"
@@ -47,7 +48,7 @@ namespace yuan::net
         EventHandler *event_handler_ = nullptr;
         ConnectorHandler *connector_handler_ = nullptr;
         std::shared_ptr<SSLModule> ssl_module = nullptr;
-        Connection *conn_ = nullptr;
+        ConnectionPtr conn_;
         timer::Timer *conn_timer_ = nullptr;
         bool suppress_failure_callback_ = false;
         bool connected_ = false;
@@ -60,11 +61,14 @@ namespace yuan::net
 
     TcpConnector::~TcpConnector() = default;
 
-    void TcpConnector::on_connected(Connection * conn)
+    void TcpConnector::on_connected(const std::shared_ptr<Connection> & conn)
     {
-        data_->conn_ = conn;
+        if (!conn) {
+            return;
+        }
+
         if (data_->ssl_module) {
-            auto *stream = dynamic_cast<StreamTransport *>(conn);
+            auto stream = std::dynamic_pointer_cast<StreamTransport>(conn);
             auto *channel = stream ? stream->stream_channel() : nullptr;
             if (!channel) {
                 data_->reset_connection_state();
@@ -113,26 +117,26 @@ namespace yuan::net
 
         data_->cancel_timer();
         data_->connected_ = true;
-
         data_->connector_handler_->on_connected_success(conn);
     }
 
-    void TcpConnector::on_error(Connection * conn)
+    void TcpConnector::on_error(const std::shared_ptr<Connection> & conn)
     {
+        (void)conn;
         data_->reset_connection_state();
     }
 
-    void TcpConnector::on_read(Connection * conn)
+    void TcpConnector::on_read(const std::shared_ptr<Connection> & conn)
     {
         (void)conn;
     }
 
-    void TcpConnector::on_write(Connection * conn)
+    void TcpConnector::on_write(const std::shared_ptr<Connection> & conn)
     {
         (void)conn;
     }
 
-    void TcpConnector::on_close(Connection * conn)
+    void TcpConnector::on_close(const std::shared_ptr<Connection> & conn)
     {
         data_->reset_connection_state();
         if (data_->suppress_failure_callback_) {
@@ -171,8 +175,13 @@ namespace yuan::net
         }
 
         auto conn = create_stream_connection(sock.release());
-        conn->set_connection_handler(this);
+        conn->set_connection_handler(make_non_owning_handler(this));
         conn->set_event_handler(data_->event_handler_);
+        if (auto *loop = dynamic_cast<EventLoop *>(data_->event_handler_)) {
+            loop->on_new_connection(conn);
+        } else if (data_->event_handler_) {
+            data_->event_handler_->on_new_connection(conn);
+        }
         data_->conn_ = conn;
         data_->conn_timer_ = timer::TimerUtil::build_timeout_timer(data_->timer_manager_, data_->timeout_, this, &TcpConnector::on_connect_timeout);
 
@@ -225,14 +234,19 @@ namespace yuan::net
             }
 
             auto conn = create_stream_connection(sock.release());
-            conn->set_connection_handler(this);
+            conn->set_connection_handler(make_non_owning_handler(this));
             conn->set_event_handler(data_->event_handler_);
+            if (auto *loop = dynamic_cast<EventLoop *>(data_->event_handler_)) {
+                loop->on_new_connection(conn);
+            } else if (data_->event_handler_) {
+                data_->event_handler_->on_new_connection(conn);
+            }
             data_->conn_ = conn;
             data_->connected_ = false;
             data_->suppress_failure_callback_ = false;
             data_->conn_timer_ = timer::TimerUtil::build_timeout_timer(data_->timer_manager_, data_->timeout_, this, &TcpConnector::on_connect_timeout);
         } else {
-            Connection *timed_out_conn = data_->conn_;
+            auto timed_out_conn = data_->conn_;
             if (data_->conn_) {
                 data_->suppress_failure_callback_ = true;
                 data_->conn_ = nullptr;

@@ -92,11 +92,11 @@ namespace yuan::net::websocket
                          WebSocketConfigManager *client_cfg)
             : client_ctx(std::move(cctx)), backend_ctx(std::move(bctx)), client_ws(WebSocketConnection::WorkMode::server_), backend_ws(WebSocketConnection::WorkMode::client_)
         {
-            client_ws.bind_connection(client_ctx.native_handle());
+            client_ws.bind_connection(client_ctx.connection());
             client_ws.set_config(server_cfg);
             client_ws.set_state(WebSocketConnection::State::connected_);
 
-            backend_ws.bind_connection(backend_ctx.native_handle());
+            backend_ws.bind_connection(backend_ctx.connection());
             backend_ws.set_config(client_cfg);
             backend_ws.set_state(WebSocketConnection::State::connected_);
         }

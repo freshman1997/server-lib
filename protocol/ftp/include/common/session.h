@@ -142,7 +142,7 @@ namespace yuan::net::ftp
 
     public:
         FtpSession *instance_;
-        FtpFileStream *file_stream_;
+        std::shared_ptr<FtpFileStream> file_stream_;
         FtpApp *app_;
         Connection *conn_;
         User user_;
@@ -159,11 +159,17 @@ namespace yuan::net::ftp
 
     public:
         FtpSession(Connection *conn, FtpApp *app, WorkMode mode, bool keepUtilSent = false, bool async_mode = false);
+        FtpSession(const std::shared_ptr<Connection> &conn, FtpApp *app, WorkMode mode, bool keepUtilSent = false, bool async_mode = false);
         virtual ~FtpSession();
+        virtual void on_connected(const std::shared_ptr<Connection> &conn);
         virtual void on_connected(Connection *conn);
+        virtual void on_error(const std::shared_ptr<Connection> &conn);
         virtual void on_error(Connection *conn);
+        virtual void on_read(const std::shared_ptr<Connection> &conn);
         virtual void on_read(Connection *conn) = 0;
+        virtual void on_write(const std::shared_ptr<Connection> &conn);
         virtual void on_write(Connection *conn);
+        virtual void on_close(const std::shared_ptr<Connection> &conn);
         virtual void on_close(Connection *conn);
         virtual void on_timer(timer::Timer *timer);
         virtual void on_opened(FtpFileStreamSession *fs);
@@ -353,7 +359,8 @@ namespace yuan::net::ftp
         bool close_;
         bool async_mode_;
         FtpSessionContext context_;
-        FtpFileStream *pending_file_stream_cleanup_ = nullptr;
+        std::shared_ptr<FtpFileStream> pending_file_stream_cleanup_;
+        std::shared_ptr<Connection> conn_owner_;
         std::unique_ptr<net::AsyncListenerHost> data_listener_;
         FtpFileInfo *pending_file_info_ = nullptr;
     };

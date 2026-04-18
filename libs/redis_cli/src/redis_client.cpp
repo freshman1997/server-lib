@@ -57,10 +57,10 @@ namespace yuan::redis
 
         const auto loop = RedisRegistry::get_instance()->get_event_loop();
 
-        Connection *conn = create_stream_connection(sock);
-        conn->set_connection_handler(impl_.get());
+        auto conn = create_stream_connection(sock);
+        conn->set_connection_handler(make_non_owning_handler(impl_.get()));
         conn->set_event_handler(loop);
-        if (auto *stream = dynamic_cast<net::StreamTransport *>(conn)) {
+        if (auto stream = std::dynamic_pointer_cast<net::StreamTransport>(conn)) {
             auto *channel = stream->stream_channel();
             if (!channel) {
                 conn->close();

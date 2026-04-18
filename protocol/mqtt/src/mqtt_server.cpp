@@ -66,13 +66,14 @@ namespace yuan::net::mqtt
 
     coroutine::Task<void> MqttServer::handle_connection(AsyncConnectionContext ctx)
     {
-        auto *conn = dynamic_cast<TcpConnection *>(ctx.native_handle());
-        if (!conn) {
+        auto conn = ctx.connection();
+        auto tcp_conn = std::dynamic_pointer_cast<TcpConnection>(conn);
+        if (!tcp_conn) {
             ctx.close();
             co_return;
         }
 
-        auto &session = session_mgr_.create_session(conn);
+        auto &session = session_mgr_.create_session(tcp_conn);
         session.set_state(MqttSessionState::connecting);
 
         ByteBuffer recv_buf;

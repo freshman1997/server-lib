@@ -23,7 +23,7 @@ namespace yuan::net
     public:
         AsyncClientSession() = default;
 
-        explicit AsyncClientSession(Connection *conn, coroutine::RuntimeView runtime)
+        explicit AsyncClientSession(std::shared_ptr<Connection> conn, coroutine::RuntimeView runtime)
             : ctx_(conn, runtime)
         {
         }

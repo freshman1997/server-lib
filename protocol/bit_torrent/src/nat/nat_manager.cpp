@@ -41,8 +41,8 @@ namespace yuan::net::bit_torrent
         if (config_.enable_inbound_listen) {
             peer_listener_ = std::make_unique<PeerListener>();
             peer_listener_->start(config, meta, peer_id, pieces_have, runtime);
-            peer_listener_->set_new_peer_callback([this](PeerConnection *peer) {
-            on_new_tcp_peer(peer);
+            peer_listener_->set_new_peer_callback([this](std::shared_ptr<PeerConnection> peer) {
+            on_new_tcp_peer(std::move(peer));
             });
         }
 
@@ -116,6 +116,7 @@ namespace yuan::net::bit_torrent
         if (pex_manager_) {
             pex_manager_.reset();
         }
+        utp_peers_.clear();
 
         runtime_ = nullptr;
         pieces_have_ = nullptr;
@@ -204,15 +205,15 @@ namespace yuan::net::bit_torrent
         }
     }
 
-    void NatManager::on_new_tcp_peer(PeerConnection * peer)
+    void NatManager::on_new_tcp_peer(std::shared_ptr<PeerConnection> peer)
     {
         if (peer_cb_)
-            peer_cb_(peer);
+            peer_cb_(std::move(peer));
     }
 
     void NatManager::on_new_utp_peer(UtpConnection * utp_conn)
     {
-        auto *peer = new PeerConnection();
+        auto peer = std::make_shared<PeerConnection>();
         peer->setup_utp(info_hash_, peer_id_,
                         utp_conn->get_remote_ip(), utp_conn->get_remote_port(),
                         pieces_have_ ? static_cast<int32_t>(pieces_have_->size()) : 0,
@@ -222,18 +223,19 @@ namespace yuan::net::bit_torrent
             utp_conn->send_data(data, len);
         });
 
-        peer->set_on_state_change([this, peer](PeerConnection *p) {
+        const std::string key = peer->get_peer_ip() + ":" + std::to_string(peer->get_peer_port());
+        utp_peers_[key] = peer;
+
+        peer->set_on_state_change([this, key, peer](PeerConnection *p) {
             if (p->get_state() == PeerConnection::State::connected) {
                 if (peer_cb_)
-                    peer_cb_(p);
+                    peer_cb_(peer);
 
-                std::string key = p->get_peer_ip() + ":" + std::to_string(p->get_peer_port());
                 register_peer(p, key);
             } else if (p->get_state() == PeerConnection::State::closed ||
                        p->get_state() == PeerConnection::State::error) {
-                std::string key = p->get_peer_ip() + ":" + std::to_string(p->get_peer_port());
                 unregister_peer(key);
-                delete p;
+                utp_peers_.erase(key);
             }
         });
 

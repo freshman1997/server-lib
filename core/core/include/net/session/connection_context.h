@@ -5,6 +5,7 @@
 #include "net/connection/connection.h"
 #include "net/socket/inet_address.h"
 
+#include <memory>
 #include <cstdint>
 #include <string_view>
 
@@ -15,6 +16,16 @@ namespace yuan::net
     {
     public:
         ConnectionContext() = default;
+
+        explicit ConnectionContext(Connection *conn)
+            : conn_(conn, [](Connection *) {})
+        {
+        }
+
+        explicit ConnectionContext(std::shared_ptr<Connection> conn)
+            : conn_(std::move(conn))
+        {
+        }
 
         ::yuan::buffer::ByteBuffer take_input_byte_buffer()
         {
@@ -83,7 +94,7 @@ namespace yuan::net
 
         uintptr_t connection_id() const
         {
-            return reinterpret_cast<uintptr_t>(conn_);
+            return reinterpret_cast<uintptr_t>(conn_.get());
         }
 
         void set_max_packet_size(size_t size)
@@ -93,10 +104,15 @@ namespace yuan::net
 
         ConnectionState get_connection_state() const
         {
-            return conn_->get_connection_state();
+            return conn_ ? conn_->get_connection_state() : ConnectionState::closed;
         }
 
         Connection *native_handle() const
+        {
+            return conn_.get();
+        }
+
+        std::shared_ptr<Connection> shared_handle() const
         {
             return conn_;
         }
@@ -112,12 +128,7 @@ namespace yuan::net
         friend class DatagramServerSession;
         friend class DatagramClientSession;
 
-        explicit ConnectionContext(Connection *conn)
-            : conn_(conn)
-        {
-        }
-
-        Connection *conn_ = nullptr;
+        std::shared_ptr<Connection> conn_;
     };
 
 } // namespace yuan::net

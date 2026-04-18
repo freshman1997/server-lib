@@ -11,15 +11,18 @@ namespace yuan::net::http
     HttpSessionContext::HttpSessionContext(Connection * conn)
         : mode_(Mode::server), has_parsed_(false), conn_(conn)
     {
-        request_ = new HttpRequest(this);
-        response_ = new HttpResponse(this);
+        request_ = std::make_unique<HttpRequest>(this);
+        response_ = std::make_unique<HttpResponse>(this);
     }
 
-    HttpSessionContext::~HttpSessionContext()
+    HttpSessionContext::HttpSessionContext(const std::shared_ptr<Connection> &conn)
+        : mode_(Mode::server), has_parsed_(false), conn_owner_(conn), conn_(conn.get())
     {
-        delete request_;
-        delete response_;
+        request_ = std::make_unique<HttpRequest>(this);
+        response_ = std::make_unique<HttpResponse>(this);
     }
+
+    HttpSessionContext::~HttpSessionContext() = default;
 
     void HttpSessionContext::reset() const
     {
@@ -114,7 +117,7 @@ namespace yuan::net::http
 
     HttpPacket *HttpSessionContext::get_packet() const
     {
-        return mode_ == Mode::server ? static_cast<HttpPacket *>(request_) : static_cast<HttpPacket *>(response_);
+        return mode_ == Mode::server ? static_cast<HttpPacket *>(request_.get()) : static_cast<HttpPacket *>(response_.get());
     }
 
     bool HttpSessionContext::is_downloading() const

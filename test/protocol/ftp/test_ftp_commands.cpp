@@ -159,13 +159,18 @@ namespace
         {
             state_ = ConnectionState::closed;
         }
-        void set_connection_handler(ConnectionHandler *handler) override
+        void set_connection_handler(std::shared_ptr<ConnectionHandler> handler) override
         {
-            handler_ = handler;
+            handler_owner_ = std::move(handler);
+            handler_ = handler_owner_.get();
         }
         ConnectionHandler *get_connection_handler() const override
         {
             return handler_;
+        }
+        std::shared_ptr<ConnectionHandler> get_connection_handler_owner() const override
+        {
+            return handler_owner_;
         }
         void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler) override
         {
@@ -186,6 +191,7 @@ namespace
         ConnectionState state_;
         InetAddress remote_;
         InetAddress local_;
+        std::shared_ptr<ConnectionHandler> handler_owner_;
         ConnectionHandler *handler_;
         EventHandler *event_handler_;
     };

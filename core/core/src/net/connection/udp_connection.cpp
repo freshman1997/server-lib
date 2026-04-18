@@ -4,6 +4,7 @@
 #include "net/socket/inet_address.h"
 #include "net/acceptor/udp/udp_instance.h"
 #include "net/acceptor/udp/adapter.h"
+#include "logger.h"
 #include <cassert>
 #include <cerrno>
 #ifndef _WIN32
@@ -25,6 +26,7 @@ namespace yuan::net
         is_closing_ = false;
         state_ = ConnectionState::connecting;
         connectionHandler_ = nullptr;
+        connectionHandlerOwner_.reset();
         eventHandler_ = nullptr;
         instance_ = nullptr;
         alive_timer_ = nullptr;
@@ -52,17 +54,17 @@ namespace yuan::net
             adapter_.reset();
         }
 
-        // Guard against use-after-free: if UdpInstance is being destroyed,
-        // skip on_connection_close to avoid accessing a destroyed object
-        if (instance_ && !instance_->is_closing()) {
+        // Guard against double cleanup when close/abort already removed the connection.
+        if (instance_ && !cleanup_done_ && !instance_->is_closing()) {
             instance_->on_connection_close(this);
             instance_ = nullptr;
         }
 
-        if (connectionHandler_) {
-            connectionHandler_->on_close(this);
-            connectionHandler_ = nullptr;
+        if (connectionHandler_ && !close_notified_) {
+            LOG_WARN("udp connection destroyed without close notification, ip: {}, port: {}",
+                     address_.get_ip(), address_.get_port());
         }
+        connectionHandler_ = nullptr;
     }
 
     ConnectionState UdpConnection::get_connection_state() const
@@ -98,7 +100,9 @@ namespace yuan::net
 
         if (adapter_) {
             if (!proc_one_buffer(buffer)) {
-                connectionHandler_->on_error(this);
+                if (connectionHandler_) {
+                    connectionHandler_->on_error(shared_from_this());
+                }
                 abort();
                 return;
             }
@@ -172,13 +176,7 @@ namespace yuan::net
         if ((!front || front->empty()) && closed_ && !is_closing_) {
             is_closing_ = true;
             // 使用延迟删除，避免在事件回调中直接删�?
-            if (eventHandler_) {
-                eventHandler_->queue_in_loop([this]() {
-                    delete this;
-                });
-            } else {
-                delete this;
-            }
+            do_close();
         }
     }
 
@@ -192,13 +190,7 @@ namespace yuan::net
         closed_ = true;
         state_ = ConnectionState::closed;
         // 使用延迟删除，避免在事件回调中直接删�?
-        if (eventHandler_) {
-            eventHandler_->queue_in_loop([this]() {
-                delete this;
-            });
-        } else {
-            delete this;
-        }
+        do_close();
     }
 
     // 发送完数据后返�?
@@ -217,23 +209,20 @@ namespace yuan::net
         }
         is_closing_ = true;
         // 使用延迟删除，避免在事件回调中直接删�?
-        if (eventHandler_) {
-            eventHandler_->queue_in_loop([this]() {
-                delete this;
-            });
-        } else {
-            delete this;
-        }
+        do_close();
     }
 
-    void UdpConnection::set_connection_handler(ConnectionHandler * handler)
+    void UdpConnection::set_connection_handler(std::shared_ptr<ConnectionHandler> handler)
     {
-        this->connectionHandler_ = handler;
+        connectionHandlerOwner_ = std::move(handler);
+        connectionHandler_ = connectionHandlerOwner_.get();
     }
 
     void UdpConnection::on_read_event()
     {
-        assert(state_ == ConnectionState::connected && connectionHandler_);
+        [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
+        auto *handler = handler_owner ? handler_owner.get() : connectionHandler_;
+        assert(state_ == ConnectionState::connected && handler);
         replace_input_buffer(instance_->take_input_packet());
 
         bool ok = true;
@@ -246,7 +235,7 @@ namespace yuan::net
         }
         if (ok) {
             active_ = true;
-            connectionHandler_->on_read(this);
+            handler->on_read(shared_from_this());
         } else {
             abort();
         }
@@ -254,7 +243,11 @@ namespace yuan::net
 
     void UdpConnection::on_write_event()
     {
-        connectionHandler_->on_write(this);
+        [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
+        auto *handler = handler_owner ? handler_owner.get() : connectionHandler_;
+        if (handler) {
+            handler->on_write(shared_from_this());
+        }
         process_pending_output_buffer();
         auto *front = output_buffer_.front();
         if (front && !front->empty()) {
@@ -273,7 +266,18 @@ namespace yuan::net
             return;
         }
         is_closing_ = true;
-        delete this;
+        cleanup_done_ = true;
+        auto self = std::static_pointer_cast<UdpConnection>(shared_from_this());
+        [[maybe_unused]] auto handler_owner = std::move(connectionHandlerOwner_);
+        auto *handler = handler_owner ? handler_owner.get() : connectionHandler_;
+        connectionHandler_ = nullptr;
+        if (handler && !close_notified_) {
+            close_notified_ = true;
+            handler->on_close(self);
+        }
+        if (instance_ && !instance_->is_closing()) {
+            instance_->on_connection_close(self);
+        }
     }
 
     ConnectionHandler *UdpConnection::get_connection_handler() const
@@ -294,8 +298,10 @@ namespace yuan::net
 
         state_ = state;
         if (state_ == ConnectionState::connected) {
-            if (connectionHandler_) {
-                connectionHandler_->on_connected(this);
+            [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
+            auto *handler = handler_owner ? handler_owner.get() : connectionHandler_;
+            if (handler) {
+                handler->on_connected(shared_from_this());
             }
             if (instance_ && instance_->get_timer_manager()) {
                 alive_timer_ = instance_->get_timer_manager()->interval(0, 10 * 1000, this, -1);
@@ -361,7 +367,11 @@ namespace yuan::net
             }
 
             if (!proc_one_buffer(front->copy_readable())) {
-                connectionHandler_->on_error(this);
+                [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
+                auto *handler = handler_owner ? handler_owner.get() : connectionHandler_;
+                if (handler) {
+                    handler->on_error(shared_from_this());
+                }
                 abort();
                 return;
             }

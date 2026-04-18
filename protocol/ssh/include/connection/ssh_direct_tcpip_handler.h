@@ -36,7 +36,7 @@ namespace yuan::net::ssh
         SshSession *session_;
         std::string target_host_;
         uint16_t target_port_;
-        net::Connection *target_conn_ = nullptr;
+        std::shared_ptr<net::Connection> target_conn_;
         std::atomic<bool> relay_active_{ false };
         std::atomic<bool> closed_{ false };
     };

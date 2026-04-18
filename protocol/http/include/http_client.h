@@ -74,7 +74,7 @@ namespace yuan::net::http
         int port_;
         std::string host_name_;
         std::shared_ptr<SSLModule> ssl_module_;
-        HttpSession *last_session_ = nullptr;
+        std::unique_ptr<HttpSession> last_session_;
     };
 }
 #endif

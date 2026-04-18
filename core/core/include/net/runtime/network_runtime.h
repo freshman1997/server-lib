@@ -62,11 +62,12 @@ namespace yuan::net
 
         void dispatch(std::function<void()> callback);
 
-        void register_connection(Connection *conn, ConnectionHandler *handler);
+        void register_connection(const std::shared_ptr<Connection> &conn, std::shared_ptr<ConnectionHandler> handler);
+        void register_connection(Connection *conn, std::shared_ptr<ConnectionHandler> handler);
 
         void register_connector(Connector *connector, ConnectorHandler *handler);
 
-        void register_acceptor(Acceptor *acceptor, ConnectionHandler *handler, Channel *channel = nullptr);
+        void register_acceptor(Acceptor *acceptor, std::shared_ptr<ConnectionHandler> handler, Channel *channel = nullptr);
 
         void update_channel(Channel *channel);
 
@@ -181,9 +182,13 @@ namespace yuan::net
             coroutine::RuntimeView::cancel_timer(timer);
         }
 
-        void register_connection(Connection *conn, ConnectionHandler *handler) const
+        void register_connection(const std::shared_ptr<Connection> &conn, std::shared_ptr<ConnectionHandler> handler) const
         {
-            view_.register_connection(conn, handler);
+            view_.register_connection(conn, std::move(handler));
+        }
+        void register_connection(Connection *conn, std::shared_ptr<ConnectionHandler> handler) const
+        {
+            view_.register_connection(conn, std::move(handler));
         }
 
         void update_channel(Channel *channel) const

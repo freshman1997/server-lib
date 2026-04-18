@@ -181,7 +181,8 @@ namespace yuan::net::websocket
 
     bool WebSocketPacketParser::unpack(WebSocketConnection * conn)
     {
-        auto input = conn->get_native_connection()->take_input_byte_buffer();
+        auto native_conn = conn->get_native_connection();
+        auto input = native_conn ? native_conn->take_input_byte_buffer() : ::yuan::buffer::ByteBuffer{};
         if (!input.empty()) {
             frame_buffer_.append(input);
         }

@@ -108,7 +108,7 @@ namespace yuan::net::websocket
 
     coroutine::Task<void> WebSocketServer::handle_connection(net::AsyncConnectionContext ctx)
     {
-        auto *conn = ctx.native_handle();
+        auto conn = ctx.connection();
 
         if (conn && conn->is_ssl_handshaking()) {
             auto hs_result = co_await ctx.ssl_handshake_async();

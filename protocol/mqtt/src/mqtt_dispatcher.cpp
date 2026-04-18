@@ -390,9 +390,9 @@ namespace yuan::net::mqtt
                     pub.properties.user_properties = rm.user_properties;
                 }
 
-                if (session.connection()) {
+                if (auto conn = session.connection()) {
                     auto pub_buf = MqttCodec::encode_publish(pub, session.protocol_level());
-                    session.connection()->write_and_flush(pub_buf);
+                    conn->write_and_flush(pub_buf);
                 }
             }
 

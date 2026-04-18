@@ -1,6 +1,7 @@
 #ifndef NET_FTP_COMMON_DEF_H
 #define NET_FTP_COMMON_DEF_H
 #include <fstream>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -62,8 +63,13 @@ namespace yuan::net::ftp
         std::string memory_content_;
         std::size_t file_size_ = 0;
         std::size_t current_progress_ = 0;
-        std::fstream *fstream_ = nullptr;
+        std::unique_ptr<std::fstream> fstream_;
 
+        FtpFileInfo() = default;
+        FtpFileInfo(const FtpFileInfo &other);
+        FtpFileInfo &operator=(const FtpFileInfo &other);
+        FtpFileInfo(FtpFileInfo &&) noexcept = default;
+        FtpFileInfo &operator=(FtpFileInfo &&) noexcept = default;
         ~FtpFileInfo();
         int read_file(std::size_t size, ::yuan::buffer::ByteBuffer &buff);
         int write_file(::yuan::buffer::ByteBuffer &buff);

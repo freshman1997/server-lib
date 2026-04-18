@@ -1,8 +1,9 @@
-#ifndef __EVENT_LOOH_H__
+﻿#ifndef __EVENT_LOOH_H__
 #define __EVENT_LOOH_H__
 #include <coroutine>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 
 #include "net/handler/event_handler.h"
 #include "net/handler/connection_handler.h"
@@ -34,7 +35,7 @@ namespace yuan::net
     public:
         EventLoopExitReason loop();
 
-        virtual void on_new_connection(Connection *conn) override;
+        void on_new_connection(const std::shared_ptr<Connection> &conn) override;
 
         virtual void close_channel(Channel *channel) override;
 
@@ -57,3 +58,4 @@ namespace yuan::net
     };
 }
 #endif
+

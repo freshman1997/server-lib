@@ -129,15 +129,26 @@ namespace yuan::net
         }
     }
 
-    void NetworkRuntime::register_connection(Connection * conn, ConnectionHandler * handler)
+    void NetworkRuntime::register_connection(const std::shared_ptr<Connection> &conn, std::shared_ptr<ConnectionHandler> handler)
     {
         if (!loop_ || !conn) {
             return;
         }
 
         loop_->on_new_connection(conn);
-        conn->set_connection_handler(handler);
+        conn->set_connection_handler(std::move(handler));
         conn->set_event_handler(loop_);
+    }
+
+    void NetworkRuntime::register_connection(Connection * conn, std::shared_ptr<ConnectionHandler> handler)
+    {
+        if (!loop_ || !conn) {
+            return;
+        }
+
+        conn->set_connection_handler(std::move(handler));
+        conn->set_event_handler(loop_);
+        loop_->on_new_connection(conn->shared_from_this());
     }
 
     void NetworkRuntime::update_channel(Channel * channel)
@@ -155,13 +166,13 @@ namespace yuan::net
         connector->set_data(timer_manager_, handler, loop_);
     }
 
-    void NetworkRuntime::register_acceptor(Acceptor * acceptor, ConnectionHandler * handler, Channel * channel)
+    void NetworkRuntime::register_acceptor(Acceptor * acceptor, std::shared_ptr<ConnectionHandler> handler, Channel * channel)
     {
         if (!acceptor || !loop_) {
             return;
         }
         acceptor->set_event_handler(loop_);
-        acceptor->set_connection_handler(handler);
+        acceptor->set_connection_handler(std::move(handler));
         if (channel) {
             loop_->update_channel(channel);
         }

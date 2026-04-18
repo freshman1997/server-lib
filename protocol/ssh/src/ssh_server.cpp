@@ -179,7 +179,7 @@ namespace yuan::net::ssh
 
         session->transport() = SshTransport(&algo_registry_, crypto_.get(), true);
 
-        session->set_client_connection(ctx.native_handle());
+        session->set_client_connection(ctx.connection());
         session->set_runtime(ctx.runtime_view());
 
         for (const auto & [

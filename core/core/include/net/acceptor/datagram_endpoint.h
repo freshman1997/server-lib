@@ -3,6 +3,8 @@
 
 #include "buffer/byte_buffer.h"
 
+#include <memory>
+
 namespace yuan::timer
 {
     class TimerManager;
@@ -19,7 +21,7 @@ namespace yuan::net
     public:
         virtual ~DatagramEndpoint() = default;
 
-        virtual int send_datagram(Connection *conn, const yuan::buffer::ByteBuffer &buff) = 0;
+        virtual int send_datagram(const std::shared_ptr<Connection> &conn, const yuan::buffer::ByteBuffer &buff) = 0;
         virtual int send_datagram(const InetAddress &addr, const yuan::buffer::ByteBuffer &buff) = 0;
         virtual Channel *endpoint_channel() const = 0;
         virtual void update_endpoint_channel() = 0;

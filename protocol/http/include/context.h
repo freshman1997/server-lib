@@ -3,6 +3,8 @@
 #include "response_code.h"
 #include "buffer/byte_buffer.h"
 
+#include <memory>
+
 namespace yuan::net
 {
     class Connection;
@@ -24,16 +26,17 @@ namespace yuan::net::http
     {
     public:
         HttpSessionContext(net::Connection *conn_);
+        HttpSessionContext(const std::shared_ptr<net::Connection> &conn_);
         ~HttpSessionContext();
 
         HttpRequest *get_request()
         {
-            return request_;
+            return request_.get();
         }
 
         HttpResponse *get_response()
         {
-            return response_;
+            return response_.get();
         }
 
         net::Connection *get_connection()
@@ -41,9 +44,21 @@ namespace yuan::net::http
             return conn_;
         }
 
+        std::shared_ptr<net::Connection> connection() const
+        {
+            return conn_owner_.lock();
+        }
+
         void set_connection(net::Connection *conn)
         {
+            conn_owner_.reset();
             conn_ = conn;
+        }
+
+        void set_connection(const std::shared_ptr<net::Connection> &conn)
+        {
+            conn_owner_ = conn;
+            conn_ = conn.get();
         }
 
         void set_session(HttpSession *session)
@@ -97,9 +112,10 @@ namespace yuan::net::http
     private:
         Mode mode_;
         bool has_parsed_;
+        std::weak_ptr<net::Connection> conn_owner_;
         Connection *conn_;
-        HttpRequest *request_;
-        HttpResponse *response_;
+        std::unique_ptr<HttpRequest> request_;
+        std::unique_ptr<HttpResponse> response_;
         HttpSession *session_;
     };
 }

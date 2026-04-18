@@ -184,11 +184,11 @@ namespace yuan::net::http
         HttpProxy(const HttpProxy &) = delete;
         HttpProxy &operator=(const HttpProxy &) = delete;
 
-        void on_connected(Connection *conn) override;
-        void on_error(Connection *conn) override;
-        void on_read(Connection *conn) override;
-        void on_write(Connection *conn) override;
-        void on_close(Connection *conn) override;
+        void on_connected(const std::shared_ptr<Connection> &conn) override;
+        void on_error(const std::shared_ptr<Connection> &conn) override;
+        void on_read(const std::shared_ptr<Connection> &conn) override;
+        void on_write(const std::shared_ptr<Connection> &conn) override;
+        void on_close(const std::shared_ptr<Connection> &conn) override;
 
         bool load_proxy_config_and_init();
         void add_route(const ProxyRoute &route);
@@ -207,7 +207,7 @@ namespace yuan::net::http
 
         void serve_proxy(HttpRequest *req, HttpResponse *resp);
         void handle_websocket_upgrade_by_url(HttpRequest *req, HttpResponse *resp, const std::string &route_key);
-        void on_client_close(Connection *conn);
+        void on_client_close(const std::shared_ptr<Connection> &conn);
 
         void on_connection_established(RemoteConnectTask::Ptr task, Connection *remoteConn);
         void on_connection_timeout(RemoteConnectTask::Ptr task);

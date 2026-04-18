@@ -101,15 +101,20 @@ namespace yuan::net
 
         void bind_connection(Connection *conn, NetworkRuntime &runtime)
         {
+            bind_connection(std::shared_ptr<Connection>(conn, [](Connection *) {}), runtime);
+        }
+
+        void bind_connection(std::shared_ptr<Connection> conn, NetworkRuntime &runtime)
+        {
             connection_ = conn;
             runtime_ = &runtime;
             event_loop_ = runtime.event_loop();
             timer_manager_ = runtime.timer_manager();
 
-            conn->set_connection_handler(this);
+            conn->set_connection_handler(make_non_owning_handler(this));
             conn->set_event_handler(event_loop_);
 
-            if (auto *stream = dynamic_cast<StreamTransport *>(conn)) {
+            if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
                 if (auto *channel = stream->stream_channel()) {
                     event_loop_->update_channel(channel);
                 }
@@ -134,7 +139,7 @@ namespace yuan::net
         {
             if (connection_) {
                 connection_->close();
-                connection_ = nullptr;
+                connection_.reset();
             }
             if (timeout_timer_) {
                 timeout_timer_->cancel();
@@ -157,7 +162,7 @@ namespace yuan::net
             event_loop_ = runtime.event_loop();
             timer_manager_ = runtime.timer_manager();
 
-            connection_->set_connection_handler(this);
+            connection_->set_connection_handler(make_non_owning_handler(this));
             co_return true;
         }
 
@@ -198,44 +203,46 @@ namespace yuan::net
             co_return exit_reason == EventLoopExitReason::coroutine_resume_requested;
         }
 
-        void on_connected(Connection *conn) override
+        void on_connected(const std::shared_ptr<Connection> &conn) override
         {
-            if (connected_cb_) {
-                ConnectionContext ctx(conn);
-                connected_cb_(ctx);
+            if (!conn || !connected_cb_) {
+                return;
             }
+            ConnectionContext ctx(conn);
+            connected_cb_(ctx);
         }
 
-        void on_error(Connection *conn) override
+        void on_error(const std::shared_ptr<Connection> &conn) override
         {
             if (!completion_event_.completed()) {
                 completion_event_.notify();
             }
-            if (error_cb_) {
+            if (error_cb_ && conn) {
                 ConnectionContext ctx(conn);
                 error_cb_(ctx);
             }
         }
 
-        void on_read(Connection *conn) override
+        void on_read(const std::shared_ptr<Connection> &conn) override
         {
-            if (read_cb_) {
+            if (read_cb_ && conn) {
                 ConnectionContext ctx(conn);
                 read_cb_(ctx);
             }
         }
 
-        void on_write(Connection *conn) override
+        void on_write(const std::shared_ptr<Connection> &conn) override
         {
+            (void)conn;
         }
 
-        void on_close(Connection *conn) override
+        void on_close(const std::shared_ptr<Connection> &conn) override
         {
-            connection_ = nullptr;
+            connection_.reset();
             if (!completion_event_.completed()) {
                 completion_event_.notify();
             }
-            if (close_cb_) {
+            if (close_cb_ && conn) {
                 ConnectionContext ctx(conn);
                 close_cb_(ctx);
             }
@@ -247,7 +254,7 @@ namespace yuan::net
         }
 
     private:
-        Connection *connection_ = nullptr;
+        std::shared_ptr<Connection> connection_;
         NetworkRuntime *runtime_ = nullptr;
         EventLoop *event_loop_ = nullptr;
         timer::TimerManager *timer_manager_ = nullptr;

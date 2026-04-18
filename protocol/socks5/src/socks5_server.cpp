@@ -20,6 +20,79 @@
 
 namespace
 {
+    class RelayEndpointHandler final : public ::yuan::net::ConnectionHandler
+    {
+    public:
+        explicit RelayEndpointHandler(std::atomic_bool *alive) noexcept
+            : alive_(alive)
+        {
+        }
+
+        void on_connected(const std::shared_ptr<::yuan::net::Connection> &conn) override
+        {
+            (void)conn;
+        }
+
+        void on_error(const std::shared_ptr<::yuan::net::Connection> &conn) override
+        {
+            (void)conn;
+            if (alive_) {
+                alive_->store(false, std::memory_order_release);
+            }
+        }
+
+        void on_read(const std::shared_ptr<::yuan::net::Connection> &conn) override
+        {
+            (void)conn;
+        }
+
+        void on_write(const std::shared_ptr<::yuan::net::Connection> &conn) override
+        {
+            (void)conn;
+        }
+
+        void on_close(const std::shared_ptr<::yuan::net::Connection> &conn) override
+        {
+            (void)conn;
+            if (alive_) {
+                alive_->store(false, std::memory_order_release);
+            }
+        }
+
+    private:
+        std::atomic_bool *alive_ = nullptr;
+    };
+
+    struct RelayBridge
+    {
+        std::atomic_bool client_alive{true};
+        std::atomic_bool remote_alive{true};
+        std::shared_ptr<::yuan::net::Connection> client_conn;
+        std::shared_ptr<::yuan::net::Connection> remote_conn;
+        RelayEndpointHandler client_handler{ &client_alive };
+        RelayEndpointHandler remote_handler{ &remote_alive };
+
+        void close_client()
+        {
+            if (client_conn && client_alive.exchange(false, std::memory_order_acq_rel)) {
+                client_conn->close();
+            }
+        }
+
+        void close_remote()
+        {
+            if (remote_conn && remote_alive.exchange(false, std::memory_order_acq_rel)) {
+                remote_conn->close();
+            }
+        }
+
+        void close_both()
+        {
+            close_client();
+            close_remote();
+        }
+    };
+
     enum class ParseProbeResult {
         incomplete,
         malformed,
@@ -201,7 +274,7 @@ namespace yuan::net::socks5
 
             auto rv = runtime->runtime_view();
             while (true) {
-                auto *conn = co_await coroutine::async_accept(rv, acceptor);
+                auto conn = co_await coroutine::async_accept(rv, acceptor);
                 if (!conn) {
                     break;
                 }
@@ -233,7 +306,7 @@ namespace yuan::net::socks5
 
     coroutine::Task<void> Socks5Server::handle_connection(AsyncConnectionContext ctx)
     {
-        Connection *client_conn = ctx.native_handle();
+        auto client_conn = ctx.connection();
         Socks5Session session(client_conn);
         ::yuan::buffer::ByteBuffer pending;
         auto read_more = [&]() -> coroutine::Task<bool> {
@@ -256,7 +329,6 @@ namespace yuan::net::socks5
                 co_return;
             }
             if (!co_await read_more()) {
-                ctx.close();
                 co_return;
             }
         }
@@ -306,7 +378,6 @@ namespace yuan::net::socks5
                     co_return;
                 }
                 if (!co_await read_more()) {
-                    ctx.close();
                     co_return;
                 }
             }
@@ -351,7 +422,6 @@ namespace yuan::net::socks5
                 co_return;
             }
             if (!co_await read_more()) {
-                ctx.close();
                 co_return;
             }
         }
@@ -402,9 +472,13 @@ namespace yuan::net::socks5
                 co_return;
             }
 
-            Connection *remote_conn = connect_result.connection;
-            rv.register_connection(remote_conn, &relay_handler_);
-            if (auto *stream = dynamic_cast<StreamTransport *>(remote_conn)) {
+            auto remote_conn = connect_result.connection;
+            auto bridge = std::make_shared<RelayBridge>();
+            bridge->client_conn = client_conn;
+            bridge->remote_conn = remote_conn;
+
+            rv.register_connection(remote_conn, make_non_owning_handler(&bridge->remote_handler));
+            if (auto stream = std::dynamic_pointer_cast<StreamTransport>(remote_conn)) {
                 if (auto *channel = stream->stream_channel()) {
                     rv.update_channel(channel);
                 }
@@ -426,13 +500,17 @@ namespace yuan::net::socks5
             LOG_INFO("socks5 server: session established -> {}:{}",
                      session.target_host(), session.target_port());
 
-            client_conn->set_connection_handler(&relay_handler_);
+            client_conn->set_connection_handler(make_aliasing_handler(bridge, &bridge->client_handler));
 
-            auto t1 = relay_pipe(rv, client_conn, remote_conn);
+            auto close_both = [bridge]() {
+                bridge->close_both();
+            };
+
+            auto t1 = relay_pipe(rv, client_conn, remote_conn, close_both, &bridge->remote_alive);
             t1.resume();
             t1.detach();
 
-            auto t2 = relay_pipe(rv, remote_conn, client_conn);
+            auto t2 = relay_pipe(rv, remote_conn, client_conn, close_both, &bridge->client_alive);
             co_await t2;
 
             if (handler_) {
@@ -487,20 +565,19 @@ namespace yuan::net::socks5
             }
 
             auto *runtime = listener_.runtime();
-            DatagramAcceptor *udp_acceptor = create_datagram_acceptor(udp_sock, *runtime);
+            auto udp_acceptor = std::unique_ptr<DatagramAcceptor>(create_datagram_acceptor(udp_sock, *runtime));
             if (!udp_acceptor->listen()) {
-                delete udp_acceptor;
                 LOG_ERROR("socks5 server: failed to listen on UDP socket for associate");
                 send_reply(client_conn, ReplyCode::general_failure);
                 ctx.close();
                 co_return;
             }
 
-            runtime->register_acceptor(udp_acceptor, &udp_relay_handler_, udp_acceptor->endpoint_channel());
+            runtime->register_acceptor(udp_acceptor.get(), make_non_owning_handler(&udp_relay_handler_), udp_acceptor->endpoint_channel());
 
             auto assoc = std::make_unique<UdpAssociation>();
             assoc->client_conn = client_conn;
-            assoc->udp_acceptor = udp_acceptor;
+            assoc->udp_acceptor = std::move(udp_acceptor);
             assoc->idle_timer = nullptr;
 
             if (session.target_host().empty() || session.target_port() == 0) {
@@ -517,7 +594,7 @@ namespace yuan::net::socks5
             send_reply(client_conn, ReplyCode::succeeded,
                        AddressType::ipv4, bind_ip, static_cast<uint16_t>(bind_port));
 
-            udp_associations_[client_conn] = std::move(assoc);
+            udp_associations_[client_conn.get()] = std::move(assoc);
 
             LOG_INFO("socks5 server: UDP associate established, relay port {}", bind_port);
 
@@ -533,8 +610,6 @@ namespace yuan::net::socks5
             if (handler_) {
                 handler_->on_session_closed(&session);
             }
-
-            ctx.close();
             co_return;
         }
 
@@ -545,16 +620,21 @@ namespace yuan::net::socks5
         }
     }
 
-    coroutine::Task<void> Socks5Server::relay_pipe(coroutine::RuntimeView rv, Connection * src, Connection * dst)
+    coroutine::Task<void> Socks5Server::relay_pipe(coroutine::RuntimeView rv,
+                                                    std::shared_ptr<Connection> src,
+                                                    std::shared_ptr<Connection> dst,
+                                                    std::function<void()> close_both,
+                                                    std::atomic_bool *dst_alive)
     {
         while (true) {
-            if (!src->is_connected()) {
-                dst->close();
-                co_return;
-            }
             auto result = co_await coroutine::async_read(rv, src);
             if (result.status != coroutine::IoStatus::success) {
-                dst->close();
+                if (close_both) {
+                    close_both();
+                }
+                co_return;
+            }
+            if (!dst_alive || !dst_alive->load(std::memory_order_acquire)) {
                 co_return;
             }
             if (result.data.readable_bytes() > 0) {
@@ -571,6 +651,16 @@ namespace yuan::net::socks5
         conn->write_and_flush(buf);
     }
 
+    void Socks5Server::send_reply(const std::shared_ptr<Connection> &conn, ReplyCode reply,
+                                  AddressType atyp, const std::string &bind_addr,
+                                  uint16_t bind_port)
+    {
+        if (!conn) {
+            return;
+        }
+        send_reply(conn.get(), reply, atyp, bind_addr, bind_port);
+    }
+
     void Socks5Server::on_udp_datagram(Connection * conn)
     {
         auto *udp_conn = dynamic_cast< ::yuan::net::UdpConnection *>(conn);
@@ -584,11 +674,11 @@ namespace yuan::net::socks5
         }
 
         UdpAssociation *assoc = nullptr;
-        Connection *client_conn = nullptr;
+        std::shared_ptr<Connection> client_conn;
         for (auto & [conn_key, assoc_ptr] : udp_associations_) {
-            if (assoc_ptr && assoc_ptr->udp_acceptor == endpoint) {
-                assoc = assoc_ptr.get();
-                client_conn = conn_key;
+            if (assoc_ptr && assoc_ptr->udp_acceptor.get() == endpoint) {
+                assoc = &*assoc_ptr;
+                client_conn = assoc_ptr->client_conn;
                 break;
             }
         }
@@ -725,19 +815,25 @@ namespace yuan::net::socks5
         LOG_INFO("socks5 server: UDP association closed");
     }
 
+    void Socks5Server::close_udp_association(const std::shared_ptr<Connection> &client_conn)
+    {
+        close_udp_association(client_conn.get());
+    }
+
     Socks5Server::UdpRelayHandler::UdpRelayHandler(Socks5Server & server)
         : server_(server)
     {
     }
 
-    void Socks5Server::UdpRelayHandler::on_read(Connection * conn)
+    void Socks5Server::UdpRelayHandler::on_read(const std::shared_ptr<Connection> &conn)
     {
-        server_.on_udp_datagram(conn);
+        if (conn) {
+            server_.on_udp_datagram(conn.get());
+        }
     }
 
-    void Socks5Server::UdpRelayHandler::on_error(Connection * conn)
+    void Socks5Server::UdpRelayHandler::on_error(const std::shared_ptr<Connection> &conn)
     {
-        if (conn)
-            conn->close();
+        (void)conn;
     }
 }

@@ -565,7 +565,7 @@ namespace
                   "async_connect should succeed");
             check(connect_result.connection != nullptr, "should return a connection");
 
-            auto *conn = connect_result.connection;
+            auto conn = connect_result.connection;
             yuan::net::AsyncConnectionContext ctx(conn, rv);
 
             std::string msg1 = "first write";

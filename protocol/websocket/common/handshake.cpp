@@ -9,8 +9,8 @@
 #include "websocket_utils.h"
 
 #include <cstring>
-#include <openssl/sha.h>
-#include <openssl/ssl.h>
+#include "openssl/sha.h"
+#include "openssl/ssl.h"
 #include <sstream>
 
 namespace yuan::net::websocket

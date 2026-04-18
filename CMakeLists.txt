@@ -52,12 +52,10 @@ add_subdirectory(protocol/bit_torrent)
 add_subdirectory(protocol/dns)
 add_subdirectory(protocol/socks5)
 add_subdirectory(protocol/mqtt)
+add_subdirectory(protocol/smb)
+
 if (YUAN_ENABLE_SSH)
     add_subdirectory(protocol/ssh)
-endif()
-
-if (NOT WIN32)
-    add_subdirectory(protocol/smb)
 endif()
 
 if (YUAN_BUILD_SERVERS OR YUAN_BUILD_TESTS OR YUAN_BUILD_EXAMPLE)

@@ -36,7 +36,7 @@ namespace yuan::net::http
 
     HttpRequest::HttpRequest(HttpSessionContext *context) : HttpPacket(context)
     {
-        parser_ = new HttpRequestParser(this);
+        parser_ = std::make_unique<HttpRequestParser>(this);
         reset();
     }
 

@@ -66,7 +66,7 @@ namespace yuan::net::ftp
         bool register_command(Command *cmdImpl);
 
     private:
-        std::unordered_map<std::string, Command *> commands;
+        std::unordered_map<std::string, std::unique_ptr<Command> > commands;
     };
 
     void ensure_all_commands_registered();

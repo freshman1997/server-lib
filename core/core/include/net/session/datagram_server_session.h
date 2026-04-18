@@ -44,8 +44,8 @@ namespace yuan::net
         void close()
         {
             if (acceptor_) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_->close();
+                acceptor_.reset();
             }
             runtime_ = nullptr;
         }
@@ -79,29 +79,34 @@ namespace yuan::net
             }
         }
 
-        void on_connected(Connection *conn) override
+        void on_connected(const std::shared_ptr<Connection> &conn) override
         {
-            conn->set_connection_handler(this);
+            if (conn) {
+                conn->set_connection_handler(make_non_owning_handler(this));
+            }
         }
 
-        void on_read(Connection *conn) override
+        void on_read(const std::shared_ptr<Connection> &conn) override
         {
-            if (read_callback_) {
+            if (read_callback_ && conn) {
                 ConnectionContext ctx(conn);
                 read_callback_(ctx);
             }
         }
 
-        void on_error(Connection *conn) override
+        void on_error(const std::shared_ptr<Connection> &conn) override
         {
+            (void)conn;
         }
 
-        void on_write(Connection *conn) override
+        void on_write(const std::shared_ptr<Connection> &conn) override
         {
+            (void)conn;
         }
 
-        void on_close(Connection *conn) override
+        void on_close(const std::shared_ptr<Connection> &conn) override
         {
+            (void)conn;
         }
 
     private:
@@ -130,21 +135,20 @@ namespace yuan::net
             sock->set_reuse(true);
             sock->set_none_block(true);
 
-            acceptor_ = create_datagram_acceptor(sock, tm);
+            acceptor_.reset(create_datagram_acceptor(sock, tm));
             if (!acceptor_->listen()) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_.reset();
                 return false;
             }
 
-            acceptor_->set_connection_handler(this);
+            acceptor_->set_connection_handler(make_non_owning_handler(this));
             acceptor_->set_event_handler(loop);
             loop->update_channel(acceptor_->endpoint_channel());
             return true;
         }
 
         NetworkRuntime *runtime_ = nullptr;
-        DatagramAcceptor *acceptor_ = nullptr;
+        std::unique_ptr<DatagramAcceptor> acceptor_;
         ReadCallback read_callback_;
     };
 

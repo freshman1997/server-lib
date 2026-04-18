@@ -1,4 +1,4 @@
-#ifndef __YUAN_NET_ASYNC_ASYNC_DATAGRAM_CLIENT_H__
+﻿#ifndef __YUAN_NET_ASYNC_ASYNC_DATAGRAM_CLIENT_H__
 #define __YUAN_NET_ASYNC_ASYNC_DATAGRAM_CLIENT_H__
 
 #include <memory>
@@ -52,10 +52,10 @@ namespace yuan::net
 
         void close()
         {
-            connection_ = nullptr;
+            connection_.reset();
             if (acceptor_) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_->close();
+                acceptor_.reset();
             }
         }
 
@@ -75,7 +75,7 @@ namespace yuan::net
                 return { 0, coroutine::IoStatus::invalid_state };
             }
 
-            auto *endpoint = static_cast<DatagramEndpoint *>(acceptor_);
+            auto *endpoint = static_cast<DatagramEndpoint *>(acceptor_.get());
             int sent = endpoint->send_datagram(connection_, buffer);
             if (sent < 0) {
                 return { 0, coroutine::IoStatus::connection_error };
@@ -89,7 +89,7 @@ namespace yuan::net
                 return { 0, coroutine::IoStatus::invalid_state };
             }
 
-            auto *endpoint = static_cast<DatagramEndpoint *>(acceptor_);
+            auto *endpoint = static_cast<DatagramEndpoint *>(acceptor_.get());
             int sent = endpoint->send_datagram(addr, buffer);
             if (sent < 0) {
                 return { 0, coroutine::IoStatus::connection_error };
@@ -114,6 +114,11 @@ namespace yuan::net
         }
 
         Connection *native_handle() const noexcept
+        {
+            return connection_.get();
+        }
+
+        std::shared_ptr<Connection> connection() const noexcept
         {
             return connection_;
         }
@@ -163,34 +168,33 @@ namespace yuan::net
                 return false;
             }
 
-            acceptor_ = create_datagram_acceptor(sock, rv);
+            acceptor_.reset(create_datagram_acceptor(sock, rv));
             if (!acceptor_->listen()) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_.reset();
                 return false;
             }
 
-            acceptor_->set_connection_handler(&default_handler_);
+            acceptor_->set_connection_handler(make_non_owning_handler(&default_handler_));
             acceptor_->set_event_handler(loop);
             loop->update_channel(acceptor_->endpoint_channel());
 
             auto instance = acceptor_->get_udp_instance();
             const auto &res = instance->on_recv(*sock->get_address());
             if (!res.first || !res.second) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_->close();
+                acceptor_.reset();
                 return false;
             }
 
-            Connection *conn = res.second;
-            auto *datagram = dynamic_cast<DatagramTransport *>(conn);
+            auto conn = res.second;
+            auto datagram = std::dynamic_pointer_cast<DatagramTransport>(conn);
             if (!datagram) {
-                delete acceptor_;
-                acceptor_ = nullptr;
+                acceptor_->close();
+                acceptor_.reset();
                 return false;
             }
 
-            conn->set_connection_handler(&default_handler_);
+            conn->set_connection_handler(make_non_owning_handler(&default_handler_));
             conn->set_event_handler(loop);
             datagram->attach_datagram_instance(instance);
             datagram->set_datagram_state(ConnectionState::connected);
@@ -203,30 +207,31 @@ namespace yuan::net
         class DefaultHandler final : public ConnectionHandler
         {
         public:
-            void on_connected(Connection *) override
+            void on_connected(const std::shared_ptr<Connection> &) override
             {
             }
-            void on_error(Connection *) override
+            void on_error(const std::shared_ptr<Connection> &) override
             {
             }
-            void on_read(Connection *) override
+            void on_read(const std::shared_ptr<Connection> &) override
             {
             }
-            void on_write(Connection *) override
+            void on_write(const std::shared_ptr<Connection> &) override
             {
             }
-            void on_close(Connection *) override
+            void on_close(const std::shared_ptr<Connection> &) override
             {
             }
         };
 
         NetworkRuntime *runtime_ = nullptr;
         coroutine::RuntimeView external_runtime_{};
-        Connection *connection_ = nullptr;
-        DatagramAcceptor *acceptor_ = nullptr;
+        std::shared_ptr<Connection> connection_;
+        std::unique_ptr<DatagramAcceptor> acceptor_;
         DefaultHandler default_handler_;
     };
 
 } // namespace yuan::net
 
 #endif
+

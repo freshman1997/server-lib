@@ -2,47 +2,53 @@
 #define __TCP_SOCKET_HANDLER_H__
 
 #include <functional>
+#include <memory>
 
 namespace yuan::net
 {
     class Connection;
 
-    // 连接事件处理器接口
+    template<typename HandlerT>
+    std::shared_ptr<HandlerT> make_non_owning_handler(HandlerT *handler)
+    {
+        return std::shared_ptr<HandlerT>(handler, [](HandlerT *) {});
+    }
+
+    template<typename OwnerT, typename HandlerT>
+    std::shared_ptr<HandlerT> make_aliasing_handler(const std::shared_ptr<OwnerT> &owner, HandlerT *handler)
+    {
+        return owner ? std::shared_ptr<HandlerT>(owner, handler) : std::shared_ptr<HandlerT>(handler, [](HandlerT *) {});
+    }
+
     class ConnectionHandler
     {
     public:
         virtual ~ConnectionHandler() = default;
 
-        // 新连接建立（三次握手完成）
-        virtual void on_connected(Connection *conn) = 0;
-        
-        // 连接发生错误
-        virtual void on_error(Connection *conn) = 0;
-        
-        // 有数据可读
-        virtual void on_read(Connection *conn) = 0;
-        
-        // 数据写入完成（写缓冲区有空间）
-        virtual void on_write(Connection *conn) = 0;
-        
-        // 连接关闭
-        virtual void on_close(Connection *conn) = 0;
+        virtual void on_connected(const std::shared_ptr<Connection> &conn) = 0;
+
+        virtual void on_error(const std::shared_ptr<Connection> &conn) = 0;
+
+        virtual void on_read(const std::shared_ptr<Connection> &conn) = 0;
+
+        virtual void on_write(const std::shared_ptr<Connection> &conn) = 0;
+
+        virtual void on_close(const std::shared_ptr<Connection> &conn) = 0;
     };
 
-    // 扩展接口：支持中间件和过滤的ConnectionHandler
-    // 可以用于在on_read/on_write等回调中插入额外逻辑
     template<typename BaseHandler>
     class FilteredConnectionHandler : public BaseHandler
     {
     public:
-        using filter_func = std::function<bool(Connection*)>;
-        
+        using filter_func = std::function<bool(Connection *)>;
+
         explicit FilteredConnectionHandler(filter_func read_filter = nullptr,
                                            filter_func write_filter = nullptr)
-            : read_filter_(std::move(read_filter))
-            , write_filter_(std::move(write_filter))
-        {}
-        
+            : read_filter_(std::move(read_filter)),
+              write_filter_(std::move(write_filter))
+        {
+        }
+
         void set_read_filter(filter_func fn) { read_filter_ = std::move(fn); }
         void set_write_filter(filter_func fn) { write_filter_ = std::move(fn); }
 
@@ -51,4 +57,5 @@ namespace yuan::net
         filter_func write_filter_;
     };
 }
+
 #endif

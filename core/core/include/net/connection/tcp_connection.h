@@ -39,9 +39,13 @@ namespace yuan::net
 
         Channel *stream_channel() const override;
 
-        virtual void set_connection_handler(ConnectionHandler *connectionHandler);
+        virtual void set_connection_handler(std::shared_ptr<ConnectionHandler> connectionHandler) override;
 
         virtual ConnectionHandler *get_connection_handler() const override;
+        virtual std::shared_ptr<ConnectionHandler> get_connection_handler_owner() const override
+        {
+            return connectionHandlerOwner_;
+        }
 
         virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler);
 
@@ -82,9 +86,12 @@ namespace yuan::net
         std::unique_ptr<Channel> channel_;
         std::unique_ptr<Socket> socket_;
         ConnectionHandler *connectionHandler_;
+        std::shared_ptr<ConnectionHandler> connectionHandlerOwner_;
         EventHandler *eventHandler_;
         std::shared_ptr<SSLHandler> ssl_handler_;
         bool is_closing_;
+        bool cleanup_done_ = false;
+        bool close_notified_ = false;
         bool ssl_handshaking_ = false;
         SslHandshakeCallback ssl_handshake_callback_;
     };

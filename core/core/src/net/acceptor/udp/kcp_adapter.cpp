@@ -69,7 +69,6 @@ namespace yuan::net
 
     void KcpAdapter::on_release()
     {
-        delete this;
     }
 
     int KcpAdapter::on_send(const char * buf, int len, ikcpcb * kcp, void * user)

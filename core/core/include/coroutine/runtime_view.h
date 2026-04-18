@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 
 #include "buffer/byte_buffer.h"
 #include "coroutine/scheduler.h"
@@ -83,12 +84,19 @@ namespace yuan::coroutine
         }
 
         AsyncReadAwaiter read(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
+        AsyncReadAwaiter read(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncWriteAwaiter write(net::Connection *conn, const ::yuan::buffer::ByteBuffer &buf,
                                 uint32_t timeout_ms = 0) const noexcept;
+        AsyncWriteAwaiter write(const std::shared_ptr<net::Connection> &conn, const ::yuan::buffer::ByteBuffer &buf,
+                                uint32_t timeout_ms = 0) const noexcept;
         AsyncFlushAwaiter flush(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
+        AsyncFlushAwaiter flush(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncCloseAwaiter close(net::Connection *conn) const noexcept;
+        AsyncCloseAwaiter close(const std::shared_ptr<net::Connection> &conn) const noexcept;
         AsyncSslHandshakeAwaiter ssl_handshake(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
+        AsyncSslHandshakeAwaiter ssl_handshake(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncReceiveFromAwaiter receive_from(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
+        AsyncReceiveFromAwaiter receive_from(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
 
         timer::Timer *schedule(uint32_t delay_ms, std::function<void()> callback) const
         {
@@ -116,7 +124,8 @@ namespace yuan::coroutine
             }
         }
 
-        void register_connection(net::Connection *conn, net::ConnectionHandler *handler) const;
+        void register_connection(net::Connection *conn, std::shared_ptr<net::ConnectionHandler> handler) const;
+        void register_connection(const std::shared_ptr<net::Connection> &conn, std::shared_ptr<net::ConnectionHandler> handler) const;
         void update_channel(net::Channel *channel) const;
 
     private:

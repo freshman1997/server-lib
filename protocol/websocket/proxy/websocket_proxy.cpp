@@ -182,7 +182,7 @@ namespace yuan::net::websocket
         }
         co_await session.flush_async();
 
-        http::HttpSessionContext httpCtx(session.native_handle());
+        http::HttpSessionContext httpCtx(session.context().connection());
         httpCtx.set_mode(http::Mode::client);
 
         std::string expected_accept = WebSocketUtils::generate_server_key(proxy_key);

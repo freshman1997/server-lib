@@ -71,7 +71,7 @@ namespace yuan::net::bit_torrent
         }
 
         void connect_peers(const std::vector<PeerAddress> &peer_list);
-        void on_inbound_peer(PeerConnection *peer);
+        void on_inbound_peer(std::shared_ptr<PeerConnection> peer);
         void disconnect_all_peers();
         void broadcast_have(uint32_t piece_index);
         std::vector<PeerConnection *> get_active_peers() const;
@@ -81,7 +81,7 @@ namespace yuan::net::bit_torrent
 
     private:
         std::string make_key(const std::string &ip, uint16_t port) const;
-        void attach_peer(PeerConnection *peer, const std::string &key);
+        void attach_peer(const std::shared_ptr<PeerConnection> &peer, const std::string &key);
         void on_peer_state_changed(PeerConnection *peer);
         void on_peer_connected(PeerConnection *peer);
         void remove_peer(PeerConnection *peer);
@@ -103,7 +103,7 @@ namespace yuan::net::bit_torrent
         PeerLostHandler peer_lost_handler_;
 
         mutable std::mutex peers_mutex_;
-        std::unordered_map<std::string, PeerConnection *> peers_;
+        std::unordered_map<std::string, std::shared_ptr<PeerConnection> > peers_;
     };
 
 } // namespace yuan::net::bit_torrent

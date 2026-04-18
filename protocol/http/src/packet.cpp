@@ -21,23 +21,16 @@ namespace yuan::net::http
         : context_(context)
     {
         body_content_ = nullptr;
-        parser_ = nullptr;
 
         body_length_ = 0;
         is_good_ = false;
         error_code_ = ResponseCode::internal_server_error;
 
-        pre_content_parser_ = nullptr;
-        task_ = nullptr;
     }
 
     HttpPacket::~HttpPacket()
     {
         reset();
-        if (parser_) {
-            delete parser_;
-            parser_ = nullptr;
-        }
     }
 
     HttpPacket::HttpPacket(HttpPacket && other) noexcept
@@ -49,7 +42,7 @@ namespace yuan::net::http
           content_type_(other.content_type_),
           body_length_(other.body_length_),
           context_(other.context_),
-          parser_(other.parser_),
+          parser_(std::move(other.parser_)),
           params_(std::move(other.params_)),
           headers_(std::move(other.headers_)),
           content_type_text_(std::move(other.content_type_text_)),
@@ -57,15 +50,15 @@ namespace yuan::net::http
           body_content_(std::move(other.body_content_)),
           buffer_(std::move(other.buffer_)),
           input_cache_(std::move(other.input_cache_)),
-          pre_content_parser_(other.pre_content_parser_),
-          task_(other.task_),
+          pre_content_parser_(std::move(other.pre_content_parser_)),
+          task_(std::move(other.task_)),
           chunked_checksum_(std::move(other.chunked_checksum_)),
           original_file_name_(std::move(other.original_file_name_))
     {
         other.context_ = nullptr;
-        other.parser_ = nullptr;
-        other.pre_content_parser_ = nullptr;
-        other.task_ = nullptr;
+        other.parser_.reset();
+        other.pre_content_parser_.reset();
+        other.task_.reset();
         other.body_length_ = 0;
         other.is_good_ = false;
     }
@@ -74,9 +67,6 @@ namespace yuan::net::http
     {
         if (this != &other) {
             reset();
-            if (parser_) {
-                delete parser_;
-            }
 
             version_ = other.version_;
             is_good_ = other.is_good_;
@@ -86,7 +76,7 @@ namespace yuan::net::http
             content_type_ = other.content_type_;
             body_length_ = other.body_length_;
             context_ = other.context_;
-            parser_ = other.parser_;
+            parser_ = std::move(other.parser_);
             params_ = std::move(other.params_);
             headers_ = std::move(other.headers_);
             content_type_text_ = std::move(other.content_type_text_);
@@ -94,15 +84,15 @@ namespace yuan::net::http
             body_content_ = std::move(other.body_content_);
             buffer_ = std::move(other.buffer_);
             input_cache_ = std::move(other.input_cache_);
-            pre_content_parser_ = other.pre_content_parser_;
-            task_ = other.task_;
+            pre_content_parser_ = std::move(other.pre_content_parser_);
+            task_ = std::move(other.task_);
             chunked_checksum_ = std::move(other.chunked_checksum_);
             original_file_name_ = std::move(other.original_file_name_);
 
             other.context_ = nullptr;
-            other.parser_ = nullptr;
-            other.pre_content_parser_ = nullptr;
-            other.task_ = nullptr;
+            other.parser_.reset();
+            other.pre_content_parser_.reset();
+            other.task_.reset();
             other.body_length_ = 0;
             other.is_good_ = false;
         }
@@ -127,20 +117,24 @@ namespace yuan::net::http
         buffer_.clear();
         buffer_.shrink_to_fit();
         input_cache_.clear();
-        if (pre_content_parser_) {
-            delete pre_content_parser_;
-            pre_content_parser_ = nullptr;
-        }
+        pre_content_parser_.reset();
         chunked_checksum_.clear();
         chunked_checksum_.shrink_to_fit();
         is_download_file_ = false;
         is_upload_file_ = false;
-        if (task_) {
-            delete task_;
-            task_ = nullptr;
-        }
+        task_.reset();
         original_file_name_.clear();
         original_file_name_.shrink_to_fit();
+    }
+
+    void HttpPacket::set_pre_content_parser(ContentParser * parser)
+    {
+        pre_content_parser_.reset(parser);
+    }
+
+    void HttpPacket::set_task(HttpTask * task)
+    {
+        task_.reset(task);
     }
 
     const std::string *HttpPacket::get_header(std::string_view key) const

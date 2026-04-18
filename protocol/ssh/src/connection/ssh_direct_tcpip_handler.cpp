@@ -21,7 +21,7 @@ namespace yuan::net::ssh
         closed_.store(true, std::memory_order_relaxed);
         if (target_conn_) {
             target_conn_->close();
-            target_conn_ = nullptr;
+            target_conn_.reset();
         }
     }
 
@@ -49,7 +49,7 @@ namespace yuan::net::ssh
 
             target_conn_ = result.connection;
             rv.register_connection(target_conn_, nullptr);
-            if (auto *stream = dynamic_cast<StreamTransport *>(target_conn_)) {
+            if (auto stream = std::dynamic_pointer_cast<StreamTransport>(target_conn_)) {
                 if (auto *ch = stream->stream_channel()) {
                     rv.update_channel(ch);
                 }
@@ -79,7 +79,7 @@ namespace yuan::net::ssh
     {
         if (target_conn_) {
             target_conn_->close();
-            target_conn_ = nullptr;
+            target_conn_.reset();
         }
     }
 
@@ -88,7 +88,7 @@ namespace yuan::net::ssh
         closed_.store(true, std::memory_order_relaxed);
         if (target_conn_) {
             target_conn_->close();
-            target_conn_ = nullptr;
+            target_conn_.reset();
         }
     }
 

@@ -101,11 +101,11 @@ namespace yuan::net::websocket
             co_return;
         }
 
-        auto *conn = data_->session_.native_handle();
+        auto conn = data_->session_.context().connection();
 
 #if defined(WS_USE_SSL)
         if (data_->ssl_module_) {
-            auto *stream = dynamic_cast<StreamTransport *>(conn);
+            auto *stream = dynamic_cast<StreamTransport *>(conn.get());
             auto *channel = stream ? stream->stream_channel() : nullptr;
             if (!channel) {
                 if (data_->data_handler_) {

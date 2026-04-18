@@ -7,24 +7,24 @@
 namespace yuan::net
 {
 
-Connection *create_stream_connection(Socket *socket)
+ConnectionPtr create_stream_connection(Socket *socket)
 {
-    return new TcpConnection(socket);
+    return std::make_shared<TcpConnection>(socket);
 }
 
-Connection *create_stream_connection(const std::string &ip, int port, int fd)
+ConnectionPtr create_stream_connection(const std::string &ip, int port, int fd)
 {
-    return new TcpConnection(ip, port, fd);
+    return std::make_shared<TcpConnection>(ip, port, fd);
 }
 
-Connection *create_datagram_connection(const InetAddress &address)
+ConnectionPtr create_datagram_connection(const InetAddress &address)
 {
-    return new UdpConnection(address);
+    return std::make_shared<UdpConnection>(address);
 }
 
-Connection *create_datagram_connection(const InetAddress &address, UdpAdapter *adapter)
+ConnectionPtr create_datagram_connection(const InetAddress &address, UdpAdapter *adapter)
 {
-    return new UdpConnection(address, adapter);
+    return std::make_shared<UdpConnection>(address, adapter);
 }
 
 } // namespace yuan::net

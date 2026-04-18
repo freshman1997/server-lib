@@ -214,10 +214,10 @@ namespace yuan::net::ftp
             co_return net::AsyncConnectionContext{};
         }
 
-        auto *data_conn = connect_result.connection;
+        auto data_conn = connect_result.connection;
         net::AsyncConnectionContext data_ctx(data_conn, rv);
 
-        if (auto *stream = dynamic_cast<StreamTransport *>(data_conn)) {
+        if (auto stream = std::dynamic_pointer_cast<StreamTransport>(data_conn)) {
             if (auto *channel = stream->stream_channel()) {
                 if (mode == StreamMode::Receiver) {
                     channel->disable_write();

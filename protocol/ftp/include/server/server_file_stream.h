@@ -25,7 +25,7 @@ namespace yuan::net::ftp
         virtual void quit(const InetAddress &addr);
 
     private:
-        StreamAcceptor *acceptor_;
+        std::unique_ptr<StreamAcceptor> acceptor_;
     };
 }
 
