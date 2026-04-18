@@ -1,6 +1,8 @@
 #include "socks5.h"
+#include "logger.h"
 
 #include <atomic>
+#include <cerrno>
 #include <exception>
 #include <chrono>
 #include <csignal>
@@ -58,6 +60,45 @@ namespace
 #else
         (void)::shutdown(sock, SHUT_RDWR);
 #endif
+    }
+
+    std::string socket_error_message()
+    {
+#ifdef _WIN32
+        return "WSA error " + std::to_string(::WSAGetLastError());
+#else
+        return std::strerror(errno);
+#endif
+    }
+
+    std::string sockaddr_to_string(const sockaddr_storage &addr)
+    {
+        char host[INET6_ADDRSTRLEN] = {0};
+        uint16_t port = 0;
+
+        if (addr.ss_family == AF_INET) {
+            const auto *sin = reinterpret_cast<const sockaddr_in *>(&addr);
+            port = ntohs(sin->sin_port);
+            if (!::inet_ntop(AF_INET, &sin->sin_addr, host, sizeof(host))) {
+                return "unknown";
+            }
+        } else if (addr.ss_family == AF_INET6) {
+            const auto *sin6 = reinterpret_cast<const sockaddr_in6 *>(&addr);
+            port = ntohs(sin6->sin6_port);
+            if (!::inet_ntop(AF_INET6, &sin6->sin6_addr, host, sizeof(host))) {
+                return "unknown";
+            }
+        } else {
+            return "unknown";
+        }
+
+        std::ostringstream oss;
+        if (addr.ss_family == AF_INET6) {
+            oss << '[' << host << "]:" << port;
+        } else {
+            oss << host << ':' << port;
+        }
+        return oss.str();
     }
 
     bool write_all(socket_t sock, const uint8_t *data, std::size_t len)
@@ -263,9 +304,11 @@ namespace
         return true;
     }
 
-    bool relay_bidirectional(socket_t left, socket_t right)
+    bool relay_bidirectional(socket_t left, socket_t right, const std::string &tag)
     {
         std::vector<uint8_t> buffer(8192);
+        std::size_t left_to_right = 0;
+        std::size_t right_to_left = 0;
         while (true) {
             fd_set readfds;
             FD_ZERO(&readfds);
@@ -285,8 +328,11 @@ namespace
                 const int received = ::recv(left, buffer.data(), static_cast<int>(buffer.size()), 0);
 #endif
                 if (received <= 0 || !write_all(right, buffer.data(), static_cast<std::size_t>(received))) {
+                    LOG_INFO("[http-proxy] {} relay left->right closed, transferred={} bytes",
+                             tag, left_to_right);
                     break;
                 }
+                left_to_right += static_cast<std::size_t>(received);
             }
 
             if (FD_ISSET(right, &readfds)) {
@@ -296,26 +342,36 @@ namespace
                 const int received = ::recv(right, buffer.data(), static_cast<int>(buffer.size()), 0);
 #endif
                 if (received <= 0 || !write_all(left, buffer.data(), static_cast<std::size_t>(received))) {
+                    LOG_INFO("[http-proxy] {} relay right->left closed, transferred={} bytes",
+                             tag, right_to_left);
                     break;
                 }
+                right_to_left += static_cast<std::size_t>(received);
             }
         }
 
         shutdown_socket(left);
         shutdown_socket(right);
+        LOG_INFO("[http-proxy] {} tunnel shutdown, left->right={} bytes, right->left={} bytes",
+                 tag, left_to_right, right_to_left);
         return true;
     }
 
-    void handle_http_proxy_client(socket_t client)
+    void handle_http_proxy_client(socket_t client, const sockaddr_storage &peer)
     {
+        const std::string peer_text = sockaddr_to_string(peer);
+        LOG_INFO("[http-proxy] client connected from {}", peer_text);
+
         std::string request;
         if (!read_http_request(client, request)) {
+            LOG_WARN("[http-proxy] {} failed to read request: {}", peer_text, socket_error_message());
             close_socket(client);
             return;
         }
 
         const auto line_end = request.find("\r\n");
         if (line_end == std::string::npos) {
+            LOG_WARN("[http-proxy] {} malformed request line", peer_text);
             (void)write_http_text(client, 400, "Bad Request");
             close_socket(client);
             return;
@@ -327,12 +383,16 @@ namespace
         std::string version;
         iss >> method >> target >> version;
         if (method.empty() || target.empty()) {
+            LOG_WARN("[http-proxy] {} incomplete request line: {}", peer_text, request.substr(0, line_end));
             (void)write_http_text(client, 400, "Bad Request");
             close_socket(client);
             return;
         }
 
+        LOG_INFO("[http-proxy] {} request: {} {} {}", peer_text, method, target, version);
+
         if (method != "CONNECT") {
+            LOG_WARN("[http-proxy] {} rejected method {}", peer_text, method);
             (void)write_http_text(client, 405, "Method Not Allowed", "proxy_tool only supports CONNECT");
             close_socket(client);
             return;
@@ -340,32 +400,46 @@ namespace
 
         ConnectTarget connect_target;
         if (!parse_connect_target(target, connect_target)) {
+            LOG_WARN("[http-proxy] {} invalid CONNECT target {}", peer_text, target);
             (void)write_http_text(client, 400, "Bad Request", "invalid CONNECT target");
             close_socket(client);
             return;
         }
 
+        LOG_INFO("[http-proxy] {} connecting upstream {}:{}",
+                 peer_text, connect_target.host, connect_target.port);
+
         socket_t upstream = invalid_socket;
         if (!resolve_and_connect(upstream, connect_target.host, connect_target.port)) {
+            LOG_ERROR("[http-proxy] {} failed to connect upstream {}:{} : {}",
+                      peer_text, connect_target.host, connect_target.port, socket_error_message());
             (void)write_http_text(client, 502, "Bad Gateway", "failed to connect upstream");
             close_socket(client);
             return;
         }
+
+        LOG_INFO("[http-proxy] {} upstream connected {}:{}",
+                 peer_text, connect_target.host, connect_target.port);
 
         const std::string established =
             "HTTP/1.1 200 Connection Established\r\n"
             "Proxy-Agent: proxy_tool\r\n"
             "\r\n";
         if (!write_all(client, reinterpret_cast<const uint8_t *>(established.data()), established.size())) {
+            LOG_ERROR("[http-proxy] {} failed to write CONNECT response", peer_text);
             close_socket(upstream);
             close_socket(client);
             return;
         }
 
-        (void)relay_bidirectional(client, upstream);
+        LOG_INFO("[http-proxy] {} tunnel established {}:{}",
+                 peer_text, connect_target.host, connect_target.port);
+
+        (void)relay_bidirectional(client, upstream, peer_text + " -> " + connect_target.host + ':' + std::to_string(connect_target.port));
 
         close_socket(upstream);
         close_socket(client);
+        LOG_INFO("[http-proxy] {} connection closed", peer_text);
     }
 
     bool bind_udp_socket(socket_t &sock, const std::string &host, uint16_t port)
@@ -419,7 +493,7 @@ namespace
 
         yuan::net::socks5::Socks5Server server(config);
         if (!server.init(port)) {
-            std::cerr << "failed to bind socks5 server on port " << port << "\n";
+            LOG_ERROR("failed to bind socks5 server on port {}", port);
             return false;
         }
 
@@ -430,8 +504,9 @@ namespace
             server.serve();
         });
 
-        std::cout << "SOCKS5 server listening on 127.0.0.1:" << port << "\n";
-        std::cout << "press Ctrl+C to stop\n";
+        LOG_INFO("SOCKS5 server listening on 127.0.0.1:{}", port);
+        LOG_INFO("SOCKS5 features: CONNECT=on, UDP_ASSOCIATE=on, AUTH=off");
+        LOG_INFO("press Ctrl+C to stop");
 
         while (!g_stop.load(std::memory_order_relaxed)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -439,6 +514,7 @@ namespace
 
         server.stop();
         server_thread.join();
+        LOG_INFO("SOCKS5 server stopped");
         return true;
     }
 
@@ -446,12 +522,12 @@ namespace
     {
         socket_t listen_sock = invalid_socket;
         if (!bind_listen_socket(listen_sock, "0.0.0.0", port)) {
-            std::cerr << "failed to bind http proxy on port " << port << "\n";
+            LOG_ERROR("failed to bind http proxy on port {}", port);
             return false;
         }
 
         if (!set_nonblocking(listen_sock)) {
-            std::cerr << "failed to switch http proxy socket to non-blocking mode\n";
+            LOG_ERROR("failed to switch http proxy socket to non-blocking mode");
             close_socket(listen_sock);
             return false;
         }
@@ -459,9 +535,9 @@ namespace
         std::signal(SIGINT, on_signal);
         std::signal(SIGTERM, on_signal);
 
-        std::cout << "HTTP proxy listening on 0.0.0.0:" << port << "\n";
-        std::cout << "proxy supports CONNECT tunneling for HTTPS traffic\n";
-        std::cout << "press Ctrl+C to stop\n";
+        LOG_INFO("HTTP proxy listening on 0.0.0.0:{}", port);
+        LOG_INFO("proxy supports CONNECT tunneling for HTTPS traffic");
+        LOG_INFO("press Ctrl+C to stop");
 
         while (!g_stop.load(std::memory_order_relaxed)) {
             sockaddr_storage peer{};
@@ -474,6 +550,7 @@ namespace
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
                 }
+                LOG_WARN("[http-proxy] accept failed: WSA error {}", err);
                 continue;
             }
 #else
@@ -483,16 +560,21 @@ namespace
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
                 }
+                LOG_WARN("[http-proxy] accept failed: {}", socket_error_message());
                 continue;
             }
 #endif
 
-            std::thread([client]() {
-                handle_http_proxy_client(client);
+            const std::string peer_text = sockaddr_to_string(peer);
+            LOG_INFO("[http-proxy] accepted client {}", peer_text);
+
+            std::thread([client, peer]() {
+                handle_http_proxy_client(client, peer);
             }).detach();
         }
 
         close_socket(listen_sock);
+        LOG_INFO("[http-proxy] listener stopped");
         return true;
     }
 
@@ -500,11 +582,11 @@ namespace
     {
         socket_t sock = invalid_socket;
         if (!bind_udp_socket(sock, "127.0.0.1", port)) {
-            std::cerr << "failed to start udp echo on 127.0.0.1:" << port << "\n";
+            LOG_ERROR("failed to start udp echo on 127.0.0.1:{}", port);
             return false;
         }
 
-        std::cout << "UDP echo server listening on 127.0.0.1:" << port << "\n";
+        LOG_INFO("UDP echo server listening on 127.0.0.1:{}", port);
         set_recv_timeout(sock, 1000);
 
         std::vector<uint8_t> buffer(4096);
@@ -541,25 +623,25 @@ namespace
     {
         socket_t tcp = invalid_socket;
         if (!resolve_and_connect(tcp, proxy_host, proxy_port)) {
-            std::cerr << "failed to connect to proxy " << proxy_host << ":" << proxy_port << "\n";
+            LOG_ERROR("failed to connect to proxy {}:{}", proxy_host, proxy_port);
             return 1;
         }
 
         uint8_t greeting[] = { 0x05, 0x01, 0x00 };
         if (!write_all(tcp, greeting, sizeof(greeting))) {
-            std::cerr << "failed to send greeting\n";
+            LOG_ERROR("failed to send greeting");
             close_socket(tcp);
             return 1;
         }
 
         uint8_t greet_reply[2] = {0};
         if (!read_exact(tcp, greet_reply, sizeof(greet_reply))) {
-            std::cerr << "failed to read greeting reply\n";
+            LOG_ERROR("failed to read greeting reply");
             close_socket(tcp);
             return 1;
         }
         if (greet_reply[0] != 0x05 || greet_reply[1] != 0x00) {
-            std::cerr << "proxy did not accept no-auth greeting\n";
+            LOG_ERROR("proxy did not accept no-auth greeting");
             close_socket(tcp);
             return 1;
         }
@@ -570,33 +652,33 @@ namespace
             0x00, 0x00
         };
         if (!write_all(tcp, udp_assoc, sizeof(udp_assoc))) {
-            std::cerr << "failed to send udp associate request\n";
+            LOG_ERROR("failed to send udp associate request");
             close_socket(tcp);
             return 1;
         }
 
         uint8_t reply[10] = {0};
         if (!read_exact(tcp, reply, sizeof(reply))) {
-            std::cerr << "failed to read udp associate reply\n";
+            LOG_ERROR("failed to read udp associate reply");
             close_socket(tcp);
             return 1;
         }
         if (reply[1] != 0x00) {
-            std::cerr << "udp associate rejected with code " << static_cast<int>(reply[1]) << "\n";
+            LOG_ERROR("udp associate rejected with code {}", static_cast<int>(reply[1]));
             close_socket(tcp);
             return 1;
         }
 
         const uint16_t relay_port = static_cast<uint16_t>((static_cast<uint16_t>(reply[8]) << 8) | reply[9]);
         if (relay_port == 0) {
-            std::cerr << "proxy returned relay port 0\n";
+            LOG_ERROR("proxy returned relay port 0");
             close_socket(tcp);
             return 1;
         }
 
         socket_t udp = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         if (udp == invalid_socket) {
-            std::cerr << "failed to create udp socket\n";
+            LOG_ERROR("failed to create udp socket");
             close_socket(tcp);
             return 1;
         }
@@ -616,7 +698,7 @@ namespace
 
         in_addr target_addr{};
         if (::inet_pton(AF_INET, target_host.c_str(), &target_addr) != 1) {
-            std::cerr << "only ipv4 target is supported in this probe helper\n";
+            LOG_ERROR("only ipv4 target is supported in this probe helper");
             close_socket(udp);
             close_socket(tcp);
             return 1;
@@ -636,7 +718,7 @@ namespace
         if (::sendto(udp, packet.data(), static_cast<int>(packet.size()), 0,
                      reinterpret_cast<sockaddr *>(&relay), sizeof(relay)) < 0) {
 #endif
-            std::cerr << "failed to send udp datagram through proxy\n";
+            LOG_ERROR("failed to send udp datagram through proxy");
             close_socket(udp);
             close_socket(tcp);
             return 1;
@@ -653,22 +735,21 @@ namespace
                                         reinterpret_cast<sockaddr *>(&from), &from_len);
 #endif
         if (received <= 0) {
-            std::cerr << "did not receive udp response from proxy\n";
+            LOG_ERROR("did not receive udp response from proxy");
             close_socket(udp);
             close_socket(tcp);
             return 1;
         }
 
         if (received < 10) {
-            std::cerr << "udp response too short\n";
+            LOG_ERROR("udp response too short");
             close_socket(udp);
             close_socket(tcp);
             return 1;
         }
 
         const std::string echoed_payload(response.begin() + 10, response.begin() + received);
-        std::cout << "UDP_OK relay_port=" << relay_port
-                  << " payload=" << echoed_payload << "\n";
+        LOG_INFO("UDP_OK relay_port={} payload={}", relay_port, echoed_payload);
 
         close_socket(udp);
         close_socket(tcp);
@@ -677,12 +758,11 @@ namespace
 
     void print_usage()
     {
-        std::cout <<
-            "proxy_tool commands:\n"
-            "  serve [port]\n"
-            "  http-proxy [port]\n"
-            "  udp-echo [port]\n"
-            "  udp-probe [proxy_host] [proxy_port] [target_host] [target_port] [payload]\n";
+        LOG_INFO("proxy_tool commands:\n"
+                 "  serve [port]\n"
+                 "  http-proxy [port]\n"
+                 "  udp-echo [port]\n"
+                 "  udp-probe [proxy_host] [proxy_port] [target_host] [target_port] [payload]\n");
     }
 } // namespace
 
@@ -737,7 +817,7 @@ int main(int argc, char **argv)
 
         return code;
     } catch (const std::exception &ex) {
-        std::cerr << ex.what() << "\n";
+        LOG_ERROR("{}", ex.what());
         return 1;
     }
 }
