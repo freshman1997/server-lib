@@ -3,6 +3,7 @@
 
 #include "server_runtime_host.h"
 #include "service.h"
+#include "socks5_config.h"
 
 #include <atomic>
 #include <memory>
@@ -32,6 +33,13 @@ namespace yuan::server
         std::string basic_auth_password;
         std::vector<std::string> allow_targets;
         std::vector<std::string> deny_targets;
+    };
+
+    struct Socks5ServiceConfigFile
+    {
+        bool enabled = true;
+        int port = 1080;
+        yuan::net::socks5::Socks5ServerConfig server_config;
     };
 
     class ProxyService : public yuan::app::Service, public yuan::app::RuntimeContextAwareService

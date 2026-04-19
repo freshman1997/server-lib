@@ -15,6 +15,8 @@
 
 namespace
 {
+    using yuan::server::Socks5ServiceConfigFile;
+
     std::atomic_bool g_running{ true };
 
     void signal_handler(int)
@@ -109,13 +111,6 @@ namespace
             config.deny_targets = (*proxy)["deny_targets"].get<std::vector<std::string>>();
         }
     }
-
-    struct Socks5ServiceConfigFile
-    {
-        bool enabled = false;
-        int port = 1080;
-        yuan::net::socks5::Socks5ServerConfig server_config;
-    };
 
     void apply_json_config(const nlohmann::json &json, Socks5ServiceConfigFile &config)
     {
@@ -222,8 +217,10 @@ namespace
     void apply_env_overrides(Socks5ServiceConfigFile &config)
     {
         const std::string enabled = read_env_string("YUAN_SOCKS5_ENABLED");
-        if (!enabled.empty()) {
-            config.enabled = enabled == "1" || enabled == "true" || enabled == "TRUE";
+        if (enabled == "0" || enabled == "false" || enabled == "FALSE") {
+            config.enabled = false;
+        } else if (!enabled.empty()) {
+            config.enabled = true;
         }
         config.port = read_env_int("YUAN_SOCKS5_PORT", config.port);
         const std::string enable_auth = read_env_string("YUAN_SOCKS5_ENABLE_AUTH");
