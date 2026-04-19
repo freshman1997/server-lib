@@ -7,7 +7,7 @@
 #include <fstream>
 #include <filesystem>
 #include <iomanip>
-#include "common/winsock_guard.h"
+
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -232,11 +232,7 @@ void print_help()
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::cerr << "WSAStartup failed\n";
-        return 1;
-    }
+    
 
     InteractiveFtpClient client;
     

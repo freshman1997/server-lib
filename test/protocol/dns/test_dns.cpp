@@ -4,7 +4,7 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
-#include "common/winsock_guard.h"
+
 
 #ifndef _WIN32
 #include <signal.h>
@@ -316,11 +316,7 @@ void test_dns_error_codes()
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::printf("WSAStartup failed\n");
-        return 1;
-    }
+    
 
     std::cout << "\n";
     std::cout << "========================================" << std::endl;

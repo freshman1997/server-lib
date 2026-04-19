@@ -171,6 +171,24 @@ Avoid in formal service mode:
 - detached unmanaged threads
 - raw fd ownership spread across helper functions
 
+## Current Implementation Progress
+
+The repo now has a service-oriented proxy baseline in place:
+
+- `ProxyService` under `server/services`
+- `proxy_server` as the formal launcher
+- HTTP `CONNECT` support
+- basic plain HTTP forward proxy support
+- optional Basic proxy auth
+- target ACL via allow/deny rules
+- custom events and counters
+- explicit session state transitions and state-change events
+- periodic state-driven session sweeps for request/connect phase timeout control
+- tracked worker sessions with graceful shutdown
+- configurable `drain_timeout_ms` to bound stop-time waiting
+
+This is still not the final runtime/session architecture described above, but it is already beyond the original test-tool shape and is suitable for continued hardening.
+
 ## Phase Plan
 
 ## Phase 1: Formalize HTTP CONNECT as a service
@@ -189,6 +207,8 @@ Deliverables:
 - tunnel session object for each CONNECT request
 - idle timeout and max connection count
 - basic counters
+- graceful drain timeout on shutdown
+- stable session ids for logs and custom events
 
 Why first:
 

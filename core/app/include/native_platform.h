@@ -1,16 +1,16 @@
-#ifndef TEST_COMMON_WINSOCK_GUARD_H
-#define TEST_COMMON_WINSOCK_GUARD_H
+#ifndef YUAN_APP_NATIVE_PLATFORM_H
+#define YUAN_APP_NATIVE_PLATFORM_H
 
 #ifdef _WIN32
 #include <winsock2.h>
 #endif
 
-namespace test::common
+namespace yuan::app
 {
-    class WinsockGuard
+    class NativePlatformGuard
     {
     public:
-        WinsockGuard()
+        NativePlatformGuard()
         {
 #ifdef _WIN32
             WSADATA wsa{};
@@ -20,7 +20,7 @@ namespace test::common
 #endif
         }
 
-        ~WinsockGuard()
+        ~NativePlatformGuard()
         {
 #ifdef _WIN32
             if (initialized_) {

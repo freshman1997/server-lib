@@ -138,4 +138,9 @@ namespace yuan::net
     {
         socket::set_none_block(fd_, on);
     }
+
+    bool Socket::shutdown_write() const
+    {
+        return socket::shutdown_write(fd_);
+    }
 }

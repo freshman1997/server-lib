@@ -14,7 +14,7 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include "common/winsock_guard.h"
+
 
 #ifdef _WIN32
 #include <WS2tcpip.h>
@@ -254,11 +254,7 @@ void test_udp_tracker_runtime_announce_async()
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::cerr << "winsock init failed\n";
-        return 1;
-    }
+    
 
     test_udp_tracker_runtime_announce_async();
 

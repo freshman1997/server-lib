@@ -70,6 +70,14 @@ namespace yuan::net
         virtual void flush() = 0;
         virtual void abort() = 0;
         virtual void close() = 0;
+        virtual bool shutdown_write()
+        {
+            return false;
+        }
+        virtual bool input_shutdown() const
+        {
+            return false;
+        }
 
         virtual void set_connection_handler(std::shared_ptr<ConnectionHandler> handler) = 0;
         virtual ConnectionHandler *get_connection_handler() const = 0;
@@ -120,6 +128,11 @@ namespace yuan::net
         {
             input_buffer_.clear();
             input_buffer_.reserve(max_packet_size_);
+        }
+
+        std::size_t output_readable_bytes() const noexcept
+        {
+            return output_buffer_.readable_bytes();
         }
 
         void append_output(std::string_view text)

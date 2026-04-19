@@ -238,4 +238,13 @@ namespace yuan::net::socket
                      &optval, static_cast<socklen_t>(sizeof(optval)));
 #endif
     }
+
+    bool shutdown_write(int fd)
+    {
+#ifdef _WIN32
+        return ::shutdown(fd, SD_SEND) == 0;
+#else
+        return ::shutdown(fd, SHUT_WR) == 0;
+#endif
+    }
 }

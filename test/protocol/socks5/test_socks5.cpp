@@ -5,7 +5,7 @@
 #include "socks5_server.h"
 #include "buffer/byte_buffer.h"
 #include "net/socket/inet_address.h"
-#include "common/winsock_guard.h"
+
 
 #include <cstdint>
 #include <cstring>
@@ -1262,12 +1262,6 @@ void run_e2e_tests()
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::cerr << "WSAStartup failed" << std::endl;
-        return 1;
-    }
-
     std::cout << "\n";
     std::cout << "========================================" << std::endl;
     std::cout << "    SOCKS5 Protocol Test Suite         " << std::endl;

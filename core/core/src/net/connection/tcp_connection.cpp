@@ -53,6 +53,9 @@ namespace yuan::net
         state_ = ConnectionState::connecting;
         ssl_handler_ = nullptr;
         is_closing_ = false;
+        input_shutdown_ = false;
+        output_shutdown_ = false;
+        pending_output_shutdown_ = false;
     }
 
     TcpConnection::~TcpConnection()
@@ -110,7 +113,7 @@ namespace yuan::net
             return;
         }
 
-        if (state_ != ConnectionState::connected && state_ != ConnectionState::closing) {
+        if ((state_ != ConnectionState::connected && state_ != ConnectionState::closing) || output_shutdown_) {
             return;
         }
 
@@ -190,6 +193,14 @@ namespace yuan::net
         }
 
         if (output_buffer_.size() == 0) {
+            if (pending_output_shutdown_ && !output_shutdown_) {
+                output_shutdown_ = socket_ && socket_->shutdown_write();
+                pending_output_shutdown_ = false;
+                if (output_shutdown_ && input_shutdown_) {
+                    do_close();
+                    return;
+                }
+            }
             if (state_ == ConnectionState::closing) {
                 do_close();
             } else {
@@ -204,6 +215,35 @@ namespace yuan::net
     void TcpConnection::abort()
     {
         do_close();
+    }
+
+    bool TcpConnection::shutdown_write()
+    {
+        if (!socket_ || output_shutdown_) {
+            return false;
+        }
+
+        auto *front = output_buffer_.front();
+        if (front && front->readable_bytes() > 0) {
+            pending_output_shutdown_ = true;
+            channel_->enable_write();
+            if (eventHandler_) {
+                eventHandler_->update_channel(channel_.get());
+            }
+            return true;
+        }
+
+        output_shutdown_ = socket_->shutdown_write();
+        pending_output_shutdown_ = false;
+        if (output_shutdown_ && input_shutdown_) {
+            do_close();
+        }
+        return output_shutdown_;
+    }
+
+    bool TcpConnection::input_shutdown() const
+    {
+        return input_shutdown_;
     }
 
     void TcpConnection::close()
@@ -332,7 +372,17 @@ namespace yuan::net
 
             if (close_flag) {
                 LOG_INFO("connection closed by peer, ip: {}, port: {}", socket_->get_address()->get_ip(), socket_->get_address()->get_port());
-                abort();
+                input_shutdown_ = true;
+                channel_->disable_read();
+                if (eventHandler_) {
+                    eventHandler_->update_channel(channel_.get());
+                }
+                if (handler) {
+                    handler->on_input_shutdown(shared_from_this());
+                }
+                if (output_shutdown_ || state_ == ConnectionState::closing) {
+                    do_close();
+                }
             }
         } else {
             bool read = false, close_flag = false;
@@ -381,7 +431,17 @@ namespace yuan::net
 
             if (close_flag) {
                 LOG_INFO("ssl connection closed by peer, ip: {}, port: {}", socket_->get_address()->get_ip(), socket_->get_address()->get_port());
-                abort();
+                input_shutdown_ = true;
+                channel_->disable_read();
+                if (eventHandler_) {
+                    eventHandler_->update_channel(channel_.get());
+                }
+                if (handler) {
+                    handler->on_input_shutdown(shared_from_this());
+                }
+                if (output_shutdown_ || state_ == ConnectionState::closing) {
+                    do_close();
+                }
             }
         }
     }

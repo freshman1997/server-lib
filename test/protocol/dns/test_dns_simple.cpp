@@ -1,6 +1,6 @@
 #include "dns_packet.h"
 #include <iostream>
-#include "common/winsock_guard.h"
+
 
 #ifndef _WIN32
 #else
@@ -207,11 +207,7 @@ void test_different_record_types()
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::printf("WSAStartup failed\n");
-        return 1;
-    }
+    
 
     std::cout << "DNS Protocol Tests\n" << std::endl;
     std::cout << "==================" << std::endl;

@@ -26,6 +26,12 @@ namespace yuan::server::events
     inline constexpr const char *socks5_session_relay_started = "server.socks5.session.relay_started";
     inline constexpr const char *socks5_session_relay_completed = "server.socks5.session.relay_completed";
 
+    inline constexpr const char *proxy_session_accepted = "server.proxy.session.accepted";
+    inline constexpr const char *proxy_session_rejected = "server.proxy.session.rejected";
+    inline constexpr const char *proxy_session_completed = "server.proxy.session.completed";
+    inline constexpr const char *proxy_session_state_changed = "server.proxy.session.state_changed";
+    inline constexpr const char *proxy_session_snapshot = "server.proxy.session.snapshot";
+
     inline constexpr const char *websocket_session_connected = "server.websocket.session.connected";
     inline constexpr const char *websocket_session_disconnected = "server.websocket.session.disconnected";
     inline constexpr const char *websocket_message_received = "server.websocket.message.received";
@@ -122,6 +128,65 @@ namespace yuan::server
         uint64_t bytes_up = 0;
         uint64_t bytes_down = 0;
         uint64_t duration_ms = 0;
+    };
+
+    struct ProxySessionAcceptedEvent
+    {
+        uint64_t session_id = 0;
+        std::string service_name;
+        std::string client_addr;
+        std::string method;
+        std::string target_addr;
+        uint32_t active_sessions = 0;
+    };
+
+    struct ProxySessionRejectedEvent
+    {
+        uint64_t session_id = 0;
+        std::string service_name;
+        std::string client_addr;
+        std::string method;
+        std::string target_addr;
+        std::string reason;
+    };
+
+    struct ProxySessionCompletedEvent
+    {
+        uint64_t session_id = 0;
+        std::string service_name;
+        std::string client_addr;
+        std::string method;
+        std::string target_addr;
+        uint64_t duration_ms = 0;
+        uint64_t bytes_up = 0;
+        uint64_t bytes_down = 0;
+        std::string close_reason;
+    };
+
+    struct ProxySessionStateChangedEvent
+    {
+        uint64_t session_id = 0;
+        std::string service_name;
+        std::string client_addr;
+        std::string method;
+        std::string target_addr;
+        std::string previous_state;
+        std::string current_state;
+        std::string reason;
+    };
+
+    struct ProxySessionSnapshotEvent
+    {
+        std::string service_name;
+        uint32_t accepted_sessions = 0;
+        uint32_t reading_request_sessions = 0;
+        uint32_t connecting_upstream_sessions = 0;
+        uint32_t established_sessions = 0;
+        uint32_t closing_sessions = 0;
+        uint32_t active_sessions = 0;
+        uint64_t total_accepted = 0;
+        uint64_t total_rejected = 0;
+        uint64_t total_completed = 0;
     };
 
     struct WebSocketSessionEvent

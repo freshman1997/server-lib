@@ -7,7 +7,7 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
-#include "common/winsock_guard.h"
+
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -2451,12 +2451,6 @@ void test_torrent_generation()
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        printf("WSAStartup failed\n");
-        return 1;
-    }
-
     // Disable stdout buffering to ensure all output is flushed
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);

@@ -8,8 +8,10 @@
 #include "net/async/async_datagram_client.h"
 #include "net/async/async_listener_host.h"
 #include "net/async/async_request_client.h"
+#include "net/handler/connection_handler.h"
 #include "net/runtime/network_runtime.h"
-#include "common/winsock_guard.h"
+#include "net/socket/inet_address.h"
+
 
 #include <atomic>
 #include <chrono>
@@ -49,6 +51,129 @@ namespace
         const auto span = buffer.readable_span();
         return std::string(span.begin(), span.end());
     }
+
+    class ImmediateFlushConnection final : public yuan::net::Connection
+    {
+    public:
+        ImmediateFlushConnection()
+            : remote_addr_("127.0.0.1", 12345),
+              local_addr_("127.0.0.1", 23456)
+        {
+        }
+
+        yuan::net::ConnectionState get_connection_state() const override
+        {
+            return state_;
+        }
+
+        bool is_connected() const override
+        {
+            return state_ == yuan::net::ConnectionState::connected;
+        }
+
+        const yuan::net::InetAddress &get_remote_address() const override
+        {
+            return remote_addr_;
+        }
+
+        const yuan::net::InetAddress &get_local_address() const override
+        {
+            return local_addr_;
+        }
+
+        void write(const ::yuan::buffer::ByteBuffer &buffer) override
+        {
+            append_output(buffer);
+        }
+
+        void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer) override
+        {
+            write(buffer);
+            flush();
+        }
+
+        void flush() override
+        {
+            output_buffer_.clear();
+        }
+
+        void abort() override
+        {
+            state_ = yuan::net::ConnectionState::closed;
+        }
+
+        void close() override
+        {
+            state_ = yuan::net::ConnectionState::closed;
+        }
+
+        void set_connection_handler(std::shared_ptr<yuan::net::ConnectionHandler> handler) override
+        {
+            handler_owner_ = std::move(handler);
+            handler_ = handler_owner_.get();
+        }
+
+        yuan::net::ConnectionHandler *get_connection_handler() const override
+        {
+            return handler_;
+        }
+
+        std::shared_ptr<yuan::net::ConnectionHandler> get_connection_handler_owner() const override
+        {
+            return handler_owner_;
+        }
+
+        void set_ssl_handler(std::shared_ptr<yuan::net::SSLHandler> sslHandler) override
+        {
+            ssl_handler_ = std::move(sslHandler);
+        }
+
+        void on_read_event() override
+        {
+        }
+
+        void on_write_event() override
+        {
+        }
+
+        void set_event_handler(yuan::net::EventHandler *eventHandler) override
+        {
+            event_handler_ = eventHandler;
+        }
+
+    private:
+        yuan::net::ConnectionState state_ = yuan::net::ConnectionState::connected;
+        yuan::net::InetAddress remote_addr_;
+        yuan::net::InetAddress local_addr_;
+        yuan::net::ConnectionHandler *handler_ = nullptr;
+        std::shared_ptr<yuan::net::ConnectionHandler> handler_owner_;
+        yuan::net::EventHandler *event_handler_ = nullptr;
+        std::shared_ptr<yuan::net::SSLHandler> ssl_handler_;
+    };
+
+    class TrackingHandler final : public yuan::net::ConnectionHandler
+    {
+    public:
+        void on_connected(const std::shared_ptr<yuan::net::Connection> &) override
+        {
+        }
+
+        void on_error(const std::shared_ptr<yuan::net::Connection> &) override
+        {
+        }
+
+        void on_read(const std::shared_ptr<yuan::net::Connection> &) override
+        {
+        }
+
+        void on_write(const std::shared_ptr<yuan::net::Connection> &) override
+        {
+        }
+
+        void on_close(const std::shared_ptr<yuan::net::Connection> &) override
+        {
+        }
+    };
 
     uint16_t reserve_tcp_port()
     {
@@ -324,6 +449,18 @@ namespace
 
         const int result = yuan::coroutine::sync_wait(rv, test_default_ctx(rv));
         check(result == 0, "connection context lifecycle test should return 0");
+
+        auto conn = std::make_shared<ImmediateFlushConnection>();
+        auto existing_handler = std::make_shared<TrackingHandler>();
+        conn->set_connection_handler(existing_handler);
+
+        yuan::net::AsyncConnectionContext ctx(conn, rv);
+        check(conn->get_connection_handler() == existing_handler.get(),
+              "context construction should not replace existing connection handler");
+
+        ctx.install_default_handler();
+        check(conn->get_connection_handler() != existing_handler.get(),
+              "install_default_handler should explicitly replace the handler");
     }
 
     void test_async_client_session_connect_read_write()
@@ -608,16 +745,45 @@ namespace
         check(result == 0, "IO awaitables test should return 0");
     }
 
+    void test_write_and_flush_immediate_completion_regression()
+    {
+        std::cout << "  [IO awaitables] immediate write/flush completion regression\n";
+
+        yuan::net::NetworkRuntime runtime;
+        auto rv = runtime.runtime_view();
+        auto conn = std::make_shared<ImmediateFlushConnection>();
+
+        auto test_fn = [&](yuan::coroutine::RuntimeView view)->yuan::coroutine::Task<int>
+        {
+            co_await view.schedule();
+
+            yuan::buffer::ByteBuffer write_buf;
+            write_buf.append("ping", 4);
+
+            auto write_result = co_await view.write(conn.get(), write_buf, 100);
+            check(write_result.status == yuan::coroutine::IoStatus::success,
+                  "async_write should complete even if flush finishes synchronously");
+            check(conn->output_readable_bytes() == 0,
+                  "synchronous flush should drain output buffer");
+
+            conn->append_output("pong", 4);
+            auto flush_result = co_await view.flush(conn.get(), 100);
+            check(flush_result.status == yuan::coroutine::IoStatus::success,
+                  "async_flush should complete even if no on_write callback fires");
+            check(conn->output_readable_bytes() == 0,
+                  "async_flush should leave no pending output");
+
+            co_return 0;
+        };
+
+        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        check(result == 0, "immediate completion regression test should return 0");
+    }
+
 } // namespace
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::cerr << "winsock init failed\n";
-        return 1;
-    }
-
     std::cout << "Running async facades smoke tests...\n\n";
 
     test_network_runtime_lifecycle();
@@ -628,6 +794,7 @@ int main()
     test_async_datagram_client_send_receive();
     test_async_datagram_client_send_and_receive_async();
     test_io_awaitables_via_connection_context();
+    test_write_and_flush_immediate_completion_regression();
 
     std::cout << "\n";
     if (g_failed > 0) {

@@ -37,6 +37,8 @@ namespace yuan::net::socket
     void set_none_block(int fd, bool on);
 
     void set_ipv6_only(int fd, bool on);
+
+    bool shutdown_write(int fd);
 }
 
 #endif

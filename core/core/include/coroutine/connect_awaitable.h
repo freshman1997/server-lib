@@ -83,7 +83,11 @@ namespace yuan::coroutine
                 return false;
             }
 
-            proxy_ = std::make_shared<ConnectProxyHandler>(*this, conn_.get());
+            original_handler_ = conn_->get_connection_handler();
+            original_handler_owner_ = conn_->get_connection_handler_owner();
+            proxy_ = std::make_shared<ConnectProxyHandler>(*this, conn_.get(),
+                                                           original_handler_,
+                                                           original_handler_owner_);
             conn_->set_connection_handler(proxy_);
             conn_->set_event_handler(runtime_.event_loop());
 
@@ -122,9 +126,7 @@ namespace yuan::coroutine
                 timeout_timer_ = nullptr;
             }
 
-            if (proxy_ && conn_) {
-                conn_->set_connection_handler(std::shared_ptr<net::ConnectionHandler>{});
-            }
+            restore_handler_if_needed();
             proxy_.reset();
 
             if (timed_out_) {
@@ -146,6 +148,22 @@ namespace yuan::coroutine
         }
 
     private:
+        void restore_handler_if_needed() noexcept
+        {
+            if (handler_restored_ || !conn_) {
+                return;
+            }
+
+            if (proxy_ && conn_->get_connection_handler() == proxy_.get()) {
+                if (original_handler_owner_) {
+                    conn_->set_connection_handler(original_handler_owner_);
+                } else {
+                    conn_->set_connection_handler(make_non_owning_handler(original_handler_));
+                }
+            }
+            handler_restored_ = true;
+        }
+
         void resume() noexcept
         {
             if (completed_ || !handle_) {
@@ -160,28 +178,37 @@ namespace yuan::coroutine
         class ConnectProxyHandler final : public net::ConnectionHandler
         {
         public:
-            ConnectProxyHandler(ConnectAwaitable &owner, net::Connection *conn) noexcept
+            ConnectProxyHandler(ConnectAwaitable &owner,
+                                net::Connection *conn,
+                                net::ConnectionHandler *next,
+                                std::shared_ptr<net::ConnectionHandler> next_owner) noexcept
                 : owner_(owner),
-                  conn_(conn)
+                  conn_(conn),
+                  next_(next),
+                  next_owner_(std::move(next_owner))
             {
             }
 
             void on_connected(const std::shared_ptr<net::Connection> &conn) override
             {
-                if (owner_.completed_) {
-                    return;
+                if (!owner_.completed_) {
+                    owner_.result_.result = ConnectResult::success;
+                    owner_.resume();
                 }
-                owner_.result_.result = ConnectResult::success;
-                owner_.resume();
+                if (next_) {
+                    next_->on_connected(conn);
+                }
             }
 
             void on_error(const std::shared_ptr<net::Connection> &conn) override
             {
-                if (owner_.completed_) {
-                    return;
+                if (!owner_.completed_) {
+                    owner_.result_.result = ConnectResult::connection_error;
+                    owner_.resume();
                 }
-                owner_.result_.result = ConnectResult::connection_error;
-                owner_.resume();
+                if (next_) {
+                    next_->on_error(conn);
+                }
             }
 
             void on_read(const std::shared_ptr<net::Connection> &conn) override
@@ -194,16 +221,20 @@ namespace yuan::coroutine
 
             void on_close(const std::shared_ptr<net::Connection> &conn) override
             {
-                if (owner_.completed_) {
-                    return;
+                if (!owner_.completed_) {
+                    owner_.result_.result = ConnectResult::connection_error;
+                    owner_.resume();
                 }
-                owner_.result_.result = ConnectResult::connection_error;
-                owner_.resume();
+                if (next_) {
+                    next_->on_close(conn);
+                }
             }
 
         private:
             ConnectAwaitable &owner_;
             net::Connection *conn_;
+            net::ConnectionHandler *next_ = nullptr;
+            std::shared_ptr<net::ConnectionHandler> next_owner_;
         };
 
         RuntimeView runtime_{};
@@ -212,12 +243,15 @@ namespace yuan::coroutine
         uint32_t timeout_ms_ = 0;
         std::shared_ptr<net::Connection> conn_;
         timer::Timer *timeout_timer_ = nullptr;
+        net::ConnectionHandler *original_handler_ = nullptr;
+        std::shared_ptr<net::ConnectionHandler> original_handler_owner_;
 
         std::coroutine_handle<> handle_{};
-            std::shared_ptr<ConnectProxyHandler> proxy_;
+        std::shared_ptr<ConnectProxyHandler> proxy_;
         ConnectAwaitableResult result_{};
         bool completed_ = false;
         bool timed_out_ = false;
+        bool handler_restored_ = false;
     };
 
     inline ConnectAwaitable async_connect(
@@ -232,4 +266,3 @@ namespace yuan::coroutine
 } // namespace yuan::coroutine
 
 #endif
-

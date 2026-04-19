@@ -5,7 +5,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include "common/winsock_guard.h"
+
 
 #ifndef _WIN32
 #else
@@ -26,12 +26,6 @@ void print_usage(const char *program_name)
 
 int main(int argc, char *argv[])
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::printf("WSAStartup failed\n");
-        return 1;
-    }
-
     if (argc < 4) {
         print_usage(argv[0]);
         return 1;

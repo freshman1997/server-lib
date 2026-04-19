@@ -3,7 +3,7 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
-#include "common/winsock_guard.h"
+
 
 #ifndef _WIN32
 #else
@@ -15,11 +15,7 @@ using namespace yuan::net::dns;
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::printf("WSAStartup failed\n");
-        return 1;
-    }
+    
 
     const int PORT = 53540;
 

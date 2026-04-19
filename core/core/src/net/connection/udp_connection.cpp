@@ -267,6 +267,10 @@ namespace yuan::net
         }
         is_closing_ = true;
         cleanup_done_ = true;
+        if (alive_timer_) {
+            alive_timer_->cancel();
+            alive_timer_ = nullptr;
+        }
         auto self = std::static_pointer_cast<UdpConnection>(shared_from_this());
         [[maybe_unused]] auto handler_owner = std::move(connectionHandlerOwner_);
         auto *handler = handler_owner ? handler_owner.get() : connectionHandler_;

@@ -12,7 +12,7 @@ add_executable(test_ipv6_dual_stack test_ipv6_dual_stack.cpp)
 
 target_link_libraries(test_log PUBLIC Logger)
 target_link_libraries(test_logger_auto PUBLIC Logger)
-target_link_libraries(test_net_logger PUBLIC NetLogger)
+target_link_libraries(test_net_logger PUBLIC NetLogger App)
 target_link_libraries(test_coroutine_runtime PUBLIC Core)
 target_link_libraries(test_event_bus PUBLIC Core)
 target_link_libraries(test_buffer_model PUBLIC Core)

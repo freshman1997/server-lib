@@ -36,6 +36,8 @@ namespace yuan::net
 
         // 发送完数据后返回
         virtual void close();
+        virtual bool shutdown_write() override;
+        virtual bool input_shutdown() const override;
 
         Channel *stream_channel() const override;
 
@@ -93,6 +95,9 @@ namespace yuan::net
         bool cleanup_done_ = false;
         bool close_notified_ = false;
         bool ssl_handshaking_ = false;
+        bool input_shutdown_ = false;
+        bool output_shutdown_ = false;
+        bool pending_output_shutdown_ = false;
         SslHandshakeCallback ssl_handshake_callback_;
     };
 }

@@ -1,4 +1,4 @@
-﻿#ifndef __YUAN_COROUTINE_DATAGRAM_IO_AWAITABLE_H__
+#ifndef __YUAN_COROUTINE_DATAGRAM_IO_AWAITABLE_H__
 #define __YUAN_COROUTINE_DATAGRAM_IO_AWAITABLE_H__
 
 #include <coroutine>
@@ -209,6 +209,15 @@ namespace yuan::coroutine
         bool completed_ = false;
         bool timed_out_ = false;
         bool handler_restored_ = false;
+
+    public:
+        ~AsyncReceiveFromAwaiter()
+        {
+            if (timeout_timer_) {
+                timeout_timer_->cancel();
+                timeout_timer_ = nullptr;
+            }
+        }
     };
 
     inline AsyncReceiveFromAwaiter async_receive_from(

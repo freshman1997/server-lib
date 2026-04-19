@@ -6,7 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <thread>
-#include "common/winsock_guard.h"
+
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -18,11 +18,7 @@ using namespace yuan::net::ftp;
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::cerr << "WSAStartup failed\n";
-        return 1;
-    }
+    
 
     namespace fs = std::filesystem;
     const auto root = fs::temp_directory_path() / "ftp_e2e_root";

@@ -185,12 +185,18 @@ const char *to_string(const SupervisorReason reason) noexcept
 }
 
 Bootstrap::Bootstrap(Application& application)
-    : application_(application)
+    : application_(application),
+      native_platform_guard_(std::make_unique<NativePlatformGuard>())
 {
 }
 
 bool Bootstrap::run()
 {
+    if (native_platform_guard_ && !native_platform_guard_->ok()) {
+        LOG_ERROR("failed to initialize native platform");
+        return false;
+    }
+
     const auto plan = derive_runtime_plan(application_.context());
     if (!plan.implemented) {
         LOG_WARN(

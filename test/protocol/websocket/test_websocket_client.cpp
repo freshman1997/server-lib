@@ -1,6 +1,6 @@
 #include "websocket.h"
 #include <iostream>
-#include "common/winsock_guard.h"
+
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -32,11 +32,7 @@ public:
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::cerr << "WSAStartup failed\n";
-        return 1;
-    }
+    
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
 #endif

@@ -10,7 +10,7 @@
 #include <memory>
 #include <string>
 #include <thread>
-#include "common/winsock_guard.h"
+
 
 namespace
 {
@@ -47,11 +47,7 @@ int main(int argc, char **argv)
     std::signal(SIGTERM, signal_handler);
 
 #ifdef _WIN32
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::cerr << "winsock init failed\n";
-        return 1;
-    }
+    
 #endif
 
     yuan::app::RuntimeContext context;

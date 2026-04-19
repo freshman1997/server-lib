@@ -1,6 +1,6 @@
 #include "server/ftp_server.h"
 #include "server/context.h"
-#include "common/winsock_guard.h"
+
 
 #include <filesystem>
 #include <iostream>
@@ -16,11 +16,7 @@ using namespace yuan::net::ftp;
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::cerr << "WSAStartup failed\n";
-        return 1;
-    }
+    
 
     // 设置服务器根目录
     std::string root_dir = "E:/k5client";

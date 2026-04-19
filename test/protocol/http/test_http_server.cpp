@@ -1,7 +1,7 @@
 #include "application.h"
 #include "bootstrap.h"
 #include "http_service.h"
-#include "common/winsock_guard.h"
+
 
 #include <atomic>
 #include <chrono>
@@ -24,11 +24,7 @@ void signal_handler(int)
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::cerr << "WSAStartup failed\n";
-        return 1;
-    }
+    
 
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);

@@ -49,6 +49,8 @@ namespace yuan::net
 
         // 发送完数据后返回
         virtual void close();
+        virtual bool shutdown_write() override { return false; }
+        virtual bool input_shutdown() const override { return false; }
 
         virtual void set_connection_handler(std::shared_ptr<ConnectionHandler> handler) override;
 

@@ -26,6 +26,7 @@ namespace yuan::net
         explicit AsyncClientSession(std::shared_ptr<Connection> conn, coroutine::RuntimeView runtime)
             : ctx_(conn, runtime)
         {
+            ctx_.install_default_handler();
         }
 
         ~AsyncClientSession() = default;
@@ -47,6 +48,7 @@ namespace yuan::net
             }
 
             ctx_ = AsyncConnectionContext(result.connection, runtime);
+            ctx_.install_default_handler();
             co_return true;
         }
 

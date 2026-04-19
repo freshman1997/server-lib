@@ -67,6 +67,12 @@ namespace yuan::coroutine
             resume();
         }
 
+        void on_accept_finished() noexcept
+        {
+            accepted_conn_.reset();
+            resume();
+        }
+
         void resume() noexcept
         {
             if (completed_ || !handle_) {
@@ -94,6 +100,7 @@ namespace yuan::coroutine
             void on_error(const std::shared_ptr<net::Connection> &conn) override
             {
                 (void)conn;
+                owner_.on_accept_finished();
             }
 
             void on_read(const std::shared_ptr<net::Connection> &conn) override
@@ -109,6 +116,7 @@ namespace yuan::coroutine
             void on_close(const std::shared_ptr<net::Connection> &conn) override
             {
                 (void)conn;
+                owner_.on_accept_finished();
             }
 
         private:
@@ -136,4 +144,3 @@ namespace yuan::coroutine
 } // namespace yuan::coroutine
 
 #endif
-

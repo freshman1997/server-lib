@@ -2,6 +2,7 @@
 #define __YUAN_APP_BOOTSTRAP_H__
 
 #include "application.h"
+#include "native_platform.h"
 
 #include <cstdint>
 #include <memory>
@@ -128,6 +129,7 @@ private:
 #ifndef _WIN32
     std::vector<WorkerProcessInfo> worker_processes_;
 #endif
+    std::unique_ptr<NativePlatformGuard> native_platform_guard_;
 };
 
 } // namespace yuan::app

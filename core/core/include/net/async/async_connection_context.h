@@ -28,17 +28,11 @@ namespace yuan::net
             : conn_(conn, [](Connection *) {}),
               runtime_(runtime)
         {
-            if (conn_) {
-                conn_->set_connection_handler(default_handler_owner_);
-            }
         }
 
         AsyncConnectionContext(std::shared_ptr<Connection> conn, coroutine::RuntimeView runtime)
             : conn_(conn), runtime_(runtime)
         {
-            if (conn_) {
-                conn_->set_connection_handler(default_handler_owner_);
-            }
         }
 
         ~AsyncConnectionContext() = default;
@@ -54,9 +48,6 @@ namespace yuan::net
         {
             other.conn_ = nullptr;
             other.closed_ = true;
-            if (conn_) {
-                conn_->set_connection_handler(default_handler_owner_);
-            }
         }
 
         AsyncConnectionContext &operator=(AsyncConnectionContext &&other) noexcept
@@ -68,11 +59,15 @@ namespace yuan::net
                 default_handler_owner_ = other.default_handler_owner_;
                 other.conn_ = nullptr;
                 other.closed_ = true;
-                if (conn_) {
-                    conn_->set_connection_handler(default_handler_owner_);
-                }
             }
             return *this;
+        }
+
+        void install_default_handler()
+        {
+            if (conn_) {
+                conn_->set_connection_handler(default_handler_owner_);
+            }
         }
 
         coroutine::Task<coroutine::ReadResult> read_async(uint32_t timeout_ms = 0)
@@ -285,4 +280,3 @@ namespace yuan::net
 } // namespace yuan::net
 
 #endif
-

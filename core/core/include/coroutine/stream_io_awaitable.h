@@ -1,4 +1,4 @@
-﻿#ifndef __YUAN_COROUTINE_STREAM_IO_AWAITABLE_H__
+#ifndef __YUAN_COROUTINE_STREAM_IO_AWAITABLE_H__
 #define __YUAN_COROUTINE_STREAM_IO_AWAITABLE_H__
 
 #include <coroutine>
@@ -31,7 +31,10 @@ namespace yuan::coroutine
             if (!connection_ || !runtime_.event_loop()) {
                 return true;
             }
-            return connection_->input_readable_bytes() > 0;
+            if (connection_->get_connection_state() == net::ConnectionState::closed) {
+                return true;
+            }
+            return connection_->input_readable_bytes() > 0 || connection_->input_shutdown();
         }
 
         bool await_suspend(std::coroutine_handle<> handle)
@@ -41,7 +44,17 @@ namespace yuan::coroutine
                 return false;
             }
 
+            if (connection_->get_connection_state() == net::ConnectionState::closed) {
+                result_.status = IoStatus::connection_closed;
+                return false;
+            }
+
             if (connection_->input_readable_bytes() > 0) {
+                return false;
+            }
+
+            if (connection_->input_shutdown()) {
+                result_.status = IoStatus::connection_closed;
                 return false;
             }
 
@@ -50,6 +63,27 @@ namespace yuan::coroutine
                                                     connection_->get_connection_handler(),
                                                     connection_->get_connection_handler_owner());
             connection_->set_connection_handler(proxy_);
+
+            if (connection_->input_readable_bytes() > 0) {
+                result_.status = IoStatus::success;
+                restore_handler_if_needed();
+                proxy_.reset();
+                return false;
+            }
+
+            if (connection_->input_shutdown()) {
+                result_.status = IoStatus::connection_closed;
+                restore_handler_if_needed();
+                proxy_.reset();
+                return false;
+            }
+
+            if (connection_->get_connection_state() != net::ConnectionState::connected) {
+                result_.status = IoStatus::connection_closed;
+                restore_handler_if_needed();
+                proxy_.reset();
+                return false;
+            }
 
             if (timeout_ms_ > 0 && runtime_.timer_manager()) {
                 timeout_timer_ = timer::TimerUtil::build_timeout_timer(
@@ -160,6 +194,22 @@ namespace yuan::coroutine
                 }
             }
 
+            void on_input_shutdown(const std::shared_ptr<net::Connection> &conn) override
+            {
+                if (!owner_.completed_) {
+                    owner_.complete(IoStatus::connection_closed);
+                    return;
+                }
+                if (next_) {
+                    next_->on_input_shutdown(conn);
+                }
+            }
+
+            bool is_input_shutdown() const override
+            {
+                return next_ ? next_->is_input_shutdown() : false;
+            }
+
             AsyncReadAwaiter &owner_;
             net::Connection *connection_;
             net::ConnectionHandler *next_;
@@ -192,6 +242,15 @@ namespace yuan::coroutine
         bool completed_ = false;
         bool timed_out_ = false;
         bool handler_restored_ = false;
+
+    public:
+        ~AsyncReadAwaiter()
+        {
+            if (timeout_timer_) {
+                timeout_timer_->cancel();
+                timeout_timer_ = nullptr;
+            }
+        }
     };
 
     inline AsyncReadAwaiter async_read(
@@ -225,7 +284,8 @@ namespace yuan::coroutine
 
         bool await_ready() const noexcept
         {
-            return !connection_ || !runtime_.event_loop();
+            return !connection_ || !runtime_.event_loop() ||
+                   connection_->get_connection_state() == net::ConnectionState::closed;
         }
 
         bool await_suspend(std::coroutine_handle<> handle)
@@ -235,13 +295,27 @@ namespace yuan::coroutine
                 return false;
             }
 
-            handle_ = handle;
-            connection_->write_and_flush(buffer_);
+            if (connection_->get_connection_state() == net::ConnectionState::closed) {
+                result_.status = IoStatus::connection_closed;
+                return false;
+            }
 
+            handle_ = handle;
             proxy_ = std::make_shared<ProxyHandler>(*this, connection_,
                                                     connection_->get_connection_handler(),
                                                     connection_->get_connection_handler_owner());
             connection_->set_connection_handler(proxy_);
+            connection_->write_and_flush(buffer_);
+
+            if (completed_) {
+                return true;
+            }
+            if (connection_->output_readable_bytes() == 0) {
+                result_.status = IoStatus::success;
+                restore_handler_if_needed();
+                proxy_.reset();
+                return false;
+            }
 
             if (timeout_ms_ > 0 && runtime_.timer_manager()) {
                 timeout_timer_ = timer::TimerUtil::build_timeout_timer(
@@ -381,6 +455,15 @@ namespace yuan::coroutine
         bool completed_ = false;
         bool timed_out_ = false;
         bool handler_restored_ = false;
+
+    public:
+        ~AsyncWriteAwaiter()
+        {
+            if (timeout_timer_) {
+                timeout_timer_->cancel();
+                timeout_timer_ = nullptr;
+            }
+        }
     };
 
     inline AsyncWriteAwaiter async_write(
@@ -414,7 +497,8 @@ namespace yuan::coroutine
 
         bool await_ready() const noexcept
         {
-            return !connection_ || !runtime_.event_loop();
+            return !connection_ || !runtime_.event_loop() ||
+                   connection_->get_connection_state() == net::ConnectionState::closed;
         }
 
         bool await_suspend(std::coroutine_handle<> handle)
@@ -424,13 +508,27 @@ namespace yuan::coroutine
                 return false;
             }
 
-            handle_ = handle;
-            connection_->flush();
+            if (connection_->get_connection_state() == net::ConnectionState::closed) {
+                result_.status = IoStatus::connection_closed;
+                return false;
+            }
 
+            handle_ = handle;
             proxy_ = std::make_shared<ProxyHandler>(*this, connection_,
                                                     connection_->get_connection_handler(),
                                                     connection_->get_connection_handler_owner());
             connection_->set_connection_handler(proxy_);
+            connection_->flush();
+
+            if (completed_) {
+                return true;
+            }
+            if (connection_->output_readable_bytes() == 0) {
+                result_.status = IoStatus::success;
+                restore_handler_if_needed();
+                proxy_.reset();
+                return false;
+            }
 
             if (timeout_ms_ > 0 && runtime_.timer_manager()) {
                 timeout_timer_ = timer::TimerUtil::build_timeout_timer(
@@ -569,6 +667,15 @@ namespace yuan::coroutine
         bool completed_ = false;
         bool timed_out_ = false;
         bool handler_restored_ = false;
+
+    public:
+        ~AsyncFlushAwaiter()
+        {
+            if (timeout_timer_) {
+                timeout_timer_->cancel();
+                timeout_timer_ = nullptr;
+            }
+        }
     };
 
     inline AsyncFlushAwaiter async_flush(
@@ -612,17 +719,21 @@ namespace yuan::coroutine
             }
 
             handle_ = handle;
-            connection_->close();
-
-            if (connection_->get_connection_state() == net::ConnectionState::closed) {
-                result_ = IoStatus::success;
-                return false;
-            }
-
             proxy_ = std::make_shared<ProxyHandler>(*this, connection_,
                                                     connection_->get_connection_handler(),
                                                     connection_->get_connection_handler_owner());
             connection_->set_connection_handler(proxy_);
+            connection_->close();
+
+            if (completed_) {
+                return true;
+            }
+            if (connection_->get_connection_state() == net::ConnectionState::closed) {
+                result_ = IoStatus::success;
+                restore_handler_if_needed();
+                proxy_.reset();
+                return false;
+            }
             return true;
         }
 
@@ -907,4 +1018,3 @@ namespace yuan::coroutine
 } // namespace yuan::coroutine
 
 #endif
-

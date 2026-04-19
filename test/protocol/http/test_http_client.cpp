@@ -7,7 +7,7 @@
 #include "request.h"
 #include "response.h"
 #include "task/download_file_task.h"
-#include "common/winsock_guard.h"
+
 
 #include <fstream>
 #include <iostream>
@@ -139,11 +139,7 @@ int handle_response(yuan::net::http::HttpResponse *resp)
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::cerr << "WSAStartup failed\n";
-        return 1;
-    }
+    
 
     using namespace yuan;
 

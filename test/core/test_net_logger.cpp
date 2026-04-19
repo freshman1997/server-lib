@@ -1,6 +1,5 @@
 #include "net_logger.h"
-#include "common/winsock_guard.h"
-
+#include "native_platform.h"
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -68,10 +67,10 @@ int reserve_free_port()
 
 int main()
 {
-    using namespace yuan::log;
+    const yuan::app::NativePlatformGuard platform_guard;
+    require(platform_guard.ok(), "WSAStartup failed");
 
-    const test::common::WinsockGuard winsock;
-    require(winsock.ok(), "WSAStartup failed");
+    using namespace yuan::log;
 
     const int selected_port = reserve_free_port();
     std::atomic<bool> done{false};

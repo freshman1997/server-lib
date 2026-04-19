@@ -12,7 +12,7 @@
 #include <atomic>
 #include <filesystem>
 #include <fstream>
-#include "common/winsock_guard.h"
+
 
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -999,11 +999,7 @@ bool test_make_response_header()
 
 int main()
 {
-    const test::common::WinsockGuard winsock;
-    if (!winsock.ok()) {
-        std::cerr << "WSAStartup failed" << std::endl;
-        return 1;
-    }
+    
 
     std::cout << "=== SMB Protocol Unit Tests ===" << std::endl;
 

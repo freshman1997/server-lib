@@ -44,6 +44,8 @@ namespace yuan::net
 
         void set_none_block(bool on) const;
 
+        bool shutdown_write() const;
+
         int get_fd() const
         {
             return fd_;

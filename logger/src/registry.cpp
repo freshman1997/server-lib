@@ -18,7 +18,7 @@ LogRegistry::LogRegistry()
     file_logger_ = file;
     loggers_["file"] = file;
     file_enabled_.store(true, std::memory_order_relaxed);
-    file_threshold_.store(Level::warn, std::memory_order_relaxed);
+    file_threshold_.store(Level::trace, std::memory_order_relaxed);
 }
 
 LogRegistry::~LogRegistry()
