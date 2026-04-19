@@ -18,7 +18,7 @@ namespace yuan::net::socks5
         bool enable_udp_associate = false;
         uint32_t connect_timeout_ms = 10000;
         uint32_t idle_timeout_ms = 300000;
-        size_t max_connections = 1024;
+        size_t max_connections = 8192;
     };
 }
 

@@ -21,7 +21,7 @@ namespace yuan::server
     {
         std::string listen_host = "0.0.0.0";
         int port = 3128;
-        int max_active_sessions = 128;
+        int max_active_sessions = 4096;
         int max_sessions_per_client = 1024;
         int header_timeout_ms = 15000;
         int idle_timeout_ms = 300000;

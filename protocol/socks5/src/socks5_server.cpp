@@ -279,7 +279,18 @@ namespace yuan::net::socks5
                     break;
                 }
 
-                auto ctx = AsyncConnectionContext(conn, static_cast<coroutine::RuntimeView>(rv));
+                auto *event_loop = rv.event_loop();
+                if (!event_loop) {
+                    conn->close();
+                    continue;
+                }
+
+                auto ctx = AsyncConnectionContext(conn, rv);
+                if (!ctx.runtime_view().event_loop()) {
+                    conn->close();
+                    continue;
+                }
+
                 auto task = handle_connection(std::move(ctx));
                 task.resume();
                 task.detach();

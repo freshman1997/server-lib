@@ -24,9 +24,16 @@ namespace yuan::server
         }
 
         if (shared_runtime_) {
-            return server_->init(port_, *shared_runtime_);
+            if (!server_->init(port_, *shared_runtime_)) {
+                return false;
+            }
+        } else {
+            if (!server_->init(port_)) {
+                return false;
+            }
         }
-        return server_->init(port_);
+
+        return true;
     }
 
     void Socks5Service::set_runtime_context(const yuan::app::RuntimeContext & context)

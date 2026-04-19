@@ -223,11 +223,15 @@ namespace yuan::app
         }
 
         for (const auto &entry : services_) {
+            if (!entry.service) {
+                return false;
+            }
+
             if (auto *contextAware = dynamic_cast<RuntimeContextAwareService *>(entry.service.get())) {
                 contextAware->set_runtime_context(context_);
             }
 
-            if (!entry.service || !entry.service->init()) {
+            if (!entry.service->init()) {
                 return false;
             }
 
