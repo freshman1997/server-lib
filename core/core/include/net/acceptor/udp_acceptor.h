@@ -31,7 +31,7 @@ namespace yuan::net
 
         virtual Channel *endpoint_channel() const override
         {
-            return channel_.get();
+            return channel_ ? &*channel_ : nullptr;
         }
 
         virtual void update_channel();
@@ -46,7 +46,7 @@ namespace yuan::net
         virtual void set_connection_handler(std::shared_ptr<ConnectionHandler> connHandler) override;
         virtual ConnectionHandler *connection_handler() const override
         {
-            return conn_handler_;
+            return conn_handler_owner_ ? &*conn_handler_owner_ : nullptr;
         }
         virtual std::shared_ptr<ConnectionHandler> connection_handler_owner() const override
         {
@@ -64,7 +64,7 @@ namespace yuan::net
 
         virtual int send_datagram(const std::shared_ptr<Connection> &conn, const ::yuan::buffer::ByteBuffer &buff) override
         {
-            return send_to(conn ? conn.get() : nullptr, buff);
+            return send_to(conn ? &*conn : nullptr, buff);
         }
 
         virtual int send_datagram(const InetAddress &addr, const ::yuan::buffer::ByteBuffer &buff) override;
@@ -86,14 +86,14 @@ namespace yuan::net
 
         UdpInstance *get_udp_instance() const override
         {
-            return instance_.get();
+            return instance_ ? &*instance_ : nullptr;
         }
 
     private:
         std::unique_ptr<Channel> channel_;
         std::unique_ptr<Socket> sock_;
+        std::shared_ptr<SelectHandler> self_handler_owner_;
         EventHandler *handler_;
-        ConnectionHandler *conn_handler_;
         std::shared_ptr<ConnectionHandler> conn_handler_owner_;
         timer::TimerManager *timer_manager_;
         std::unique_ptr<UdpInstance> instance_;

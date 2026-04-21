@@ -1,4 +1,4 @@
-﻿#include <cassert>
+#include <cassert>
 #include <cstdlib>
 #include <ctime>
 #include <memory>
@@ -231,12 +231,12 @@ namespace yuan::net::http
         runtime->register_connection(conn, make_non_owning_handler(proxy));
 
         PooledConnection pc;
-        pc.conn = conn.get();
+        pc.conn = &*conn;
         pc.created_at_ms = base::time::steady_now_ms();
         pc.mark_used(); // 鏂板垱寤虹殑杩炴帴绔嬪嵆鏍囪涓轰娇鐢ㄤ腑
 
         connections_.push_back(std::move(pc));
-        return conn.get();
+        return &*conn;
     }
 
     // ============================================================
@@ -328,7 +328,8 @@ namespace yuan::net::http
             return;
         }
 
-        auto *conn_ptr = conn.get();
+        auto &conn_ref = *conn;
+        auto *conn_ptr = &conn_ref;
         RemoteConnectTask::Ptr task;
         {
             std::lock_guard<std::mutex> lock(mapping_mutex_);
@@ -350,7 +351,7 @@ namespace yuan::net::http
             return;
         }
 
-        unmap_and_close_peer(conn.get(), false);
+        unmap_and_close_peer(&*conn, false);
     }
 
     void HttpProxy::on_read(const std::shared_ptr<Connection> &conn)
@@ -359,7 +360,8 @@ namespace yuan::net::http
             return;
         }
 
-        auto *conn_ptr = conn.get();
+        auto &conn_ref = *conn;
+        auto *conn_ptr = &conn_ref;
         ServerMapping mapping;
         bool is_server = false;
 
@@ -399,7 +401,8 @@ namespace yuan::net::http
             return;
         }
 
-        auto *conn_ptr = conn.get();
+        auto &conn_ref = *conn;
+        auto *conn_ptr = &conn_ref;
         timer::Timer *timer_to_cancel = take_timer(conn_ptr);
         if (timer_to_cancel) {
             timer_to_cancel->cancel();
@@ -622,7 +625,7 @@ namespace yuan::net::http
             Connection *pooledConn = pool->acquire(this, server_);
             if (pooledConn) {
                 ++stats_.pool_hits;
-                map_connections(clientConn, pooledConn, route_key);
+                map_connections(clientConn->shared_from_this(), pooledConn->shared_from_this(), route_key);
                 req->pack_and_send(pooledConn);
                 pooledConn->flush();
                 return;
@@ -688,7 +691,7 @@ namespace yuan::net::http
             }
 
             // 寤虹珛杩炴帴鏄犲皠
-            map_connections(task->client_conn_, remoteConn, task->route_key_);
+            map_connections(task->client_conn_->shared_from_this(), remoteConn->shared_from_this(), task->route_key_);
 
             // 娓呯悊pending鐘舵€?
             {
@@ -727,7 +730,7 @@ namespace yuan::net::http
 
                 // 鎵惧埌杩滅▼杩炴帴
                 for (auto it = pending_server_tasks_.begin(); it != pending_server_tasks_.end(); ++it) {
-                    if (it->second.get() == task.get()) {
+                    if (it->second == task) {
                         remoteConn = it->first;
                         pending_server_tasks_.erase(it);
                         break;
@@ -774,7 +777,7 @@ namespace yuan::net::http
                 return;
             }
 
-            auto *conn_ptr = conn.get();
+            auto *conn_ptr = &*conn;
             unmap_and_close_peer(conn_ptr, true);
             std::lock_guard<std::mutex> lock(mapping_mutex_);
             pending_requests_.erase(conn_ptr);
@@ -900,7 +903,22 @@ namespace yuan::net::http
             orig_req->remove_header("te");
             orig_req->remove_header("trailers");
 
-            if (route.strip_prefix && !route.rewrite_prefix.empty()) {
+            if (route.strip_prefix) {
+                auto path = std::string(orig_req->get_path());
+                auto query = std::string(orig_req->get_query_string());
+                if (path.size() >= route.match_pattern.size()
+                    && path.compare(0, route.match_pattern.size(), route.match_pattern) == 0) {
+                    path.erase(0, route.match_pattern.size());
+                }
+                if (!route.rewrite_prefix.empty()) {
+                    path = route.rewrite_prefix + path;
+                }
+                std::string new_url = path;
+                if (!query.empty()) {
+                    new_url += "?";
+                    new_url += query;
+                }
+                orig_req->set_raw_url(std::move(new_url));
             }
         }
 
@@ -927,19 +945,29 @@ namespace yuan::net::http
                 server_->runtime()->register_connection(conn, make_non_owning_handler(this));
             }
 
-            return conn.get();
+            return &*conn;
         }
 
-        void HttpProxy::map_connections(Connection * clientConn, Connection * serverConn, const std::string & routeKey)
-        {
-            std::lock_guard<std::mutex> lock(mapping_mutex_);
-            cs_mapping_[clientConn] = serverConn;
+    void HttpProxy::map_connections(Connection * clientConn, Connection * serverConn, const std::string & routeKey)
+    {
+        std::lock_guard<std::mutex> lock(mapping_mutex_);
+        cs_mapping_[clientConn] = serverConn;
 
             ServerMapping sm;
             sm.client_conn = clientConn;
             sm.route_key = routeKey;
-            sc_mapping_[serverConn] = std::move(sm);
+        sc_mapping_[serverConn] = std::move(sm);
+    }
+
+    void HttpProxy::map_connections(const std::shared_ptr<Connection> &clientConn,
+                                    const std::shared_ptr<Connection> &serverConn,
+                                    const std::string &routeKey)
+    {
+        if (!clientConn || !serverConn) {
+            return;
         }
+        map_connections(&*clientConn, &*serverConn, routeKey);
+    }
 
         void HttpProxy::unmap_and_close_peer(Connection * conn, bool is_client)
         {
@@ -1032,7 +1060,7 @@ namespace yuan::net::http
             ++stats_.active_connections;
 
             const std::string route_key = route.match_pattern;
-            map_connections(clientConn, remoteConn, route_key);
+            map_connections(clientConn->shared_from_this(), remoteConn->shared_from_this(), route_key);
 
             req->pack_and_send(remoteConn);
             remoteConn->flush();

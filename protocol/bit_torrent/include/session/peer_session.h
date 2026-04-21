@@ -74,7 +74,7 @@ namespace yuan::net::bit_torrent
         void on_inbound_peer(std::shared_ptr<PeerConnection> peer);
         void disconnect_all_peers();
         void broadcast_have(uint32_t piece_index);
-        std::vector<PeerConnection *> get_active_peers() const;
+        std::vector<std::shared_ptr<PeerConnection> > get_active_peers() const;
 
         int32_t get_peer_count() const;
         int32_t get_active_peer_count() const;
@@ -83,8 +83,8 @@ namespace yuan::net::bit_torrent
         std::string make_key(const std::string &ip, uint16_t port) const;
         void attach_peer(const std::shared_ptr<PeerConnection> &peer, const std::string &key);
         void on_peer_state_changed(PeerConnection *peer);
-        void on_peer_connected(PeerConnection *peer);
-        void remove_peer(PeerConnection *peer);
+        void on_peer_connected(PeerConnection &peer);
+        void remove_peer(PeerConnection &peer);
 
     private:
         net::NetworkRuntime *runtime_ = nullptr;

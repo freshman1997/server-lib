@@ -14,6 +14,21 @@ namespace yuan::net::bit_torrent
 
     namespace
     {
+        template <typename T>
+        T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+
+        template <typename T>
+        T *ptr_of(const std::shared_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
+    namespace
+    {
 
         size_t compute_max_active_pieces(const DownloadRuntimeCoordinator *runtime_coordinator)
         {
@@ -164,7 +179,7 @@ namespace yuan::net::bit_torrent
 
         if (!runtime_) {
             owned_runtime_ = std::make_unique<NetworkRuntime>();
-            runtime_ = owned_runtime_.get();
+            runtime_ = ptr_of(owned_runtime_);
         }
 
         if (save_path_.empty())
@@ -234,8 +249,8 @@ namespace yuan::net::bit_torrent
                 stats_tracker_.set_piece_completed(piece_index);
 
                 if (piece_state_.is_endgame() || piece_state_.is_complete()) {
-                    for (auto *active_peer : runtime_coordinator_->get_active_peers()) {
-                        if (active_peer && active_peer != peer) {
+                    for (const auto &active_peer : runtime_coordinator_->get_active_peers()) {
+                        if (active_peer && ptr_of(active_peer) != peer) {
                             active_peer->send_cancel(piece_index, offset, length);
                         }
                     }
@@ -245,7 +260,7 @@ namespace yuan::net::bit_torrent
                     runtime_coordinator_->broadcast_have(piece_index);
                     if (piece_state_.is_complete()) {
                         runtime_coordinator_->announce_now();
-                        for (auto *active_peer : runtime_coordinator_->get_active_peers()) {
+                        for (const auto &active_peer : runtime_coordinator_->get_active_peers()) {
                             if (active_peer) {
                                 active_peer->send_not_interested();
                             }
@@ -271,8 +286,9 @@ namespace yuan::net::bit_torrent
             return;
         }
 
-        const auto piece_availability = build_piece_availability();
-        const auto max_active_pieces = compute_max_active_pieces(runtime_coordinator_.get());
+        const auto peers = runtime_coordinator_ ? runtime_coordinator_->get_active_peers() : std::vector<std::shared_ptr<PeerConnection> >{};
+        const auto piece_availability = build_piece_availability(peers);
+        const auto max_active_pieces = compute_max_active_pieces(ptr_of(runtime_coordinator_));
         while (peer->pending_request_count() < peer->request_window_size()) {
             PieceBlockRequest request;
             if (!piece_state_.select_next_request(peer->get_peer_state().pieces,
@@ -296,8 +312,8 @@ namespace yuan::net::bit_torrent
             return;
         }
 
-        for (auto *peer : runtime_coordinator_->get_active_peers()) {
-            request_next_block(peer);
+        for (const auto &peer : runtime_coordinator_->get_active_peers()) {
+            request_next_block(ptr_of(peer));
         }
     }
 
@@ -316,14 +332,14 @@ namespace yuan::net::bit_torrent
         stats_tracker_.add_uploaded_bytes(length);
     }
 
-    std::vector<uint32_t> BitTorrentClient::build_piece_availability() const
+    std::vector<uint32_t> BitTorrentClient::build_piece_availability(const std::vector<std::shared_ptr<PeerConnection> > &peers) const
     {
-        if (!runtime_coordinator_) {
+        if (peers.empty()) {
             return {};
         }
 
         std::vector<uint32_t> availability(meta_.info.piece_count(), 0);
-        for (const auto *peer : runtime_coordinator_->get_active_peers()) {
+        for (const auto &peer : peers) {
             if (!peer) {
                 continue;
             }
@@ -352,20 +368,20 @@ namespace yuan::net::bit_torrent
 
         auto peers = runtime_coordinator_->get_active_peers();
 
-        std::vector<PeerConnection *> interested;
-        for (auto *peer : peers) {
+        std::vector<std::shared_ptr<PeerConnection> > interested;
+        for (const auto &peer : peers) {
             if (peer && peer->get_peer_state().peer_interested) {
                 interested.push_back(peer);
             }
         }
 
         std::sort(interested.begin(), interested.end(),
-                  [](PeerConnection *a, PeerConnection *b) {
+                  [](const std::shared_ptr<PeerConnection> &a, const std::shared_ptr<PeerConnection> &b) {
                 return a->get_peer_ip() < b->get_peer_ip();
         });
 
         int32_t slots_remaining = upload_slots_;
-        for (auto *peer : peers) {
+        for (const auto &peer : peers) {
             if (!peer)
                 continue;
 

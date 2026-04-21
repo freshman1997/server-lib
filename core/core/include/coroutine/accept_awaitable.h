@@ -1,4 +1,4 @@
-﻿#ifndef __YUAN_COROUTINE_ACCEPT_AWAITABLE_H__
+#ifndef __YUAN_COROUTINE_ACCEPT_AWAITABLE_H__
 #define __YUAN_COROUTINE_ACCEPT_AWAITABLE_H__
 
 #include <coroutine>
@@ -23,7 +23,10 @@ namespace yuan::coroutine
 
         bool await_ready() const noexcept
         {
-            return !acceptor_ || !runtime_.event_loop();
+            if (!acceptor_ || !runtime_.event_loop()) {
+                return true;
+            }
+            return acceptor_->has_pending_connections();
         }
 
         bool await_suspend(std::coroutine_handle<> handle) noexcept
@@ -43,13 +46,17 @@ namespace yuan::coroutine
         std::shared_ptr<net::Connection> await_resume() noexcept
         {
             if (acceptor_) {
-                if (original_handler_owner_) {
-                    acceptor_->set_connection_handler(original_handler_owner_);
-                } else {
-                    acceptor_->set_connection_handler(make_non_owning_handler(original_handler_));
-                }
+                acceptor_->set_connection_handler(original_handler_owner_);
             }
             proxy_.reset();
+
+            if (acceptor_ && acceptor_->has_pending_connections()) {
+                auto conn = acceptor_->dequeue_pending_connection();
+                if (conn) {
+                    conn->set_connection_handler(original_handler_owner_);
+                }
+                return conn;
+            }
             return accepted_conn_;
         }
 
@@ -57,11 +64,11 @@ namespace yuan::coroutine
         void on_connection_accepted(std::shared_ptr<net::Connection> conn) noexcept
         {
             if (conn) {
-                if (original_handler_owner_) {
-                    conn->set_connection_handler(original_handler_owner_);
-                } else {
-                    conn->set_connection_handler(make_non_owning_handler(original_handler_));
-                }
+                conn->set_connection_handler(original_handler_owner_);
+            }
+            if (completed_) {
+                acceptor_->enqueue_pending_connection(std::move(conn));
+                return;
             }
             accepted_conn_ = conn;
             resume();
@@ -100,7 +107,9 @@ namespace yuan::coroutine
             void on_error(const std::shared_ptr<net::Connection> &conn) override
             {
                 (void)conn;
-                owner_.on_accept_finished();
+                if (!owner_.completed_) {
+                    owner_.on_accept_finished();
+                }
             }
 
             void on_read(const std::shared_ptr<net::Connection> &conn) override
@@ -116,7 +125,9 @@ namespace yuan::coroutine
             void on_close(const std::shared_ptr<net::Connection> &conn) override
             {
                 (void)conn;
-                owner_.on_accept_finished();
+                if (!owner_.completed_) {
+                    owner_.on_accept_finished();
+                }
             }
 
         private:

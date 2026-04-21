@@ -98,15 +98,15 @@ namespace yuan::app
 
         virtual void on_stop();
 
-        virtual void on_packet(net::Connection *conn, const buffer::ByteBuffer &packet) = 0;
+        virtual void on_packet(net::Connection &conn, const buffer::ByteBuffer &packet) = 0;
 
-        virtual void on_connection_open(net::Connection *conn);
+        virtual void on_connection_open(net::Connection &conn);
 
-        virtual void on_connection_error(net::Connection *conn);
+        virtual void on_connection_error(net::Connection &conn);
 
-        virtual void on_connection_write(net::Connection *conn);
+        virtual void on_connection_write(net::Connection &conn);
 
-        virtual void on_connection_close(net::Connection *conn);
+        virtual void on_connection_close(net::Connection &conn);
 
     private:
         class AppData;

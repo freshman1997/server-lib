@@ -420,6 +420,25 @@ As of the latest verified build:
   - the repository can be treated as "mainline refactor complete"
 - the repository still should not be treated as "final whole-project refactor complete"
 
+### Mainline Round Two (proxy/coroutine hardening)
+
+Latest verified round-two outcomes:
+
+- Proxy integration accept path regression has been repaired; integration logs now show normal accept flow (`accepted=1`) instead of stalled listener loops.
+- Event-loop poll event generation validation has been hardened to avoid discarding `generation=0` events.
+- High-frequency connection-facing coroutine/context paths now use explicit connection ownership semantics (`ConnectionRef`) rather than ad hoc pointer extraction helpers.
+- `make_non_owning_handler` and related session/async call sites have moved toward safer reference/shared ownership style while preserving compatibility entry points.
+- Manual `new/delete` remnants in key session/async/connect paths have been reduced in favor of RAII (`std::unique_ptr` handoff to existing factory ownership).
+- Key build and regression targets for this track are green:
+  - `Core`
+  - `App`
+  - `ServerServices`
+  - `test_proxy_service_integration`
+
+Known caveat retained in current baseline:
+
+- Windows large CONNECT behavior is now split conceptually into two cases: a strict no-half-close large tunnel path, which passes with full payload equality, and a half-close smoke path, which is timing-sensitive at the socket/read boundary and is validated as a substantial correct prefix rather than a strict full-echo guarantee.
+
 The remaining work is no longer about recovering broken migration steps. It is about finishing the intended end-state:
 
 - continue decomposing large protocol internals

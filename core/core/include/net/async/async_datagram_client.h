@@ -115,7 +115,7 @@ namespace yuan::net
 
         Connection *native_handle() const noexcept
         {
-            return connection_.get();
+            return connection_ ? const_cast<Connection *>(&*connection_) : nullptr;
         }
 
         std::shared_ptr<Connection> connection() const noexcept
@@ -155,31 +155,30 @@ namespace yuan::net
     private:
         bool setup(const std::string &host, uint16_t port)
         {
-            Socket *sock = new Socket(host.c_str(), port, true);
+            auto sock = std::make_unique<Socket>(host.c_str(), port, true);
             if (!sock->valid()) {
-                delete sock;
                 return false;
             }
+            const InetAddress remote_address = *sock->get_address();
 
             auto rv = runtime_view();
             auto *loop = rv.event_loop();
             if (!loop) {
-                delete sock;
                 return false;
             }
 
-            acceptor_.reset(create_datagram_acceptor(sock, rv));
+            acceptor_.reset(create_datagram_acceptor(sock.release(), rv));
             if (!acceptor_->listen()) {
                 acceptor_.reset();
                 return false;
             }
 
-            acceptor_->set_connection_handler(make_non_owning_handler(&default_handler_));
+            acceptor_->set_connection_handler(default_handler_holder_);
             acceptor_->set_event_handler(loop);
             loop->update_channel(acceptor_->endpoint_channel());
 
             auto instance = acceptor_->get_udp_instance();
-            const auto &res = instance->on_recv(*sock->get_address());
+            const auto &res = instance->on_recv(remote_address);
             if (!res.first || !res.second) {
                 acceptor_->close();
                 acceptor_.reset();
@@ -194,7 +193,7 @@ namespace yuan::net
                 return false;
             }
 
-            conn->set_connection_handler(make_non_owning_handler(&default_handler_));
+            conn->set_connection_handler(default_handler_holder_);
             conn->set_event_handler(loop);
             datagram->attach_datagram_instance(instance);
             datagram->set_datagram_state(ConnectionState::connected);
@@ -229,6 +228,7 @@ namespace yuan::net
         std::shared_ptr<Connection> connection_;
         std::unique_ptr<DatagramAcceptor> acceptor_;
         DefaultHandler default_handler_;
+        std::shared_ptr<ConnectionHandler> default_handler_holder_{ make_non_owning_handler(default_handler_) };
     };
 
 } // namespace yuan::net

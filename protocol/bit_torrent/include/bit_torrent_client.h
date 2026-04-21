@@ -97,7 +97,7 @@ namespace yuan::net::bit_torrent
         bool on_piece_request(uint32_t piece_index, uint32_t offset, uint32_t length, std::vector<uint8_t> &out);
         void on_piece_served(uint32_t piece_index, uint32_t offset, uint32_t length);
         void on_peer_requests_lost(const std::vector<PieceBlockRequest> &requests);
-        std::vector<uint32_t> build_piece_availability() const;
+        std::vector<uint32_t> build_piece_availability(const std::vector<std::shared_ptr<PeerConnection> > &peers) const;
         void request_next_block(PeerConnection *peer);
         void perform_choking_round();
         void on_unchoke_timer();

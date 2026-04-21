@@ -85,6 +85,10 @@ namespace yuan::coroutine
 
         AsyncReadAwaiter read(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncReadAwaiter read(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
+        AsyncReadAwaiter read(net::Connection *conn, uint32_t timeout_ms,
+                              bool forward_terminal_events_after_completion) const noexcept;
+        AsyncReadAwaiter read(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms,
+                              bool forward_terminal_events_after_completion) const noexcept;
         AsyncWriteAwaiter write(net::Connection *conn, const ::yuan::buffer::ByteBuffer &buf,
                                 uint32_t timeout_ms = 0) const noexcept;
         AsyncWriteAwaiter write(const std::shared_ptr<net::Connection> &conn, const ::yuan::buffer::ByteBuffer &buf,

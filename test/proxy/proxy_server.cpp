@@ -98,6 +98,12 @@ namespace
         if (proxy->contains("max_header_bytes")) {
             config.max_header_bytes = (*proxy)["max_header_bytes"].get<int>();
         }
+        if (proxy->contains("max_session_buffer_bytes")) {
+            config.max_session_buffer_bytes = (*proxy)["max_session_buffer_bytes"].get<int>();
+        }
+        if (proxy->contains("max_total_tunnel_memory")) {
+            config.max_total_tunnel_memory = (*proxy)["max_total_tunnel_memory"].get<int>();
+        }
         if (proxy->contains("basic_auth_user")) {
             config.basic_auth_user = (*proxy)["basic_auth_user"].get<std::string>();
         }
@@ -109,6 +115,9 @@ namespace
         }
         if (proxy->contains("deny_targets") && (*proxy)["deny_targets"].is_array()) {
             config.deny_targets = (*proxy)["deny_targets"].get<std::vector<std::string>>();
+        }
+        if (proxy->contains("allow_private_targets")) {
+            config.allow_private_targets = (*proxy)["allow_private_targets"].get<bool>();
         }
     }
 
@@ -152,6 +161,33 @@ namespace
         if (node->contains("max_connections")) {
             config.server_config.max_connections = (*node)["max_connections"].get<size_t>();
         }
+        if (node->contains("udp_idle_timeout_ms")) {
+            config.server_config.udp_idle_timeout_ms = (*node)["udp_idle_timeout_ms"].get<uint32_t>();
+        }
+        if (node->contains("max_datagram_size")) {
+            config.server_config.max_datagram_size = (*node)["max_datagram_size"].get<size_t>();
+        }
+        if (node->contains("max_udp_associations_per_client")) {
+            config.server_config.max_udp_associations_per_client = (*node)["max_udp_associations_per_client"].get<size_t>();
+        }
+        if (node->contains("listen_host")) {
+            config.server_config.listen_host = (*node)["listen_host"].get<std::string>();
+        }
+        if (node->contains("allow_private_targets")) {
+            config.server_config.allow_private_targets = (*node)["allow_private_targets"].get<bool>();
+        }
+        if (node->contains("allow_targets") && (*node)["allow_targets"].is_array()) {
+            config.server_config.allow_targets = (*node)["allow_targets"].get<std::vector<std::string>>();
+        }
+        if (node->contains("deny_targets") && (*node)["deny_targets"].is_array()) {
+            config.server_config.deny_targets = (*node)["deny_targets"].get<std::vector<std::string>>();
+        }
+        if (node->contains("max_sessions_per_client")) {
+            config.server_config.max_sessions_per_client = (*node)["max_sessions_per_client"].get<size_t>();
+        }
+        if (node->contains("drain_timeout_ms")) {
+            config.server_config.drain_timeout_ms = (*node)["drain_timeout_ms"].get<uint32_t>();
+        }
     }
 
     bool load_config_file(const std::string &path,
@@ -194,6 +230,8 @@ namespace
         config.session_snapshot_interval_ms =
             read_env_int("YUAN_PROXY_SESSION_SNAPSHOT_INTERVAL_MS", config.session_snapshot_interval_ms);
         config.max_header_bytes = read_env_int("YUAN_PROXY_MAX_HEADER_BYTES", config.max_header_bytes);
+        config.max_session_buffer_bytes = read_env_int("YUAN_PROXY_MAX_SESSION_BUFFER_BYTES", config.max_session_buffer_bytes);
+        config.max_total_tunnel_memory = read_env_int("YUAN_PROXY_MAX_TOTAL_TUNNEL_MEMORY", config.max_total_tunnel_memory);
 
         const std::string env_user = read_env_string("YUAN_PROXY_BASIC_USER");
         const std::string env_pass = read_env_string("YUAN_PROXY_BASIC_PASS");
@@ -211,6 +249,11 @@ namespace
         }
         if (!env_deny.empty()) {
             config.deny_targets = split_csv(env_deny);
+        }
+
+        const std::string env_allow_private = read_env_string("YUAN_PROXY_ALLOW_PRIVATE_TARGETS");
+        if (!env_allow_private.empty()) {
+            config.allow_private_targets = env_allow_private == "1" || env_allow_private == "true" || env_allow_private == "TRUE";
         }
     }
 
@@ -245,6 +288,31 @@ namespace
         if (!enable_udp.empty()) {
             config.server_config.enable_udp_associate = enable_udp == "1" || enable_udp == "true" || enable_udp == "TRUE";
         }
+        config.server_config.udp_idle_timeout_ms = static_cast<uint32_t>(
+            read_env_int("YUAN_SOCKS5_UDP_IDLE_TIMEOUT_MS", static_cast<int>(config.server_config.udp_idle_timeout_ms)));
+        config.server_config.max_datagram_size = static_cast<size_t>(
+            read_env_int("YUAN_SOCKS5_MAX_DATAGRAM_SIZE", static_cast<int>(config.server_config.max_datagram_size)));
+        config.server_config.max_udp_associations_per_client = static_cast<size_t>(
+            read_env_int("YUAN_SOCKS5_MAX_UDP_PER_CLIENT", static_cast<int>(config.server_config.max_udp_associations_per_client)));
+
+        const std::string socks5_listen_host = read_env_string("YUAN_SOCKS5_LISTEN_HOST");
+        if (!socks5_listen_host.empty()) {
+            config.server_config.listen_host = socks5_listen_host;
+        }
+        const std::string socks5_allow_private = read_env_string("YUAN_SOCKS5_ALLOW_PRIVATE_TARGETS");
+        if (!socks5_allow_private.empty()) {
+            config.server_config.allow_private_targets = socks5_allow_private == "1" || socks5_allow_private == "true" || socks5_allow_private == "TRUE";
+        }
+        const std::string socks5_allow_targets = read_env_string("YUAN_SOCKS5_ALLOW_TARGETS");
+        if (!socks5_allow_targets.empty()) {
+            config.server_config.allow_targets = split_csv(socks5_allow_targets);
+        }
+        const std::string socks5_deny_targets = read_env_string("YUAN_SOCKS5_DENY_TARGETS");
+        if (!socks5_deny_targets.empty()) {
+            config.server_config.deny_targets = split_csv(socks5_deny_targets);
+        }
+        config.server_config.max_sessions_per_client = static_cast<size_t>(
+            read_env_int("YUAN_SOCKS5_MAX_SESSIONS_PER_CLIENT", static_cast<int>(config.server_config.max_sessions_per_client)));
     }
 }
 

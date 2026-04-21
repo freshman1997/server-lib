@@ -15,7 +15,7 @@ namespace yuan::net::ftp
         ~ServerFtpSession();
 
     public:
-        virtual void on_read(Connection *conn);
+        virtual void on_read(Connection &conn);
 
         FtpCommandParser &command_parser()
         {

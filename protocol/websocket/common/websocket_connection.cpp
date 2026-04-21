@@ -13,6 +13,15 @@
 
 namespace yuan::net::websocket
 {
+    namespace
+    {
+        template <typename T>
+        T *ptr_of(const std::shared_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
     WebSocketConnection::WebSocketConnection(WorkMode mode)
         : mode_(mode), state_(State::connecting_), conn_(nullptr), heartbeat_timer_(nullptr), config_(nullptr), last_active_time_(0)
     {
@@ -35,7 +44,7 @@ namespace yuan::net::websocket
     void WebSocketConnection::bind_connection(const std::shared_ptr<Connection> &conn)
     {
         conn_owner_ = conn;
-        conn_ = conn.get();
+        conn_ = ptr_of(conn);
     }
 
     void WebSocketConnection::set_config(WebSocketConfigManager * config)
@@ -196,7 +205,7 @@ namespace yuan::net::websocket
 
     FrameDispatchResult WebSocketConnection::dispatch_frames(const std::shared_ptr<Connection> &conn)
     {
-        return dispatch_frames(conn.get());
+        return dispatch_frames(ptr_of(conn));
     }
 
     WebSocketHandshaker &WebSocketConnection::handshaker()
@@ -270,7 +279,7 @@ namespace yuan::net::websocket
 
     void WebSocketConnection::send_ping_frame_to(const std::shared_ptr<Connection> &conn)
     {
-        send_ping_frame_to(conn.get());
+        send_ping_frame_to(ptr_of(conn));
     }
 
     void WebSocketConnection::send_pong_frame_to(Connection * conn, const ::yuan::buffer::ByteBuffer & payload)
@@ -286,7 +295,7 @@ namespace yuan::net::websocket
 
     void WebSocketConnection::send_pong_frame_to(const std::shared_ptr<Connection> &conn, const ::yuan::buffer::ByteBuffer &payload)
     {
-        send_pong_frame_to(conn.get(), payload);
+        send_pong_frame_to(ptr_of(conn), payload);
     }
 
     void WebSocketConnection::send_close_frame_to(Connection * conn, uint16_t code)
@@ -305,7 +314,7 @@ namespace yuan::net::websocket
 
     void WebSocketConnection::send_close_frame_to(const std::shared_ptr<Connection> &conn, uint16_t code)
     {
-        send_close_frame_to(conn.get(), code);
+        send_close_frame_to(ptr_of(conn), code);
     }
 
     std::vector< ::yuan::buffer::ByteBuffer> *WebSocketConnection::get_output_buffers()

@@ -67,7 +67,7 @@ namespace yuan::net::bit_torrent
     private:
         bool try_bind_and_listen(int32_t port);
 
-        void handle_inbound_handshake(net::Connection *conn, std::shared_ptr<PeerConnection> peer);
+        void handle_inbound_handshake(net::Connection &conn, std::shared_ptr<PeerConnection> peer);
 
     private:
         bool listening_ = false;

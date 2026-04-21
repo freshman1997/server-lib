@@ -44,10 +44,10 @@ namespace yuan::net::bit_torrent
 
         NatManager *get_nat_manager()
         {
-            return nat_manager_.get();
+            return nat_manager_ ? &*nat_manager_ : nullptr;
         }
         void broadcast_have(uint32_t piece_index);
-        std::vector<PeerConnection *> get_active_peers() const;
+        std::vector<std::shared_ptr<PeerConnection> > get_active_peers() const;
         int32_t get_peer_count() const;
         int32_t get_active_peer_count() const;
 

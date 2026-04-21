@@ -68,7 +68,9 @@ namespace yuan::net::ftp
 
                     auto conn = create_stream_connection(peer_addr.get_ip(), peer_addr.get_port(), conn_fd);
                     conn->set_event_handler(handler_);
-                    conn->set_connection_handler(make_non_owning_handler(conn_handler_));
+                    if (conn_handler_owner_) {
+                        conn->set_connection_handler(conn_handler_owner_);
+                    }
 
                     if (sslHandler) {
                         conn->set_ssl_handler(sslHandler);
@@ -109,7 +111,7 @@ namespace yuan::net::ftp
         }
     }
 
-    void ServerFtpFileStream::on_connected(Connection * conn)
+    void ServerFtpFileStream::on_connected(Connection & conn)
     {
         FtpFileStream::on_connected(conn);
     }
@@ -142,7 +144,7 @@ namespace yuan::net::ftp
         auto *runtime = session_->get_app()->get_runtime();
         assert(runtime);
 
-        runtime->register_acceptor(acceptor_.get(), make_non_owning_handler(this));
+        runtime->register_acceptor(acceptor_, make_non_owning_handler(this));
 
         return true;
     }

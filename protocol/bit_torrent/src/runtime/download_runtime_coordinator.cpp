@@ -5,6 +5,15 @@
 
 namespace yuan::net::bit_torrent
 {
+    namespace
+    {
+        template <typename T>
+        T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
 
     void DownloadRuntimeCoordinator::configure(DownloadRuntimeConfig config)
     {
@@ -72,9 +81,9 @@ namespace yuan::net::bit_torrent
         }
     }
 
-    std::vector<PeerConnection *> DownloadRuntimeCoordinator::get_active_peers() const
+    std::vector<std::shared_ptr<PeerConnection> > DownloadRuntimeCoordinator::get_active_peers() const
     {
-        return peer_session_ ? peer_session_->get_active_peers() : std::vector<PeerConnection *>{};
+        return peer_session_ ? peer_session_->get_active_peers() : std::vector<std::shared_ptr<PeerConnection> >{};
     }
 
     int32_t DownloadRuntimeCoordinator::get_peer_count() const
@@ -102,7 +111,7 @@ namespace yuan::net::bit_torrent
     {
         PeerSessionConfig peer_config;
         peer_config.runtime_ = config_.runtime_;
-        peer_config.nat_manager_ = nat_manager_.get();
+        peer_config.nat_manager_ = ptr_of(nat_manager_);
         peer_config.meta_ = config_.meta_;
         peer_config.peer_id_ = config_.peer_id_;
         peer_config.pieces_have_ = config_.pieces_have_;
@@ -140,7 +149,7 @@ namespace yuan::net::bit_torrent
         nat_manager_->start(config_.nat_config_, *config_.meta_, *config_.peer_id_,
                             *config_.pieces_have_, config_.runtime_);
 
-        peer_session_->set_nat_manager(nat_manager_.get());
+        peer_session_->set_nat_manager(ptr_of(nat_manager_));
         configure_peer_session();
         peer_session_->bind_nat_runtime();
     }

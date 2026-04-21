@@ -18,7 +18,7 @@ namespace yuan::net::ftp
         ~ServerFtpFileStream();
 
     public:
-        virtual void on_connected(Connection *conn);
+        virtual void on_connected(Connection &conn);
 
         virtual bool start(const InetAddress &addr);
 

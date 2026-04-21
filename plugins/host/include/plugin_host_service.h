@@ -26,6 +26,11 @@ namespace yuan::plugin
 namespace yuan::app
 {
 
+    class PluginServiceRegistryAdapter;
+    class PluginPermissionGuard;
+    class PluginHttpInterceptor;
+    class PluginHostScheduler;
+
     class PluginHostService : public Service, public RuntimeContextAwareService
     {
     public:
@@ -69,6 +74,21 @@ namespace yuan::app
         plugin::HostStorage *prepare_plugin_storage(const std::string &plugin_name);
         plugin::PluginRunMode to_plugin_run_mode(RunMode mode) const;
         plugin::PluginEvent make_plugin_event(const std::string &plugin_name) const;
+
+        plugin::HostEventBus *event_bus_ptr() const;
+        plugin::HostLogger *logger_ptr() const;
+        plugin::HostServiceCatalog *service_catalog_ptr() const;
+        plugin::HostScheduler *scheduler_ptr() const;
+        plugin::HostServiceRegistry *service_registry_ptr() const;
+        plugin::HostPermissionGuard *permission_guard_ptr() const;
+        plugin::HostResourceGuard *resource_guard_ptr() const;
+        plugin::HostHttpInterceptor *http_interceptor_ptr() const;
+        plugin::HostNetworkRuntime *network_runtime_ptr() const;
+
+        PluginServiceRegistryAdapter *service_registry_adapter() const;
+        PluginPermissionGuard *permission_guard_adapter() const;
+        PluginHttpInterceptor *http_interceptor_adapter() const;
+        PluginHostScheduler *host_scheduler_adapter() const;
 
         void setup_lifecycle_callbacks();
         void cleanup_plugin_resources(const std::string &plugin_name);

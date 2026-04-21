@@ -1,4 +1,4 @@
-﻿#ifndef __YUAN_NET_ASYNC_ASYNC_CONNECTION_CONTEXT_H__
+#ifndef __YUAN_NET_ASYNC_ASYNC_CONNECTION_CONTEXT_H__
 #define __YUAN_NET_ASYNC_ASYNC_CONNECTION_CONTEXT_H__
 
 #include "buffer/byte_buffer.h"
@@ -7,6 +7,7 @@
 #include "coroutine/stream_io_awaitable.h"
 #include "coroutine/datagram_io_awaitable.h"
 #include "net/connection/connection.h"
+#include "net/connection/connection_ref.h"
 #include "net/handler/connection_handler.h"
 #include "net/socket/inet_address.h"
 #include "timer/timer.h"
@@ -25,13 +26,13 @@ namespace yuan::net
         AsyncConnectionContext() = default;
 
         AsyncConnectionContext(Connection *conn, coroutine::RuntimeView runtime)
-            : conn_(conn, [](Connection *) {}),
+            : conn_ref_(conn),
               runtime_(runtime)
         {
         }
 
         AsyncConnectionContext(std::shared_ptr<Connection> conn, coroutine::RuntimeView runtime)
-            : conn_(conn), runtime_(runtime)
+            : conn_ref_(std::move(conn)), runtime_(runtime)
         {
         }
 
@@ -41,23 +42,23 @@ namespace yuan::net
         AsyncConnectionContext &operator=(const AsyncConnectionContext &) = delete;
 
         AsyncConnectionContext(AsyncConnectionContext &&other) noexcept
-            : conn_(other.conn_),
+            : conn_ref_(other.conn_ref_),
               runtime_(other.runtime_),
               closed_(other.closed_),
               default_handler_owner_(other.default_handler_owner_)
         {
-            other.conn_ = nullptr;
+            other.conn_ref_ = ConnectionRef{};
             other.closed_ = true;
         }
 
         AsyncConnectionContext &operator=(AsyncConnectionContext &&other) noexcept
         {
             if (this != &other) {
-                conn_ = other.conn_;
+                conn_ref_ = other.conn_ref_;
                 runtime_ = other.runtime_;
                 closed_ = other.closed_;
                 default_handler_owner_ = other.default_handler_owner_;
-                other.conn_ = nullptr;
+                other.conn_ref_ = ConnectionRef{};
                 other.closed_ = true;
             }
             return *this;
@@ -65,128 +66,157 @@ namespace yuan::net
 
         void install_default_handler()
         {
-            if (conn_) {
-                conn_->set_connection_handler(default_handler_owner_);
+            auto *conn = conn_ref_.get();
+            if (conn) {
+                conn->set_connection_handler(default_handler_owner_);
             }
         }
 
         coroutine::Task<coroutine::ReadResult> read_async(uint32_t timeout_ms = 0)
         {
-            if (!conn_ || closed_) {
+            auto *conn = conn_ref_.get();
+            if (!conn || closed_) {
                 co_return coroutine::ReadResult::with_status(coroutine::IoStatus::invalid_state);
             }
-            co_return co_await runtime_.read(conn_, timeout_ms);
+            co_return co_await runtime_.read(conn, timeout_ms);
+        }
+
+        coroutine::Task<coroutine::ReadResult> read_async(
+            uint32_t timeout_ms,
+            bool forward_terminal_events_after_completion)
+        {
+            auto *conn = conn_ref_.get();
+            if (!conn || closed_) {
+                co_return coroutine::ReadResult::with_status(coroutine::IoStatus::invalid_state);
+            }
+            co_return co_await runtime_.read(conn, timeout_ms, forward_terminal_events_after_completion);
         }
 
         coroutine::Task<coroutine::WriteResult> write_async(const ::yuan::buffer::ByteBuffer &buffer, uint32_t timeout_ms = 0)
         {
-            if (!conn_ || closed_) {
+            auto *conn = conn_ref_.get();
+            if (!conn || closed_) {
                 co_return coroutine::WriteResult{ coroutine::IoStatus::invalid_state };
             }
-            co_return co_await runtime_.write(conn_, buffer, timeout_ms);
+            co_return co_await runtime_.write(conn, buffer, timeout_ms);
         }
 
         coroutine::Task<coroutine::WriteResult> flush_async(uint32_t timeout_ms = 0)
         {
-            if (!conn_ || closed_) {
+            auto *conn = conn_ref_.get();
+            if (!conn || closed_) {
                 co_return coroutine::WriteResult{ coroutine::IoStatus::invalid_state };
             }
-            co_return co_await runtime_.flush(conn_, timeout_ms);
+            co_return co_await runtime_.flush(conn, timeout_ms);
         }
 
         coroutine::Task<coroutine::IoStatus> close_async()
         {
-            if (!conn_ || closed_) {
+            auto *conn = conn_ref_.get();
+            if (!conn || closed_) {
                 co_return coroutine::IoStatus::invalid_state;
             }
             closed_ = true;
-            co_return co_await runtime_.close(conn_);
+            co_return co_await runtime_.close(conn);
         }
 
         coroutine::Task<coroutine::SslHandshakeResult> ssl_handshake_async(uint32_t timeout_ms = 0)
         {
-            if (!conn_ || closed_) {
+            auto *conn = conn_ref_.get();
+            if (!conn || closed_) {
                 co_return coroutine::SslHandshakeResult::invalid_state;
             }
-            co_return co_await runtime_.ssl_handshake(conn_, timeout_ms);
+            co_return co_await runtime_.ssl_handshake(conn, timeout_ms);
         }
 
         void write(const ::yuan::buffer::ByteBuffer &buffer)
         {
-            if (conn_) {
-                conn_->write(buffer);
+            auto *conn = conn_ref_.get();
+            if (conn) {
+                conn->write(buffer);
             }
         }
 
         void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer)
         {
-            if (conn_) {
-                conn_->write_and_flush(buffer);
+            auto *conn = conn_ref_.get();
+            if (conn) {
+                conn->write_and_flush(buffer);
             }
         }
 
         void append_output(std::string_view text)
         {
-            if (conn_) {
-                conn_->append_output(text);
+            auto *conn = conn_ref_.get();
+            if (conn) {
+                conn->append_output(text);
             }
         }
 
         void append_output(const char *data, std::size_t size)
         {
-            if (conn_) {
-                conn_->append_output(data, size);
+            auto *conn = conn_ref_.get();
+            if (conn) {
+                conn->append_output(data, size);
             }
         }
 
         void append_output(const ::yuan::buffer::ByteBuffer &buffer)
         {
-            if (conn_) {
-                conn_->append_output(buffer);
+            auto *conn = conn_ref_.get();
+            if (conn) {
+                conn->append_output(buffer);
             }
         }
 
         void flush()
         {
-            if (conn_) {
-                conn_->flush();
+            auto *conn = conn_ref_.get();
+            if (conn) {
+                conn->flush();
             }
         }
 
         void close()
         {
-            if (conn_ && !closed_) {
+            auto *conn = conn_ref_.get();
+            if (conn && !closed_) {
                 closed_ = true;
-                conn_->close();
+                conn->close();
             }
         }
 
         void abort()
         {
-            if (conn_ && !closed_) {
+            auto *conn = conn_ref_.get();
+            if (conn && !closed_) {
                 closed_ = true;
-                conn_->abort();
+                conn->abort();
             }
         }
 
         ::yuan::buffer::ByteBuffer take_input_byte_buffer()
         {
-            return conn_ ? conn_->take_input_byte_buffer() : ::yuan::buffer::ByteBuffer{};
+            auto *conn = conn_ref_.get();
+            return conn ? conn->take_input_byte_buffer() : ::yuan::buffer::ByteBuffer{};
         }
 
         ::yuan::buffer::ByteBuffer get_input_byte_buffer() const
         {
-            return conn_ ? conn_->get_input_byte_buffer() : ::yuan::buffer::ByteBuffer{};
+            auto *conn = conn_ref_.get();
+            return conn ? conn->get_input_byte_buffer() : ::yuan::buffer::ByteBuffer{};
         }
 
         size_t input_readable_bytes() const
         {
-            return conn_ ? conn_->input_readable_bytes() : 0;
+            auto *conn = conn_ref_.get();
+            return conn ? conn->input_readable_bytes() : 0;
         }
 
         bool is_connected() const
         {
-            return conn_ && conn_->is_connected();
+            auto *conn = conn_ref_.get();
+            return conn && conn->is_connected();
         }
 
         bool is_closed() const noexcept
@@ -196,27 +226,28 @@ namespace yuan::net
 
         const InetAddress &get_remote_address() const
         {
-            return conn_->get_remote_address();
+            return conn_ref_->get_remote_address();
         }
 
         ConnectionState get_connection_state() const
         {
-            return conn_ ? conn_->get_connection_state() : ConnectionState::closed;
+            auto *conn = conn_ref_.get();
+            return conn ? conn->get_connection_state() : ConnectionState::closed;
         }
 
         uintptr_t connection_id() const
         {
-            return reinterpret_cast<uintptr_t>(conn_.get());
+            return reinterpret_cast<uintptr_t>(conn_ref_.get());
         }
 
         Connection *native_handle() const noexcept
         {
-            return conn_.get();
+            return conn_ref_.get();
         }
 
         std::shared_ptr<Connection> connection() const noexcept
         {
-            return conn_;
+            return conn_ref_.owner();
         }
 
         coroutine::RuntimeView runtime_view() const noexcept
@@ -244,7 +275,7 @@ namespace yuan::net
 
         explicit operator bool() const noexcept
         {
-            return conn_ != nullptr && !closed_;
+            return static_cast<bool>(conn_ref_) && !closed_;
         }
 
     private:
@@ -269,9 +300,15 @@ namespace yuan::net
             void on_close(const std::shared_ptr<Connection> &) override
             {
             }
+            void on_input_shutdown(const std::shared_ptr<Connection> &conn) override
+            {
+                if (conn) {
+                    conn->close();
+                }
+            }
         };
 
-        std::shared_ptr<Connection> conn_;
+        ConnectionRef conn_ref_;
         coroutine::RuntimeView runtime_{};
         bool closed_ = false;
         std::shared_ptr<DefaultHandler> default_handler_owner_ = std::make_shared<DefaultHandler>();

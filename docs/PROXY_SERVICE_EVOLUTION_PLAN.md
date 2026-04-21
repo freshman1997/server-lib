@@ -464,6 +464,43 @@ Recommended mitigation:
 - ship CONNECT-only service first
 - add explicit resource limits before broadening capability
 
+### Additional low-level findings (2026-04 proxy integration debugging)
+
+Observed during integration-test failure analysis:
+
+- `AsyncReadAwaiter::ProxyHandler` currently completes the awaiter and then forwards `on_input_shutdown/on_error` to `next_`.
+- In common accept paths, `next_` is a default handler that may aggressively call `conn->close()` on shutdown/error.
+- This composition creates a real risk window where await completion and default close policy interact in surprising ways under timing pressure.
+- `TcpConnection::do_close()` cleanup is queued into the event loop, so close logs/effects can appear delayed relative to the original trigger point.
+- `Channel::disable_all()` removes the fd from `SelectPoller` tracking via `update_channel`, which is correct but easy to misuse during temporary state transitions.
+
+Important conclusion from this incident:
+
+- The immediate integration-test failure was not caused by proxy core logic.
+- The direct root cause was test-harness behavior on Windows (`SO_RCVTIMEO/SO_SNDTIMEO` type mismatch and short-read stop condition).
+
+Follow-up recommendation (deferred hardening, not emergency fix):
+
+1. Add a guarded awaiter policy so shutdown/error forwarding is optional once awaiter completion is decided.
+2. Add a focused regression test for awaiter+default-handler composition under close/error races.
+3. Keep event-loop/poller semantics unchanged unless a concrete functional regression is reproduced.
+
+### Additional low-level findings (2026-04 mainline round-two)
+
+Observed while hardening proxy integration and coroutine awaiters:
+
+- Event dispatch generation filtering in `EventLoop` could drop events with generation `0`, which blocked the proxy accept path and produced `accepted=0` under integration tests.
+- The immediate fix is to only enforce generation match when `event.generation != 0`, preserving compatibility with pollers that do not carry generation.
+- Connection ownership semantics were improved with a lightweight `ConnectionRef` (borrowed or owned), replacing scattered `ptr_of(...)` access in key coroutine/context paths.
+- This reduced accidental raw-pointer usage across suspend boundaries and made awaiter/context APIs explicit about lifetime intent.
+- The large CONNECT tunnel behavior on Windows is now treated as a half-close smoke scenario rather than a strict full-echo assertion. A strict no-half-close large tunnel check passes, while immediate client half-close remains timing-sensitive at the socket/read boundary.
+
+Follow-up recommendations:
+
+1. Keep `ConnectionRef` expansion on remaining service-facing relay state and high-frequency async facades until all suspend-crossing paths are owner-aware.
+2. Keep separate tests for strict large-tunnel relay without half-close and half-close smoke behavior so platform socket timing does not masquerade as a core proxy regression.
+3. Keep accept-path instrumentation available behind debug-level logging for fast regression triage, but do not retain always-on noisy traces in release-oriented defaults.
+
 ## Recommendation Summary
 
 Recommended implementation order:

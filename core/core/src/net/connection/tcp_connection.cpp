@@ -22,6 +22,33 @@
 
 namespace yuan::net
 {
+    namespace
+    {
+        template<typename T>
+        T *ptr_of(std::unique_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+
+        template<typename T>
+        const T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+
+        template<typename T>
+        T *ptr_of(std::shared_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+
+        template<typename T>
+        T *ptr_of(const std::shared_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
     TcpConnection::TcpConnection(const std::string ip, int port, int fd)
         : Connection()
     {
@@ -38,7 +65,6 @@ namespace yuan::net
 
     void TcpConnection::init()
     {
-        connectionHandler_ = nullptr;
         connectionHandlerOwner_.reset();
         eventHandler_ = nullptr;
         socket::set_none_block(socket_->get_fd(), true);
@@ -46,7 +72,7 @@ namespace yuan::net
         socket::set_no_delay(socket_->get_fd(), true);
 
         channel_ = std::make_unique<Channel>(socket_->get_fd());
-        channel_->set_handler(this);
+        channel_->clear_handler();
         channel_->enable_read();
         channel_->enable_write();
 
@@ -63,20 +89,20 @@ namespace yuan::net
         state_ = ConnectionState::closed;
         assert(channel_);
         channel_->disable_all();
-        channel_->set_handler(nullptr);
+        channel_->clear_handler();
 
         if (eventHandler_ && !cleanup_done_) {
-            eventHandler_->close_channel(channel_.get());
+            eventHandler_->close_channel(ptr_of(channel_));
             eventHandler_ = nullptr;
         }
 
-        if (connectionHandler_ && !close_notified_) {
+        if (connectionHandlerOwner_ && !close_notified_) {
             LOG_WARN("tcp connection destroyed without close notification, ip: {}, port: {}, fd: {}",
                      socket_ ? socket_->get_address()->get_ip() : std::string{},
                      socket_ ? socket_->get_address()->get_port() : 0,
                      channel_->get_fd());
         }
-        connectionHandler_ = nullptr;
+        connectionHandlerOwner_.reset();
 
         if (socket_) {
             LOG_WARN("connection closed, ip: {}, port: {}, fd: {}", socket_->get_address()->get_ip(), socket_->get_address()->get_port(), channel_->get_fd());
@@ -121,7 +147,7 @@ namespace yuan::net
 
         channel_->enable_write();
         if (eventHandler_) {
-            eventHandler_->update_channel(channel_.get());
+            eventHandler_->update_channel(ptr_of(channel_));
         }
     }
 
@@ -175,8 +201,8 @@ namespace yuan::net
 #else
                 if (EAGAIN != errno && EWOULDBLOCK != errno && EINTR != errno) {
 #endif
-                    if (connectionHandler_) {
-                        connectionHandler_->on_error(shared_from_this());
+                    if (connectionHandlerOwner_) {
+                        connectionHandlerOwner_->on_error(shared_from_this());
                     }
                     close();
                     return;
@@ -184,7 +210,7 @@ namespace yuan::net
 
                 channel_->enable_write();
                 if (eventHandler_) {
-                    eventHandler_->update_channel(channel_.get());
+                    eventHandler_->update_channel(ptr_of(channel_));
                 }
                 break;
             } else {
@@ -206,7 +232,7 @@ namespace yuan::net
             } else {
                 channel_->disable_write();
                 if (eventHandler_) {
-                    eventHandler_->update_channel(channel_.get());
+                    eventHandler_->update_channel(ptr_of(channel_));
                 }
             }
         }
@@ -228,7 +254,7 @@ namespace yuan::net
             pending_output_shutdown_ = true;
             channel_->enable_write();
             if (eventHandler_) {
-                eventHandler_->update_channel(channel_.get());
+                eventHandler_->update_channel(ptr_of(channel_));
             }
             return true;
         }
@@ -254,28 +280,32 @@ namespace yuan::net
         if (lastState == ConnectionState::connecting || (front && front->readable_bytes() > 0)) {
             channel_->disable_read();
             if (eventHandler_) {
-                eventHandler_->update_channel(channel_.get());
+                eventHandler_->update_channel(ptr_of(channel_));
             }
             return;
         }
         do_close();
     }
 
-    Channel *TcpConnection::stream_channel() const
+    Channel *TcpConnection::stream_channel()
     {
-        return channel_.get();
+        return ptr_of(channel_);
+    }
+
+    const Channel *TcpConnection::stream_channel() const
+    {
+        return ptr_of(channel_);
     }
 
     void TcpConnection::set_connection_handler(std::shared_ptr<ConnectionHandler> handler)
     {
         connectionHandlerOwner_ = std::move(handler);
-        connectionHandler_ = connectionHandlerOwner_.get();
     }
 
     void TcpConnection::on_read_event()
     {
         [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
-        auto *handler = handler_owner ? handler_owner.get() : connectionHandler_;
+        auto *handler = ptr_of(handler_owner);
 
         if (state_ == ConnectionState::connecting && handler) {
             state_ = ConnectionState::connected;
@@ -283,7 +313,7 @@ namespace yuan::net
         }
 
         if (ssl_handshaking_) {
-            auto *ssl = ssl_handler_.get();
+            auto *ssl = ptr_of(ssl_handler_);
             if (!ssl) {
                 ssl_handshaking_ = false;
                 if (ssl_handshake_callback_) {
@@ -356,7 +386,7 @@ namespace yuan::net
                     again_read:
                         channel_->enable_read();
                         if (eventHandler_) {
-                            eventHandler_->update_channel(channel_.get());
+                            eventHandler_->update_channel(ptr_of(channel_));
                         }
                         break;
                     }
@@ -375,12 +405,16 @@ namespace yuan::net
                 input_shutdown_ = true;
                 channel_->disable_read();
                 if (eventHandler_) {
-                    eventHandler_->update_channel(channel_.get());
+                    eventHandler_->update_channel(ptr_of(channel_));
                 }
                 if (handler) {
                     handler->on_input_shutdown(shared_from_this());
                 }
-                if (output_shutdown_ || state_ == ConnectionState::closing) {
+                auto *front = output_buffer_.front();
+                const bool has_pending_output = front && front->readable_bytes() > 0;
+                if (output_shutdown_) {
+                    do_close();
+                } else if (state_ == ConnectionState::closing && !has_pending_output) {
                     do_close();
                 }
             }
@@ -415,7 +449,7 @@ namespace yuan::net
                         }
                         channel_->enable_read();
                         if (eventHandler_) {
-                            eventHandler_->update_channel(channel_.get());
+                            eventHandler_->update_channel(ptr_of(channel_));
                         }
                         break;
                     }
@@ -434,12 +468,16 @@ namespace yuan::net
                 input_shutdown_ = true;
                 channel_->disable_read();
                 if (eventHandler_) {
-                    eventHandler_->update_channel(channel_.get());
+                    eventHandler_->update_channel(ptr_of(channel_));
                 }
                 if (handler) {
                     handler->on_input_shutdown(shared_from_this());
                 }
-                if (output_shutdown_ || state_ == ConnectionState::closing) {
+                auto *front = output_buffer_.front();
+                const bool has_pending_output = front && front->readable_bytes() > 0;
+                if (output_shutdown_) {
+                    do_close();
+                } else if (state_ == ConnectionState::closing && !has_pending_output) {
                     do_close();
                 }
             }
@@ -449,7 +487,7 @@ namespace yuan::net
     void TcpConnection::on_write_event()
     {
         [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
-        auto *handler = handler_owner ? handler_owner.get() : connectionHandler_;
+        auto *handler = ptr_of(handler_owner);
 
         if (state_ == ConnectionState::connecting && handler) {
             state_ = ConnectionState::connected;
@@ -457,7 +495,7 @@ namespace yuan::net
         }
 
         if (ssl_handshaking_) {
-            auto *ssl = ssl_handler_.get();
+            auto *ssl = ptr_of(ssl_handler_);
             if (!ssl) {
                 ssl_handshaking_ = false;
                 if (ssl_handshake_callback_) {
@@ -502,9 +540,27 @@ namespace yuan::net
     void TcpConnection::set_event_handler(EventHandler * eventHandler)
     {
         assert(channel_);
+        if (eventHandler_ == eventHandler) {
+            if (eventHandler_) {
+                eventHandler_->update_channel(ptr_of(channel_));
+            }
+            return;
+        }
+
+        if (eventHandler_ && eventHandler_ != eventHandler) {
+            LOG_WARN("tcp connection event handler switched, fd: {}", channel_->get_fd());
+            eventHandler_->close_channel(ptr_of(channel_));
+        }
         eventHandler_ = eventHandler;
         if (eventHandler_) {
-            eventHandler_->update_channel(channel_.get());
+            auto self = std::static_pointer_cast<SelectHandler>(shared_from_this());
+            channel_->set_handler(std::weak_ptr<SelectHandler>(self));
+            cleanup_done_ = false;
+        } else {
+            channel_->clear_handler();
+        }
+        if (eventHandler_) {
+            eventHandler_->update_channel(ptr_of(channel_));
         }
     }
 
@@ -515,9 +571,8 @@ namespace yuan::net
         }
         is_closing_ = true;
 
-        auto *handler = connectionHandler_;
-        connectionHandler_ = nullptr;
         [[maybe_unused]] auto handler_owner = std::move(connectionHandlerOwner_);
+        auto *handler = ptr_of(handler_owner);
 
         if (handler && !close_notified_) {
             close_notified_ = true;
@@ -529,7 +584,7 @@ namespace yuan::net
             auto *event_handler = eventHandler_;
             event_handler->queue_in_loop([self, event_handler]() {
                 if (self->channel_ && !self->cleanup_done_) {
-                    event_handler->close_channel(self->channel_.get());
+                    event_handler->close_channel(ptr_of(self->channel_));
                     self->cleanup_done_ = true;
                 }
             });
@@ -539,7 +594,7 @@ namespace yuan::net
 
     ConnectionHandler *TcpConnection::get_connection_handler() const
     {
-        return connectionHandler_;
+        return ptr_of(connectionHandlerOwner_);
     }
 
     void TcpConnection::set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler)

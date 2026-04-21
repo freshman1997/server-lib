@@ -10,6 +10,15 @@
 
 namespace yuan::net::ssh
 {
+    namespace
+    {
+        template <typename T>
+        T *ptr_of(std::unique_ptr<T> &owner)
+        {
+            return &*owner;
+        }
+    }
+
     SshConnectionManager::SshConnectionManager(SshSession * session, uint32_t max_channels)
         : session_(session), max_channels_(max_channels)
     {
@@ -34,7 +43,7 @@ namespace yuan::net::ssh
         channel->set_remote_max_packet(max_packet_size);
         channel->set_state(SshChannel::State::open);
 
-        auto *ptr = channel.get();
+        auto *ptr = ptr_of(channel);
         std::lock_guard<std::mutex> lock(channels_mutex_);
         channels_.emplace(local_id, std::move(channel));
         return ptr;
@@ -44,7 +53,7 @@ namespace yuan::net::ssh
     {
         std::lock_guard<std::mutex> lock(channels_mutex_);
         auto it = channels_.find(local_id);
-        return it != channels_.end() ? it->second.get() : nullptr;
+        return it != channels_.end() ? ptr_of(it->second) : nullptr;
     }
 
     SshChannel *SshConnectionManager::find_channel_by_remote(uint32_t remote_id)
@@ -55,7 +64,7 @@ namespace yuan::net::ssh
                         ch
                     ] : channels_) {
             if (ch->remote_id() == remote_id) {
-                return ch.get();
+                return ptr_of(ch);
             }
         }
         return nullptr;
@@ -112,7 +121,7 @@ namespace yuan::net::ssh
         channel->set_remote_max_packet(msg.maximum_packet_size);
         channel->set_state(SshChannel::State::open);
 
-        if (!effective_handler->on_channel_open(session_, msg.channel_type, channel.get())) {
+        if (!effective_handler->on_channel_open(session_, msg.channel_type, ptr_of(channel))) {
             return build_channel_open_failure(msg.sender_channel,
                                               SshChannelOpenFailureReason::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED,
                                               "Channel open denied");
@@ -135,7 +144,7 @@ namespace yuan::net::ssh
                                                   "Invalid direct-tcpip parameters");
             }
 
-            if (!effective_handler->on_direct_tcpip(session_, channel.get(), *host, static_cast<uint16_t>(port))) {
+            if (!effective_handler->on_direct_tcpip(session_, ptr_of(channel), *host, static_cast<uint16_t>(port))) {
                 return build_channel_open_failure(msg.sender_channel,
                                                   SshChannelOpenFailureReason::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED,
                                                   "Direct TCP/IP forwarding denied");
@@ -155,7 +164,7 @@ namespace yuan::net::ssh
                                               "Unknown channel type: " + msg.channel_type);
         }
 
-        auto *ptr = channel.get();
+        auto *ptr = ptr_of(channel);
         {
             std::lock_guard<std::mutex> lock(channels_mutex_);
             channels_.emplace(local_id, std::move(channel));
@@ -347,7 +356,7 @@ namespace yuan::net::ssh
                     if (success) {
                         if (it != subsystem_factories_.end()) {
                             auto subsystem_handler = it->second();
-                            auto *raw = subsystem_handler.get();
+                            auto *raw = ptr_of(subsystem_handler);
                             channel->set_handler(std::move(subsystem_handler));
                             raw->on_open(channel);
                         }

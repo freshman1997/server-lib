@@ -5,6 +5,21 @@
 
 namespace yuan::net::mqtt
 {
+    namespace
+    {
+        template <typename T>
+        T *ptr_of(const std::shared_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+
+        template <typename T>
+        T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
     static std::atomic<uint64_t> global_session_id{ 1 };
 
     MqttSession::MqttSession(TcpConnection * conn)
@@ -13,7 +28,7 @@ namespace yuan::net::mqtt
     }
 
     MqttSession::MqttSession(const std::shared_ptr<TcpConnection> &conn)
-        : session_id_(global_session_id.fetch_add(1)), last_activity_(std::chrono::steady_clock::now()), conn_owner_(conn), conn_(conn.get())
+        : session_id_(global_session_id.fetch_add(1)), last_activity_(std::chrono::steady_clock::now()), conn_owner_(conn), conn_(ptr_of(conn))
     {
     }
 
@@ -128,15 +143,15 @@ namespace yuan::net::mqtt
             return nullptr;
         auto sess_it = sessions_.find(idx_it->second);
         if (sess_it != sessions_.end())
-            return sess_it->second.get();
+            return ptr_of(sess_it->second);
         return nullptr;
     }
 
     MqttSession *MqttSessionManager::find_by_connection(TcpConnection * conn)
     {
         for (auto &pair : sessions_) {
-            if (auto current = pair.second->connection(); current && current.get() == conn)
-                return pair.second.get();
+            if (auto current = pair.second->connection(); current && ptr_of(current) == conn)
+                return ptr_of(pair.second);
         }
         return nullptr;
     }
@@ -146,7 +161,7 @@ namespace yuan::net::mqtt
         std::vector<MqttSession *> result;
         result.reserve(sessions_.size());
         for (auto &pair : sessions_)
-            result.push_back(pair.second.get());
+            result.push_back(ptr_of(pair.second));
         return result;
     }
 

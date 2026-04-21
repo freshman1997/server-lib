@@ -27,11 +27,32 @@
 
 namespace yuan::net
 {
+    namespace
+    {
+        template<typename T>
+        T *ptr_of(std::unique_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+
+        template<typename T>
+        const T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+
+        template<typename T>
+        T *ptr_of(std::shared_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+    }
+
     UdpAcceptor::UdpAcceptor(Socket * socket, timer::TimerManager * timerManager)
         : sock_(socket), timer_manager_(timerManager)
     {
         handler_ = nullptr;
-        conn_handler_ = nullptr;
+        self_handler_owner_ = std::shared_ptr<SelectHandler>(this, [](SelectHandler *) {});
     }
 
     UdpAcceptor::~UdpAcceptor()
@@ -39,12 +60,13 @@ namespace yuan::net
         if (channel_) {
             channel_->disable_all();
             if (handler_) {
-                handler_->close_channel(channel_.get());
+                handler_->close_channel(ptr_of(channel_));
             }
-            channel_->set_handler(nullptr);
+            channel_->clear_handler();
         }
 
         channel_.reset();
+        self_handler_owner_.reset();
         instance_.reset();
         sock_.reset();
         LOG_INFO("udp acceptor close");
@@ -65,7 +87,7 @@ namespace yuan::net
         channel_ = std::make_unique<Channel>();
         channel_->enable_read();
         channel_->enable_write();
-        channel_->set_handler(this);
+        channel_->clear_handler();
         channel_->set_fd(sock_->get_fd());
 
         return true;
@@ -76,8 +98,8 @@ namespace yuan::net
         if (channel_) {
             channel_->disable_all();
             if (handler_) {
-                handler_->close_channel(channel_.get());
-                channel_->set_handler(nullptr);
+                handler_->close_channel(ptr_of(channel_));
+                channel_->clear_handler();
             }
         }
     }
@@ -86,7 +108,7 @@ namespace yuan::net
     {
         assert(channel_);
         if (handler_) {
-            handler_->update_channel(channel_.get());
+            handler_->update_channel(ptr_of(channel_));
         }
     }
 
@@ -135,7 +157,7 @@ namespace yuan::net
 
                 channel_->enable_read();
                 channel_->enable_write();
-                handler_->update_channel(channel_.get());
+                handler_->update_channel(ptr_of(channel_));
                 break;
             }
 
@@ -148,20 +170,18 @@ namespace yuan::net
             auto res = instance_->on_recv(addr);
             if (res.first && res.second) {
                 if (!res.second->is_connected()) {
-                    auto *datagram = dynamic_cast<DatagramTransport *>(res.second.get());
+                    auto *datagram = dynamic_cast<DatagramTransport *>(&*res.second);
                     if (!datagram) {
                         res.second->abort();
                         break;
                     }
                     if (conn_handler_owner_) {
                         res.second->set_connection_handler(conn_handler_owner_);
-                    } else {
-                        res.second->set_connection_handler(make_non_owning_handler(conn_handler_));
                     }
                     res.second->set_event_handler(handler_);
                     handler_->on_new_connection(res.second);
-                    if (conn_handler_) {
-                        conn_handler_->on_connected(res.second);
+                    if (conn_handler_owner_) {
+                        conn_handler_owner_->on_connected(res.second);
                     }
                     datagram->set_datagram_state(ConnectionState::connected);
                 }
@@ -202,16 +222,29 @@ namespace yuan::net
 
     void UdpAcceptor::set_event_handler(EventHandler * handler)
     {
+        if (handler_ == handler) {
+            if (handler_ && channel_) {
+                handler_->update_channel(ptr_of(channel_));
+            }
+            return;
+        }
+
+        if (handler_ && handler_ != handler && channel_) {
+            LOG_WARN("udp acceptor event handler switched, fd: {}", channel_->get_fd());
+            handler_->close_channel(ptr_of(channel_));
+        }
         handler_ = handler;
         assert(channel_);
         if (handler_) {
-            handler_->update_channel(channel_.get());
+            channel_->set_handler(std::weak_ptr<SelectHandler>(self_handler_owner_));
+            handler_->update_channel(ptr_of(channel_));
+        } else {
+            channel_->clear_handler();
         }
     }
 
     void UdpAcceptor::set_connection_handler(std::shared_ptr<ConnectionHandler> connHandler)
     {
         conn_handler_owner_ = std::move(connHandler);
-        conn_handler_ = conn_handler_owner_.get();
     }
 }

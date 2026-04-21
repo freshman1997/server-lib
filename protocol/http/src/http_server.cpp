@@ -46,10 +46,16 @@ namespace yuan::net::http
     {
         using HttpSessionMap = std::unordered_map<uint64_t, std::unique_ptr<HttpSession> >;
 
+        template <typename T>
+        T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+
         HttpSession *find_http_session(HttpSessionMap &sessions, uint64_t session_id)
         {
             const auto it = sessions.find(session_id);
-            return it == sessions.end() ? nullptr : it->second.get();
+            return it == sessions.end() ? nullptr : ptr_of(it->second);
         }
     }
 
@@ -386,9 +392,9 @@ namespace yuan::net::http
         const auto sessionId = ctx.connection_id();
         conn->set_max_packet_size(HttpPacket::get_max_packet_size());
 
-        auto *httpCtx = new HttpSessionContext(conn);
-        auto session = std::make_unique<HttpSession>(sessionId, httpCtx, listener_.runtime()->runtime_view());
-        auto *session_ptr = session.get();
+        auto httpCtx = std::make_unique<HttpSessionContext>(conn);
+        auto session = std::make_unique<HttpSession>(sessionId, std::move(httpCtx), listener_.runtime()->runtime_view());
+        auto *session_ptr = ptr_of(session);
         sessions_[sessionId] = std::move(session);
 
         while (ctx.is_connected()) {

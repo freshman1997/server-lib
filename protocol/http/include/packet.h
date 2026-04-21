@@ -39,6 +39,19 @@ namespace yuan::net::http
 
     class HttpPacket
     {
+    private:
+        template <typename T>
+        static T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+
+        template <typename T>
+        static T *ptr_of(const std::shared_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+
     public:
         HttpPacket(HttpSessionContext *context);
         virtual ~HttpPacket();
@@ -113,7 +126,7 @@ namespace yuan::net::http
 
         Content *get_body_content() const
         {
-            return body_content_.get();
+            return ptr_of(body_content_);
         }
 
         bool good() const
@@ -190,7 +203,7 @@ namespace yuan::net::http
 
         ContentParser *get_pre_content_parser() const
         {
-            return pre_content_parser_.get();
+            return ptr_of(pre_content_parser_);
         }
 
     public: // task
@@ -203,7 +216,7 @@ namespace yuan::net::http
 
         HttpTask *get_task() const
         {
-            return task_.get();
+            return ptr_of(task_);
         }
 
     public: // original file name

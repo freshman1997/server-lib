@@ -527,7 +527,7 @@ namespace yuan::net::bit_torrent
             return false;
         }
 
-        runtime_->register_acceptor(acceptor_.get(), make_non_owning_handler(this), acceptor_->endpoint_channel());
+        runtime_->register_acceptor(acceptor_, make_non_owning_handler(this), acceptor_->endpoint_channel());
 
         port_ = bind_port;
         running_ = true;
@@ -570,9 +570,9 @@ namespace yuan::net::bit_torrent
         //   send_conn_id: we expect this from the peer (= recv_conn_id + 1)
         auto conn = std::make_unique<UtpConnection>(ip, port, info_hash, peer_id,
                                                     conn_id, conn_id + 1,
-                                                    acceptor_.get(), runtime_);
+                                                    &*acceptor_, runtime_);
 
-        auto *conn_ptr = conn.get();
+        auto *conn_ptr = &*conn;
         connections_[conn_id] = std::move(conn);
         conn_ptr->send_syn();
 
@@ -632,7 +632,7 @@ namespace yuan::net::bit_torrent
             if (pit->second->get_state() == UtpConnection::State::connected ||
                 pit->second->get_state() == UtpConnection::State::syn_recv) {
                 uint32_t id = pit->second->get_send_conn_id();
-                auto conn_ptr = pit->second.get();
+                auto conn_ptr = &*pit->second;
                 connections_[id] = std::move(pit->second);
                 pending_syn_.erase(pit);
 
@@ -665,13 +665,13 @@ namespace yuan::net::bit_torrent
                                                      "",
                                                      our_recv_id,
                                                      their_recv_id,
-                                                     acceptor_.get(), runtime_);
+                                                     &*acceptor_, runtime_);
 
         conn->on_packet_received(
             reinterpret_cast<const uint8_t *>(&hdr), UTP_HEADER_SIZE + len);
 
         std::string key = remote_ip + ":" + std::to_string(remote_port);
-        auto *conn_ptr = conn.get();
+        auto *conn_ptr = &*conn;
         pending_syn_[key] = std::move(conn);
 
         if (conn_ptr->get_state() == UtpConnection::State::connected ||

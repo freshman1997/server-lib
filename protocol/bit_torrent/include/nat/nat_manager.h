@@ -66,7 +66,7 @@ namespace yuan::net::bit_torrent
         // Get PEX manager for integration with peer connections
         PexManager *get_pex_manager()
         {
-            return pex_manager_.get();
+            return pex_manager_ ? &*pex_manager_ : nullptr;
         }
 
         // Getters for individual subsystems

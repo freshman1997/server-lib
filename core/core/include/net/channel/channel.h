@@ -1,6 +1,8 @@
 #ifndef __CHANNEL_H__
 #define __CHANNEL_H__
 
+#include <memory>
+
 namespace yuan::net
 {
     class SelectHandler;
@@ -61,6 +63,10 @@ namespace yuan::net
 
         void set_handler(SelectHandler *handler);
 
+        void set_handler(const std::weak_ptr<SelectHandler> &handler);
+
+        void clear_handler();
+
         void set_revent(int revent)
         {
             revent_ = revent;
@@ -88,6 +94,7 @@ namespace yuan::net
         int revent_;
         int priority_;
         SelectHandler *handler_;
+        std::weak_ptr<SelectHandler> handler_owner_;
     };
 }
 

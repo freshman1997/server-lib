@@ -29,6 +29,24 @@ namespace yuan::net
 {
     namespace
     {
+        template<typename T>
+        T *ptr_of(std::unique_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+
+        template<typename T>
+        const T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+
+        template<typename T>
+        T *ptr_of(std::shared_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+
         void close_socket_fd(int fd)
         {
 #ifdef _WIN32
@@ -45,18 +63,19 @@ namespace yuan::net
         assert(socket_);
         channel_ = std::make_unique<Channel>();
         ssl_module_ = nullptr;
-        conn_handler_ = nullptr;
+        self_handler_owner_ = std::shared_ptr<SelectHandler>(this, [](SelectHandler *) {});
     }
 
     TcpAcceptor::~TcpAcceptor()
     {
         if (handler_) {
             channel_->disable_all();
-            handler_->close_channel(channel_.get());
-            channel_->set_handler(nullptr);
+            handler_->close_channel(ptr_of(channel_));
+            channel_->clear_handler();
         }
 
         channel_.reset();
+        self_handler_owner_.reset();
         socket_.reset();
 
         LOG_INFO("tcp acceptor close");
@@ -71,7 +90,7 @@ namespace yuan::net
         }
 
         channel_->set_fd(socket_->get_fd());
-        channel_->set_handler(this);
+        channel_->clear_handler();
         channel_->enable_read();
 
         return true;
@@ -82,8 +101,8 @@ namespace yuan::net
         if (channel_) {
             channel_->disable_all();
             if (handler_) {
-                handler_->close_channel(channel_.get());
-                channel_->set_handler(nullptr);
+                handler_->close_channel(ptr_of(channel_));
+                channel_->clear_handler();
             }
         }
     }
@@ -92,7 +111,7 @@ namespace yuan::net
     {
         assert(channel_);
         if (handler_) {
-            handler_->update_channel(channel_.get());
+            handler_->update_channel(ptr_of(channel_));
         }
     }
 
@@ -133,8 +152,6 @@ namespace yuan::net
             conn->set_event_handler(handler_);
             if (conn_handler_owner_) {
                 conn->set_connection_handler(conn_handler_owner_);
-            } else {
-                conn->set_connection_handler(make_non_owning_handler(conn_handler_));
             }
 
             if (sslHandler) {
@@ -158,8 +175,8 @@ namespace yuan::net
             } else if (handler_) {
                 handler_->on_new_connection(conn);
             }
-            if (conn_handler_) {
-                conn_handler_->on_connected(conn);
+            if (conn_handler_owner_) {
+                conn_handler_owner_->on_connected(conn);
             }
         }
     }
@@ -171,17 +188,30 @@ namespace yuan::net
 
     void TcpAcceptor::set_event_handler(EventHandler * handler)
     {
+        if (handler_ == handler) {
+            if (handler_ && channel_) {
+                handler_->update_channel(ptr_of(channel_));
+            }
+            return;
+        }
+
+        if (handler_ && handler_ != handler && channel_) {
+            LOG_WARN("tcp acceptor event handler switched, fd: {}", channel_->get_fd());
+            handler_->close_channel(ptr_of(channel_));
+        }
         handler_ = handler;
         assert(channel_);
         if (handler_) {
-            handler_->update_channel(channel_.get());
+            channel_->set_handler(std::weak_ptr<SelectHandler>(self_handler_owner_));
+            handler_->update_channel(ptr_of(channel_));
+        } else {
+            channel_->clear_handler();
         }
     }
 
     void TcpAcceptor::set_connection_handler(std::shared_ptr<ConnectionHandler> connHandler)
     {
         this->conn_handler_owner_ = std::move(connHandler);
-        this->conn_handler_ = conn_handler_owner_.get();
     }
 
     void TcpAcceptor::set_ssl_module(std::shared_ptr<SSLModule> module)

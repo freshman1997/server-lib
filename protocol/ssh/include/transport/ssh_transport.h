@@ -120,7 +120,7 @@ namespace yuan::net::ssh
         void set_host_key_algorithm(std::unique_ptr<SshHostKeyAlgorithm> algo)
         {
             owned_host_key_algo_ = std::move(algo);
-            host_key_algo_ = owned_host_key_algo_.get();
+            host_key_algo_ = owned_host_key_algo_ ? &*owned_host_key_algo_ : nullptr;
         }
 
         void set_host_key_algorithm(SshHostKeyAlgorithm * algo)

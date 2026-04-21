@@ -17,7 +17,21 @@ namespace yuan::coroutine
 
     inline AsyncReadAwaiter RuntimeView::read(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms) const noexcept
     {
-        return async_read(*this, conn.get(), timeout_ms);
+        return async_read(*this, conn, timeout_ms);
+    }
+
+    inline AsyncReadAwaiter RuntimeView::read(net::Connection *conn,
+                                              uint32_t timeout_ms,
+                                              bool forward_terminal_events_after_completion) const noexcept
+    {
+        return async_read(*this, conn, timeout_ms, forward_terminal_events_after_completion);
+    }
+
+    inline AsyncReadAwaiter RuntimeView::read(const std::shared_ptr<net::Connection> &conn,
+                                              uint32_t timeout_ms,
+                                              bool forward_terminal_events_after_completion) const noexcept
+    {
+        return async_read(*this, conn, timeout_ms, forward_terminal_events_after_completion);
     }
 
     inline AsyncWriteAwaiter RuntimeView::write(net::Connection * conn, const ::yuan::buffer::ByteBuffer & buf,
@@ -29,7 +43,7 @@ namespace yuan::coroutine
     inline AsyncWriteAwaiter RuntimeView::write(const std::shared_ptr<net::Connection> &conn, const ::yuan::buffer::ByteBuffer &buf,
                                                 uint32_t timeout_ms) const noexcept
     {
-        return async_write(*this, conn.get(), buf, timeout_ms);
+        return async_write(*this, conn, buf, timeout_ms);
     }
 
     inline AsyncFlushAwaiter RuntimeView::flush(net::Connection * conn, uint32_t timeout_ms) const noexcept
@@ -39,7 +53,7 @@ namespace yuan::coroutine
 
     inline AsyncFlushAwaiter RuntimeView::flush(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms) const noexcept
     {
-        return async_flush(*this, conn.get(), timeout_ms);
+        return async_flush(*this, conn, timeout_ms);
     }
 
     inline AsyncCloseAwaiter RuntimeView::close(net::Connection * conn) const noexcept
@@ -49,7 +63,7 @@ namespace yuan::coroutine
 
     inline AsyncCloseAwaiter RuntimeView::close(const std::shared_ptr<net::Connection> &conn) const noexcept
     {
-        return async_close(*this, conn.get());
+        return async_close(*this, conn);
     }
 
     inline AsyncSslHandshakeAwaiter RuntimeView::ssl_handshake(net::Connection * conn, uint32_t timeout_ms) const noexcept
@@ -59,7 +73,7 @@ namespace yuan::coroutine
 
     inline AsyncSslHandshakeAwaiter RuntimeView::ssl_handshake(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms) const noexcept
     {
-        return async_ssl_handshake(*this, conn.get(), timeout_ms);
+        return async_ssl_handshake(*this, conn, timeout_ms);
     }
 
     inline AsyncReceiveFromAwaiter RuntimeView::receive_from(net::Connection * conn, uint32_t timeout_ms) const noexcept
@@ -69,7 +83,7 @@ namespace yuan::coroutine
 
     inline AsyncReceiveFromAwaiter RuntimeView::receive_from(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms) const noexcept
     {
-        return async_receive_from(*this, conn.get(), timeout_ms);
+        return async_receive_from(*this, conn, timeout_ms);
     }
 
     inline void RuntimeView::register_connection(net::Connection * conn, std::shared_ptr<net::ConnectionHandler> handler) const

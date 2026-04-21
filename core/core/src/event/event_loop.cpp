@@ -5,6 +5,7 @@
 #include <mutex>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "logger.h"
@@ -43,6 +44,8 @@ namespace yuan::net
         std::mutex m;
         std::condition_variable cond;
         std::unordered_map<int, Channel *> channels_;
+        std::unordered_map<int, uint64_t> channel_generations_;
+        std::unordered_set<int> tombstoned_fds_;
         std::queue<std::function<void()>> pending_callbacks_;
         std::queue<std::coroutine_handle<>> pending_coroutines_;
         std::unordered_map<int, std::shared_ptr<Connection>> connections_;
@@ -109,31 +112,39 @@ namespace yuan::net
         };
         
         uint64_t from = base::time::get_tick_count();
-        std::vector<Channel *> channels;
-        channels.reserve(4096);
+        std::vector<PollEvent> events;
+        events.reserve(4096);
         while (!data_->quit_.load(std::memory_order_acquire) &&
                !data_->resume_coroutine_requested_.load(std::memory_order_acquire)) {
-            channels.clear();
-            const uint64_t to = data_->poller_->poll(2, channels);
-            if (!channels.empty()) {
-                for (const auto &channel : channels) {
-                    if (!channel) {
-                        continue;
-                    }
-
-                    bool should_dispatch = false;
+            events.clear();
+            const uint64_t to = data_->poller_->poll(2, events);
+            if (!events.empty()) {
+                for (const auto &event : events) {
+                    Channel *channel = nullptr;
                     {
                         std::lock_guard<std::mutex> lock(data_->m);
-                        should_dispatch = data_->channels_.find(channel->get_fd()) != data_->channels_.end();
+                        auto it = data_->channels_.find(event.fd);
+                        if (it == data_->channels_.end()) {
+                            continue;
+                        }
+
+                        auto gen_it = data_->channel_generations_.find(event.fd);
+                        if (event.generation != 0) {
+                            if (gen_it == data_->channel_generations_.end() || gen_it->second != event.generation) {
+                                continue;
+                            }
+                        }
+                        channel = it->second;
                     }
 
-                    if (should_dispatch) {
+                    if (channel) {
                         try {
+                            channel->set_revent(event.revents);
                             channel->on_event();
                         } catch (const std::exception& e) {
-                            LOG_ERROR("Exception in event loop (fd={}): {}", channel->get_fd(), e.what());
+                            LOG_ERROR("Exception in event loop (fd={}): {}", event.fd, e.what());
                         } catch (...) {
-                            LOG_ERROR("Unknown exception in event loop (fd={})", channel->get_fd());
+                            LOG_ERROR("Unknown exception in event loop (fd={})", event.fd);
                         }
                     }
                 }
@@ -198,6 +209,10 @@ namespace yuan::net
             std::lock_guard<std::mutex> lock(data_->m);
             data_->poller_->update_channel(channel);
             data_->channels_[channel->get_fd()] = channel;
+            if (data_->channel_generations_[channel->get_fd()] == 0) {
+                data_->channel_generations_[channel->get_fd()] = 1;
+            }
+            data_->tombstoned_fds_.erase(channel->get_fd());
         }
     }
 
@@ -223,6 +238,8 @@ namespace yuan::net
             LOG_INFO("channel closed, fd: {}", channel->get_fd());
             data_->poller_->remove_channel(channel);
             data_->channels_.erase(it);
+            data_->tombstoned_fds_.insert(channel->get_fd());
+            data_->channel_generations_[channel->get_fd()] += 1;
         } else {
             LOG_WARN("channel not found, fd: {}", channel->get_fd());
         }
@@ -233,6 +250,10 @@ namespace yuan::net
         if (channel) {
             std::lock_guard<std::mutex> lock(data_->m);
             data_->channels_[channel->get_fd()] = channel;
+            if (data_->channel_generations_[channel->get_fd()] == 0) {
+                data_->channel_generations_[channel->get_fd()] = 1;
+            }
+            data_->tombstoned_fds_.erase(channel->get_fd());
             data_->poller_->update_channel(channel);
         }
     }

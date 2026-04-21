@@ -58,7 +58,7 @@ namespace yuan::net
 
         InetAddress *get_address() const
         {
-            return addr_.get();
+            return addr_ ? &*addr_ : nullptr;
         }
 
         InetAddress get_local_address() const;

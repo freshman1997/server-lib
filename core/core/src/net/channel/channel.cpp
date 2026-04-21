@@ -3,6 +3,15 @@
 
 namespace yuan::net
 {
+    namespace
+    {
+        template <typename T>
+        T *ptr_of(const std::shared_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
     Channel::Channel() : Channel(0)
     {
     }
@@ -15,11 +24,32 @@ namespace yuan::net
     void Channel::set_handler(SelectHandler *handler)
     {
         handler_ = handler;
+        handler_owner_.reset();
+    }
+
+    void Channel::set_handler(const std::weak_ptr<SelectHandler> &handler)
+    {
+        handler_owner_ = handler;
+        auto locked = handler_owner_.lock();
+        handler_ = ptr_of(locked);
+    }
+
+    void Channel::clear_handler()
+    {
+        handler_ = nullptr;
+        handler_owner_.reset();
     }
 
     void Channel::on_event()
     {
-        if (!handler_) {
+        SelectHandler *handler = handler_;
+        if (!handler_owner_.expired()) {
+            auto locked = handler_owner_.lock();
+            handler = ptr_of(locked);
+            handler_ = handler;
+        }
+
+        if (!handler) {
             return;
         }
 
@@ -28,11 +58,11 @@ namespace yuan::net
         }
 
         if (revent_ & READ_EVENT && events_ & READ_EVENT) {
-            handler_->on_read_event();
+            handler->on_read_event();
         }
 
         if (revent_ & WRITE_EVENT && events_ & WRITE_EVENT) {
-            handler_->on_write_event();
+            handler->on_write_event();
         }
     }
 }

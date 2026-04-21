@@ -37,6 +37,18 @@ namespace yuan::log
 
 namespace
 {
+    template <typename T>
+    T *ptr_of(std::unique_ptr<T> &owner)
+    {
+        return owner ? &*owner : nullptr;
+    }
+
+    template <typename T>
+    const T *ptr_of(const std::unique_ptr<T> &owner)
+    {
+        return owner ? &*owner : nullptr;
+    }
+}
 
 static inline LogItem make_log_item(Level level, const std::string& msg, const std::string& name,
                                     const char* file = nullptr, int line = 0, const char* func = nullptr)
@@ -99,10 +111,10 @@ static void ensure_winsock_initialized()
 }
 #endif
 
-class NetLoggerImpl : public yuan::net::ConnectorHandler, public yuan::net::ConnectionHandler
+class NetLogger::Impl : public yuan::net::ConnectorHandler, public yuan::net::ConnectionHandler
 {
 public:
-    explicit NetLoggerImpl(const LogConfig& cfg)
+    explicit Impl(const LogConfig& cfg)
         : cfg_(cfg)
     {
 #ifdef _WIN32
@@ -111,7 +123,7 @@ public:
         start_runtime();
     }
 
-    ~NetLoggerImpl() override
+    ~Impl() override
     {
         stop_runtime();
     }
@@ -122,9 +134,7 @@ public:
     void send(const std::string& data);
     void flush();
 
-    void on_connect_failed(const std::shared_ptr<yuan::net::Connection>& conn) override;
-    void on_connect_timeout(const std::shared_ptr<yuan::net::Connection>& conn) override;
-    void on_connected_success(const std::shared_ptr<yuan::net::Connection>& conn) override;
+    void on_connect_result(const yuan::net::ConnectResult& result) override;
 
     void on_connected(const std::shared_ptr<yuan::net::Connection>& conn) override;
     void on_error(const std::shared_ptr<yuan::net::Connection>& conn) override;
@@ -163,7 +173,7 @@ private:
     int reconnect_attempts_ = 0;
 };
 
-void NetLoggerImpl::start_runtime()
+void NetLogger::Impl::start_runtime()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (runtime_started_) return;
@@ -187,7 +197,7 @@ void NetLoggerImpl::start_runtime()
     });
 }
 
-void NetLoggerImpl::stop_runtime()
+void NetLogger::Impl::stop_runtime()
 {
     std::thread loop_thread;
     yuan::net::EventLoop* loop = nullptr;
@@ -238,7 +248,7 @@ void NetLoggerImpl::stop_runtime()
     delete timer_manager;
 }
 
-bool NetLoggerImpl::schedule_connect_locked()
+bool NetLogger::Impl::schedule_connect_locked()
 {
     if (!runtime_started_ || !loop_ || shutting_down_) return false;
     if (connected_ || connecting_) return true;
@@ -246,7 +256,10 @@ bool NetLoggerImpl::schedule_connect_locked()
     connecting_ = true;
     if (!connector_) {
         connector_ = std::make_shared<yuan::net::TcpConnector>();
-        connector_->set_data(timer_manager_, this, loop_);
+        connector_->set_data(timer_manager_,
+                             std::shared_ptr<yuan::net::ConnectorHandler>(static_cast<yuan::net::ConnectorHandler *>(this),
+                                                                           [](yuan::net::ConnectorHandler *) {}),
+                             loop_);
     }
 
     const auto address = yuan::net::InetAddress(cfg_.net_server_ip, cfg_.net_server_port);
@@ -268,7 +281,7 @@ bool NetLoggerImpl::schedule_connect_locked()
     return true;
 }
 
-    void NetLoggerImpl::cancel_reconnect_timer_locked()
+    void NetLogger::Impl::cancel_reconnect_timer_locked()
 {
     if (reconnect_timer_) {
         reconnect_timer_->cancel();
@@ -276,7 +289,7 @@ bool NetLoggerImpl::schedule_connect_locked()
     }
 }
 
-bool NetLoggerImpl::schedule_reconnect_locked()
+bool NetLogger::Impl::schedule_reconnect_locked()
 {
     if (!cfg_.net_auto_reconnect) return false;
     if (!runtime_started_ || !loop_ || !timer_manager_ || shutting_down_) return false;
@@ -302,7 +315,7 @@ bool NetLoggerImpl::schedule_reconnect_locked()
     return reconnect_timer_ != nullptr;
 }
 
-void NetLoggerImpl::enqueue_pending_locked(std::string data)
+void NetLogger::Impl::enqueue_pending_locked(std::string data)
 {
     const int max_pending = cfg_.net_max_pending_messages;
     if (max_pending > 0 && static_cast<int>(pending_messages_.size()) >= max_pending) {
@@ -317,13 +330,13 @@ void NetLoggerImpl::enqueue_pending_locked(std::string data)
     pending_messages_.push_back(std::move(data));
 }
 
-bool NetLoggerImpl::connect()
+bool NetLogger::Impl::connect()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     return schedule_connect_locked();
 }
 
-void NetLoggerImpl::disconnect()
+void NetLogger::Impl::disconnect()
 {
     std::shared_ptr<yuan::net::TcpConnector> connector;
     std::shared_ptr<yuan::net::Connection> connection;
@@ -351,13 +364,13 @@ void NetLoggerImpl::disconnect()
     }
 }
 
-bool NetLoggerImpl::is_connected() const
+bool NetLogger::Impl::is_connected() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     return connected_;
 }
 
-void NetLoggerImpl::queue_send_locked(std::string data)
+void NetLogger::Impl::queue_send_locked(std::string data)
 {
     if (!runtime_started_ || !loop_ || shutting_down_) {
         fallback_to_stderr(data);
@@ -369,7 +382,7 @@ void NetLoggerImpl::queue_send_locked(std::string data)
     });
 }
 
-void NetLoggerImpl::write_on_loop(const std::string& data)
+void NetLogger::Impl::write_on_loop(const std::string& data)
 {
     std::shared_ptr<yuan::net::Connection> connection;
     {
@@ -387,7 +400,7 @@ void NetLoggerImpl::write_on_loop(const std::string& data)
     connection->write_and_flush(buffer);
 }
 
-void NetLoggerImpl::send(const std::string& data)
+void NetLogger::Impl::send(const std::string& data)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (connected_ && connection_) {
@@ -405,7 +418,7 @@ void NetLoggerImpl::send(const std::string& data)
     }
 }
 
-void NetLoggerImpl::flush_pending_locked()
+void NetLogger::Impl::flush_pending_locked()
 {
     if (!loop_ || !connected_ || !connection_) return;
 
@@ -418,7 +431,7 @@ void NetLoggerImpl::flush_pending_locked()
     }
 }
 
-void NetLoggerImpl::flush()
+void NetLogger::Impl::flush()
 {
     std::shared_ptr<yuan::net::Connection> connection;
     {
@@ -437,14 +450,37 @@ void NetLoggerImpl::flush()
     std::cerr.flush();
 }
 
-void NetLoggerImpl::fallback_to_stderr(const std::string& data) const
+void NetLogger::Impl::fallback_to_stderr(const std::string& data) const
 {
     std::cerr << data << '\n';
 }
 
-void NetLoggerImpl::on_connect_failed(const std::shared_ptr<yuan::net::Connection>& conn)
+void NetLogger::Impl::on_connect_result(const yuan::net::ConnectResult& result)
 {
+    const auto& conn = result.connection;
     std::lock_guard<std::mutex> lock(mutex_);
+
+    if (result.code == yuan::net::ConnectResultCode::success) {
+        cancel_reconnect_timer_locked();
+        reconnect_attempts_ = 0;
+        connection_ = conn;
+        connected_ = true;
+        connecting_ = false;
+        if (conn) {
+            conn->set_connection_handler(yuan::net::make_non_owning_handler(this));
+        }
+        flush_pending_locked();
+        state_cv_.notify_all();
+        return;
+    }
+
+    if (result.code == yuan::net::ConnectResultCode::timeout) {
+        fallback_to_stderr("[NetLogger-Fallback] connect timeout, attempt=" + std::to_string(result.attempt_id));
+    } else {
+        fallback_to_stderr("[NetLogger-Fallback] connect failed, err=" + std::to_string(result.error_code)
+            + ", attempt=" + std::to_string(result.attempt_id));
+    }
+
     connecting_ = false;
     connected_ = false;
     if (connection_ == conn) {
@@ -454,12 +490,7 @@ void NetLoggerImpl::on_connect_failed(const std::shared_ptr<yuan::net::Connectio
     state_cv_.notify_all();
 }
 
-void NetLoggerImpl::on_connect_timeout(const std::shared_ptr<yuan::net::Connection>& conn)
-{
-    on_connect_failed(conn);
-}
-
-void NetLoggerImpl::on_connected_success(const std::shared_ptr<yuan::net::Connection>& conn)
+void NetLogger::Impl::on_connected(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     cancel_reconnect_timer_locked();
@@ -467,24 +498,11 @@ void NetLoggerImpl::on_connected_success(const std::shared_ptr<yuan::net::Connec
     connection_ = conn;
     connected_ = true;
     connecting_ = false;
-    conn->set_connection_handler(yuan::net::make_non_owning_handler(this));
     flush_pending_locked();
     state_cv_.notify_all();
 }
 
-void NetLoggerImpl::on_connected(const std::shared_ptr<yuan::net::Connection>& conn)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    cancel_reconnect_timer_locked();
-    reconnect_attempts_ = 0;
-    connection_ = conn;
-    connected_ = true;
-    connecting_ = false;
-    flush_pending_locked();
-    state_cv_.notify_all();
-}
-
-void NetLoggerImpl::on_error(const std::shared_ptr<yuan::net::Connection>& conn)
+void NetLogger::Impl::on_error(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     connected_ = false;
@@ -496,17 +514,17 @@ void NetLoggerImpl::on_error(const std::shared_ptr<yuan::net::Connection>& conn)
     state_cv_.notify_all();
 }
 
-void NetLoggerImpl::on_read(const std::shared_ptr<yuan::net::Connection>& conn)
+void NetLogger::Impl::on_read(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     (void)conn;
 }
 
-void NetLoggerImpl::on_write(const std::shared_ptr<yuan::net::Connection>& conn)
+void NetLogger::Impl::on_write(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     (void)conn;
 }
 
-void NetLoggerImpl::on_close(const std::shared_ptr<yuan::net::Connection>& conn)
+void NetLogger::Impl::on_close(const std::shared_ptr<yuan::net::Connection>& conn)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     connected_ = false;
@@ -517,11 +535,9 @@ void NetLoggerImpl::on_close(const std::shared_ptr<yuan::net::Connection>& conn)
     schedule_reconnect_locked();
     state_cv_.notify_all();
 }
-
-} // namespace
 
 NetLogger::NetLogger(const LogConfig& cfg)
-    : config_(cfg), connection_impl_(new NetLoggerImpl(cfg))
+    : config_(cfg), connection_impl_(std::make_unique<Impl>(cfg))
 {
     set_level(cfg.log_level);
     formatter_ = std::make_shared<Formatter>(cfg.fmt_pattern, cfg.fmt_datefmt);
@@ -531,7 +547,7 @@ NetLogger::NetLogger(const std::string& server_ip, int server_port)
 {
     config_.net_server_ip = server_ip;
     config_.net_server_port = server_port;
-    connection_impl_ = new NetLoggerImpl(config_);
+    connection_impl_ = std::make_unique<Impl>(config_);
     set_level(config_.log_level);
     formatter_ = std::make_shared<Formatter>();
 }
@@ -539,8 +555,7 @@ NetLogger::NetLogger(const std::string& server_ip, int server_port)
 NetLogger::~NetLogger()
 {
     flush();
-    delete static_cast<NetLoggerImpl*>(connection_impl_);
-    connection_impl_ = nullptr;
+    connection_impl_.reset();
 }
 
 void NetLogger::log(Level level, const char* fmt, ...)
@@ -566,7 +581,7 @@ void NetLogger::log_impl(Level level, const std::string& msg)
     }
 
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    auto* impl = static_cast<NetLoggerImpl*>(connection_impl_);
+    auto* impl = ptr_of(connection_impl_);
     if (impl) impl->send(formatted);
 }
 
@@ -582,35 +597,35 @@ void NetLogger::log_impl(Level level, const std::string& msg,
     }
 
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    auto* impl = static_cast<NetLoggerImpl*>(connection_impl_);
+    auto* impl = ptr_of(connection_impl_);
     if (impl) impl->send(formatted);
 }
 
 void NetLogger::flush()
 {
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    auto* impl = static_cast<NetLoggerImpl*>(connection_impl_);
+    auto* impl = ptr_of(connection_impl_);
     if (impl) impl->flush();
 }
 
 bool NetLogger::connect()
 {
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    auto* impl = static_cast<NetLoggerImpl*>(connection_impl_);
+    auto* impl = ptr_of(connection_impl_);
     return impl ? impl->connect() : false;
 }
 
 void NetLogger::disconnect()
 {
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    auto* impl = static_cast<NetLoggerImpl*>(connection_impl_);
+    auto* impl = ptr_of(connection_impl_);
     if (impl) impl->disconnect();
 }
 
 bool NetLogger::is_connected() const
 {
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    auto* impl = static_cast<const NetLoggerImpl*>(connection_impl_);
+    const auto* impl = ptr_of(connection_impl_);
     return impl ? impl->is_connected() : false;
 }
 

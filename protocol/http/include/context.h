@@ -31,12 +31,12 @@ namespace yuan::net::http
 
         HttpRequest *get_request()
         {
-            return request_.get();
+            return request_ ? &*request_ : nullptr;
         }
 
         HttpResponse *get_response()
         {
-            return response_.get();
+            return response_ ? &*response_ : nullptr;
         }
 
         net::Connection *get_connection()
@@ -58,7 +58,7 @@ namespace yuan::net::http
         void set_connection(const std::shared_ptr<net::Connection> &conn)
         {
             conn_owner_ = conn;
-            conn_ = conn.get();
+            conn_ = conn ? &*conn : nullptr;
         }
 
         void set_session(HttpSession *session)

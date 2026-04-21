@@ -168,7 +168,7 @@ namespace yuan::net::ssh
             return false;
 
         auto crypto = std::make_unique<SshCryptoOpenSSL>();
-        algo->set_crypto(crypto.get());
+        algo->set_crypto(&*crypto);
 
         if (!algo->load_key_pair(priv_der, pub_der))
             return false;
@@ -198,14 +198,14 @@ namespace yuan::net::ssh
     {
         for (const auto &entry : entries_) {
             if (entry.algorithm_name == algo_name)
-                return entry.algorithm.get();
+                return entry.algorithm ? &*entry.algorithm : nullptr;
 
             if (algo_name == "ssh-rsa" && entry.type == SshHostKeyType::RSA)
-                return entry.algorithm.get();
+                return entry.algorithm ? &*entry.algorithm : nullptr;
 
             if ((algo_name == "rsa-sha2-256" || algo_name == "rsa-sha2-512") &&
                 entry.type == SshHostKeyType::RSA)
-                return entry.algorithm.get();
+                return entry.algorithm ? &*entry.algorithm : nullptr;
         }
         return nullptr;
     }
@@ -223,7 +223,7 @@ namespace yuan::net::ssh
     {
         if (entries_.empty())
             return nullptr;
-        return entries_.front().algorithm.get();
+        return entries_.front().algorithm ? &*entries_.front().algorithm : nullptr;
     }
 
     bool SshHostKeyProvider::generate_key(SshHostKeyType type, const std::string & path)

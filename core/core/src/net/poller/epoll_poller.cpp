@@ -1,6 +1,7 @@
 #ifdef __linux__
 #include <cstring>
 #include <set>
+#include <unordered_map>
 #include <unistd.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
@@ -15,6 +16,12 @@ namespace yuan::net
     class EpollPoller::HelperData
     {
     public:
+        struct ChannelEntry
+        {
+            Channel *channel = nullptr;
+            uint64_t generation = 0;
+        };
+
         HelperData() = default;
         ~HelperData()
         {
@@ -26,8 +33,27 @@ namespace yuan::net
     public:
         int epoll_fd_;
         std::set<int> fds_;
+        std::unordered_map<int, ChannelEntry> channels_;
         std::vector<struct epoll_event> epoll_events_;
     };
+
+    namespace
+    {
+        static uint64_t encode_token(int fd, uint64_t generation)
+        {
+            return (generation << 32) | static_cast<uint32_t>(fd);
+        }
+
+        static int decode_fd(uint64_t token)
+        {
+            return static_cast<int>(token & 0xffffffffULL);
+        }
+
+        static uint64_t decode_generation(uint64_t token)
+        {
+            return token >> 32;
+        }
+    }
 
     const int EpollPoller::MAX_EVENT = 4096;
 
@@ -49,7 +75,7 @@ namespace yuan::net
         return data_->epoll_fd_ != -1;
     }
 
-    uint64_t EpollPoller::poll(uint32_t timeout, std::vector<Channel *> & channels)
+    uint64_t EpollPoller::poll(uint32_t timeout, std::vector<PollEvent> & events)
     {
         int nevent = ::epoll_wait(data_->epoll_fd_, &*data_->epoll_events_.begin(), (int)data_->epoll_events_.size(), timeout);
         uint64_t tm = base::time::get_tick_count();
@@ -69,10 +95,13 @@ namespace yuan::net
                     ev |= Channel::WRITE_EVENT;
                 }
 
-                Channel *channel = static_cast<Channel *>(data_->epoll_events_[i].data.ptr);
-                if (ev != Channel::NONE_EVENT && channel) {
-                    channel->set_revent(ev);
-                    channels.push_back(channel);
+                const uint64_t token = data_->epoll_events_[i].data.u64;
+                if (ev != Channel::NONE_EVENT) {
+                    PollEvent pe;
+                    pe.fd = decode_fd(token);
+                    pe.revents = ev;
+                    pe.generation = decode_generation(token);
+                    events.push_back(pe);
                 }
             }
 
@@ -86,16 +115,21 @@ namespace yuan::net
 
     void EpollPoller::update_channel(Channel * channel)
     {
-        auto it = data_->fds_.find(channel->get_fd());
+        const int fd = channel->get_fd();
+        auto it = data_->fds_.find(fd);
         if (it != data_->fds_.end()) {
             if (!channel->has_events()) {
                 remove_channel(channel);
             } else {
+                auto &entry = data_->channels_[fd];
+                entry.channel = channel;
                 update(EPOLL_CTL_MOD, channel);
             }
         } else {
+            auto &entry = data_->channels_[fd];
+            entry.channel = channel;
             update(EPOLL_CTL_ADD, channel);
-            data_->fds_.insert(channel->get_fd());
+            data_->fds_.insert(fd);
         }
     }
 
@@ -103,6 +137,7 @@ namespace yuan::net
     {
         update(EPOLL_CTL_DEL, channel);
         data_->fds_.erase(channel->get_fd());
+        data_->channels_.erase(channel->get_fd());
     }
 
     void EpollPoller::update(int op, Channel * channel)
@@ -122,7 +157,9 @@ namespace yuan::net
                 event.events |= EPOLLOUT;
             }
 
-            event.data.ptr = channel;
+            auto it = data_->channels_.find(channel->get_fd());
+            const uint64_t generation = (it == data_->channels_.end()) ? 0 : it->second.generation;
+            event.data.u64 = encode_token(channel->get_fd(), generation);
 
             ret = ::epoll_ctl(data_->epoll_fd_, op, channel->get_fd(), &event);
         } else {

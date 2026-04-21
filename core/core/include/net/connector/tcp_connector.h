@@ -1,6 +1,7 @@
 #ifndef __NET_TCP_CONNECTOR_H__
 #define __NET_TCP_CONNECTOR_H__
 #include "connector.h"
+#include "net/handler/connection_handler.h"
 #include <memory>
 
 namespace yuan::net
@@ -8,24 +9,17 @@ namespace yuan::net
     class TcpConnector : public Connector
     {
     public:
+        class ConnectAttemptHandler;
+
         TcpConnector();
         ~TcpConnector();
 
     public:
-        virtual void on_connected(const std::shared_ptr<Connection> &conn) override;
-
-        virtual void on_error(const std::shared_ptr<Connection> &conn) override;
-
-        virtual void on_read(const std::shared_ptr<Connection> &conn) override;
-
-        virtual void on_write(const std::shared_ptr<Connection> &conn) override;
-
-        virtual void on_close(const std::shared_ptr<Connection> &conn) override;
-
-    public:
         virtual bool connect(const InetAddress &address, int timeout = 10 * 1000, int retryCount = 3);
 
-        virtual void set_data(timer::TimerManager *timerManager, ConnectorHandler *connectorHandler, EventHandler *eventHander);
+        virtual void set_data(timer::TimerManager *timerManager,
+                              std::shared_ptr<ConnectorHandler> connectorHandler,
+                              EventHandler *eventHander);
 
         virtual void set_ssl_module(std::shared_ptr<SSLModule> module);
 
@@ -38,7 +32,7 @@ namespace yuan::net
 
     private:
         class TcpConnectorData;
-        std::unique_ptr<TcpConnectorData> data_;
+        std::shared_ptr<TcpConnectorData> data_;
     };
 }
 

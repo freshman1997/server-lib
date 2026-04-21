@@ -20,6 +20,15 @@ namespace yuan::net::ssh
 {
     namespace
     {
+        template <typename T>
+        T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
+    namespace
+    {
         bool contains_token_ci(const std::string & text, std::string_view token)
         {
             if (token.empty() || text.size() < token.size()) {
@@ -111,7 +120,7 @@ namespace yuan::net::ssh
                 file_system_ = std::make_unique<SshLocalFileSystem>(
                     sftp_root);
             }
-            auto *fs = file_system_.get();
+            auto *fs = ptr_of(file_system_);
             register_subsystem("sftp", [fs]()->std::unique_ptr<SshChannelHandler> {
                 return std::make_unique<SshSftpSubsystem>(fs);
             });
@@ -177,7 +186,7 @@ namespace yuan::net::ssh
             co_return;
         }
 
-        session->transport() = SshTransport(&algo_registry_, crypto_.get(), true);
+        session->transport() = SshTransport(&algo_registry_, ptr_of(crypto_), true);
 
         session->set_client_connection(ctx.connection());
         session->set_runtime(ctx.runtime_view());
@@ -464,7 +473,7 @@ namespace yuan::net::ssh
             if (method_name == "password") {
                 session->authenticator().register_method(std::make_unique<SshAuthPassword>());
             } else if (method_name == "publickey") {
-                session->authenticator().register_method(std::make_unique<SshAuthPublickey>(crypto_.get()));
+                session->authenticator().register_method(std::make_unique<SshAuthPublickey>(ptr_of(crypto_)));
             } else if (method_name == "keyboard-interactive") {
                 session->authenticator().register_method(std::make_unique<SshAuthKeyboardInteractive>());
             }

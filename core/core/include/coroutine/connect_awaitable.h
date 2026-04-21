@@ -63,21 +63,19 @@ namespace yuan::coroutine
                 return false;
             }
 
-            net::Socket *sock = new net::Socket(addr.get_ip().c_str(), port_);
+            auto sock = std::make_unique<net::Socket>(addr.get_ip().c_str(), port_);
             if (!sock->valid()) {
-                delete sock;
                 result_.result = ConnectResult::socket_error;
                 return false;
             }
 
             sock->set_none_block(true);
             if (!sock->connect()) {
-                delete sock;
                 result_.result = ConnectResult::connect_failed;
                 return false;
             }
 
-            conn_ = net::create_stream_connection(sock);
+            conn_ = net::create_stream_connection(sock.release());
             if (!conn_) {
                 result_.result = ConnectResult::socket_error;
                 return false;
@@ -85,13 +83,13 @@ namespace yuan::coroutine
 
             original_handler_ = conn_->get_connection_handler();
             original_handler_owner_ = conn_->get_connection_handler_owner();
-            proxy_ = std::make_shared<ConnectProxyHandler>(*this, conn_.get(),
+            proxy_ = std::make_shared<ConnectProxyHandler>(*this, &*conn_,
                                                            original_handler_,
                                                            original_handler_owner_);
             conn_->set_connection_handler(proxy_);
             conn_->set_event_handler(runtime_.event_loop());
 
-            if (auto *stream = dynamic_cast<net::StreamTransport *>(conn_.get())) {
+            if (auto *stream = dynamic_cast<net::StreamTransport *>(&*conn_)) {
                 if (auto *channel = stream->stream_channel()) {
                     runtime_.event_loop()->update_channel(channel);
                 }
@@ -154,12 +152,8 @@ namespace yuan::coroutine
                 return;
             }
 
-            if (proxy_ && conn_->get_connection_handler() == proxy_.get()) {
-                if (original_handler_owner_) {
-                    conn_->set_connection_handler(original_handler_owner_);
-                } else {
-                    conn_->set_connection_handler(make_non_owning_handler(original_handler_));
-                }
+            if (proxy_ && conn_->get_connection_handler_owner() == proxy_) {
+                conn_->set_connection_handler(original_handler_owner_);
             }
             handler_restored_ = true;
         }

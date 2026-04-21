@@ -83,7 +83,7 @@ namespace yuan::net::ssh
         }
         SshChannelHandler *handler() const
         {
-            return handler_.get();
+            return handler_ ? &*handler_ : nullptr;
         }
 
         void consume_local_window(uint32_t bytes);

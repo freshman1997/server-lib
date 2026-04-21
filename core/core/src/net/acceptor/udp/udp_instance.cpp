@@ -41,7 +41,7 @@ namespace yuan::net
             if (adapter_type_ == UdpAdapterType::kcp) {
                 UdpAdapter *adapter = new KcpAdapter;
                 udpConn = create_datagram_connection(address, adapter);
-                if (!adapter->init(udpConn.get(), acceptor_->endpoint_timer_manager())) {
+                if (!adapter->init(udpConn ? &*udpConn : nullptr, acceptor_->endpoint_timer_manager())) {
                     return { false, udpConn };
                 }
             } else {

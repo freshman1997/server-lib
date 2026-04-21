@@ -9,6 +9,9 @@
 #include "net/async/async_connection_context.h"
 #include "net/async/async_listener_host.h"
 #include "net/connection/connection.h"
+#include "net/connection/connection_ref.h"
+#include "net/auth_rate_limiter.h"
+#include "net/ip_policy.h"
 #include "net/runtime/network_runtime.h"
 #include "server_service_custom_events.h"
 
@@ -354,8 +357,8 @@ namespace
     struct RelaySharedState
     {
         yuan::coroutine::RuntimeView runtime;
-        std::shared_ptr<yuan::net::Connection> client_connection;
-        std::shared_ptr<yuan::net::Connection> upstream_connection;
+        yuan::net::ConnectionRef client_connection;
+        yuan::net::ConnectionRef upstream_connection;
         std::string client_addr;
         std::string upstream_addr;
         std::string method;
@@ -365,9 +368,14 @@ namespace
         std::atomic_int remaining_relays{ 0 };
         std::atomic_uint64_t bytes_up{ 0 };
         std::atomic_uint64_t bytes_down{ 0 };
+        std::atomic_uint64_t pending_buffer_bytes{ 0 };
+        std::atomic_uint64_t *total_tunnel_memory{ nullptr };
+        int max_session_buffer_bytes = 0;
+        int max_total_tunnel_memory = 0;
         yuan::coroutine::CompletionEvent relays_completed;
         std::mutex reason_mutex;
         std::string close_reason = "closed";
+        std::function<void(bool client_half_closed)> on_half_close;
     };
 
     enum class ProxySessionState {
@@ -375,6 +383,8 @@ namespace
         reading_request,
         connecting_upstream,
         established,
+        half_closed_client,
+        half_closed_upstream,
         closing,
         closed,
     };
@@ -390,6 +400,10 @@ namespace
             return "connecting_upstream";
         case ProxySessionState::established:
             return "established";
+        case ProxySessionState::half_closed_client:
+            return "half_closed_client";
+        case ProxySessionState::half_closed_upstream:
+            return "half_closed_upstream";
         case ProxySessionState::closing:
             return "closing";
         case ProxySessionState::closed:
@@ -427,6 +441,24 @@ namespace
         case yuan::coroutine::IoStatus::invalid_state:
         default:
             return std::string(error_reason);
+        }
+    }
+
+    void increment_close_reason_counter(yuan::server::ProxyServiceMetrics *metrics, const std::string &reason)
+    {
+        if (!metrics) {
+            return;
+        }
+        if (reason == "idle_timeout") {
+            metrics->idle_timeouts.fetch_add(1, std::memory_order_relaxed);
+        } else if (reason == "client_closed" || reason == "client_error") {
+            metrics->closes_by_client.fetch_add(1, std::memory_order_relaxed);
+        } else if (reason == "upstream_closed" || reason == "upstream_error") {
+            metrics->closes_by_upstream.fetch_add(1, std::memory_order_relaxed);
+        } else if (reason == "ssrf_blocked") {
+            metrics->closes_by_ssrf.fetch_add(1, std::memory_order_relaxed);
+        } else if (reason == "acl_denied") {
+            metrics->closes_by_acl.fetch_add(1, std::memory_order_relaxed);
         }
     }
 
@@ -543,8 +575,13 @@ namespace
         } };
 
         auto &runtime = state->runtime;
-        yuan::net::Connection *src = client_to_upstream ? state->client_connection.get() : state->upstream_connection.get();
-        yuan::net::Connection *dst = client_to_upstream ? state->upstream_connection.get() : state->client_connection.get();
+        auto &src_ref = client_to_upstream ? state->client_connection : state->upstream_connection;
+        auto &dst_ref = client_to_upstream ? state->upstream_connection : state->client_connection;
+        if (!src_ref || !dst_ref) {
+            co_return;
+        }
+        yuan::net::Connection *src = src_ref.get();
+        yuan::net::Connection *dst = dst_ref.get();
 
         while (!state->closed.load(std::memory_order_acquire) && src->is_connected() && dst->is_connected()) {
             auto read_result = co_await runtime.read(src, idle_timeout_ms);
@@ -560,10 +597,36 @@ namespace
                           state->client_addr,
                           state->upstream_addr);
                 note_relay_reason(state, client_to_upstream ? "client_closed" : "upstream_closed");
+                if (state->on_half_close) {
+                    state->on_half_close(client_to_upstream);
+                }
                 if (dst) {
                     (void)dst->shutdown_write();
                 }
                 co_return;
+            }
+
+            if (read_result.status == yuan::coroutine::IoStatus::connection_error) {
+                auto ctx = yuan::net::AsyncConnectionContext(src->shared_from_this(), runtime);
+                auto shutdown_result = co_await ctx.read_async(idle_timeout_ms, false);
+                if (shutdown_result.status == yuan::coroutine::IoStatus::connection_closed && src->input_shutdown()) {
+                    LOG_DEBUG("[ProxyService] session relay {}->{} target={}:{} client={} upstream={} shutdown observed after read race, forwarding FIN",
+                              client_to_upstream ? "client" : "upstream",
+                              client_to_upstream ? "upstream" : "client",
+                              state->target_host,
+                              state->target_port,
+                              state->client_addr,
+                              state->upstream_addr);
+                    note_relay_reason(state, client_to_upstream ? "client_closed" : "upstream_closed");
+                    if (state->on_half_close) {
+                        state->on_half_close(client_to_upstream);
+                    }
+                    if (dst) {
+                        (void)dst->shutdown_write();
+                    }
+                    co_return;
+                }
+                read_result = std::move(shutdown_result);
             }
 
             if (read_result.status != yuan::coroutine::IoStatus::success) {
@@ -593,13 +656,65 @@ namespace
                           state->client_addr,
                           state->upstream_addr);
                 note_relay_reason(state, client_to_upstream ? "client_closed" : "upstream_closed");
+                if (state->on_half_close) {
+                    state->on_half_close(client_to_upstream);
+                }
                 if (dst) {
                     (void)dst->shutdown_write();
                 }
                 co_return;
             }
 
+            if (state->max_session_buffer_bytes > 0) {
+                const uint64_t current_pending = state->pending_buffer_bytes.fetch_add(bytes, std::memory_order_relaxed) + bytes;
+                if (current_pending > static_cast<uint64_t>(state->max_session_buffer_bytes)) {
+                    state->pending_buffer_bytes.fetch_sub(bytes, std::memory_order_relaxed);
+                    LOG_WARN("[ProxyService] session relay {}->{} target={}:{} buffer overflow: pending={} max={}",
+                             client_to_upstream ? "client" : "upstream",
+                             client_to_upstream ? "upstream" : "client",
+                             state->target_host,
+                             state->target_port,
+                             current_pending,
+                             state->max_session_buffer_bytes);
+                    close_relay_state(state, "buffer_overflow");
+                    co_return;
+                }
+            }
+
+            if (state->max_total_tunnel_memory > 0 && state->total_tunnel_memory) {
+                const uint64_t current_total = state->total_tunnel_memory->fetch_add(bytes, std::memory_order_relaxed) + bytes;
+                if (current_total > static_cast<uint64_t>(state->max_total_tunnel_memory)) {
+                    state->total_tunnel_memory->fetch_sub(bytes, std::memory_order_relaxed);
+                    LOG_WARN("[ProxyService] session relay {}->{} target={}:{} total tunnel memory overflow: total={} max={}",
+                             client_to_upstream ? "client" : "upstream",
+                             client_to_upstream ? "upstream" : "client",
+                             state->target_host,
+                             state->target_port,
+                             current_total,
+                             state->max_total_tunnel_memory);
+                    close_relay_state(state, "total_memory_overflow");
+                    co_return;
+                }
+            }
+
             auto wr = co_await runtime.write(dst, read_result.data, idle_timeout_ms);
+            if (state->max_session_buffer_bytes > 0) {
+                state->pending_buffer_bytes.fetch_sub(bytes, std::memory_order_relaxed);
+            }
+            if (state->max_total_tunnel_memory > 0 && state->total_tunnel_memory) {
+                state->total_tunnel_memory->fetch_sub(bytes, std::memory_order_relaxed);
+            }
+            if (wr.status == yuan::coroutine::IoStatus::connection_closed && dst && dst->input_shutdown()) {
+                LOG_DEBUG("[ProxyService] session relay {}->{} target={}:{} client={} upstream={} peer closed after successful half-close relay",
+                          client_to_upstream ? "upstream" : "client",
+                          client_to_upstream ? "client" : "upstream",
+                          state->target_host,
+                          state->target_port,
+                          state->client_addr,
+                          state->upstream_addr);
+                note_relay_reason(state, client_to_upstream ? "upstream_closed" : "client_closed");
+                co_return;
+            }
             if (wr.status != yuan::coroutine::IoStatus::success) {
                 LOG_DEBUG("[ProxyService] session relay {}->{} target={}:{} client={} upstream={} write failed status={}",
                           client_to_upstream ? "upstream" : "client",
@@ -633,10 +748,13 @@ namespace
         std::atomic_int &active_sessions,
         yuan::server::ServerRuntimeHost *host,
         std::atomic_uint64_t *completed_sessions,
+        yuan::server::ProxyServiceMetrics *metrics,
+        yuan::net::AuthRateLimiter *auth_rate_limiter,
         std::function<void(std::string_view, std::string_view, std::string_view, std::string_view, int)> on_metadata,
         std::function<void(ProxySessionState, std::string_view)> on_state_change,
         std::function<void(const std::shared_ptr<yuan::net::Connection> &)> on_upstream_ready,
         std::function<void(const std::shared_ptr<RelaySharedState> &)> on_relay_ready,
+        std::atomic_uint64_t *total_tunnel_memory,
         std::function<void()> on_finish)
     {
         SessionGuard guard(active_sessions);
@@ -644,6 +762,13 @@ namespace
         const auto started_at = std::chrono::steady_clock::now();
         const std::string peer_text = format_remote_address(ctx.get_remote_address());
         std::chrono::steady_clock::time_point request_read_completed_at = started_at;
+
+        if (auth_rate_limiter && !config.basic_auth_user.empty() && auth_rate_limiter->is_banned(peer_text)) {
+            LOG_WARN("[ProxyService] session #{} rejecting banned client {} due to auth rate limit", session_id, peer_text);
+            (void)co_await write_http_text_async(ctx, 429, "Too Many Requests", "auth rate limit exceeded");
+            ctx.close();
+            co_return;
+        }
         std::chrono::steady_clock::time_point upstream_connected_at = started_at;
         bool lifecycle_completed = false;
         ScopeExit state_finish{ [&]() {
@@ -680,6 +805,9 @@ namespace
                     (void)co_await write_http_text_async(ctx, 431, "Request Header Fields Too Large");
                 } else if (request_result.status == yuan::coroutine::IoStatus::timed_out) {
                     LOG_WARN("[ProxyService] session #{} {} request header timeout", session_id, peer_text);
+                    if (metrics) {
+                        metrics->header_timeouts.fetch_add(1, std::memory_order_relaxed);
+                    }
                     (void)co_await write_http_text_async(ctx, 408, "Request Timeout");
                 } else {
                     LOG_WARN("[ProxyService] session #{} {} failed to read request, status={}",
@@ -701,6 +829,9 @@ namespace
 
             const auto headers = parse_header_map(request);
             if (!verify_basic_proxy_auth(headers, config)) {
+                if (auth_rate_limiter) {
+                    auth_rate_limiter->record_failure(peer_text);
+                }
                 const std::string response =
                     "HTTP/1.1 407 Proxy Authentication Required\r\n"
                     "Proxy-Agent: yuan-proxy-service\r\n"
@@ -710,6 +841,10 @@ namespace
                 (void)co_await write_text_async(ctx, response);
                 ctx.close();
                 co_return;
+            }
+
+            if (auth_rate_limiter && !config.basic_auth_user.empty()) {
+                auth_rate_limiter->record_success(peer_text);
             }
 
             std::istringstream iss(request.substr(0, line_end));
@@ -767,6 +902,9 @@ namespace
             if (!target_allowed(config, connect_target.host, connect_target.port)) {
                 LOG_WARN("[ProxyService] session #{} {} target denied {}:{}",
                          session_id, peer_text, connect_target.host, connect_target.port);
+                if (metrics) {
+                    metrics->closes_by_acl.fetch_add(1, std::memory_order_relaxed);
+                }
                 if (host) {
                     yuan::server::ProxySessionRejectedEvent evt;
                     evt.session_id = session_id;
@@ -785,6 +923,7 @@ namespace
             if (on_state_change) {
                 on_state_change(ProxySessionState::connecting_upstream, "upstream_connect_started");
             }
+
             auto connect_result = co_await yuan::coroutine::async_connect(runtime,
                                                                           connect_target.host,
                                                                           connect_target.port,
@@ -793,6 +932,9 @@ namespace
                 LOG_ERROR("[ProxyService] session #{} {} failed to connect upstream {}:{} result={}",
                           session_id, peer_text, connect_target.host, connect_target.port, static_cast<int>(connect_result.result));
                 if (connect_result.result == yuan::coroutine::ConnectResult::timed_out) {
+                    if (metrics) {
+                        metrics->connect_timeouts.fetch_add(1, std::memory_order_relaxed);
+                    }
                     (void)co_await write_http_text_async(ctx, 504, "Gateway Timeout", "upstream connect timed out");
                 } else {
                     (void)co_await write_http_text_async(ctx, 502, "Bad Gateway", "failed to connect upstream");
@@ -812,6 +954,31 @@ namespace
                      connect_target.host + ":" + std::to_string(connect_target.port),
                      upstream_peer_text,
                      method);
+
+            if (!config.allow_private_targets) {
+                const std::string resolved_ip = connect_result.connection->get_remote_address().get_ip();
+                if (yuan::net::is_private_ip(resolved_ip)) {
+                    LOG_WARN("[ProxyService] session #{} SSRF blocked, target {} resolves to private IP {}",
+                             session_id, connect_target.host, resolved_ip);
+                    if (metrics) {
+                        metrics->closes_by_ssrf.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    if (host) {
+                        yuan::server::ProxySessionRejectedEvent evt;
+                        evt.session_id = session_id;
+                        evt.service_name = "proxy";
+                        evt.client_addr = peer_text;
+                        evt.method = method;
+                        evt.target_addr = connect_target.host + ":" + std::to_string(connect_target.port);
+                        evt.reason = "ssrf_blocked";
+                        host->publish_custom(yuan::server::events::proxy_session_rejected, std::move(evt));
+                    }
+                    (void)co_await write_http_text_async(ctx, 403, "Forbidden", "target resolves to private IP");
+                    connect_result.connection->close();
+                    ctx.close();
+                    co_return;
+                }
+            }
 
             yuan::net::AsyncConnectionContext upstream_ctx(connect_result.connection, runtime);
 
@@ -875,8 +1042,8 @@ namespace
 
         auto relay_state = std::make_shared<RelaySharedState>();
         relay_state->runtime = runtime;
-        relay_state->client_connection = ctx.connection();
-        relay_state->upstream_connection = connect_result.connection;
+        relay_state->client_connection = yuan::net::ConnectionRef(ctx.connection());
+        relay_state->upstream_connection = yuan::net::ConnectionRef(connect_result.connection);
         relay_state->client_addr = peer_text;
         relay_state->upstream_addr = upstream_peer_text;
         relay_state->method = method;
@@ -884,6 +1051,15 @@ namespace
         relay_state->target_port = connect_target.port;
         relay_state->remaining_relays.store(2, std::memory_order_relaxed);
         relay_state->relays_completed.reset(runtime.event_loop());
+        relay_state->max_session_buffer_bytes = config.max_session_buffer_bytes;
+        relay_state->max_total_tunnel_memory = config.max_total_tunnel_memory;
+        relay_state->total_tunnel_memory = total_tunnel_memory;
+        relay_state->on_half_close = [on_state_change](bool client_half_closed) {
+            if (on_state_change) {
+                on_state_change(client_half_closed ? ProxySessionState::half_closed_client : ProxySessionState::half_closed_upstream,
+                                client_half_closed ? "client_half_close" : "upstream_half_close");
+            }
+        };
         if (on_relay_ready) {
             on_relay_ready(relay_state);
         }
@@ -896,7 +1072,9 @@ namespace
         downlink_task.resume();
         downlink_task.detach();
 
-        co_await relay_state->relays_completed.wait();
+        co_await relay_state->relays_completed.wait_for(
+            runtime.timer_manager(),
+            static_cast<uint32_t>(config.idle_timeout_ms * 2 + config.drain_timeout_ms + 10000));
 
         if (!relay_state->closed.exchange(true, std::memory_order_acq_rel)) {
             if (relay_state->client_connection) {
@@ -936,6 +1114,7 @@ namespace
             std::lock_guard<std::mutex> lock(relay_state->reason_mutex);
             close_reason = relay_state->close_reason;
         }
+        increment_close_reason_counter(metrics, close_reason);
         LOG_INFO("[ProxyService] session #{} client={} method={} target={} upstream={} relay finished close_reason={} bytes_up={} bytes_down={}",
                  session_id,
                  peer_text,
@@ -990,8 +1169,8 @@ namespace yuan::server
         struct SessionContext
         {
             uint64_t session_id = 0;
-            std::shared_ptr<yuan::net::Connection> client_connection;
-            std::shared_ptr<yuan::net::Connection> upstream_connection;
+            yuan::net::ConnectionRef client_connection;
+            yuan::net::ConnectionRef upstream_connection;
             std::shared_ptr<RelaySharedState> relay_state;
             std::string client_addr;
             std::string client_ip;
@@ -1038,6 +1217,41 @@ namespace yuan::server
         rejected_sessions_.store(0, std::memory_order_relaxed);
         completed_sessions_.store(0, std::memory_order_relaxed);
         next_session_id_.store(1, std::memory_order_relaxed);
+        total_tunnel_memory_.store(0, std::memory_order_relaxed);
+        metrics_.header_timeouts.store(0, std::memory_order_relaxed);
+        metrics_.connect_timeouts.store(0, std::memory_order_relaxed);
+        metrics_.idle_timeouts.store(0, std::memory_order_relaxed);
+        metrics_.closes_by_client.store(0, std::memory_order_relaxed);
+        metrics_.closes_by_upstream.store(0, std::memory_order_relaxed);
+        metrics_.closes_by_ssrf.store(0, std::memory_order_relaxed);
+        metrics_.closes_by_acl.store(0, std::memory_order_relaxed);
+
+        if (config_.port <= 0 || config_.port > 65535) {
+            LOG_ERROR("[ProxyService] invalid port={}, must be 1-65535", config_.port);
+            return false;
+        }
+        if (config_.max_active_sessions <= 0) {
+            LOG_WARN("[ProxyService] max_active_sessions={} invalid, defaulting to 4096", config_.max_active_sessions);
+            config_.max_active_sessions = 4096;
+        }
+        if (config_.header_timeout_ms <= 0) {
+            LOG_WARN("[ProxyService] header_timeout_ms={} invalid, defaulting to 15000", config_.header_timeout_ms);
+            config_.header_timeout_ms = 15000;
+        }
+        if (config_.idle_timeout_ms <= 0) {
+            LOG_WARN("[ProxyService] idle_timeout_ms={} invalid, defaulting to 300000", config_.idle_timeout_ms);
+            config_.idle_timeout_ms = 300000;
+        }
+        if (config_.connect_timeout_ms <= 0) {
+            LOG_WARN("[ProxyService] connect_timeout_ms={} invalid, defaulting to 10000", config_.connect_timeout_ms);
+            config_.connect_timeout_ms = 10000;
+        }
+        if (!config_.basic_auth_user.empty() && config_.basic_auth_password.empty()) {
+            LOG_WARN("[ProxyService] basic_auth_user set but basic_auth_password is empty");
+        }
+        if (!config_.allow_targets.empty() && !config_.deny_targets.empty()) {
+            LOG_WARN("[ProxyService] both allow_targets and deny_targets are set; deny is evaluated first, then allow acts as whitelist");
+        }
 
         data_->accept_task = {};
         if (data_->session_sweep_timer) {
@@ -1139,9 +1353,11 @@ namespace yuan::server
                  config_.port,
                  config_.max_active_sessions,
                  config_.basic_auth_user.empty() ? "off" : "on");
-        LOG_INFO("[ProxyService] limits: max_per_client={}, max_header_bytes={}, header_timeout_ms={}, connect_timeout_ms={}, idle_timeout_ms={}",
+        LOG_INFO("[ProxyService] limits: max_per_client={}, max_header_bytes={}, max_session_buffer_bytes={}, max_total_tunnel_memory={}, header_timeout_ms={}, connect_timeout_ms={}, idle_timeout_ms={}",
                  config_.max_sessions_per_client,
                  config_.max_header_bytes,
+                 config_.max_session_buffer_bytes,
+                 config_.max_total_tunnel_memory,
                  config_.header_timeout_ms,
                  config_.connect_timeout_ms,
                  config_.idle_timeout_ms);
@@ -1198,6 +1414,8 @@ namespace yuan::server
                     std::size_t reading_count = 0;
                     std::size_t connecting_count = 0;
                     std::size_t established_count = 0;
+                    std::size_t half_closed_client_count = 0;
+                    std::size_t half_closed_upstream_count = 0;
                     std::size_t closing_count = 0;
 
                     const auto now = std::chrono::steady_clock::now();
@@ -1219,6 +1437,12 @@ namespace yuan::server
                             break;
                         case ProxySessionState::established:
                             ++established_count;
+                            break;
+                        case ProxySessionState::half_closed_client:
+                            ++half_closed_client_count;
+                            break;
+                        case ProxySessionState::half_closed_upstream:
+                            ++half_closed_upstream_count;
                             break;
                         case ProxySessionState::closing:
                             ++closing_count;
@@ -1255,7 +1479,9 @@ namespace yuan::server
                             elapsed_ms > config_.connect_timeout_ms;
 
                         if (!request_phase_timed_out && !connect_phase_timed_out) {
-                            if (state == ProxySessionState::established && relay_state) {
+                            if ((state == ProxySessionState::established ||
+                                 state == ProxySessionState::half_closed_client ||
+                                 state == ProxySessionState::half_closed_upstream) && relay_state) {
                                 const uint64_t total_up = relay_state->bytes_up.load(std::memory_order_relaxed);
                                 const uint64_t total_down = relay_state->bytes_down.load(std::memory_order_relaxed);
                                 const uint64_t delta_up = total_up >= prev_bytes_up ? (total_up - prev_bytes_up) : total_up;
@@ -1300,20 +1526,38 @@ namespace yuan::server
                         evt.reading_request_sessions = static_cast<uint32_t>(reading_count);
                         evt.connecting_upstream_sessions = static_cast<uint32_t>(connecting_count);
                         evt.established_sessions = static_cast<uint32_t>(established_count);
+                        evt.half_closed_client_sessions = static_cast<uint32_t>(half_closed_client_count);
+                        evt.half_closed_upstream_sessions = static_cast<uint32_t>(half_closed_upstream_count);
                         evt.closing_sessions = static_cast<uint32_t>(closing_count);
                         evt.active_sessions = static_cast<uint32_t>(active_sessions_.load(std::memory_order_relaxed));
                         evt.total_accepted = accepted_sessions_.load(std::memory_order_relaxed);
                         evt.total_rejected = rejected_sessions_.load(std::memory_order_relaxed);
                         evt.total_completed = completed_sessions_.load(std::memory_order_relaxed);
+                        evt.header_timeouts = metrics_.header_timeouts.load(std::memory_order_relaxed);
+                        evt.connect_timeouts = metrics_.connect_timeouts.load(std::memory_order_relaxed);
+                        evt.idle_timeouts = metrics_.idle_timeouts.load(std::memory_order_relaxed);
+                        evt.closes_by_client = metrics_.closes_by_client.load(std::memory_order_relaxed);
+                        evt.closes_by_upstream = metrics_.closes_by_upstream.load(std::memory_order_relaxed);
+                        evt.closes_by_ssrf = metrics_.closes_by_ssrf.load(std::memory_order_relaxed);
+                        evt.closes_by_acl = metrics_.closes_by_acl.load(std::memory_order_relaxed);
                         host_.publish_custom(yuan::server::events::proxy_session_snapshot, evt);
 
-                        LOG_INFO("[ProxyService] session snapshot accepted={}, reading_request={}, connecting_upstream={}, established={}, closing={}, active={}",
+                        LOG_INFO("[ProxyService] session snapshot accepted={}, reading_request={}, connecting_upstream={}, established={}, half_closed_client={}, half_closed_upstream={}, closing={}, active={}, header_timeouts={}, connect_timeouts={}, idle_timeouts={}, closes_by_client={}, closes_by_upstream={}, closes_by_ssrf={}, closes_by_acl={}",
                                  accepted_count,
                                  reading_count,
                                  connecting_count,
                                  established_count,
+                                 half_closed_client_count,
+                                 half_closed_upstream_count,
                                  closing_count,
-                                 active_sessions_.load(std::memory_order_relaxed));
+                                 active_sessions_.load(std::memory_order_relaxed),
+                                 evt.header_timeouts,
+                                 evt.connect_timeouts,
+                                 evt.idle_timeouts,
+                                 evt.closes_by_client,
+                                 evt.closes_by_upstream,
+                                 evt.closes_by_ssrf,
+                                 evt.closes_by_acl);
                     }
 
                     reap_finished_sessions();
@@ -1397,7 +1641,7 @@ namespace yuan::server
                 accepted_sessions_.fetch_add(1, std::memory_order_relaxed);
                 auto session = std::make_shared<ProxyServiceData::SessionContext>();
                 session->session_id = session_id;
-                session->client_connection = conn;
+                session->client_connection = yuan::net::ConnectionRef(conn);
                 session->client_addr = client_addr;
                 session->client_ip = client_ip;
                 {
@@ -1414,6 +1658,8 @@ namespace yuan::server
                     active_sessions_,
                     &host_,
                     &completed_sessions_,
+                    &metrics_,
+                    &auth_rate_limiter_,
                     [session](std::string_view client_addr,
                               std::string_view method,
                               std::string_view target_addr,
@@ -1430,7 +1676,7 @@ namespace yuan::server
                         publish_state_transition(session, next_state, reason);
                     },
                     [session](const std::shared_ptr<yuan::net::Connection> &upstream) {
-                        session->upstream_connection = upstream;
+                        session->upstream_connection = yuan::net::ConnectionRef(upstream);
                         if (upstream) {
                             std::lock_guard<std::mutex> lock(session->mutex);
                             session->upstream_addr = format_remote_address(upstream->get_remote_address());
@@ -1442,6 +1688,7 @@ namespace yuan::server
                         session->last_bytes_up = relay_state ? relay_state->bytes_up.load(std::memory_order_relaxed) : 0;
                         session->last_bytes_down = relay_state ? relay_state->bytes_down.load(std::memory_order_relaxed) : 0;
                     },
+                    &total_tunnel_memory_,
                     [session]() {
                         session->finished.store(true, std::memory_order_release);
                     });

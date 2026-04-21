@@ -402,7 +402,7 @@ namespace match
             }
 
             std::vector<std::shared_ptr<MatchNode>> matched_nodes;
-            if (try_match_in_pool(pool, score_pool.get(), config, matched_nodes))
+            if (try_match_in_pool(pool, score_pool ? &*score_pool : nullptr, config, matched_nodes))
             {
                 // 标记节点为已匹配
                 for (auto& node : matched_nodes)

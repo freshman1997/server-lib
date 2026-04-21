@@ -1,4 +1,4 @@
-﻿#ifndef __YUAN_NET_ASYNC_ASYNC_LISTENER_HOST_H__
+#ifndef __YUAN_NET_ASYNC_ASYNC_LISTENER_HOST_H__
 #define __YUAN_NET_ASYNC_ASYNC_LISTENER_HOST_H__
 
 #include <functional>
@@ -85,7 +85,7 @@ namespace yuan::net
                 }
 
                 conn->set_event_handler(runtime_->event_loop());
-                conn->set_connection_handler(make_non_owning_handler(&default_handler_));
+                conn->set_connection_handler(default_handler_holder_);
 
                 if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
                     if (auto *channel = stream->stream_channel()) {
@@ -128,9 +128,8 @@ namespace yuan::net
                 return false;
             }
 
-            Socket *sock = new Socket(host.c_str(), port);
+            auto sock = std::make_unique<Socket>(host.c_str(), port);
             if (!sock->valid()) {
-                delete sock;
                 return false;
             }
 
@@ -141,11 +140,10 @@ namespace yuan::net
 #endif
             sock->set_none_block(true);
             if (!sock->bind()) {
-                delete sock;
                 return false;
             }
 
-            acceptor_.reset(create_stream_acceptor(sock));
+            acceptor_.reset(create_stream_acceptor(sock.release()));
             if (!acceptor_->listen()) {
                 acceptor_.reset();
                 return false;
@@ -155,7 +153,7 @@ namespace yuan::net
                 acceptor_->set_ssl_module(ssl_module_);
             }
 
-            acceptor_->set_connection_handler(make_non_owning_handler(&default_handler_));
+            acceptor_->set_connection_handler(default_handler_holder_);
             acceptor_->set_event_handler(loop);
             if (auto *channel = acceptor_->listener_channel()) {
                 loop->update_channel(channel);
@@ -184,6 +182,12 @@ namespace yuan::net
             void on_close(const std::shared_ptr<Connection> &) override
             {
             }
+            void on_input_shutdown(const std::shared_ptr<Connection> &conn) override
+            {
+                if (conn) {
+                    conn->close();
+                }
+            }
         };
 
         NetworkRuntime *runtime_ = nullptr;
@@ -191,6 +195,7 @@ namespace yuan::net
         std::shared_ptr<SSLModule> ssl_module_;
         AsyncConnectionHandler conn_handler_;
         DefaultHandler default_handler_;
+        std::shared_ptr<ConnectionHandler> default_handler_holder_{ make_non_owning_handler(default_handler_) };
     };
 
 } // namespace yuan::net

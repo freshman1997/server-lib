@@ -22,15 +22,19 @@ namespace yuan::server::events
     inline constexpr const char *ftp_transfer_completed = "server.ftp.transfer.completed";
     inline constexpr const char *ftp_transfer_failed = "server.ftp.transfer.failed";
 
-    inline constexpr const char *socks5_session_connected = "server.socks5.session.connected";
-    inline constexpr const char *socks5_session_relay_started = "server.socks5.session.relay_started";
-    inline constexpr const char *socks5_session_relay_completed = "server.socks5.session.relay_completed";
+    inline constexpr const char *socks5_session_accepted = "server.socks5.session.accepted";
+    inline constexpr const char *socks5_session_rejected = "server.socks5.session.rejected";
+    inline constexpr const char *socks5_session_completed = "server.socks5.session.completed";
+    inline constexpr const char *socks5_session_state_changed = "server.socks5.session.state_changed";
+    inline constexpr const char *socks5_session_snapshot = "server.socks5.session.snapshot";
 
     inline constexpr const char *proxy_session_accepted = "server.proxy.session.accepted";
     inline constexpr const char *proxy_session_rejected = "server.proxy.session.rejected";
     inline constexpr const char *proxy_session_completed = "server.proxy.session.completed";
     inline constexpr const char *proxy_session_state_changed = "server.proxy.session.state_changed";
     inline constexpr const char *proxy_session_snapshot = "server.proxy.session.snapshot";
+
+    inline constexpr const char *proxy_combined_snapshot = "server.proxy.combined.snapshot";
 
     inline constexpr const char *websocket_session_connected = "server.websocket.session.connected";
     inline constexpr const char *websocket_session_disconnected = "server.websocket.session.disconnected";
@@ -130,6 +134,63 @@ namespace yuan::server
         uint64_t duration_ms = 0;
     };
 
+    struct Socks5SessionAcceptedEvent
+    {
+        std::string service_name;
+        std::string client_addr;
+        std::string command;
+        std::string target_addr;
+        uint32_t active_sessions = 0;
+    };
+
+    struct Socks5SessionRejectedEvent
+    {
+        std::string service_name;
+        std::string client_addr;
+        std::string command;
+        std::string target_addr;
+        std::string reason;
+    };
+
+    struct Socks5SessionCompletedEvent
+    {
+        std::string service_name;
+        std::string client_addr;
+        std::string command;
+        std::string target_addr;
+        uint64_t duration_ms = 0;
+        uint64_t bytes_up = 0;
+        uint64_t bytes_down = 0;
+        std::string close_reason;
+    };
+
+    struct Socks5SessionStateChangedEvent
+    {
+        std::string service_name;
+        std::string client_addr;
+        std::string command;
+        std::string target_addr;
+        std::string previous_state;
+        std::string current_state;
+        std::string reason;
+    };
+
+    struct Socks5SessionSnapshotEvent
+    {
+        std::string service_name;
+        uint32_t active_sessions = 0;
+        uint32_t active_udp_associations = 0;
+        uint64_t total_accepted = 0;
+        uint64_t total_rejected = 0;
+        uint64_t total_completed = 0;
+        uint64_t connect_timeouts = 0;
+        uint64_t idle_timeouts = 0;
+        uint64_t closes_by_client = 0;
+        uint64_t closes_by_upstream = 0;
+        uint64_t closes_by_ssrf = 0;
+        uint64_t closes_by_acl = 0;
+    };
+
     struct ProxySessionAcceptedEvent
     {
         uint64_t session_id = 0;
@@ -182,11 +243,20 @@ namespace yuan::server
         uint32_t reading_request_sessions = 0;
         uint32_t connecting_upstream_sessions = 0;
         uint32_t established_sessions = 0;
+        uint32_t half_closed_client_sessions = 0;
+        uint32_t half_closed_upstream_sessions = 0;
         uint32_t closing_sessions = 0;
         uint32_t active_sessions = 0;
         uint64_t total_accepted = 0;
         uint64_t total_rejected = 0;
         uint64_t total_completed = 0;
+        uint64_t header_timeouts = 0;
+        uint64_t connect_timeouts = 0;
+        uint64_t idle_timeouts = 0;
+        uint64_t closes_by_client = 0;
+        uint64_t closes_by_upstream = 0;
+        uint64_t closes_by_ssrf = 0;
+        uint64_t closes_by_acl = 0;
     };
 
     struct WebSocketSessionEvent
@@ -224,6 +294,32 @@ namespace yuan::server
         std::string info_hash;
         std::string name;
         std::size_t total_size = 0;
+    };
+
+    struct ProxyCombinedSnapshotEvent
+    {
+        uint32_t proxy_active_sessions = 0;
+        uint64_t proxy_total_accepted = 0;
+        uint64_t proxy_total_rejected = 0;
+        uint64_t proxy_total_completed = 0;
+        uint64_t proxy_header_timeouts = 0;
+        uint64_t proxy_connect_timeouts = 0;
+        uint64_t proxy_idle_timeouts = 0;
+        uint64_t proxy_closes_by_client = 0;
+        uint64_t proxy_closes_by_upstream = 0;
+        uint64_t proxy_closes_by_ssrf = 0;
+        uint64_t proxy_closes_by_acl = 0;
+        uint32_t socks5_active_sessions = 0;
+        uint32_t socks5_active_udp_associations = 0;
+        uint64_t socks5_total_accepted = 0;
+        uint64_t socks5_total_rejected = 0;
+        uint64_t socks5_total_completed = 0;
+        uint64_t socks5_connect_timeouts = 0;
+        uint64_t socks5_idle_timeouts = 0;
+        uint64_t socks5_closes_by_client = 0;
+        uint64_t socks5_closes_by_upstream = 0;
+        uint64_t socks5_closes_by_ssrf = 0;
+        uint64_t socks5_closes_by_acl = 0;
     };
 
 } // namespace yuan::server

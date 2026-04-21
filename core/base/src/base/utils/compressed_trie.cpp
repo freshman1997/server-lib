@@ -11,7 +11,7 @@ void CompressTrie::insert(const std::string &word, bool as_prefix)
 {
     if (word.empty()) return;
 
-    do_insert(root_.get(), std::string_view(word), /*at_end=*/true, /*mark_prefix=*/as_prefix);
+    do_insert(&*root_, std::string_view(word), /*at_end=*/true, /*mark_prefix=*/as_prefix);
     ++size_;
 }
 
@@ -24,7 +24,7 @@ bool CompressTrie::contains(const std::string &word) const
 {
     if (word.empty()) return false;
 
-    auto result = do_find_prefix(root_.get(), std::string_view(word));
+    auto result = do_find_prefix(&*root_, std::string_view(word));
     // 精确匹配要求：遍历完整个 word 且 终点节点标记为 terminal
     return result.match_length == static_cast<int>(word.size());
 }
@@ -40,7 +40,7 @@ CompressTrie::MatchResult CompressTrie::find_prefix(const std::string &word) con
         return MatchResult{0, false};
     }
 
-    return do_find_prefix(root_.get(), std::string_view(word));
+    return do_find_prefix(&*root_, std::string_view(word));
 }
 
 bool CompressTrie::has_key_with_prefix(const std::string &word) const
@@ -101,7 +101,7 @@ void CompressTrie::do_insert(Node *parent, std::string_view remaining,
                 return;
             }
 
-            do_insert(child.get(), rest, at_end_is_terminal, mark_as_prefix);
+            do_insert(&*child, rest, at_end_is_terminal, mark_as_prefix);
             return;
         }
 
@@ -233,7 +233,7 @@ CompressTrie::MatchResult CompressTrie::do_find_prefix(const Node *node, std::st
             
             if (child->edge[0] == remaining[0])
             {
-                next = child.get();
+                next = &*child;
                 break;
             }
         }

@@ -615,7 +615,7 @@ bool test_config_defaults()
     TEST_ASSERT(!config.enable_udp_associate, "udp_associate should be disabled by default");
     TEST_ASSERT(config.connect_timeout_ms == 10000, "connect timeout should be 10000");
     TEST_ASSERT(config.idle_timeout_ms == 300000, "idle timeout should be 300000");
-    TEST_ASSERT(config.max_connections == 1024, "max connections should be 1024");
+    TEST_ASSERT(config.max_connections == 8192, "max connections should be 8192");
 
     return true;
 }

@@ -6,6 +6,14 @@
 namespace yuan::net 
 {
     class Channel;
+
+    struct PollEvent
+    {
+        int fd = -1;
+        int revents = 0;
+        uint64_t generation = 0;
+    };
+
     class Poller
     {
     public:
@@ -13,7 +21,7 @@ namespace yuan::net
 
         virtual bool init() = 0;
         
-        virtual uint64_t poll(uint32_t timeout, std::vector<Channel *> &channels) = 0;
+        virtual uint64_t poll(uint32_t timeout, std::vector<PollEvent> &events) = 0;
 
         virtual void update_channel(Channel *channel) = 0;
 

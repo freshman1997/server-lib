@@ -1,6 +1,7 @@
 #include "base/time.h"
 #include "net/channel/channel.h"
 #include "net/poller/select_poller.h"
+#include "logger.h"
 
 #include <map>
 #include <mutex>
@@ -11,10 +12,16 @@ namespace yuan::net
     class SelectPoller::HelperData
     {
     public:
+        struct ChannelEntry
+        {
+            net::Channel *channel = nullptr;
+            uint64_t generation = 0;
+        };
+
         fd_set reads_;
         fd_set writes_;
 		fd_set excepts_;
-        std::map<int, net::Channel *> sockets_;
+        std::map<int, ChannelEntry> sockets_;
         std::mutex mutex_;
     };
 
@@ -33,7 +40,7 @@ namespace yuan::net
         return true;
     }
 
-    uint64_t SelectPoller::poll(uint32_t timeout, std::vector<Channel *> &channels)
+    uint64_t SelectPoller::poll(uint32_t timeout, std::vector<PollEvent> &events)
     {
         uint64_t tm = base::time::get_tick_count();
         std::lock_guard<std::mutex> lock(data_->mutex_);
@@ -44,25 +51,25 @@ namespace yuan::net
 
         int max_fd = 0;
         for (auto i = data_->sockets_.begin(); i != data_->sockets_.end(); ++i) {
-            if (!i->second) {
+            if (!i->second.channel) {
                 continue;
             }
 
-            if (i->second->get_events() & Channel::READ_EVENT) {
+            if (i->second.channel->get_events() & Channel::READ_EVENT) {
                 FD_SET(i->first, &data_->reads_);
                 if (i->first > max_fd) {
                     max_fd = i->first;
                 }
             }
 
-            if (i->second->get_events() & Channel::WRITE_EVENT) {
+            if (i->second.channel->get_events() & Channel::WRITE_EVENT) {
                 FD_SET(i->first, &data_->writes_);
                 if (i->first > max_fd) {
                     max_fd = i->first;
                 }
             }
 
-            if (i->second->get_events() & Channel::EXCEP_EVENT) {
+            if (i->second.channel->get_events() & Channel::EXCEP_EVENT) {
                 FD_SET(i->first, &data_->excepts_);
                 if (i->first > max_fd) {
                     max_fd = i->first;
@@ -76,12 +83,14 @@ namespace yuan::net
 
         int ret = select(max_fd + 1, &data_->reads_, &data_->writes_, &data_->excepts_, &tv);
         if (ret <= 0) {
-            // TODO
+            if (ret < 0) {
+                LOG_WARN("select poll failed, ret: {}", ret);
+            }
             return tm;
         }
 
         for (auto j = data_->sockets_.begin(); j != data_->sockets_.end();) {
-            if (!j->second) {
+            if (!j->second.channel) {
                 j = data_->sockets_.erase(j);
                 continue;
             }
@@ -99,9 +108,12 @@ namespace yuan::net
                 ev |= Channel::EXCEP_EVENT;
             }
 
-            if (ev != Channel::NONE_EVENT && j->second) {
-                j->second->set_revent(ev);
-                channels.push_back(j->second);
+            if (ev != Channel::NONE_EVENT && j->second.channel) {
+                PollEvent pe;
+                pe.fd = j->first;
+                pe.revents = ev;
+                pe.generation = j->second.generation;
+                events.push_back(pe);
             }
             
             ++j;
@@ -120,7 +132,8 @@ namespace yuan::net
             remove_channel(channel);
         } else {
             std::lock_guard<std::mutex> lock(data_->mutex_);
-            data_->sockets_[channel->get_fd()] = channel;
+            auto &entry = data_->sockets_[channel->get_fd()];
+            entry.channel = channel;
         }
     }
 

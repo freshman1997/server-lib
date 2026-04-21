@@ -86,7 +86,7 @@ namespace yuan::net::bit_torrent
         void set_connection(const std::shared_ptr<net::Connection> &conn)
         {
             conn_owner_ = conn;
-            conn_ = conn_owner_.get();
+            conn_ = conn_owner_ ? &*conn_owner_ : nullptr;
         }
         void set_connection(net::Connection *conn)
         {
@@ -263,7 +263,7 @@ namespace yuan::net::bit_torrent
         timer::Timer *keepalive_timer_;
         std::unique_ptr<net::InetAddress> pending_addr_;
         std::unique_ptr<net::TcpConnector> pending_connector_;
-        std::unique_ptr<PeerConnectorHandler> connector_handler_;
+        std::shared_ptr<PeerConnectorHandler> connector_handler_;
 
         PeerState peer_state_;
         yuan::buffer::ByteBuffer inbound_buffer_;

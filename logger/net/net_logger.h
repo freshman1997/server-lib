@@ -4,6 +4,8 @@
 #include "log.h"
 #include "log_config.h"
 
+#include <memory>
+
 namespace yuan::log
 {
 
@@ -20,6 +22,8 @@ namespace yuan::log
 class NetLogger : public Logger
 {
 public:
+    class Impl;
+
     explicit NetLogger(const LogConfig& cfg);
     NetLogger(const std::string& server_ip, int server_port);
     ~NetLogger() override;
@@ -43,7 +47,7 @@ protected:
 
 private:
     LogConfig config_;
-    void* connection_impl_ = nullptr;
+    std::unique_ptr<Impl> connection_impl_;
     mutable std::mutex conn_mutex_;
 };
 

@@ -132,7 +132,7 @@ namespace yuan::net::http
         {
             auto it = fields.find(name);
             if (it != fields.end() && it->second->type == FormDataType::string_)
-                return static_cast<FormDataStringItem*>(it->second.get())->value;
+                return static_cast<FormDataStringItem*>(&*it->second)->value;
             return {};
         }
 
@@ -141,7 +141,7 @@ namespace yuan::net::http
         {
             auto it = fields.find(name);
             if (it != fields.end() && it->second->type == FormDataType::file_)
-                return static_cast<FormDataFileItem*>(it->second.get());
+                return static_cast<FormDataFileItem*>(&*it->second);
             return nullptr;
         }
 
@@ -201,13 +201,13 @@ namespace yuan::net::http
         template<typename T>
         T *as()
         {
-            return dynamic_cast<T*>(data.get());
+            return data ? dynamic_cast<T*>(&*data) : nullptr;
         }
 
         template<typename T>
         const T *as() const
         {
-            return dynamic_cast<const T*>(data.get());
+            return data ? dynamic_cast<const T*>(&*data) : nullptr;
         }
 
         bool is_valid() const noexcept { return data != nullptr && type != ContentType::not_support; }

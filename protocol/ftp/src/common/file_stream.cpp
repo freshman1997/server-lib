@@ -25,22 +25,24 @@ namespace yuan::net::ftp
 
     void FtpFileStream::on_connected(const std::shared_ptr<Connection> &conn)
     {
-        on_connected(conn.get());
+        if (conn) {
+            on_connected(*conn);
+        }
     }
 
-    void FtpFileStream::on_connected(Connection * conn)
+    void FtpFileStream::on_connected(Connection & conn)
     {
-        LOG_DEBUG("data stream connected ip: {}", conn->get_remote_address().get_ip());
+        LOG_DEBUG("data stream connected ip: {}", conn.get_remote_address().get_ip());
         assert(session_);
         auto stream_session = std::make_shared<FtpFileStreamSession>(session_);
-        const auto ip = conn->get_remote_address().get_ip();
-        const auto addr_key = conn->get_remote_address().to_address_key();
+        const auto ip = conn.get_remote_address().get_ip();
+        const auto addr_key = conn.get_remote_address().to_address_key();
 
         if (last_sessions_.find(ip) != last_sessions_.end()) {
             LOG_WARN("file stream last_sessions_ collision for ip={}, overwriting", ip);
         }
         last_sessions_[ip] = stream_session;
-        conn->set_connection_handler(make_aliasing_handler(stream_session, stream_session.get()));
+        conn.set_connection_handler(make_aliasing_handler(stream_session, &*stream_session));
         file_stream_sessions_[addr_key] = stream_session;
         stream_session->on_connected(conn);
 
@@ -58,42 +60,50 @@ namespace yuan::net::ftp
 
     void FtpFileStream::on_error(const std::shared_ptr<Connection> &conn)
     {
-        on_error(conn.get());
+        if (conn) {
+            on_error(*conn);
+        }
     }
 
-    void FtpFileStream::on_error(Connection * conn)
+    void FtpFileStream::on_error(Connection & conn)
     {
-        LOG_WARN("file stream on_error ip={}", conn ? conn->get_remote_address().get_ip() : "null");
+        LOG_WARN("file stream on_error ip={}", conn.get_remote_address().get_ip());
     }
 
     void FtpFileStream::on_read(const std::shared_ptr<Connection> &conn)
     {
-        on_read(conn.get());
+        if (conn) {
+            on_read(*conn);
+        }
     }
 
-    void FtpFileStream::on_read(Connection * conn)
+    void FtpFileStream::on_read(Connection & conn)
     {
-        LOG_DEBUG("file stream on_read ip={}", conn ? conn->get_remote_address().get_ip() : "null");
+        LOG_DEBUG("file stream on_read ip={}", conn.get_remote_address().get_ip());
     }
 
     void FtpFileStream::on_write(const std::shared_ptr<Connection> &conn)
     {
-        on_write(conn.get());
+        if (conn) {
+            on_write(*conn);
+        }
     }
 
-    void FtpFileStream::on_write(Connection * conn)
+    void FtpFileStream::on_write(Connection & conn)
     {
-        LOG_DEBUG("file stream on_write ip={}", conn ? conn->get_remote_address().get_ip() : "null");
+        LOG_DEBUG("file stream on_write ip={}", conn.get_remote_address().get_ip());
     }
 
     void FtpFileStream::on_close(const std::shared_ptr<Connection> &conn)
     {
-        on_close(conn.get());
+        if (conn) {
+            on_close(*conn);
+        }
     }
 
-    void FtpFileStream::on_close(Connection * conn)
+    void FtpFileStream::on_close(Connection & conn)
     {
-        LOG_DEBUG("file stream on_close ip={}", conn ? conn->get_remote_address().get_ip() : "null");
+        LOG_DEBUG("file stream on_close ip={}", conn.get_remote_address().get_ip());
     }
 
     void FtpFileStream::quit(const InetAddress & addr)
@@ -110,14 +120,14 @@ namespace yuan::net::ftp
     void FtpFileStream::remove_session(FtpFileStreamSession * fs)
     {
         for (auto it = file_stream_sessions_.begin(); it != file_stream_sessions_.end(); ++it) {
-            if (it->second.get() == fs) {
+            if (&*it->second == fs) {
                 file_stream_sessions_.erase(it);
                 break;
             }
         }
 
         for (auto it = last_sessions_.begin(); it != last_sessions_.end(); ++it) {
-            if (it->second.get() == fs) {
+            if (&*it->second == fs) {
                 last_sessions_.erase(it);
                 break;
             }

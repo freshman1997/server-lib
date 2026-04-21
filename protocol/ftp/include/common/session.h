@@ -162,15 +162,15 @@ namespace yuan::net::ftp
         FtpSession(const std::shared_ptr<Connection> &conn, FtpApp *app, WorkMode mode, bool keepUtilSent = false, bool async_mode = false);
         virtual ~FtpSession();
         virtual void on_connected(const std::shared_ptr<Connection> &conn);
-        virtual void on_connected(Connection *conn);
+        virtual void on_connected(Connection &conn);
         virtual void on_error(const std::shared_ptr<Connection> &conn);
-        virtual void on_error(Connection *conn);
+        virtual void on_error(Connection &conn);
         virtual void on_read(const std::shared_ptr<Connection> &conn);
-        virtual void on_read(Connection *conn) = 0;
+        virtual void on_read(Connection &conn) = 0;
         virtual void on_write(const std::shared_ptr<Connection> &conn);
-        virtual void on_write(Connection *conn);
+        virtual void on_write(Connection &conn);
         virtual void on_close(const std::shared_ptr<Connection> &conn);
-        virtual void on_close(Connection *conn);
+        virtual void on_close(Connection &conn);
         virtual void on_timer(timer::Timer *timer);
         virtual void on_opened(FtpFileStreamSession *fs);
         virtual void on_connect_timeout(FtpFileStreamSession *fs);
@@ -235,7 +235,7 @@ namespace yuan::net::ftp
         }
         net::AsyncListenerHost *data_listener() const
         {
-            return data_listener_.get();
+            return data_listener_ ? &*data_listener_ : nullptr;
         }
         std::unique_ptr<net::AsyncListenerHost> take_data_listener()
         {

@@ -10,7 +10,7 @@ namespace yuan::net::ftp
     {
         ensure_all_commands_registered();
         auto it = commands.find(cmd);
-        return it == commands.end() ? nullptr : it->second.get();
+        return it == commands.end() ? nullptr : (it->second ? &*it->second : nullptr);
     }
 
     bool CommandFactory::register_command(Command *cmdImpl)

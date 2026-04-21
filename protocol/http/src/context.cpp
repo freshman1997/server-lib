@@ -8,6 +8,21 @@
 
 namespace yuan::net::http
 {
+    namespace
+    {
+        template <typename T>
+        T *ptr_of(const std::shared_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+
+        template <typename T>
+        T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
     HttpSessionContext::HttpSessionContext(Connection * conn)
         : mode_(Mode::server), has_parsed_(false), conn_(conn)
     {
@@ -16,7 +31,7 @@ namespace yuan::net::http
     }
 
     HttpSessionContext::HttpSessionContext(const std::shared_ptr<Connection> &conn)
-        : mode_(Mode::server), has_parsed_(false), conn_owner_(conn), conn_(conn.get())
+        : mode_(Mode::server), has_parsed_(false), conn_owner_(conn), conn_(ptr_of(conn))
     {
         request_ = std::make_unique<HttpRequest>(this);
         response_ = std::make_unique<HttpResponse>(this);
@@ -117,7 +132,7 @@ namespace yuan::net::http
 
     HttpPacket *HttpSessionContext::get_packet() const
     {
-        return mode_ == Mode::server ? static_cast<HttpPacket *>(request_.get()) : static_cast<HttpPacket *>(response_.get());
+        return mode_ == Mode::server ? static_cast<HttpPacket *>(ptr_of(request_)) : static_cast<HttpPacket *>(ptr_of(response_));
     }
 
     bool HttpSessionContext::is_downloading() const

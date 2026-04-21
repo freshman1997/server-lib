@@ -84,7 +84,7 @@ namespace yuan::net::bit_torrent
 
         const auto state = peer->get_state();
         if (state == PeerConnection::State::connected) {
-            on_peer_connected(peer);
+            on_peer_connected(*peer);
             return;
         }
 
@@ -95,36 +95,28 @@ namespace yuan::net::bit_torrent
                     peer_lost_handler_(pending_requests);
                 }
             }
-            remove_peer(peer);
+            remove_peer(*peer);
         }
     }
 
-    void PeerSession::on_peer_connected(PeerConnection * peer)
+    void PeerSession::on_peer_connected(PeerConnection & peer)
     {
-        if (!peer) {
-            return;
-        }
-
         if (nat_manager_) {
-            nat_manager_->register_peer(peer, make_key(peer->get_peer_ip(), peer->get_peer_port()));
+            nat_manager_->register_peer(&peer, make_key(peer.get_peer_ip(), peer.get_peer_port()));
         }
 
         if (peer_ready_handler_) {
-            peer_ready_handler_(peer);
+            peer_ready_handler_(&peer);
         }
     }
 
-    void PeerSession::remove_peer(PeerConnection * peer)
+    void PeerSession::remove_peer(PeerConnection & peer)
     {
-        if (!peer) {
-            return;
-        }
-
         std::string key;
         {
         std::lock_guard<std::mutex> lock(peers_mutex_);
             for (auto it = peers_.begin(); it != peers_.end(); ++it) {
-                if (it->second.get() == peer) {
+                if (it->second && &*it->second == &peer) {
                     key = it->first;
                     peers_.erase(it);
                     break;
@@ -198,18 +190,18 @@ namespace yuan::net::bit_torrent
         attach_peer(peer, key);
 
         if (peer->is_connected()) {
-            on_peer_connected(peer.get());
+            on_peer_connected(*peer);
         }
     }
 
     void PeerSession::disconnect_all_peers()
     {
-        std::vector<PeerConnection *> peers;
+        std::vector<std::shared_ptr<PeerConnection> > peers;
         std::vector<std::string> keys;
         {
             std::lock_guard<std::mutex> lock(peers_mutex_);
             for (auto &pair : peers_) {
-                peers.push_back(pair.second.get());
+                peers.push_back(pair.second);
                 keys.push_back(pair.first);
             }
             peers_.clear();
@@ -221,7 +213,7 @@ namespace yuan::net::bit_torrent
             }
         }
 
-        for (auto *peer : peers) {
+        for (const auto &peer : peers) {
             if (peer) {
                 peer->disconnect();
             }
@@ -230,20 +222,20 @@ namespace yuan::net::bit_torrent
 
     void PeerSession::broadcast_have(uint32_t piece_index)
     {
-        for (auto *peer : get_active_peers()) {
+        for (const auto &peer : get_active_peers()) {
             if (peer) {
                 peer->send_have(piece_index);
             }
         }
     }
 
-    std::vector<PeerConnection *> PeerSession::get_active_peers() const
+    std::vector<std::shared_ptr<PeerConnection> > PeerSession::get_active_peers() const
     {
-        std::vector<PeerConnection *> peers;
+        std::vector<std::shared_ptr<PeerConnection> > peers;
         std::lock_guard<std::mutex> lock(peers_mutex_);
         for (const auto &pair : peers_) {
             if (pair.second && pair.second->is_connected()) {
-                peers.push_back(pair.second.get());
+                peers.push_back(pair.second);
             }
         }
         return peers;

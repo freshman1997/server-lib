@@ -8,6 +8,7 @@
 #include "coroutine/runtime_view.h"
 #include "net/acceptor/datagram_endpoint.h"
 #include "net/connection/connection.h"
+#include "net/connection/connection_ref.h"
 #include "net/handler/connection_handler.h"
 #include "net/socket/inet_address.h"
 #include "timer/timer_manager.h"
@@ -38,35 +39,46 @@ namespace yuan::coroutine
         AsyncReceiveFromAwaiter(RuntimeView runtime, net::Connection *connection,
                                 uint32_t timeout_ms = 0) noexcept
             : runtime_(runtime),
-              connection_(connection),
+              connection_ref_(connection),
+              timeout_ms_(timeout_ms)
+        {
+        }
+
+        AsyncReceiveFromAwaiter(RuntimeView runtime,
+                                std::shared_ptr<net::Connection> connection,
+                                uint32_t timeout_ms = 0) noexcept
+            : runtime_(runtime),
+              connection_ref_(std::move(connection)),
               timeout_ms_(timeout_ms)
         {
         }
 
         bool await_ready() const noexcept
         {
-            if (!connection_ || !runtime_.event_loop()) {
+            auto *connection = connection_ref_.get();
+            if (!connection || !runtime_.event_loop()) {
                 return true;
             }
-            return connection_->input_readable_bytes() > 0;
+            return connection->input_readable_bytes() > 0;
         }
 
         bool await_suspend(std::coroutine_handle<> handle)
         {
-            if (!connection_ || !runtime_.event_loop()) {
+            auto *connection = connection_ref_.get();
+            if (!connection || !runtime_.event_loop()) {
                 result_.status = IoStatus::invalid_state;
                 return false;
             }
 
-            if (connection_->input_readable_bytes() > 0) {
+            if (connection->input_readable_bytes() > 0) {
                 return false;
             }
 
             handle_ = handle;
-            proxy_ = std::make_shared<ProxyHandler>(*this, connection_,
-                                                    connection_->get_connection_handler(),
-                                                    connection_->get_connection_handler_owner());
-            connection_->set_connection_handler(proxy_);
+            proxy_ = std::make_shared<ProxyHandler>(*this, connection,
+                                                    connection->get_connection_handler(),
+                                                    connection->get_connection_handler_owner());
+            connection->set_connection_handler(proxy_);
 
             if (timeout_ms_ > 0 && runtime_.timer_manager()) {
                 timeout_timer_ = timer::TimerUtil::build_timeout_timer(
@@ -98,8 +110,9 @@ namespace yuan::coroutine
                 timeout_timer_ = nullptr;
             }
 
-            if (result_.status == IoStatus::success && connection_) {
-                result_.data = connection_->take_input_byte_buffer();
+            auto *connection = connection_ref_.get();
+            if (result_.status == IoStatus::success && connection) {
+                result_.data = connection->take_input_byte_buffer();
             }
 
             return result_;
@@ -185,21 +198,18 @@ namespace yuan::coroutine
 
         void restore_handler_if_needed() noexcept
         {
-            if (handler_restored_ || !proxy_ || !connection_) {
+            auto *connection = connection_ref_.get();
+            if (handler_restored_ || !proxy_ || !connection) {
                 return;
             }
-            if (connection_->get_connection_handler() == proxy_.get()) {
-                if (proxy_->next_owner_) {
-                    connection_->set_connection_handler(proxy_->next_owner_);
-                } else {
-                    connection_->set_connection_handler(make_non_owning_handler(proxy_->next_));
-                }
+            if (connection->get_connection_handler_owner() == proxy_) {
+                connection->set_connection_handler(proxy_->next_owner_);
             }
             handler_restored_ = true;
         }
 
         RuntimeView runtime_{};
-        net::Connection *connection_ = nullptr;
+        net::ConnectionRef connection_ref_{};
         uint32_t timeout_ms_ = 0;
         timer::Timer *timeout_timer_ = nullptr;
 
@@ -233,7 +243,7 @@ namespace yuan::coroutine
         const std::shared_ptr<net::Connection> &connection,
         uint32_t timeout_ms = 0) noexcept
     {
-        return AsyncReceiveFromAwaiter(runtime, connection.get(), timeout_ms);
+        return AsyncReceiveFromAwaiter(runtime, connection, timeout_ms);
     }
 
 } // namespace yuan::coroutine

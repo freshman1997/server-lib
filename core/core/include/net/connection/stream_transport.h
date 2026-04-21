@@ -11,7 +11,8 @@ namespace yuan::net
     public:
         virtual ~StreamTransport() = default;
 
-        virtual Channel *stream_channel() const = 0;
+        virtual Channel *stream_channel() = 0;
+        virtual const Channel *stream_channel() const = 0;
     };
 
 } // namespace yuan::net

@@ -15,17 +15,26 @@
 namespace yuan::net
 {
 
+    namespace
+    {
+        template <typename T>
+        T *ptr_of(std::unique_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+    }
+
     NetworkRuntime::NetworkRuntime()
         : owns_(true)
     {
         owned_poller_.reset(create_default_poller());
         owned_poller_->init();
         owned_timer_manager_.reset(new timer::WheelTimerManager());
-        owned_loop_.reset(new EventLoop(owned_poller_.get(), owned_timer_manager_.get()));
+        owned_loop_.reset(new EventLoop(ptr_of(owned_poller_), ptr_of(owned_timer_manager_)));
 
-        poller_ = owned_poller_.get();
-        timer_manager_ = owned_timer_manager_.get();
-        loop_ = owned_loop_.get();
+        poller_ = ptr_of(owned_poller_);
+        timer_manager_ = ptr_of(owned_timer_manager_);
+        loop_ = ptr_of(owned_loop_);
     }
 
     NetworkRuntime::NetworkRuntime(EventLoop * loop, timer::TimerManager * tm)
@@ -158,12 +167,12 @@ namespace yuan::net
         }
     }
 
-    void NetworkRuntime::register_connector(Connector * connector, ConnectorHandler * handler)
+    void NetworkRuntime::register_connector(Connector * connector, std::shared_ptr<ConnectorHandler> handler)
     {
         if (!connector || !loop_ || !timer_manager_) {
             return;
         }
-        connector->set_data(timer_manager_, handler, loop_);
+        connector->set_data(timer_manager_, std::move(handler), loop_);
     }
 
     void NetworkRuntime::register_acceptor(Acceptor * acceptor, std::shared_ptr<ConnectionHandler> handler, Channel * channel)

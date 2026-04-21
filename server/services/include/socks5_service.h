@@ -4,6 +4,8 @@
 #include "socks5.h"
 #include "server_runtime_host.h"
 #include "service.h"
+#include "server_service_custom_events.h"
+#include "timer/timer_util.hpp"
 
 #include <memory>
 
@@ -26,13 +28,18 @@ namespace yuan::server
 
         void set_handler(yuan::net::socks5::Socks5Handler *handler);
 
+        const yuan::net::socks5::Socks5ServerMetrics &metrics() const;
+
     private:
+        void publish_session_event(const std::string &event_name, const yuan::net::socks5::Socks5SessionInfo &info);
+
         int port_;
         yuan::net::socks5::Socks5ServerConfig config_;
         std::unique_ptr<yuan::net::socks5::Socks5Server> server_;
         yuan::net::socks5::Socks5Handler *handler_ = nullptr;
         ServerRuntimeHost host_;
         yuan::net::NetworkRuntime *shared_runtime_ = nullptr;
+        yuan::timer::Timer *snapshot_timer_ = nullptr;
     };
 
 } // namespace yuan::server

@@ -20,17 +20,17 @@ namespace yuan::net::ftp
     {
     }
 
-    void ServerFtpSession::on_read(Connection * conn)
+    void ServerFtpSession::on_read(Connection & conn)
     {
-        auto buff = conn->take_input_byte_buffer();
+        auto buff = conn.take_input_byte_buffer();
         command_parser_.set_buff(buff);
         const auto &cmds = command_parser_.split_cmds(delimiter, " ");
         for (const auto &item : cmds) {
             LOG_DEBUG("ftp server cmd={} args={}", item.cmd_, item.args_);
             auto command = CommandFactory::get_instance()->find_command(item.cmd_);
             if (!command) {
-                conn->append_output("500 Unsupported command.\r\n");
-                conn->flush();
+                conn.append_output("500 Unsupported command.\r\n");
+                conn.flush();
                 continue;
             }
             const auto &res = command->execute(this, item.args_);
@@ -38,11 +38,11 @@ namespace yuan::net::ftp
             if (res.code_ == FtpResponseCode::invalid) {
                 continue;
             }
-            conn->append_output(std::to_string((int)res.code_));
-            conn->append_output(" ");
-            conn->append_output(res.body_);
-            conn->append_output("\r\n");
-            conn->flush();
+            conn.append_output(std::to_string((int)res.code_));
+            conn.append_output(" ");
+            conn.append_output(res.body_);
+            conn.append_output("\r\n");
+            conn.flush();
             if (res.close_) {
                 quit();
                 break;

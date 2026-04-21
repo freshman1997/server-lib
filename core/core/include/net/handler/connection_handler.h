@@ -14,6 +14,12 @@ namespace yuan::net
         return std::shared_ptr<HandlerT>(handler, [](HandlerT *) {});
     }
 
+    template<typename HandlerT>
+    std::shared_ptr<HandlerT> make_non_owning_handler(HandlerT &handler)
+    {
+        return make_non_owning_handler(&handler);
+    }
+
     template<typename OwnerT, typename HandlerT>
     std::shared_ptr<HandlerT> make_aliasing_handler(const std::shared_ptr<OwnerT> &owner, HandlerT *handler)
     {

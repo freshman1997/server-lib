@@ -20,22 +20,22 @@ public:
 
     ByteBuffer *front() noexcept
     {
-        return buffers_.empty() ? nullptr : buffers_.front().get();
+        return buffers_.empty() ? nullptr : &*buffers_.front();
     }
 
     const ByteBuffer *front() const noexcept
     {
-        return buffers_.empty() ? nullptr : buffers_.front().get();
+        return buffers_.empty() ? nullptr : &*buffers_.front();
     }
 
     ByteBuffer *back() noexcept
     {
-        return buffers_.empty() ? nullptr : buffers_.back().get();
+        return buffers_.empty() ? nullptr : &*buffers_.back();
     }
 
     const ByteBuffer *back() const noexcept
     {
-        return buffers_.empty() ? nullptr : buffers_.back().get();
+        return buffers_.empty() ? nullptr : &*buffers_.back();
     }
 
     bool empty() const noexcept
@@ -62,7 +62,7 @@ public:
     ByteBuffer *emplace_back(std::size_t capacity = ByteBuffer::kDefaultCapacity)
     {
         buffers_.push_back(std::make_unique<ByteBuffer>(capacity));
-        return buffers_.back().get();
+        return &*buffers_.back();
     }
 
     void push_back(BufferPtr buffer)

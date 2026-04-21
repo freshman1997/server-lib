@@ -24,14 +24,26 @@ namespace yuan::app
 {
     namespace
     {
-        net::Poller *create_default_poller()
+        template<typename T>
+        T *ptr_of(std::unique_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+
+        template<typename T>
+        T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+
+        std::unique_ptr<net::Poller> create_default_poller()
         {
         #ifdef __linux__
-            return new net::EpollPoller;
+            return std::make_unique<net::EpollPoller>();
         #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-            return new net::KQueuePoller;
+            return std::make_unique<net::KQueuePoller>();
         #else
-            return new net::SelectPoller;
+            return std::make_unique<net::SelectPoller>();
         #endif
         }
 
@@ -40,12 +52,27 @@ namespace yuan::app
     class App::AppData
     {
     public:
+        void reset_runtime_resources()
+        {
+            if (acceptor_) {
+                acceptor_->close();
+                acceptor_.reset();
+            }
+            stream_acceptor_ = nullptr;
+            datagram_acceptor_ = nullptr;
+            loop_.reset();
+            poller_.reset();
+            timer_manager_.reset();
+            running_.store(false);
+            initialized_.store(false);
+        }
+
         AppOption option_;
         std::atomic_bool initialized_ = false;
         std::atomic_bool running_ = false;
-        net::Poller *poller_ = nullptr;
-        net::EventLoop *loop_ = nullptr;
-        timer::TimerManager *timer_manager_ = nullptr;
+        std::unique_ptr<net::Poller> poller_;
+        std::unique_ptr<net::EventLoop> loop_;
+        std::unique_ptr<timer::TimerManager> timer_manager_;
         std::unique_ptr<net::Acceptor> acceptor_;
         net::StreamAcceptor *stream_acceptor_ = nullptr;
         net::DatagramAcceptor *datagram_acceptor_ = nullptr;
@@ -59,21 +86,9 @@ namespace yuan::app
     App::~App()
     {
         stop();
-
-        if (data_->loop_) {
-            delete data_->loop_;
-            data_->loop_ = nullptr;
-        }
-
-        if (data_->poller_) {
-            delete data_->poller_;
-            data_->poller_ = nullptr;
-        }
-
-        if (data_->timer_manager_) {
-            delete data_->timer_manager_;
-            data_->timer_manager_ = nullptr;
-        }
+        data_->loop_.reset();
+        data_->poller_.reset();
+        data_->timer_manager_.reset();
     }
 
     bool App::init()
@@ -82,124 +97,52 @@ namespace yuan::app
             return true;
         }
 
-        if (data_->acceptor_) {
-            data_->acceptor_->close();
-            data_->acceptor_.reset();
-        }
-        data_->stream_acceptor_ = nullptr;
-        data_->datagram_acceptor_ = nullptr;
-
-        if (data_->loop_) {
-            delete data_->loop_;
-            data_->loop_ = nullptr;
-        }
-
-        if (data_->poller_) {
-            delete data_->poller_;
-            data_->poller_ = nullptr;
-        }
-
-        if (data_->timer_manager_) {
-            delete data_->timer_manager_;
-            data_->timer_manager_ = nullptr;
-        }
-
-        data_->running_.store(false);
-        data_->initialized_.store(false);
+        data_->reset_runtime_resources();
 
         if (data_->option_.port == 0) {
             return false;
         }
 
-        data_->timer_manager_ = new timer::WheelTimerManager;
+        data_->timer_manager_ = std::make_unique<timer::WheelTimerManager>();
         data_->poller_ = create_default_poller();
         if (!data_->poller_ || !data_->poller_->init()) {
-            stop();
-            if (data_->loop_) {
-                delete data_->loop_;
-                data_->loop_ = nullptr;
-            }
-            if (data_->poller_) {
-                delete data_->poller_;
-                data_->poller_ = nullptr;
-            }
-            if (data_->timer_manager_) {
-                delete data_->timer_manager_;
-                data_->timer_manager_ = nullptr;
-            }
+            data_->reset_runtime_resources();
             return false;
         }
 
-        data_->loop_ = new net::EventLoop(data_->poller_, data_->timer_manager_);
+        data_->loop_ = std::make_unique<net::EventLoop>(ptr_of(data_->poller_), ptr_of(data_->timer_manager_));
 
-        auto *socket = new net::Socket(data_->option_.ip.c_str(),
-                                       data_->option_.port,
-                                       data_->option_.protocol == TransportProtocol::udp);
+        auto socket = std::make_unique<net::Socket>(
+            data_->option_.ip.c_str(),
+            data_->option_.port,
+            data_->option_.protocol == TransportProtocol::udp);
         if (!socket->valid()) {
-            delete socket;
-            if (data_->loop_) {
-                delete data_->loop_;
-                data_->loop_ = nullptr;
-            }
-            if (data_->poller_) {
-                delete data_->poller_;
-                data_->poller_ = nullptr;
-            }
-            if (data_->timer_manager_) {
-                delete data_->timer_manager_;
-                data_->timer_manager_ = nullptr;
-            }
+            data_->reset_runtime_resources();
             return false;
         }
 
         socket->set_reuse(data_->option_.reuse_addr);
         socket->set_none_block(data_->option_.non_block);
         if (!socket->bind()) {
-            delete socket;
-            if (data_->loop_) {
-                delete data_->loop_;
-                data_->loop_ = nullptr;
-            }
-            if (data_->poller_) {
-                delete data_->poller_;
-                data_->poller_ = nullptr;
-            }
-            if (data_->timer_manager_) {
-                delete data_->timer_manager_;
-                data_->timer_manager_ = nullptr;
-            }
+            data_->reset_runtime_resources();
             return false;
         }
 
         if (data_->option_.protocol == TransportProtocol::udp) {
-            data_->acceptor_.reset(net::create_datagram_acceptor(socket, data_->timer_manager_));
-            data_->datagram_acceptor_ = static_cast<net::DatagramAcceptor *>(data_->acceptor_.get());
+            data_->acceptor_.reset(net::create_datagram_acceptor(socket.release(), ptr_of(data_->timer_manager_)));
+            data_->datagram_acceptor_ = static_cast<net::DatagramAcceptor *>(ptr_of(data_->acceptor_));
         } else {
-            data_->acceptor_.reset(net::create_stream_acceptor(socket));
-            data_->stream_acceptor_ = static_cast<net::StreamAcceptor *>(data_->acceptor_.get());
+            data_->acceptor_.reset(net::create_stream_acceptor(socket.release()));
+            data_->stream_acceptor_ = static_cast<net::StreamAcceptor *>(ptr_of(data_->acceptor_));
         }
 
         if (!data_->acceptor_->listen()) {
-            data_->acceptor_.reset();
-            data_->stream_acceptor_ = nullptr;
-            data_->datagram_acceptor_ = nullptr;
-            if (data_->loop_) {
-                delete data_->loop_;
-                data_->loop_ = nullptr;
-            }
-            if (data_->poller_) {
-                delete data_->poller_;
-                data_->poller_ = nullptr;
-            }
-            if (data_->timer_manager_) {
-                delete data_->timer_manager_;
-                data_->timer_manager_ = nullptr;
-            }
+            data_->reset_runtime_resources();
             return false;
         }
 
-        data_->acceptor_->set_connection_handler(net::make_non_owning_handler(this));
-        data_->acceptor_->set_event_handler(data_->loop_);
+        data_->acceptor_->set_connection_handler(net::make_non_owning_handler(*this));
+        data_->acceptor_->set_event_handler(ptr_of(data_->loop_));
 
         if (data_->stream_acceptor_) {
             data_->loop_->update_channel(data_->stream_acceptor_->listener_channel());
@@ -208,19 +151,7 @@ namespace yuan::app
         }
 
         if (!on_init()) {
-            stop();
-            if (data_->loop_) {
-                delete data_->loop_;
-                data_->loop_ = nullptr;
-            }
-            if (data_->poller_) {
-                delete data_->poller_;
-                data_->poller_ = nullptr;
-            }
-            if (data_->timer_manager_) {
-                delete data_->timer_manager_;
-                data_->timer_manager_ = nullptr;
-            }
+            data_->reset_runtime_resources();
             return false;
         }
 
@@ -270,12 +201,12 @@ namespace yuan::app
 
     net::EventLoop * App::get_event_loop() const
     {
-        return data_->loop_;
+        return ptr_of(data_->loop_);
     }
 
     timer::TimerManager * App::get_timer_manager() const
     {
-        return data_->timer_manager_;
+        return ptr_of(data_->timer_manager_);
     }
 
     void App::on_connected(const std::shared_ptr<net::Connection> &conn)
@@ -285,12 +216,14 @@ namespace yuan::app
         }
 
         conn->set_max_packet_size(data_->option_.max_packet_size);
-        on_connection_open(conn.get());
+        on_connection_open(*conn);
     }
 
     void App::on_error(const std::shared_ptr<net::Connection> &conn)
     {
-        on_connection_error(conn.get());
+        if (conn) {
+            on_connection_error(*conn);
+        }
     }
 
     void App::on_read(const std::shared_ptr<net::Connection> &conn)
@@ -304,17 +237,21 @@ namespace yuan::app
             return;
         }
 
-        on_packet(conn.get(), packet);
+        on_packet(*conn, packet);
     }
 
     void App::on_write(const std::shared_ptr<net::Connection> &conn)
     {
-        on_connection_write(conn.get());
+        if (conn) {
+            on_connection_write(*conn);
+        }
     }
 
     void App::on_close(const std::shared_ptr<net::Connection> &conn)
     {
-        on_connection_close(conn.get());
+        if (conn) {
+            on_connection_close(*conn);
+        }
     }
 
     void App::set_option(const AppOption &option)
@@ -335,19 +272,23 @@ namespace yuan::app
     {
     }
 
-    void App::on_connection_open(net::Connection *conn)
+    void App::on_connection_open(net::Connection &conn)
     {
+        (void)conn;
     }
 
-    void App::on_connection_error(net::Connection *conn)
+    void App::on_connection_error(net::Connection &conn)
     {
+        (void)conn;
     }
 
-    void App::on_connection_write(net::Connection *conn)
+    void App::on_connection_write(net::Connection &conn)
     {
+        (void)conn;
     }
 
-    void App::on_connection_close(net::Connection *conn)
+    void App::on_connection_close(net::Connection &conn)
     {
+        (void)conn;
     }
 }

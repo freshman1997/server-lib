@@ -59,7 +59,7 @@ namespace yuan::net::http
 
         HttpProxy *get_proxy() const noexcept
         {
-            return proxy_.get();
+            return proxy_ ? &*proxy_ : nullptr;
         }
 
     public:

@@ -239,6 +239,7 @@ namespace yuan::net::http
         void build_forward_request(HttpRequest *orig_req, const ProxyRoute &route, const ProxyTarget &target, bool is_websocket = false);
         Connection *create_remote_connection(const ProxyTarget &target, int timeout_ms);
         void map_connections(Connection *clientConn, Connection *serverConn, const std::string &routeKey);
+        void map_connections(const std::shared_ptr<Connection> &clientConn, const std::shared_ptr<Connection> &serverConn, const std::string &routeKey);
         void unmap_and_close_peer(Connection *conn, bool is_client);
         void forward_data(Connection *src, Connection *dst);
 

@@ -14,6 +14,15 @@
 
 namespace yuan::net::http
 {
+    namespace
+    {
+        template <typename T>
+        T *ptr_of(const std::shared_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
     HttpClient::HttpClient()
         : port_(80), ssl_module_(nullptr)
     {
@@ -119,7 +128,7 @@ namespace yuan::net::http
                 }
             }
 
-            auto *stream = dynamic_cast<StreamTransport *>(conn.get());
+            auto *stream = dynamic_cast<StreamTransport *>(ptr_of(conn));
             auto *channel = stream ? stream->stream_channel() : nullptr;
             if (!channel) {
                 co_return nullptr;
@@ -138,13 +147,13 @@ namespace yuan::net::http
             }
         }
 
-        HttpSessionContext *httpCtx = new HttpSessionContext(conn);
+        auto httpCtx = std::make_unique<HttpSessionContext>(conn);
         httpCtx->set_mode(Mode::client);
 
         last_session_.reset();
-        auto httpSession = std::make_unique<HttpSession>(reinterpret_cast<uintptr_t>(conn.get()), httpCtx, runtime);
+        auto httpSession = std::make_unique<HttpSession>(reinterpret_cast<uintptr_t>(ptr_of(conn)), std::move(httpCtx), runtime);
 
-        ccb(httpCtx->get_request());
+        ccb(httpSession->get_context()->get_request());
 
         const uint32_t read_timeout = timeout_ms > 0 ? timeout_ms : config::connection_idle_timeout;
 
@@ -154,25 +163,27 @@ namespace yuan::net::http
                 break;
             }
 
-            if (!httpCtx->parse_from(read_result.data)) {
-                if (httpCtx->has_error()) {
+            auto *context = httpSession->get_context();
+
+            if (!context->parse_from(read_result.data)) {
+                if (context->has_error()) {
                     break;
                 }
                 continue;
             }
 
-            if (httpCtx->has_error()) {
+            if (context->has_error()) {
                 break;
             }
 
-            if (httpCtx->is_downloading()) {
+            if (context->is_downloading()) {
                 continue;
             }
 
-            if (httpCtx->is_completed()) {
-                (void)httpCtx->try_parse_request_content();
+            if (context->is_completed()) {
+                (void)context->try_parse_request_content();
 
-                if (httpCtx->is_completed()) {
+                if (context->is_completed()) {
                     last_session_ = std::move(httpSession);
                     co_return last_session_->get_context()->get_response();
                 }

@@ -39,7 +39,8 @@ namespace yuan::net
         virtual bool shutdown_write() override;
         virtual bool input_shutdown() const override;
 
-        Channel *stream_channel() const override;
+        Channel *stream_channel() override;
+        const Channel *stream_channel() const override;
 
         virtual void set_connection_handler(std::shared_ptr<ConnectionHandler> connectionHandler) override;
 
@@ -87,7 +88,6 @@ namespace yuan::net
         ConnectionState state_;
         std::unique_ptr<Channel> channel_;
         std::unique_ptr<Socket> socket_;
-        ConnectionHandler *connectionHandler_;
         std::shared_ptr<ConnectionHandler> connectionHandlerOwner_;
         EventHandler *eventHandler_;
         std::shared_ptr<SSLHandler> ssl_handler_;

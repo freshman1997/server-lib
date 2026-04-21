@@ -16,8 +16,15 @@ namespace yuan::net
     class KQueuePoller::HelperData
     {
     public:
+        struct ChannelEntry
+        {
+            Channel *channel = nullptr;
+            uint64_t generation = 0;
+        };
+
         int kqueuefd_;
         std::set<int> fds_;
+        std::unordered_map<int, ChannelEntry> channels_;
         std::vector<struct kevent> kqueue_events_;
     };
 
@@ -43,7 +50,7 @@ namespace yuan::net
         return data_->kqueuefd_ != -1;
     }
 
-    uint64_t KQueuePoller::poll(uint32_t timeout, std::vector<Channel *> & channels)
+    uint64_t KQueuePoller::poll(uint32_t timeout, std::vector<PollEvent> & events)
     {
         timespec time;
         time.tv_sec = timeout / 1000;
@@ -66,8 +73,8 @@ namespace yuan::net
             // 但 EventLoop 遍历时会反复调用 channel->on_event()，而 channel->revent_ 会在
             // poll 循环内被后一次 set_revent 覆盖，导致前一次回调丢失。
             // 因此这里按 Channel 聚合 revent，只 push 一次。
-            std::unordered_map<Channel *, int> revents_by_channel;
-            revents_by_channel.reserve(static_cast<size_t>(count));
+            std::unordered_map<int, PollEvent> revents_by_fd;
+            revents_by_fd.reserve(static_cast<size_t>(count));
 
             for (int i = 0; i < count; ++i) {
                 int ev = Channel::NONE_EVENT;
@@ -87,19 +94,20 @@ namespace yuan::net
                     ev |= Channel::WRITE_EVENT;
                 }
 
-                Channel *channel = static_cast<Channel *>(event.udata);
-                if (ev != Channel::NONE_EVENT && channel) {
-                    revents_by_channel[channel] |= ev;
+                const int fd = static_cast<int>(event.ident);
+                auto it = data_->channels_.find(fd);
+                if (ev != Channel::NONE_EVENT && it != data_->channels_.end() && it->second.channel) {
+                    auto &pe = revents_by_fd[fd];
+                    pe.fd = fd;
+                    pe.generation = it->second.generation;
+                    pe.revents |= ev;
                 }
             }
 
-            for (auto & [
-                            channel,
-                            ev
-                        ] : revents_by_channel) {
-                if (channel && ev != Channel::NONE_EVENT) {
-                    channel->set_revent(ev);
-                    channels.push_back(channel);
+            for (auto & [fd, pe] : revents_by_fd) {
+                (void)fd;
+                if (pe.revents != Channel::NONE_EVENT) {
+                    events.push_back(pe);
                 }
             }
 
@@ -121,6 +129,9 @@ namespace yuan::net
             }
             return;
         }
+
+        auto &entry = data_->channels_[channel->get_fd()];
+        entry.channel = channel;
 
         struct kevent events[2];
         int count = 0;
@@ -152,10 +163,11 @@ namespace yuan::net
         }
 
         data_->fds_.erase(it);
+        data_->channels_.erase(channel->get_fd());
 
         struct kevent events[2];
-        EV_SET(&events[0], channel->get_fd(), EVFILT_READ, EV_DELETE, 0, 0, channel);
-        EV_SET(&events[1], channel->get_fd(), EVFILT_WRITE, EV_DELETE, 0, 0, channel);
+        EV_SET(&events[0], channel->get_fd(), EVFILT_READ, EV_DELETE, 0, 0, nullptr);
+        EV_SET(&events[1], channel->get_fd(), EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
         kevent(data_->kqueuefd_, events, 2, nullptr, 0, nullptr);
     }
 }

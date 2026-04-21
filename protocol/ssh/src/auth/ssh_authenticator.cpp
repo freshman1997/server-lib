@@ -52,7 +52,7 @@ namespace yuan::net::ssh
         if (it == methods_.end())
             return SshAuthResult::FAILURE;
 
-        active_method_ = it->second.get();
+        active_method_ = it->second ? &*it->second : nullptr;
         state_ = State::authenticating;
 
         SshAuthCredentials creds;

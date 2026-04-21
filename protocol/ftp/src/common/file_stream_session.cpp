@@ -44,19 +44,21 @@ namespace yuan::net::ftp
 
     void FtpFileStreamSession::on_connected(const std::shared_ptr<Connection> &conn)
     {
-        on_connected(conn.get());
+        if (conn) {
+            on_connected(*conn);
+        }
     }
 
-    void FtpFileStreamSession::on_connected(Connection * conn)
+    void FtpFileStreamSession::on_connected(Connection & conn)
     {
         if (conn_) {
-            conn->close();
+            conn.close();
             return;
         }
         state_ = FileStreamState::connected;
-        conn_owner_ = conn ? conn->shared_from_this() : std::weak_ptr<Connection>{};
-        conn_ = conn;
-        remote_addr_ = conn ? conn->get_remote_address() : InetAddress{};
+        conn_owner_ = conn.shared_from_this();
+        conn_ = &conn;
+        remote_addr_ = conn.get_remote_address();
         LOG_DEBUG("file session connected remote={}:{}", remote_addr_.get_ip(), remote_addr_.get_port());
         session_->on_opened(this);
         last_active_time_ = base::time::now();
@@ -64,10 +66,12 @@ namespace yuan::net::ftp
 
     void FtpFileStreamSession::on_error(const std::shared_ptr<Connection> &conn)
     {
-        on_error(conn.get());
+        if (conn) {
+            on_error(*conn);
+        }
     }
 
-    void FtpFileStreamSession::on_error(Connection * conn)
+    void FtpFileStreamSession::on_error(Connection & conn)
     {
         (void)conn;
         state_ = FileStreamState::connection_error;
@@ -82,17 +86,19 @@ namespace yuan::net::ftp
 
     void FtpFileStreamSession::on_read(const std::shared_ptr<Connection> &conn)
     {
-        on_read(conn.get());
+        if (conn) {
+            on_read(*conn);
+        }
     }
 
-    void FtpFileStreamSession::on_read(Connection * conn)
+    void FtpFileStreamSession::on_read(Connection & conn)
     {
         if (!current_file_info_ || current_file_info_->mode_ != StreamMode::Receiver || !current_file_info_->ready_) {
             LOG_DEBUG("file session read skipped");
             return;
         }
         state_ = FileStreamState::processing;
-        auto buff = conn->take_input_byte_buffer();
+        auto buff = conn.take_input_byte_buffer();
         LOG_DEBUG("file session read bytes={} dest={}", buff.readable_bytes(), current_file_info_->dest_name_);
         int ret = current_file_info_->write_file(buff);
         if (ret < 0) {
@@ -127,10 +133,12 @@ namespace yuan::net::ftp
 
     void FtpFileStreamSession::on_write(const std::shared_ptr<Connection> &conn)
     {
-        on_write(conn.get());
+        if (conn) {
+            on_write(*conn);
+        }
     }
 
-    void FtpFileStreamSession::on_write(Connection * conn)
+    void FtpFileStreamSession::on_write(Connection & conn)
     {
         if (!current_file_info_ || current_file_info_->mode_ != StreamMode::Sender || !current_file_info_->ready_) {
             LOG_DEBUG("file session write skipped");
@@ -152,12 +160,12 @@ namespace yuan::net::ftp
             return;
         }
         if (buff.readable_bytes() > 0) {
-            conn->write(buff);
+            conn.write(buff);
         }
         if (current_file_info_->is_completed()) {
             state_ = FileStreamState::idle;
             current_file_info_->ready_ = false;
-            conn->flush();
+            conn.flush();
             session_->on_completed(this);
             current_file_info_ = nullptr;
             // Defer close to avoid use-after-free (see on_read above)
@@ -169,15 +177,17 @@ namespace yuan::net::ftp
             return;
         }
         last_active_time_ = base::time::now();
-        conn->flush();
+        conn.flush();
     }
 
     void FtpFileStreamSession::on_close(const std::shared_ptr<Connection> &conn)
     {
-        on_close(conn.get());
+        if (conn) {
+            on_close(*conn);
+        }
     }
 
-    void FtpFileStreamSession::on_close(Connection * conn)
+    void FtpFileStreamSession::on_close(Connection & conn)
     {
         (void)conn;
         LOG_DEBUG("file session close remote={}:{}", remote_addr_.get_ip(), remote_addr_.get_port());

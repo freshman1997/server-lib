@@ -297,7 +297,7 @@ namespace yuan::timer
 
         if (task->need_free()) {
             owned_task_.reset(task);
-            task_ = owned_task_.get();
+            task_ = owned_task_ ? &*owned_task_ : nullptr;
             return;
         }
 

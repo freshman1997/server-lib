@@ -14,6 +14,15 @@
 
 namespace yuan::net::ftp
 {
+    namespace
+    {
+        template <typename T>
+        T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
     FtpServer::FtpServer()
     {
     }
@@ -63,7 +72,7 @@ namespace yuan::net::ftp
         }
 
         auto session = std::make_unique<ServerFtpSession>(conn, this, false, true);
-        active_sessions_.insert(session.get());
+        active_sessions_.insert(ptr_of(session));
 
         ctx.append_output("220 Welcome to FTP server.\r\n");
         ctx.flush();
@@ -87,7 +96,7 @@ namespace yuan::net::ftp
                     continue;
                 }
 
-                const auto &res = command->execute(session.get(), item.args_);
+                const auto &res = command->execute(ptr_of(session), item.args_);
                 LOG_DEBUG("ftp server response code={} body={}", static_cast<int>(res.code_), res.body_);
                 if (res.code_ == FtpResponseCode::invalid) {
                     continue;
@@ -116,8 +125,8 @@ namespace yuan::net::ftp
         }
 
     done:
-        return_passive_port(session.get());
-        on_session_closed(session.get());
+        return_passive_port(ptr_of(session));
+        on_session_closed(ptr_of(session));
         session->detach_async();
         co_return;
     }

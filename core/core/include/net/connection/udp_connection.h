@@ -88,7 +88,6 @@ namespace yuan::net
         int idle_cnt_;
         InetAddress address_;
         std::unique_ptr<UdpAdapter> adapter_;
-        ConnectionHandler *connectionHandler_;
         std::shared_ptr<ConnectionHandler> connectionHandlerOwner_;
         EventHandler *eventHandler_;
         UdpInstance *instance_;

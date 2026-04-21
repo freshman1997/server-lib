@@ -10,10 +10,28 @@
 
 namespace yuan::net::http
 {
+    namespace
+    {
+        template <typename T>
+        T *ptr_of(const std::shared_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+
+        template <typename T>
+        T *back_ptr_of(const std::vector<std::shared_ptr<T> > &owners)
+        {
+            if (owners.empty()) {
+                return nullptr;
+            }
+            return ptr_of(owners.back());
+        }
+    }
+
     ContentParserFactory::ContentParserFactory()
     {
         auto text = std::make_shared<TextContentParser>();
-        text_parser_instance = text.get();
+        text_parser_instance = ptr_of(text);
         owned_parsers_.push_back(text);
 
         parsers_[ContentType::text_plain] = text_parser_instance;
@@ -22,13 +40,13 @@ namespace yuan::net::http
         parsers_[ContentType::text_style_sheet] = text_parser_instance;
 
         owned_parsers_.push_back(std::make_shared<MultipartFormDataParser>());
-        parsers_[ContentType::multpart_form_data] = owned_parsers_.back().get();
+        parsers_[ContentType::multpart_form_data] = back_ptr_of(owned_parsers_);
         owned_parsers_.push_back(std::make_shared<MultipartByterangesParser>());
-        parsers_[ContentType::multpart_byte_ranges] = owned_parsers_.back().get();
+        parsers_[ContentType::multpart_byte_ranges] = back_ptr_of(owned_parsers_);
         owned_parsers_.push_back(std::make_shared<JsonContentParser>());
-        parsers_[ContentType::application_json] = owned_parsers_.back().get();
+        parsers_[ContentType::application_json] = back_ptr_of(owned_parsers_);
         owned_parsers_.push_back(std::make_shared<UrlEncodedContentParser>());
-        parsers_[ContentType::x_www_form_urlencoded] = owned_parsers_.back().get();
+        parsers_[ContentType::x_www_form_urlencoded] = back_ptr_of(owned_parsers_);
     }
 
     ContentParserFactory::~ContentParserFactory()
@@ -45,13 +63,13 @@ namespace yuan::net::http
             auto *raw_parser = packet->get_pre_content_parser();
             if (!raw_parser) {
                 auto owned = std::make_shared<ChunkedContentParser>();
-                chunked_parser = owned.get();
+                chunked_parser = ptr_of(owned);
                 packet->set_pre_content_parser(std::move(owned));
             } else {
                 chunked_parser = dynamic_cast<ChunkedContentParser *>(raw_parser);
                 if (!chunked_parser) {
                     auto owned = std::make_shared<ChunkedContentParser>();
-                    chunked_parser = owned.get();
+                    chunked_parser = ptr_of(owned);
                     packet->set_pre_content_parser(std::move(owned));
                 }
             }

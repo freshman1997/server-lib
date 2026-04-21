@@ -227,7 +227,7 @@ namespace yuan::app
                 return false;
             }
 
-            if (auto *contextAware = dynamic_cast<RuntimeContextAwareService *>(entry.service.get())) {
+            if (auto *contextAware = dynamic_cast<RuntimeContextAwareService *>(&*entry.service)) {
                 contextAware->set_runtime_context(context_);
             }
 

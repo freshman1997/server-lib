@@ -15,7 +15,7 @@ namespace yuan::net
 
         virtual bool init();
 
-        virtual uint64_t poll(uint32_t timeout, std::vector<Channel *> &channels);
+        virtual uint64_t poll(uint32_t timeout, std::vector<PollEvent> &events);
 
         virtual void update_channel(Channel *channel);
 

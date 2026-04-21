@@ -95,7 +95,7 @@ namespace yuan::net::smb
         }
         SmbAuth *auth()
         {
-            return auth_.get();
+            return auth_ ? &*auth_ : nullptr;
         }
 
         void set_signing_key(std::vector<uint8_t> key)
@@ -203,7 +203,7 @@ namespace yuan::net::smb
         }
         SmbCrypto *crypto()
         {
-            return crypto_.get();
+            return crypto_ ? &*crypto_ : nullptr;
         }
 
         void close();

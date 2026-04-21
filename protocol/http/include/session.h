@@ -3,6 +3,7 @@
 #include <string>
 #include <unordered_map>
 #include <functional>
+#include <memory>
 
 #include "common.h"
 #include "coroutine/runtime.h"
@@ -146,7 +147,7 @@ namespace yuan::net::http
     class HttpSession
     {
     public:
-        HttpSession(uint64_t id, HttpSessionContext *context, coroutine::RuntimeView runtime);
+        HttpSession(uint64_t id, std::unique_ptr<HttpSessionContext> context, coroutine::RuntimeView runtime);
         ~HttpSession();
 
         HttpSession(const HttpSession &) = delete;
@@ -177,7 +178,7 @@ namespace yuan::net::http
 
         HttpSessionContext *get_context()
         {
-            return context_;
+            return context_ ? &*context_ : nullptr;
         }
 
         void set_close_call_back(close_callback ccb)
@@ -194,7 +195,7 @@ namespace yuan::net::http
     private:
         uint64_t session_id_;
         std::unordered_map<std::string, SessionItem> session_items_;
-        HttpSessionContext *context_;
+        std::unique_ptr<HttpSessionContext> context_;
         coroutine::RuntimeView runtime_;
         timer::Timer *conn_timer_;
         close_callback close_cb_;

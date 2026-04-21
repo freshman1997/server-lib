@@ -104,7 +104,7 @@ namespace yuan::net::ssh
         void set_client_connection(const std::shared_ptr<net::Connection> &conn)
         {
             client_conn_owner_ = conn;
-            client_conn_ = conn.get();
+            client_conn_ = conn ? &*conn : nullptr;
         }
         void set_client_connection(net::Connection *conn)
         {

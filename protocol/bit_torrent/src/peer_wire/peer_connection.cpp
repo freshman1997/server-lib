@@ -21,22 +21,17 @@ namespace yuan::net::bit_torrent
         {
         }
 
-        void on_connect_failed(const std::shared_ptr<net::Connection> &conn) override
+        void on_connect_result(const net::ConnectResult &result) override
         {
-            (void)conn;
-            parent_->state_ = PeerConnection::State::error;
-            parent_->schedule_connect_cleanup();
-        }
+            if (result.code != net::ConnectResultCode::success || !result.connection) {
+                (void)result.error_code;
+                (void)result.attempt_id;
+                parent_->state_ = PeerConnection::State::error;
+                parent_->schedule_connect_cleanup();
+                return;
+            }
 
-        void on_connect_timeout(const std::shared_ptr<net::Connection> &conn) override
-        {
-            (void)conn;
-            parent_->state_ = PeerConnection::State::error;
-            parent_->schedule_connect_cleanup();
-        }
-
-        void on_connected_success(const std::shared_ptr<net::Connection> &conn) override
-        {
+            const auto &conn = result.connection;
             parent_->set_connection(conn);
             if (conn) {
                 conn->set_connection_handler(make_non_owning_handler(parent_));
@@ -99,9 +94,9 @@ namespace yuan::net::bit_torrent
         pending_requests_.clear();
         pending_addr_ = std::make_unique<net::InetAddress>(peer_ip, peer_port);
         pending_connector_ = std::make_unique<net::TcpConnector>();
-        connector_handler_ = std::make_unique<PeerConnectorHandler>(this);
+        connector_handler_ = std::make_shared<PeerConnectorHandler>(this);
 
-        runtime->register_connector(pending_connector_.get(), connector_handler_.get());
+        runtime->register_connector(pending_connector_, connector_handler_);
         pending_connector_->connect(*pending_addr_);
     }
 

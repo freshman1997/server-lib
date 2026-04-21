@@ -31,8 +31,10 @@ set_target_properties(quickjs_static PROPERTIES
     C_STANDARD_REQUIRED ON
 )
 
-if(UNIX)
-    target_link_libraries(quickjs_static PRIVATE dl m pthread)
+if(UNIX AND NOT MINGW)
+    target_link_libraries(quickjs_static PUBLIC dl m Threads::Threads)
+elseif(MINGW)
+    target_link_libraries(quickjs_static PUBLIC Threads::Threads)
 endif()
 
 target_compile_options(quickjs_static PRIVATE

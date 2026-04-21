@@ -28,6 +28,86 @@ namespace yuan::app
 
     namespace
     {
+        template <typename T>
+        T *ptr_of(std::unique_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+
+        template <typename T>
+        T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? &*owner : nullptr;
+        }
+    }
+
+    plugin::HostEventBus *PluginHostService::event_bus_ptr() const
+    {
+        return ptr_of(event_bus_);
+    }
+
+    plugin::HostLogger *PluginHostService::logger_ptr() const
+    {
+        return ptr_of(logger_);
+    }
+
+    plugin::HostServiceCatalog *PluginHostService::service_catalog_ptr() const
+    {
+        return ptr_of(service_catalog_);
+    }
+
+    plugin::HostScheduler *PluginHostService::scheduler_ptr() const
+    {
+        return ptr_of(scheduler_);
+    }
+
+    plugin::HostServiceRegistry *PluginHostService::service_registry_ptr() const
+    {
+        return ptr_of(service_registry_);
+    }
+
+    plugin::HostPermissionGuard *PluginHostService::permission_guard_ptr() const
+    {
+        return ptr_of(permission_guard_);
+    }
+
+    plugin::HostResourceGuard *PluginHostService::resource_guard_ptr() const
+    {
+        return ptr_of(resource_guard_);
+    }
+
+    plugin::HostHttpInterceptor *PluginHostService::http_interceptor_ptr() const
+    {
+        return ptr_of(http_interceptor_);
+    }
+
+    plugin::HostNetworkRuntime *PluginHostService::network_runtime_ptr() const
+    {
+        return ptr_of(network_runtime_);
+    }
+
+    PluginServiceRegistryAdapter *PluginHostService::service_registry_adapter() const
+    {
+        return static_cast<PluginServiceRegistryAdapter *>(service_registry_ptr());
+    }
+
+    PluginPermissionGuard *PluginHostService::permission_guard_adapter() const
+    {
+        return static_cast<PluginPermissionGuard *>(permission_guard_ptr());
+    }
+
+    PluginHttpInterceptor *PluginHostService::http_interceptor_adapter() const
+    {
+        return static_cast<PluginHttpInterceptor *>(http_interceptor_ptr());
+    }
+
+    PluginHostScheduler *PluginHostService::host_scheduler_adapter() const
+    {
+        return static_cast<PluginHostScheduler *>(scheduler_ptr());
+    }
+
+    namespace
+    {
 
         plugin::PluginEvent make_plugin_event_impl(const RuntimeContext &context, const std::string &plugin_name)
         {
@@ -79,16 +159,16 @@ namespace yuan::app
             runtime_context_.worker_threads,
             runtime_context_.worker_index,
             runtime_context_.is_worker_process,
-            event_bus_.get(),              // event_bus
-            logger_.get(),                 // logger
-            service_catalog_.get(),        // service_catalog
-            scheduler_.get(),              // scheduler
-            service_registry_.get(),       // service_registry
-            permission_guard_.get(),       // permission_guard
-            resource_guard_.get(),         // resource_guard
-            http_interceptor_.get(),       // http_interceptor
+            event_bus_ptr(),               // event_bus
+            logger_ptr(),                  // logger
+            service_catalog_ptr(),         // service_catalog
+            scheduler_ptr(),               // scheduler
+            service_registry_ptr(),        // service_registry
+            permission_guard_ptr(),        // permission_guard
+            resource_guard_ptr(),          // resource_guard
+            http_interceptor_ptr(),        // http_interceptor
             storage,                       // storage (per-plugin)
-            network_runtime_.get(),        // network_runtime
+            network_runtime_ptr(),         // network_runtime
             nullptr,                       // extension_point_registry (set by PluginManager)
             plugin::PluginPermission::none // granted_permissions
         };
@@ -98,11 +178,11 @@ namespace yuan::app
     {
         auto it = plugin_storages_.find(plugin_name);
         if (it != plugin_storages_.end()) {
-            return it->second.get();
+            return ptr_of(it->second);
         }
 
         auto storage = std::make_unique<PluginRedisStorage>(plugin_name);
-        auto *raw = storage.get();
+        auto *raw = ptr_of(storage);
         if (!storage->init()) {
             LOG_WARN("plugin storage for '{}' is present but backend is unavailable", plugin_name);
         }
@@ -232,7 +312,7 @@ namespace yuan::app
         }
 
         if (service_registry_) {
-            auto *registry = static_cast<PluginServiceRegistryAdapter *>(service_registry_.get());
+            auto *registry = service_registry_adapter();
             if (!registry->init_plugin_services(plugin_name, pluginManager->plugin_context(plugin_name))) {
                 cleanup_plugin_resources(plugin_name);
                 pluginManager->release_plugin(plugin_name);
@@ -266,7 +346,7 @@ namespace yuan::app
         }
 
         if (started_ && service_registry_ && lcm.state(plugin_name) == plugin::PluginState::active) {
-            if (!static_cast<PluginServiceRegistryAdapter *>(service_registry_.get())->start_plugin_services(plugin_name)) {
+            if (!service_registry_adapter()->start_plugin_services(plugin_name)) {
                 LOG_ERROR("plugin '{}' managed services failed to start, rolling back", plugin_name);
                 cleanup_plugin_resources(plugin_name);
                 pluginManager->release_plugin(plugin_name);
@@ -308,7 +388,7 @@ namespace yuan::app
         }
 
         if (service_registry_) {
-            static_cast<PluginServiceRegistryAdapter *>(service_registry_.get())->stop_plugin_services(plugin_name);
+            service_registry_adapter()->stop_plugin_services(plugin_name);
         }
 
         lcm.stop(plugin_name);
@@ -427,7 +507,7 @@ namespace yuan::app
     void PluginHostService::set_default_permissions(plugin::PluginPermission perm)
     {
         if (permission_guard_) {
-            static_cast<PluginPermissionGuard *>(permission_guard_.get())->set_default_permissions(perm);
+            permission_guard_adapter()->set_default_permissions(perm);
         }
     }
 
@@ -443,7 +523,7 @@ namespace yuan::app
     {
         pending_http_server_accessor_ = std::move(accessor);
         if (http_interceptor_) {
-            static_cast<PluginHttpInterceptor *>(http_interceptor_.get())->set_server_accessor(
+            http_interceptor_adapter()->set_server_accessor(
                 [acc = pending_http_server_accessor_]()->void * {
                 return acc ? acc() : nullptr;
                 });
@@ -457,7 +537,7 @@ namespace yuan::app
         pending_http_middleware_installer_ = std::move(middleware_installer);
         pending_http_route_installer_ = std::move(route_installer);
         if (http_interceptor_) {
-            static_cast<PluginHttpInterceptor *>(http_interceptor_.get())->set_installers(
+            http_interceptor_adapter()->set_installers(
                 pending_http_middleware_installer_,
                 pending_http_route_installer_);
         }
@@ -522,16 +602,15 @@ namespace yuan::app
             network_runtime_ = std::make_unique<PluginHostNetworkRuntime>(runtime_context_.shared_runtime);
         }
 
-        static_cast<PluginHttpInterceptor *>(http_interceptor_.get())->set_resource_guard(
-            resource_guard_.get());
+        http_interceptor_adapter()->set_resource_guard(resource_guard_ptr());
         if (pending_http_server_accessor_) {
-            static_cast<PluginHttpInterceptor *>(http_interceptor_.get())->set_server_accessor(
+            http_interceptor_adapter()->set_server_accessor(
                 [acc = pending_http_server_accessor_]()->void * {
                 return acc ? acc() : nullptr;
                 });
         }
         if (pending_http_middleware_installer_ || pending_http_route_installer_) {
-            static_cast<PluginHttpInterceptor *>(http_interceptor_.get())->set_installers(
+            http_interceptor_adapter()->set_installers(
                 pending_http_middleware_installer_,
                 pending_http_route_installer_);
         }
@@ -567,7 +646,7 @@ namespace yuan::app
             pluginManager->set_plugin_storage(pluginName, plugin_storage);
 
             if (service_registry_) {
-                auto *registry = static_cast<PluginServiceRegistryAdapter *>(service_registry_.get());
+                auto *registry = service_registry_adapter();
                 if (!registry->init_plugin_services(pluginName, pluginManager->plugin_context(pluginName))) {
                     LOG_ERROR("plugin host failed to init services for plugin '{}'", pluginName);
                     cleanup_plugin_resources(pluginName);
@@ -621,7 +700,7 @@ namespace yuan::app
             }
 
             if (service_registry_ && lcm.state(plugin_name) == plugin::PluginState::active) {
-                if (!static_cast<PluginServiceRegistryAdapter *>(service_registry_.get())->start_plugin_services(plugin_name)) {
+                if (!service_registry_adapter()->start_plugin_services(plugin_name)) {
                     LOG_ERROR("plugin '{}' managed services failed to start during host start", plugin_name);
                     lcm.fault(plugin_name, "managed services failed to start");
                 }
@@ -646,7 +725,7 @@ namespace yuan::app
         }
 
         if (service_registry_) {
-            auto *registry = static_cast<PluginServiceRegistryAdapter *>(service_registry_.get());
+            auto *registry = service_registry_adapter();
             for (auto it = loaded_plugins_.rbegin(); it != loaded_plugins_.rend(); ++it) {
                 registry->stop_plugin_services(*it);
             }
@@ -654,7 +733,7 @@ namespace yuan::app
         started_ = false;
 
         if (scheduler_) {
-            static_cast<PluginHostScheduler *>(scheduler_.get())->shutdown();
+            host_scheduler_adapter()->shutdown();
         }
 
         for (auto it = loaded_plugins_.rbegin(); it != loaded_plugins_.rend(); ++it) {

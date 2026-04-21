@@ -3,6 +3,7 @@
 
 #include "server_runtime_host.h"
 #include "service.h"
+#include "net/auth_rate_limiter.h"
 #include "socks5_config.h"
 
 #include <atomic>
@@ -28,11 +29,14 @@ namespace yuan::server
         int connect_timeout_ms = 10000;
         int drain_timeout_ms = 5000;
         int session_snapshot_interval_ms = 10000;
-        int max_header_bytes = 64 * 1024;
+        int max_header_bytes = 256 * 1024;
+        int max_session_buffer_bytes = 1024 * 1024 * 5;
+        int max_total_tunnel_memory = 0;
         std::string basic_auth_user;
         std::string basic_auth_password;
         std::vector<std::string> allow_targets;
         std::vector<std::string> deny_targets;
+        bool allow_private_targets = false;
     };
 
     struct Socks5ServiceConfigFile
@@ -40,6 +44,17 @@ namespace yuan::server
         bool enabled = true;
         int port = 1080;
         yuan::net::socks5::Socks5ServerConfig server_config;
+    };
+
+    struct ProxyServiceMetrics
+    {
+        std::atomic_uint64_t header_timeouts{ 0 };
+        std::atomic_uint64_t connect_timeouts{ 0 };
+        std::atomic_uint64_t idle_timeouts{ 0 };
+        std::atomic_uint64_t closes_by_client{ 0 };
+        std::atomic_uint64_t closes_by_upstream{ 0 };
+        std::atomic_uint64_t closes_by_ssrf{ 0 };
+        std::atomic_uint64_t closes_by_acl{ 0 };
     };
 
     class ProxyService : public yuan::app::Service, public yuan::app::RuntimeContextAwareService
@@ -69,6 +84,9 @@ namespace yuan::server
         std::atomic_uint64_t rejected_sessions_{ 0 };
         std::atomic_uint64_t completed_sessions_{ 0 };
         std::atomic_uint64_t next_session_id_{ 1 };
+        std::atomic_uint64_t total_tunnel_memory_{ 0 };
+        ProxyServiceMetrics metrics_;
+        yuan::net::AuthRateLimiter auth_rate_limiter_;
         ServerRuntimeHost host_;
         yuan::net::NetworkRuntime *shared_runtime_ = nullptr;
         class ProxyServiceData;

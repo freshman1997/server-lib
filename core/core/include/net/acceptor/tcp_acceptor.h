@@ -24,7 +24,7 @@ namespace yuan::net
 
         virtual Channel *listener_channel() const override
         {
-            return channel_.get();
+            return channel_ ? &*channel_ : nullptr;
         }
 
         virtual void update_channel();
@@ -38,7 +38,7 @@ namespace yuan::net
         virtual void set_connection_handler(std::shared_ptr<ConnectionHandler> connHandler) override;
         virtual ConnectionHandler *connection_handler() const override
         {
-            return conn_handler_;
+            return conn_handler_owner_ ? &*conn_handler_owner_ : nullptr;
         }
         virtual std::shared_ptr<ConnectionHandler> connection_handler_owner() const override
         {
@@ -50,8 +50,8 @@ namespace yuan::net
     protected:
         std::unique_ptr<Channel> channel_;
         std::unique_ptr<Socket> socket_;
+        std::shared_ptr<SelectHandler> self_handler_owner_;
         EventHandler *handler_;
-        ConnectionHandler *conn_handler_;
         std::shared_ptr<ConnectionHandler> conn_handler_owner_;
         std::shared_ptr<SSLModule> ssl_module_;
     };

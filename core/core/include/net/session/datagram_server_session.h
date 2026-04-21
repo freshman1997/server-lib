@@ -82,7 +82,7 @@ namespace yuan::net
         void on_connected(const std::shared_ptr<Connection> &conn) override
         {
             if (conn) {
-                conn->set_connection_handler(make_non_owning_handler(this));
+                conn->set_connection_handler(self_handler_holder_);
             }
         }
 
@@ -120,14 +120,12 @@ namespace yuan::net
                 return false;
             }
 
-            Socket *sock = new Socket(host.c_str(), port, true);
+            auto sock = std::make_unique<Socket>(host.c_str(), port, true);
             if (!sock->valid()) {
-                delete sock;
                 return false;
             }
 
             if (!sock->bind()) {
-                delete sock;
                 return false;
             }
 
@@ -135,13 +133,13 @@ namespace yuan::net
             sock->set_reuse(true);
             sock->set_none_block(true);
 
-            acceptor_.reset(create_datagram_acceptor(sock, tm));
+            acceptor_.reset(create_datagram_acceptor(sock.release(), tm));
             if (!acceptor_->listen()) {
                 acceptor_.reset();
                 return false;
             }
 
-            acceptor_->set_connection_handler(make_non_owning_handler(this));
+            acceptor_->set_connection_handler(self_handler_holder_);
             acceptor_->set_event_handler(loop);
             loop->update_channel(acceptor_->endpoint_channel());
             return true;
@@ -150,6 +148,7 @@ namespace yuan::net
         NetworkRuntime *runtime_ = nullptr;
         std::unique_ptr<DatagramAcceptor> acceptor_;
         ReadCallback read_callback_;
+        std::shared_ptr<ConnectionHandler> self_handler_holder_{ make_non_owning_handler(*this) };
     };
 
 } // namespace yuan::net

@@ -12,22 +12,26 @@ namespace yuan::net::ssh
 
     SshCipher *SshCipherContext::outbound_cipher() const
     {
-        return we_are_server_ ? server_cipher_.get() : client_cipher_.get();
+        return we_are_server_ ? (server_cipher_ ? &*server_cipher_ : nullptr)
+                             : (client_cipher_ ? &*client_cipher_ : nullptr);
     }
 
     SshCipher *SshCipherContext::inbound_cipher() const
     {
-        return we_are_server_ ? client_cipher_.get() : server_cipher_.get();
+        return we_are_server_ ? (client_cipher_ ? &*client_cipher_ : nullptr)
+                             : (server_cipher_ ? &*server_cipher_ : nullptr);
     }
 
     SshMac *SshCipherContext::outbound_mac() const
     {
-        return we_are_server_ ? server_mac_.get() : client_mac_.get();
+        return we_are_server_ ? (server_mac_ ? &*server_mac_ : nullptr)
+                             : (client_mac_ ? &*client_mac_ : nullptr);
     }
 
     SshMac *SshCipherContext::inbound_mac() const
     {
-        return we_are_server_ ? client_mac_.get() : server_mac_.get();
+        return we_are_server_ ? (client_mac_ ? &*client_mac_ : nullptr)
+                             : (server_mac_ ? &*server_mac_ : nullptr);
     }
 
     bool SshCipherContext::is_chacha20_poly1305() const
@@ -52,7 +56,8 @@ namespace yuan::net::ssh
             if (len < 4)
                 return false;
 
-            SshCipher *cipher = we_are_server_ ? client_cipher_.get() : server_cipher_.get();
+            SshCipher *cipher = we_are_server_ ? (client_cipher_ ? &*client_cipher_ : nullptr)
+                                               : (server_cipher_ ? &*server_cipher_ : nullptr);
             if (!cipher)
                 return false;
 

@@ -264,6 +264,9 @@ namespace yuan::coroutine
         {
             if (handle_) {
                 handle_.promise().detached_ = true;
+                if (handle_.done()) {
+                    handle_.destroy();
+                }
                 handle_ = nullptr;
             }
         }

@@ -15,6 +15,15 @@ namespace yuan::net::ftp
 {
     namespace
     {
+        template <typename T>
+        T *ptr_of(const std::shared_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
+    namespace
+    {
         std::string normalize_dir(const std::string &dir)
         {
             namespace fs = std::filesystem;
@@ -77,7 +86,7 @@ namespace yuan::net::ftp
     FtpSession::FtpSession(const std::shared_ptr<Connection> &conn, FtpApp *app, WorkMode mode, bool keepUtilSent, bool async_mode)
         : work_mode_(mode), keep_util_sent_(keepUtilSent), close_(false), async_mode_(async_mode), conn_owner_(conn)
     {
-        context_.conn_ = conn_owner_.get();
+        context_.conn_ = ptr_of(conn_owner_);
         context_.app_ = app;
         if (!async_mode_) {
             context_.conn_->set_connection_handler(make_non_owning_handler(this));
@@ -106,45 +115,55 @@ namespace yuan::net::ftp
 
     void FtpSession::on_connected(const std::shared_ptr<Connection> &conn)
     {
-        on_connected(conn.get());
+        if (conn) {
+            on_connected(*conn);
+        }
     }
 
-    void FtpSession::on_connected(Connection * conn)
+    void FtpSession::on_connected(Connection & conn)
     {
         (void)conn;
     }
 
     void FtpSession::on_error(const std::shared_ptr<Connection> &conn)
     {
-        on_error(conn.get());
+        if (conn) {
+            on_error(*conn);
+        }
     }
 
-    void FtpSession::on_error(Connection * conn)
+    void FtpSession::on_error(Connection & conn)
     {
         (void)conn;
     }
 
     void FtpSession::on_read(const std::shared_ptr<Connection> &conn)
     {
-        on_read(conn.get());
+        if (conn) {
+            on_read(*conn);
+        }
     }
 
     void FtpSession::on_write(const std::shared_ptr<Connection> &conn)
     {
-        on_write(conn.get());
+        if (conn) {
+            on_write(*conn);
+        }
     }
 
-    void FtpSession::on_write(Connection * conn)
+    void FtpSession::on_write(Connection & conn)
     {
         (void)conn;
     }
 
     void FtpSession::on_close(const std::shared_ptr<Connection> &conn)
     {
-        on_close(conn.get());
+        if (conn) {
+            on_close(*conn);
+        }
     }
 
-    void FtpSession::on_close(Connection * conn)
+    void FtpSession::on_close(Connection & conn)
     {
         (void)conn;
         if (async_mode_) {
@@ -406,7 +425,7 @@ namespace yuan::net::ftp
 
     void FtpSession::on_file_stream_close(FtpFileStream * ffs)
     {
-        if (context_.file_stream_.get() == ffs) {
+        if (context_.file_stream_ && &*context_.file_stream_ == ffs) {
             context_.file_stream_.reset();
         }
     }

@@ -5,6 +5,15 @@
 
 namespace yuan::net::smb
 {
+    namespace
+    {
+        template <typename T>
+        T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
     SmbShare::SmbShare(const SmbShareConfig & config)
         : name_(config.name), comment_(config.comment), type_(config.type), path_(config.path), share_flags_(config.share_flags), capabilities_(config.capabilities), max_uses_(config.max_uses)
     {
@@ -106,7 +115,7 @@ namespace yuan::net::smb
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = shares_.find(name);
         if (it != shares_.end()) {
-            return it->second.get();
+            return ptr_of(it->second);
         }
         return nullptr;
     }
@@ -120,7 +129,7 @@ namespace yuan::net::smb
                               name,
                               share
                           ] : shares_) {
-            result.push_back(share.get());
+            result.push_back(ptr_of(share));
         }
         return result;
     }
@@ -133,7 +142,7 @@ namespace yuan::net::smb
                               share
                           ] : shares_) {
             if (share->type() == type) {
-                return share.get();
+                return ptr_of(share);
             }
         }
         return nullptr;

@@ -6,6 +6,15 @@
 
 namespace yuan::timer
 {
+    namespace
+    {
+        template <typename T>
+        T *ptr_of(const std::unique_ptr<T> &owner)
+        {
+            return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+    }
+
     WheelTimerManager::WheelTimerManager()
     {
         count_ = 1000;
@@ -68,7 +77,7 @@ namespace yuan::timer
 
         while (true) {
             auto wheel = std::make_unique<Wheel>(count_, time_unit);
-            auto *wheel_ptr = wheel.get();
+            auto *wheel_ptr = ptr_of(wheel);
             wheels_.push_back(std::move(wheel));
 
             uint64_t remain = timer->get_remain();
@@ -88,7 +97,7 @@ namespace yuan::timer
         for (uint32_t time = 0; time < click; ++time) {
             const std::size_t wheel_count = wheels_.size();
             for (std::size_t i = 0; i < wheel_count; ++i) {
-                Wheel *wheel = wheels_[i].get();
+                Wheel *wheel = ptr_of(wheels_[i]);
                 if (!wheel) {
                     continue;
                 }

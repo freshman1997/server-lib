@@ -5,8 +5,8 @@
 
 namespace yuan::net::http
 {
-    HttpSession::HttpSession(uint64_t id, HttpSessionContext * context, coroutine::RuntimeView runtime)
-        : session_id_(id), context_(context), runtime_(runtime), conn_timer_(nullptr), close_cb_(nullptr)
+    HttpSession::HttpSession(uint64_t id, std::unique_ptr<HttpSessionContext> context, coroutine::RuntimeView runtime)
+        : session_id_(id), context_(std::move(context)), runtime_(runtime), conn_timer_(nullptr), close_cb_(nullptr)
     {
         context_->set_session(this);
 
@@ -31,10 +31,7 @@ namespace yuan::net::http
 
         session_items_.clear();
 
-        if (context_) {
-            delete context_;
-            context_ = nullptr;
-        }
+        context_.reset();
     }
 
     void HttpSession::add_session_value(const std::string & key, int ival)

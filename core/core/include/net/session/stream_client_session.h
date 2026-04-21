@@ -43,6 +43,13 @@ namespace yuan::net
         StreamClientSession(const StreamClientSession &) = delete;
         StreamClientSession &operator=(const StreamClientSession &) = delete;
 
+        void ensure_self_handler_holder()
+        {
+            if (!self_handler_holder_) {
+                self_handler_holder_ = make_non_owning_handler(*this);
+            }
+        }
+
         bool is_connected() const noexcept
         {
             return connection_ != nullptr && connection_->is_connected();
@@ -106,12 +113,13 @@ namespace yuan::net
 
         void bind_connection(std::shared_ptr<Connection> conn, NetworkRuntime &runtime)
         {
+            ensure_self_handler_holder();
             connection_ = conn;
             runtime_ = &runtime;
             event_loop_ = runtime.event_loop();
             timer_manager_ = runtime.timer_manager();
 
-            conn->set_connection_handler(make_non_owning_handler(this));
+            conn->set_connection_handler(self_handler_holder_);
             conn->set_event_handler(event_loop_);
 
             if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
@@ -162,7 +170,8 @@ namespace yuan::net
             event_loop_ = runtime.event_loop();
             timer_manager_ = runtime.timer_manager();
 
-            connection_->set_connection_handler(make_non_owning_handler(this));
+            ensure_self_handler_holder();
+            connection_->set_connection_handler(self_handler_holder_);
             co_return true;
         }
 
@@ -260,6 +269,7 @@ namespace yuan::net
         timer::TimerManager *timer_manager_ = nullptr;
         timer::Timer *timeout_timer_ = nullptr;
         coroutine::CompletionEvent completion_event_;
+        std::shared_ptr<ConnectionHandler> self_handler_holder_;
 
         ReadCallback read_cb_;
         ConnectedCallback connected_cb_;

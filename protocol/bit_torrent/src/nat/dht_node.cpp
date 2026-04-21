@@ -179,7 +179,7 @@ namespace yuan::net::bit_torrent
             return false;
         }
 
-        runtime_->register_acceptor(acceptor_.get(), make_non_owning_handler(this), acceptor_->endpoint_channel());
+        runtime_->register_acceptor(acceptor_, make_non_owning_handler(this), acceptor_->endpoint_channel());
 
         port_ = bind_port;
         running_ = true;

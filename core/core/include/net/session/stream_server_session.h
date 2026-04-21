@@ -169,9 +169,8 @@ namespace yuan::net
                 return false;
             }
 
-            Socket *sock = new Socket(host.c_str(), port);
+            auto sock = std::make_unique<Socket>(host.c_str(), port);
             if (!sock->valid()) {
-                delete sock;
                 return false;
             }
 
@@ -182,11 +181,10 @@ namespace yuan::net
 #endif
             sock->set_none_block(true);
             if (!sock->bind()) {
-                delete sock;
                 return false;
             }
 
-            acceptor_.reset(create_stream_acceptor(sock));
+            acceptor_.reset(create_stream_acceptor(sock.release()));
             if (!acceptor_->listen()) {
                 acceptor_.reset();
                 return false;
@@ -196,7 +194,7 @@ namespace yuan::net
                 acceptor_->set_ssl_module(ssl_module_);
             }
 
-            acceptor_->set_connection_handler(make_non_owning_handler(this));
+            acceptor_->set_connection_handler(self_handler_holder_);
             acceptor_->set_event_handler(loop);
             if (auto *channel = acceptor_->listener_channel()) {
                 loop->update_channel(channel);
@@ -207,6 +205,7 @@ namespace yuan::net
         NetworkRuntime *runtime_ = nullptr;
         std::unique_ptr<StreamAcceptor> acceptor_;
         std::shared_ptr<SSLModule> ssl_module_;
+        std::shared_ptr<ConnectionHandler> self_handler_holder_{ make_non_owning_handler(*this) };
 
         ConnectedCallback connected_cb_;
         ReadCallback read_cb_;

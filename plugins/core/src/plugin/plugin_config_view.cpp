@@ -16,7 +16,7 @@ const nlohmann::json *resolve_path(const std::shared_ptr<const nlohmann::json> &
         return nullptr;
     }
 
-    const nlohmann::json *current = config.get();
+    const nlohmann::json *current = config ? &*config : nullptr;
     if (path.empty()) {
         return current;
     }
@@ -112,7 +112,7 @@ std::string PluginConfigView::dump(int indent) const
 
 const nlohmann::json *PluginConfigView::raw() const
 {
-    return config_.get();
+    return config_ ? &*config_ : nullptr;
 }
 
 } // namespace yuan::plugin

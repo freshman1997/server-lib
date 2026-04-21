@@ -65,9 +65,24 @@ namespace yuan::net
         void register_connection(const std::shared_ptr<Connection> &conn, std::shared_ptr<ConnectionHandler> handler);
         void register_connection(Connection *conn, std::shared_ptr<ConnectionHandler> handler);
 
-        void register_connector(Connector *connector, ConnectorHandler *handler);
+        void register_connector(Connector *connector, std::shared_ptr<ConnectorHandler> handler);
+
+        template<typename ConnectorT>
+        void register_connector(const std::unique_ptr<ConnectorT> &connector,
+                                std::shared_ptr<ConnectorHandler> handler)
+        {
+            register_connector(static_cast<Connector *>(connector ? &*connector : nullptr), std::move(handler));
+        }
 
         void register_acceptor(Acceptor *acceptor, std::shared_ptr<ConnectionHandler> handler, Channel *channel = nullptr);
+
+        template<typename AcceptorT>
+        void register_acceptor(const std::unique_ptr<AcceptorT> &acceptor,
+                               std::shared_ptr<ConnectionHandler> handler,
+                               Channel *channel = nullptr)
+        {
+            register_acceptor(static_cast<Acceptor *>(acceptor ? &*acceptor : nullptr), std::move(handler), channel);
+        }
 
         void update_channel(Channel *channel);
 

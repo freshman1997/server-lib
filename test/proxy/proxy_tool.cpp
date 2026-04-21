@@ -918,12 +918,12 @@ int main(int argc, char **argv)
         std::signal(SIGPIPE, SIG_IGN);
 #endif
 
-        //if (argc < 2) {
-        //    print_usage();
-        //    return 1;
-        //}
+        if (argc < 2) {
+            print_usage();
+            return 1;
+        }
 
-        const std::string command = "http-proxy";//argv[1];
+        const std::string command = argv[1];
         int code = 0;
         if (command == "serve") {
             const uint16_t port = argc >= 3 ? static_cast<uint16_t>(std::stoi(argv[2])) : 1080;

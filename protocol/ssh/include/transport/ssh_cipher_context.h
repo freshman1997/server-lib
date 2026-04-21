@@ -58,27 +58,27 @@ namespace yuan::net::ssh
 
         SshCipher *server_cipher() const
         {
-            return server_cipher_.get();
+            return server_cipher_ ? &*server_cipher_ : nullptr;
         }
         SshCipher *client_cipher() const
         {
-            return client_cipher_.get();
+            return client_cipher_ ? &*client_cipher_ : nullptr;
         }
         SshMac *server_mac() const
         {
-            return server_mac_.get();
+            return server_mac_ ? &*server_mac_ : nullptr;
         }
         SshMac *client_mac() const
         {
-            return client_mac_.get();
+            return client_mac_ ? &*client_mac_ : nullptr;
         }
         SshCompression *server_compressor() const
         {
-            return server_compressor_.get();
+            return server_compressor_ ? &*server_compressor_ : nullptr;
         }
         SshCompression *client_compressor() const
         {
-            return client_compressor_.get();
+            return client_compressor_ ? &*client_compressor_ : nullptr;
         }
 
         uint8_t calculate_padding_length(size_t payload_len) const;
