@@ -13,11 +13,6 @@ namespace yuan::net::mqtt
             return owner ? const_cast<T *>(&*owner) : nullptr;
         }
 
-        template <typename T>
-        T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
     }
 
     static std::atomic<uint64_t> global_session_id{ 1 };
@@ -111,7 +106,7 @@ namespace yuan::net::mqtt
 
     MqttSession &MqttSessionManager::create_session(TcpConnection * conn)
     {
-        auto session = std::make_unique<MqttSession>(conn);
+        auto session = std::make_shared<MqttSession>(conn);
         auto &ref = *session;
         sessions_[ref.session_id()] = std::move(session);
         return ref;
@@ -119,10 +114,16 @@ namespace yuan::net::mqtt
 
     MqttSession &MqttSessionManager::create_session(const std::shared_ptr<TcpConnection> &conn)
     {
-        auto session = std::make_unique<MqttSession>(conn);
+        auto session = create_session_owner(conn);
+        return *session;
+    }
+
+    std::shared_ptr<MqttSession> MqttSessionManager::create_session_owner(const std::shared_ptr<TcpConnection> &conn)
+    {
+        auto session = std::make_shared<MqttSession>(conn);
         auto &ref = *session;
-        sessions_[ref.session_id()] = std::move(session);
-        return ref;
+        sessions_[ref.session_id()] = session;
+        return session;
     }
 
     void MqttSessionManager::bind_client_id(MqttSession & session, const std::string & client_id)
@@ -141,8 +142,12 @@ namespace yuan::net::mqtt
         auto it = sessions_.find(sid);
         if (it != sessions_.end()) {
             const auto &client_id = it->second->client_id();
-            if (!client_id.empty())
-                client_id_index_.erase(client_id);
+            if (!client_id.empty()) {
+                auto idx_it = client_id_index_.find(client_id);
+                if (idx_it != client_id_index_.end() && idx_it->second == sid) {
+                    client_id_index_.erase(idx_it);
+                }
+            }
             sessions_.erase(it);
         }
     }

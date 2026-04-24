@@ -27,7 +27,11 @@ namespace yuan::net
 
         virtual void write(const ::yuan::buffer::ByteBuffer &buffer);
 
+        virtual void write_owned(::yuan::buffer::ByteBuffer buffer) override;
+
         virtual void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer);
+
+        virtual void write_owned_and_flush(::yuan::buffer::ByteBuffer buffer) override;
 
         virtual void flush();
 

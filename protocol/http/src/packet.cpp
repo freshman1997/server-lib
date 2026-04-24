@@ -503,6 +503,23 @@ namespace yuan::net::http
         return span.empty() ? std::string() : std::string(span.data(), span.size());
     }
 
+    const char *HttpPacket::body_buffer_begin() const
+    {
+        return buffer_.readable_bytes() > 0 ? buffer_.read_ptr() : nullptr;
+    }
+
+    const char *HttpPacket::body_buffer_end() const
+    {
+        return buffer_.readable_bytes() > 0 ? buffer_.read_ptr() + buffer_.readable_bytes() : nullptr;
+    }
+
+    yuan::buffer::ByteBuffer HttpPacket::take_body_output_buffer()
+    {
+        auto body = std::move(buffer_);
+        buffer_ = yuan::buffer::ByteBuffer{};
+        return body;
+    }
+
     void HttpPacket::pack_and_send(Connection * conn)
     {
         assert(conn);

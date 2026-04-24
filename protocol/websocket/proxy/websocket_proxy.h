@@ -13,7 +13,7 @@
 
 namespace yuan::net::http
 {
-    class HttpProxy;
+    class HttpProxyHandler;
     class HttpServer;
 }
 
@@ -33,7 +33,7 @@ namespace yuan::net::websocket
     public:
         using Ptr = std::shared_ptr<WebSocketProxy>;
 
-        WebSocketProxy(http::HttpProxy *http_proxy, http::HttpServer *server);
+        WebSocketProxy(http::HttpProxyHandler *http_proxy, http::HttpServer *server);
         ~WebSocketProxy() = default;
 
         WebSocketProxy(const WebSocketProxy &) = delete;
@@ -47,7 +47,7 @@ namespace yuan::net::websocket
             const std::string &subproto,
             ::yuan::buffer::ByteBuffer client_leftover);
 
-        static void install(http::HttpServer &server, http::HttpProxy &proxy);
+        static void install(http::HttpServer &server, http::HttpProxyHandler &proxy);
 
     private:
         coroutine::Task<HandshakeBackendResult> handshake_backend(
@@ -70,7 +70,7 @@ namespace yuan::net::websocket
             uint8_t opcode,
             const ::yuan::buffer::ByteBuffer &payload);
 
-        http::HttpProxy *http_proxy_;
+        http::HttpProxyHandler *http_proxy_;
         http::HttpServer *server_;
         WebSocketConfigManager server_config_;
         WebSocketConfigManager client_config_;

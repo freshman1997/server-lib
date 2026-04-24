@@ -19,6 +19,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
@@ -43,6 +44,15 @@
 
 namespace
 {
+    constexpr std::size_t kProxyStreamReadBufferBytes = 64 * 1024;
+
+    void tune_proxy_stream_connection(const std::shared_ptr<yuan::net::Connection> &connection)
+    {
+        if (connection) {
+            connection->set_max_packet_size(kProxyStreamReadBufferBytes);
+        }
+    }
+
     uint64_t current_process_working_set_bytes()
     {
 #if defined(_WIN32)
@@ -654,6 +664,7 @@ namespace
         }
         yuan::net::Connection *src = src_ref.get();
         yuan::net::Connection *dst = dst_ref.get();
+        const bool plain_http_downstream = !client_to_upstream && state->method != "CONNECT";
 
         while (!state->closed.load(std::memory_order_acquire) && src->is_connected() && dst->is_connected()) {
             auto read_result = co_await runtime.read(src, idle_timeout_ms);
@@ -675,6 +686,9 @@ namespace
                 if (dst) {
                     (void)dst->shutdown_write();
                 }
+                if (plain_http_downstream) {
+                    close_relay_state(state, "upstream_closed");
+                }
                 co_return;
             }
 
@@ -695,6 +709,9 @@ namespace
                     }
                     if (dst) {
                         (void)dst->shutdown_write();
+                    }
+                    if (plain_http_downstream) {
+                        close_relay_state(state, "upstream_closed");
                     }
                     co_return;
                 }
@@ -733,6 +750,9 @@ namespace
                 }
                 if (dst) {
                     (void)dst->shutdown_write();
+                }
+                if (plain_http_downstream) {
+                    close_relay_state(state, "upstream_closed");
                 }
                 co_return;
             }
@@ -1014,6 +1034,8 @@ namespace
                 ctx.close();
                 co_return;
             }
+
+            tune_proxy_stream_connection(connect_result.connection);
 
             if (on_upstream_ready) {
                 on_upstream_ready(connect_result.connection);
@@ -1718,6 +1740,7 @@ namespace yuan::server
                 if (!conn) {
                     break;
                 }
+                tune_proxy_stream_connection(conn);
 
                 const uint64_t session_id = next_session_id_.fetch_add(1, std::memory_order_relaxed);
                 const std::string client_addr = format_remote_address(conn->get_remote_address());

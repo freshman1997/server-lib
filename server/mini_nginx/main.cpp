@@ -439,7 +439,7 @@ namespace
         }
     }
 
-    void install_routes(yuan::net::http::HttpProxy *proxy, const std::vector<nlohmann::json> &routes)
+    void install_routes(yuan::net::http::HttpProxyHandler *proxy, const std::vector<nlohmann::json> &routes)
     {
         if (!proxy) {
             return;
@@ -580,7 +580,7 @@ namespace
         std::cout << "access log enabled: " << cfg.access_log_path << '\n';
     }
 
-    bool reload_routes(yuan::net::http::HttpProxy *proxy,
+    bool reload_routes(yuan::net::http::HttpProxyHandler *proxy,
                        const std::string &config_path,
                        MiniNginxConfig &active_cfg)
     {

@@ -105,6 +105,9 @@ namespace yuan::net
                 channel_->clear_handler();
             }
         }
+        if (conn_handler_owner_) {
+            conn_handler_owner_->on_close(std::shared_ptr<Connection>{});
+        }
     }
 
     void TcpAcceptor::update_channel()

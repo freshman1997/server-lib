@@ -1,4 +1,6 @@
 #include "http_server.h"
+#include "http2/hpack_decoder.h"
+#include "http2/hpack_encoder.h"
 #include "request.h"
 #include "response.h"
 #include "http_service.h"
@@ -8,8 +10,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -331,6 +336,151 @@ namespace
         out.append(value);
     }
 
+    std::string hpack_headers(std::initializer_list<std::pair<std::string_view, std::string_view>> headers)
+    {
+        yuan::net::http::http2::HpackEncoder encoder;
+        std::vector<std::uint8_t> block;
+        for (const auto &[name, value] : headers) {
+            encoder.encode_header(block, name, value);
+        }
+        return std::string(reinterpret_cast<const char *>(block.data()), block.size());
+    }
+
+    std::string h2_frame(std::uint8_t type, std::uint8_t flags, std::uint32_t stream_id, const std::string &payload)
+    {
+        std::string frame;
+        frame.resize(9 + payload.size());
+        frame[0] = static_cast<char>((payload.size() >> 16) & 0xff);
+        frame[1] = static_cast<char>((payload.size() >> 8) & 0xff);
+        frame[2] = static_cast<char>(payload.size() & 0xff);
+        frame[3] = static_cast<char>(type);
+        frame[4] = static_cast<char>(flags);
+        frame[5] = static_cast<char>((stream_id >> 24) & 0x7f);
+        frame[6] = static_cast<char>((stream_id >> 16) & 0xff);
+        frame[7] = static_cast<char>((stream_id >> 8) & 0xff);
+        frame[8] = static_cast<char>(stream_id & 0xff);
+        if (!payload.empty()) {
+            std::memcpy(frame.data() + 9, payload.data(), payload.size());
+        }
+        return frame;
+    }
+
+    std::string h2_window_update(std::uint32_t stream_id, std::uint32_t increment)
+    {
+        std::string payload;
+        payload.resize(4);
+        payload[0] = static_cast<char>((increment >> 24) & 0x7f);
+        payload[1] = static_cast<char>((increment >> 16) & 0xff);
+        payload[2] = static_cast<char>((increment >> 8) & 0xff);
+        payload[3] = static_cast<char>(increment & 0xff);
+        return h2_frame(0x08, 0x00, stream_id, payload);
+    }
+
+    std::optional<std::string> h2_header_value(const std::string &payload, std::string_view name)
+    {
+        yuan::net::http::http2::HpackDecoder decoder;
+        std::vector<std::uint8_t> block(payload.begin(), payload.end());
+        std::vector<yuan::net::http::http2::HpackHeaderField> fields;
+        if (!decoder.decode(block, fields)) {
+            return std::nullopt;
+        }
+        for (const auto &field : fields) {
+            if (field.name == name) {
+                return field.value;
+            }
+        }
+        return std::nullopt;
+    }
+
+    void dump_http2_frames(std::string_view label, const std::vector<std::pair<std::string, std::string>> &frames)
+    {
+        std::cerr << "[DEBUG] " << label << " received " << frames.size() << " frame(s)\n";
+        for (std::size_t i = 0; i < frames.size(); ++i) {
+            const auto &h = frames[i].first;
+            if (h.size() < 9) {
+                std::cerr << "[DEBUG]   #" << i << " short header len=" << h.size() << "\n";
+                continue;
+            }
+            const std::size_t len =
+                (static_cast<std::size_t>(static_cast<unsigned char>(h[0])) << 16) |
+                (static_cast<std::size_t>(static_cast<unsigned char>(h[1])) << 8) |
+                static_cast<std::size_t>(static_cast<unsigned char>(h[2]));
+            const auto type = static_cast<unsigned char>(h[3]);
+            const auto flags = static_cast<unsigned char>(h[4]);
+            const std::uint32_t stream_id =
+                (static_cast<std::uint32_t>(static_cast<unsigned char>(h[5]) & 0x7f) << 24) |
+                (static_cast<std::uint32_t>(static_cast<unsigned char>(h[6])) << 16) |
+                (static_cast<std::uint32_t>(static_cast<unsigned char>(h[7])) << 8) |
+                static_cast<std::uint32_t>(static_cast<unsigned char>(h[8]));
+            std::cerr << "[DEBUG]   #" << i
+                      << " type=" << static_cast<int>(type)
+                      << " flags=0x" << std::hex << static_cast<int>(flags) << std::dec
+                      << " stream=" << stream_id
+                      << " len=" << len
+                      << " payload=" << frames[i].second.size()
+                      << "\n";
+        }
+    }
+
+    std::optional<std::string> hpack_field_value(const std::vector<yuan::net::http::http2::HpackHeaderField> &fields,
+                                                 std::string_view name)
+    {
+        for (const auto &field : fields) {
+            if (field.name == name) {
+                return field.value;
+            }
+        }
+        return std::nullopt;
+    }
+
+    void test_hpack_decoder_regressions()
+    {
+        using yuan::net::http::http2::HpackDecoder;
+        using yuan::net::http::http2::HpackEncoder;
+        using yuan::net::http::http2::HpackHeaderField;
+
+        const std::vector<std::uint8_t> python_hpack_sample = {
+            0x82, 0x44, 0x86, 0x60, 0x75, 0x99, 0x84, 0x95,
+            0x09, 0x87, 0x41, 0x8a, 0xa0, 0xe4, 0x1d, 0x13,
+            0x9d, 0x09, 0xb8, 0xf0, 0x1e, 0x07,
+        };
+
+        HpackDecoder decoder;
+        std::vector<HpackHeaderField> fields;
+        check(decoder.decode(python_hpack_sample, fields), "HPACK decoder should decode known Huffman sample");
+        check(fields.size() == 4, "HPACK decoder sample should contain 4 fields");
+        check(hpack_field_value(fields, ":method") == std::optional<std::string>("GET"),
+              "HPACK decoder sample should decode :method");
+        check(hpack_field_value(fields, ":path") == std::optional<std::string>("/api/test"),
+              "HPACK decoder sample should decode :path");
+        check(hpack_field_value(fields, ":scheme") == std::optional<std::string>("https"),
+              "HPACK decoder sample should decode :scheme");
+        check(hpack_field_value(fields, ":authority") == std::optional<std::string>("localhost:8080"),
+              "HPACK decoder sample should decode :authority");
+
+        HpackEncoder encoder;
+        std::vector<std::uint8_t> roundtrip;
+        encoder.encode_header(roundtrip, ":method", "POST");
+        encoder.encode_header(roundtrip, ":path", "/__h2_echo");
+        encoder.encode_header(roundtrip, ":authority", "local.test");
+        encoder.encode_header(roundtrip, "x-repeat", "alpha-value");
+        encoder.encode_header(roundtrip, "x-repeat", "alpha-value");
+
+        HpackDecoder roundtrip_decoder;
+        fields.clear();
+        check(roundtrip_decoder.decode(roundtrip, fields), "HPACK decoder should decode encoder roundtrip");
+        check(fields.size() == 5, "HPACK encoder roundtrip should contain 5 fields");
+        check(hpack_field_value(fields, ":method") == std::optional<std::string>("POST"),
+              "HPACK encoder roundtrip should decode :method");
+        check(hpack_field_value(fields, ":path") == std::optional<std::string>("/__h2_echo"),
+              "HPACK encoder roundtrip should decode :path");
+        check(hpack_field_value(fields, ":authority") == std::optional<std::string>("local.test"),
+              "HPACK encoder roundtrip should decode :authority");
+        check(fields[3].name == "x-repeat" && fields[3].value == "alpha-value" &&
+                  fields[4].name == "x-repeat" && fields[4].value == "alpha-value",
+              "HPACK decoder should resolve dynamic table indexed references");
+    }
+
     void test_http_caps_and_proxy_stats(uint16_t port)
     {
         const std::string caps = http_get(port, "/__http_caps");
@@ -488,6 +638,71 @@ namespace
         const unsigned char flags = static_cast<unsigned char>(hdr[4]);
         check(type == 0x04, "http/2 response frame should be SETTINGS");
         check((flags & 0x01) != 0, "http/2 response SETTINGS should carry ACK");
+
+        std::error_code ec;
+        std::filesystem::remove("http.json", ec);
+        (void)yuan::net::http::HttpConfigManager::get_instance()->reload_config();
+        yuan::net::http::config::load_config();
+    }
+
+    void test_http2_fragmented_preface_settings_ack(uint16_t port)
+    {
+        nlohmann::json cfg;
+        cfg["enable_http2"] = true;
+        cfg["enable_http3"] = false;
+        {
+            std::ofstream out("http.json", std::ios::binary);
+            out << cfg.dump(2);
+        }
+        (void)yuan::net::http::HttpConfigManager::get_instance()->reload_config();
+        yuan::net::http::config::load_config();
+
+        socket_t s = connect_loopback(port);
+        check(s != kInvalidSocket, "http/2 fragmented preface test should connect");
+        if (s == kInvalidSocket) {
+            return;
+        }
+
+        const std::string preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+        std::string settings;
+        settings.resize(9);
+        settings[0] = 0;
+        settings[1] = 0;
+        settings[2] = 0;
+        settings[3] = 0x04;
+        settings[4] = 0x00;
+        settings[5] = 0x00;
+        settings[6] = 0x00;
+        settings[7] = 0x00;
+        settings[8] = 0x00;
+
+        const std::string first = preface.substr(0, 19);
+        const std::string second = preface.substr(19) + settings;
+        if (!send_all(s, first)) {
+            close_socket(s);
+            check(false, "http/2 fragmented preface test should send first chunk");
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!send_all(s, second)) {
+            close_socket(s);
+            check(false, "http/2 fragmented preface test should send second chunk");
+            return;
+        }
+
+        skip_server_settings(s);
+
+        std::string hdr;
+        std::string payload;
+        const bool got = recv_http2_frame(s, hdr, payload);
+        check(got, "http/2 fragmented preface test should receive frame");
+        close_socket(s);
+        if (got) {
+            check(static_cast<unsigned char>(hdr[3]) == 0x04,
+                  "http/2 fragmented preface response should be SETTINGS");
+            check((static_cast<unsigned char>(hdr[4]) & 0x01) != 0,
+                  "http/2 fragmented preface response SETTINGS should carry ACK");
+        }
 
         std::error_code ec;
         std::filesystem::remove("http.json", ec);
@@ -904,33 +1119,14 @@ namespace
         settings[7] = 0x00;
         settings[8] = 0x00;
 
-        std::string headers_payload = ":method: POST\r\n:path: /h2-bridge\r\n";
-        std::string headers;
-        headers.resize(9 + headers_payload.size());
-        headers[0] = static_cast<char>((headers_payload.size() >> 16) & 0xff);
-        headers[1] = static_cast<char>((headers_payload.size() >> 8) & 0xff);
-        headers[2] = static_cast<char>(headers_payload.size() & 0xff);
-        headers[3] = 0x01;
-        headers[4] = 0x00;
-        headers[5] = 0x00;
-        headers[6] = 0x00;
-        headers[7] = 0x00;
-        headers[8] = 0x01;
-        std::memcpy(headers.data() + 9, headers_payload.data(), headers_payload.size());
-
-        std::string cont_payload = ":authority: local.test\r\n";
-        std::string cont;
-        cont.resize(9 + cont_payload.size());
-        cont[0] = static_cast<char>((cont_payload.size() >> 16) & 0xff);
-        cont[1] = static_cast<char>((cont_payload.size() >> 8) & 0xff);
-        cont[2] = static_cast<char>(cont_payload.size() & 0xff);
-        cont[3] = 0x09;
-        cont[4] = 0x04;
-        cont[5] = 0x00;
-        cont[6] = 0x00;
-        cont[7] = 0x00;
-        cont[8] = 0x01;
-        std::memcpy(cont.data() + 9, cont_payload.data(), cont_payload.size());
+        const std::string header_block = hpack_headers({
+            {":method", "POST"},
+            {":path", "/h2-bridge"},
+            {":authority", "local.test"},
+        });
+        const std::size_t split = header_block.size() / 2;
+        const std::string headers = h2_frame(0x01, 0x00, 1, header_block.substr(0, split));
+        const std::string cont = h2_frame(0x09, 0x04, 1, header_block.substr(split));
 
         const std::string body = "hello-h2-body";
         std::string data;
@@ -1004,19 +1200,11 @@ namespace
         settings[7] = 0x00;
         settings[8] = 0x00;
 
-        std::string headers_payload = ":method: POST\r\n:path: /__h2_echo\r\n:authority: local.test\r\n";
-        std::string headers;
-        headers.resize(9 + headers_payload.size());
-        headers[0] = static_cast<char>((headers_payload.size() >> 16) & 0xff);
-        headers[1] = static_cast<char>((headers_payload.size() >> 8) & 0xff);
-        headers[2] = static_cast<char>(headers_payload.size() & 0xff);
-        headers[3] = 0x01;
-        headers[4] = 0x04;
-        headers[5] = 0x00;
-        headers[6] = 0x00;
-        headers[7] = 0x00;
-        headers[8] = 0x01;
-        std::memcpy(headers.data() + 9, headers_payload.data(), headers_payload.size());
+        const std::string headers = h2_frame(0x01, 0x04, 1, hpack_headers({
+            {":method", "POST"},
+            {":path", "/__h2_echo"},
+            {":authority", "local.test"},
+        }));
 
         const std::string body = "echo-body-xyz";
         std::string data;
@@ -1064,6 +1252,7 @@ namespace
         if (idx_settings == static_cast<std::size_t>(-1) ||
             idx_headers == static_cast<std::size_t>(-1) ||
             idx_data == static_cast<std::size_t>(-1)) {
+            dump_http2_frames("h2 echo", frames);
             check(false, "http/2 minimal response echo should receive at least 3 frames");
             return;
         }
@@ -1128,19 +1317,11 @@ namespace
         settings[7] = 0x00;
         settings[8] = 0x00;
 
-        std::string headers_payload = ":method: GET\r\n:path: /__http_caps\r\n:authority: local.test\r\n";
-        std::string headers;
-        headers.resize(9 + headers_payload.size());
-        headers[0] = static_cast<char>((headers_payload.size() >> 16) & 0xff);
-        headers[1] = static_cast<char>((headers_payload.size() >> 8) & 0xff);
-        headers[2] = static_cast<char>(headers_payload.size() & 0xff);
-        headers[3] = 0x01;
-        headers[4] = 0x05;
-        headers[5] = 0x00;
-        headers[6] = 0x00;
-        headers[7] = 0x00;
-        headers[8] = 0x01;
-        std::memcpy(headers.data() + 9, headers_payload.data(), headers_payload.size());
+        const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
+            {":method", "GET"},
+            {":path", "/__http_caps"},
+            {":authority", "local.test"},
+        }));
 
         if (!send_all(s, preface + settings + headers)) {
             close_socket(s);
@@ -1174,6 +1355,7 @@ namespace
         if (idx_settings == static_cast<std::size_t>(-1) ||
             idx_headers == static_cast<std::size_t>(-1) ||
             idx_data == static_cast<std::size_t>(-1)) {
+            dump_http2_frames("h2 caps", frames);
             check(false, "http/2 minimal response caps should receive at least 3 frames");
             return;
         }
@@ -1190,6 +1372,177 @@ namespace
               "caps DATA should set END_STREAM");
         check(p3.find("\"http2\":true") != std::string::npos,
               "caps data should indicate http2 enabled");
+
+        std::error_code ec;
+        std::filesystem::remove("http.json", ec);
+        (void)yuan::net::http::HttpConfigManager::get_instance()->reload_config();
+        yuan::net::http::config::load_config();
+    }
+
+    void test_http2_large_response_data_split(uint16_t port)
+    {
+        nlohmann::json cfg;
+        cfg["enable_http2"] = true;
+        cfg["enable_http3"] = false;
+        {
+            std::ofstream out("http.json", std::ios::binary);
+            out << cfg.dump(2);
+        }
+        (void)yuan::net::http::HttpConfigManager::get_instance()->reload_config();
+        yuan::net::http::config::load_config();
+
+        socket_t s = connect_loopback(port);
+        check(s != kInvalidSocket, "http/2 large response test should connect");
+        if (s == kInvalidSocket) {
+            return;
+        }
+
+        const std::string preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+        std::string settings;
+        settings.resize(9);
+        settings[0] = 0;
+        settings[1] = 0;
+        settings[2] = 0;
+        settings[3] = 0x04;
+        settings[4] = 0x00;
+        settings[5] = 0x00;
+        settings[6] = 0x00;
+        settings[7] = 0x00;
+        settings[8] = 0x00;
+
+        const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
+            {":method", "GET"},
+            {":path", "/__h2_large"},
+            {":authority", "local.test"},
+        }));
+
+        if (!send_all(s, preface + settings + headers)) {
+            close_socket(s);
+            check(false, "http/2 large response test should send bytes");
+            return;
+        }
+
+        std::vector<std::pair<std::string, std::string>> frames;
+        const bool got = recv_http2_frames(s, 16, frames);
+        close_socket(s);
+        check(got, "http/2 large response test should receive frames");
+        if (!got) {
+            return;
+        }
+
+        std::size_t idx_headers = static_cast<std::size_t>(-1);
+        std::size_t data_frames = 0;
+        std::size_t data_bytes = 0;
+        bool saw_end_stream = false;
+        for (std::size_t i = 0; i < frames.size(); ++i) {
+            const auto t = static_cast<unsigned char>(frames[i].first[3]);
+            const auto fl = static_cast<unsigned char>(frames[i].first[4]);
+            if (idx_headers == static_cast<std::size_t>(-1) && t == 0x01) {
+                idx_headers = i;
+            } else if (t == 0x00) {
+                ++data_frames;
+                data_bytes += frames[i].second.size();
+                saw_end_stream = saw_end_stream || ((fl & 0x01) != 0);
+            }
+        }
+
+        check(idx_headers != static_cast<std::size_t>(-1), "http/2 large response should include HEADERS");
+        if (idx_headers != static_cast<std::size_t>(-1)) {
+            const auto status = h2_header_value(frames[idx_headers].second, ":status");
+            check(status && *status == "200", "http/2 large response should return 200");
+        }
+        check(data_frames >= 2, "http/2 large response should be split into multiple DATA frames");
+        check(data_bytes == 60000, "http/2 large response should deliver full body");
+        check(saw_end_stream, "http/2 large response final DATA should set END_STREAM");
+
+        std::error_code ec;
+        std::filesystem::remove("http.json", ec);
+        (void)yuan::net::http::HttpConfigManager::get_instance()->reload_config();
+        yuan::net::http::config::load_config();
+    }
+
+    void test_http2_window_update_flushes_pending_data(uint16_t port)
+    {
+        nlohmann::json cfg;
+        cfg["enable_http2"] = true;
+        cfg["enable_http3"] = false;
+        {
+            std::ofstream out("http.json", std::ios::binary);
+            out << cfg.dump(2);
+        }
+        (void)yuan::net::http::HttpConfigManager::get_instance()->reload_config();
+        yuan::net::http::config::load_config();
+
+        socket_t s = connect_loopback(port);
+        check(s != kInvalidSocket, "http/2 WINDOW_UPDATE pending data test should connect");
+        if (s == kInvalidSocket) {
+            return;
+        }
+
+        const std::string preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+        std::string settings;
+        settings.resize(9);
+        settings[0] = 0;
+        settings[1] = 0;
+        settings[2] = 0;
+        settings[3] = 0x04;
+        settings[4] = 0x00;
+        settings[5] = 0x00;
+        settings[6] = 0x00;
+        settings[7] = 0x00;
+        settings[8] = 0x00;
+
+        const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
+            {":method", "GET"},
+            {":path", "/__h2_window"},
+            {":authority", "local.test"},
+        }));
+
+        if (!send_all(s, preface + settings + headers)) {
+            close_socket(s);
+            check(false, "http/2 WINDOW_UPDATE pending data test should send bytes");
+            return;
+        }
+
+        std::size_t data_bytes = 0;
+        std::size_t data_frames = 0;
+        bool sent_update = false;
+        bool saw_end_stream = false;
+        bool saw_headers = false;
+
+        for (int i = 0; i < 20 && !saw_end_stream; ++i) {
+            std::string hdr;
+            std::string payload;
+            if (!recv_http2_frame(s, hdr, payload)) {
+                break;
+            }
+            const auto type = static_cast<unsigned char>(hdr[3]);
+            const auto flags = static_cast<unsigned char>(hdr[4]);
+            if (type == 0x01) {
+                saw_headers = true;
+                const auto status = h2_header_value(payload, ":status");
+                check(status && *status == "200", "http/2 WINDOW_UPDATE pending data should return 200");
+            } else if (type == 0x00) {
+                ++data_frames;
+                data_bytes += payload.size();
+                saw_end_stream = (flags & 0x01) != 0;
+                if (!sent_update) {
+                    const std::string update = h2_window_update(0, 10000) + h2_window_update(1, 10000);
+                    if (!send_all(s, update)) {
+                        check(false, "http/2 WINDOW_UPDATE pending data test should send WINDOW_UPDATE");
+                        break;
+                    }
+                    sent_update = true;
+                }
+            }
+        }
+        close_socket(s);
+
+        check(saw_headers, "http/2 WINDOW_UPDATE pending data should receive HEADERS");
+        check(sent_update, "http/2 WINDOW_UPDATE pending data should send window increments");
+        check(data_frames >= 5, "http/2 WINDOW_UPDATE pending data should receive multiple DATA frames");
+        check(data_bytes == 70000, "http/2 WINDOW_UPDATE pending data should deliver full body");
+        check(saw_end_stream, "http/2 WINDOW_UPDATE pending data should end stream");
 
         std::error_code ec;
         std::filesystem::remove("http.json", ec);
@@ -1228,19 +1581,11 @@ namespace
         settings[7] = 0x00;
         settings[8] = 0x00;
 
-        std::string headers_payload = ":method: GET\r\n:path: /__h2_unknown_path\r\n:authority: local.test\r\n";
-        std::string headers;
-        headers.resize(9 + headers_payload.size());
-        headers[0] = static_cast<char>((headers_payload.size() >> 16) & 0xff);
-        headers[1] = static_cast<char>((headers_payload.size() >> 8) & 0xff);
-        headers[2] = static_cast<char>(headers_payload.size() & 0xff);
-        headers[3] = 0x01;
-        headers[4] = 0x05;
-        headers[5] = 0x00;
-        headers[6] = 0x00;
-        headers[7] = 0x00;
-        headers[8] = 0x01;
-        std::memcpy(headers.data() + 9, headers_payload.data(), headers_payload.size());
+        const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
+            {":method", "GET"},
+            {":path", "/__h2_unknown_path"},
+            {":authority", "local.test"},
+        }));
 
         if (!send_all(s, preface + settings + headers)) {
             close_socket(s);
@@ -1269,9 +1614,8 @@ namespace
 
         check(idx_headers != static_cast<std::size_t>(-1), "http/2 unknown path should include HEADERS frame");
         if (idx_headers != static_cast<std::size_t>(-1)) {
-            const auto &headers_payload_resp = frames[idx_headers].second;
-            check(headers_payload_resp.find(":status: 404") != std::string::npos ||
-                  (!headers_payload_resp.empty() && static_cast<unsigned char>(headers_payload_resp[0]) == 0x8d),
+            const auto status = h2_header_value(frames[idx_headers].second, ":status");
+            check(status && *status == "404",
                   "http/2 unknown path should return 404 status in headers");
         }
         if (idx_data != static_cast<std::size_t>(-1)) {
@@ -1321,19 +1665,11 @@ namespace
         settings[7] = 0x00;
         settings[8] = 0x00;
 
-        std::string headers_payload = ":method: GET\r\n:path: /__h2_extra\r\n:authority: local.test\r\n";
-        std::string headers;
-        headers.resize(9 + headers_payload.size());
-        headers[0] = static_cast<char>((headers_payload.size() >> 16) & 0xff);
-        headers[1] = static_cast<char>((headers_payload.size() >> 8) & 0xff);
-        headers[2] = static_cast<char>(headers_payload.size() & 0xff);
-        headers[3] = 0x01;
-        headers[4] = 0x05;
-        headers[5] = 0x00;
-        headers[6] = 0x00;
-        headers[7] = 0x00;
-        headers[8] = 0x01;
-        std::memcpy(headers.data() + 9, headers_payload.data(), headers_payload.size());
+        const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
+            {":method", "GET"},
+            {":path", "/__h2_extra"},
+            {":authority", "local.test"},
+        }));
 
         if (!send_all(s, preface + settings + headers)) {
             close_socket(s);
@@ -1358,9 +1694,8 @@ namespace
             }
         }
         if (idx_headers != static_cast<std::size_t>(-1)) {
-            const auto &headers_payload_resp = frames[idx_headers].second;
-            check(headers_payload_resp.find(":status: 404") != std::string::npos ||
-                  (!headers_payload_resp.empty() && static_cast<unsigned char>(headers_payload_resp[0]) == 0x8d),
+            const auto status = h2_header_value(frames[idx_headers].second, ":status");
+            check(status && *status == "404",
                   "http/2 configurable path should be dispatched and keep 404 semantics");
         } else {
             std::size_t idx_goaway = static_cast<std::size_t>(-1);
@@ -1409,19 +1744,10 @@ namespace
         settings[7] = 0x00;
         settings[8] = 0x00;
 
-        std::string headers_payload = ":method: GET\r\n:authority: local.test\r\n";
-        std::string headers;
-        headers.resize(9 + headers_payload.size());
-        headers[0] = static_cast<char>((headers_payload.size() >> 16) & 0xff);
-        headers[1] = static_cast<char>((headers_payload.size() >> 8) & 0xff);
-        headers[2] = static_cast<char>(headers_payload.size() & 0xff);
-        headers[3] = 0x01;
-        headers[4] = 0x05;
-        headers[5] = 0x00;
-        headers[6] = 0x00;
-        headers[7] = 0x00;
-        headers[8] = 0x01;
-        std::memcpy(headers.data() + 9, headers_payload.data(), headers_payload.size());
+        const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
+            {":method", "GET"},
+            {":authority", "local.test"},
+        }));
 
         if (!send_all(s, preface + settings + headers)) {
             close_socket(s);
@@ -1446,9 +1772,8 @@ namespace
         }
         check(idx_headers != static_cast<std::size_t>(-1), "http/2 invalid pseudo-headers should return HEADERS response");
         if (idx_headers != static_cast<std::size_t>(-1)) {
-            const auto &hp = frames[idx_headers].second;
-            check(hp.find(":status: 400") != std::string::npos ||
-                  (!hp.empty() && static_cast<unsigned char>(hp[0]) == 0x8c),
+            const auto status = h2_header_value(frames[idx_headers].second, ":status");
+            check(status && *status == "400",
                   "http/2 invalid pseudo-headers should return 400 status");
         }
 
@@ -1489,19 +1814,11 @@ namespace
         settings[7] = 0x00;
         settings[8] = 0x00;
 
-        std::string headers_payload = "x-test: 1\r\n:method: GET\r\n:path: /__http_caps\r\n";
-        std::string headers;
-        headers.resize(9 + headers_payload.size());
-        headers[0] = static_cast<char>((headers_payload.size() >> 16) & 0xff);
-        headers[1] = static_cast<char>((headers_payload.size() >> 8) & 0xff);
-        headers[2] = static_cast<char>(headers_payload.size() & 0xff);
-        headers[3] = 0x01;
-        headers[4] = 0x05;
-        headers[5] = 0x00;
-        headers[6] = 0x00;
-        headers[7] = 0x00;
-        headers[8] = 0x01;
-        std::memcpy(headers.data() + 9, headers_payload.data(), headers_payload.size());
+        const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
+            {"x-test", "1"},
+            {":method", "GET"},
+            {":path", "/__http_caps"},
+        }));
 
         if (!send_all(s, preface + settings + headers)) {
             close_socket(s);
@@ -1526,9 +1843,8 @@ namespace
         }
         check(idx_headers != static_cast<std::size_t>(-1), "http/2 pseudo-after-regular should return HEADERS response");
         if (idx_headers != static_cast<std::size_t>(-1)) {
-            const auto &hp = frames[idx_headers].second;
-            check(hp.find(":status: 400") != std::string::npos ||
-                  (!hp.empty() && static_cast<unsigned char>(hp[0]) == 0x8c),
+            const auto status = h2_header_value(frames[idx_headers].second, ":status");
+            check(status && *status == "400",
                   "http/2 pseudo-after-regular should return 400 status");
         }
 
@@ -1610,9 +1926,8 @@ namespace
         }
         check(idx_headers != static_cast<std::size_t>(-1), "http/2 HPACK indexed flow should return HEADERS response");
         if (idx_headers != static_cast<std::size_t>(-1)) {
-            const auto &hp = frames[idx_headers].second;
-            check(hp.find(":status: 404") != std::string::npos ||
-                  (!hp.empty() && static_cast<unsigned char>(hp[0]) == 0x8d),
+            const auto status = h2_header_value(frames[idx_headers].second, ":status");
+            check(status && *status == "404",
                   "http/2 HPACK indexed flow should decode pseudo headers and return 404 for '/'");
         }
 
@@ -1722,6 +2037,8 @@ int main()
     (void)yuan::net::http::HttpConfigManager::get_instance()->reload_config();
     yuan::net::http::config::load_config();
 
+    test_hpack_decoder_regressions();
+
     const uint16_t port = reserve_tcp_port();
     check(port != 0, "should reserve test server port");
     if (port == 0) {
@@ -1740,12 +2057,35 @@ int main()
         return 1;
     }
     service->server().mount_static("/static", static_root.string());
+    service->server().on("/__h2_large", [](yuan::net::http::HttpRequest *req,
+                                           yuan::net::http::HttpResponse *resp) {
+        const std::string body(60000, 'x');
+        resp->set_response_code(yuan::net::http::ResponseCode::ok_);
+        resp->add_header("Content-Type", "text/plain");
+        resp->add_header("Content-Length", std::to_string(body.size()));
+        resp->append_body(body);
+        if (req->get_version() != yuan::net::http::HttpVersion::v_2_0) {
+            resp->send();
+        }
+    });
+    service->server().on("/__h2_window", [](yuan::net::http::HttpRequest *req,
+                                            yuan::net::http::HttpResponse *resp) {
+        const std::string body(70000, 'w');
+        resp->set_response_code(yuan::net::http::ResponseCode::ok_);
+        resp->add_header("Content-Type", "text/plain");
+        resp->add_header("Content-Length", std::to_string(body.size()));
+        resp->append_body(body);
+        if (req->get_version() != yuan::net::http::HttpVersion::v_2_0) {
+            resp->send();
+        }
+    });
     service->start();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     test_http_caps_and_proxy_stats(port);
     test_http2_preface_gate(port);
     test_http2_preface_settings_ack(port);
+    test_http2_fragmented_preface_settings_ack(port);
     test_http2_ping_ack(port);
     test_http2_invalid_window_update_goaway(port);
     test_http2_invalid_rst_stream_goaway(port);
@@ -1755,6 +2095,8 @@ int main()
     test_http_caps_with_config_flags(port);
     test_http2_minimal_response_echo(port);
     test_http2_minimal_response_caps(port);
+    test_http2_large_response_data_split(port);
+    test_http2_window_update_flushes_pending_data(port);
     test_http2_unknown_path_404(port);
     test_http2_configurable_dispatch_path(port);
     test_http2_invalid_pseudo_headers_400(port);

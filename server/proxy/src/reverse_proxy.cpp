@@ -725,6 +725,20 @@ namespace yuan::net::http
         pending_requests_.erase(conn_ptr);
     }
 
+    HttpProxyStats HttpProxy::snapshot_stats() const
+    {
+        HttpProxyStats out;
+        out.total_requests = stats_.total_requests.load(std::memory_order_relaxed);
+        out.active_connections = stats_.active_connections.load(std::memory_order_relaxed);
+        out.failed_requests = stats_.failed_requests.load(std::memory_order_relaxed);
+        out.pool_hits = stats_.pool_hits.load(std::memory_order_relaxed);
+        out.pool_misses = stats_.pool_misses.load(std::memory_order_relaxed);
+        out.ws_duplicate_upgrade_skipped = stats_.ws_duplicate_upgrade_skipped.load(std::memory_order_relaxed);
+        out.ws_stale_upgrade_skipped = stats_.ws_stale_upgrade_skipped.load(std::memory_order_relaxed);
+        out.unmapped_close_events = stats_.unmapped_close_events.load(std::memory_order_relaxed);
+        return out;
+    }
+
     ProxyTarget HttpProxy::select_target(const ProxyRoute & route)
     {
         if (route.targets.empty())
@@ -1077,6 +1091,11 @@ namespace yuan::net::http
         }
 
         return pool;
+    }
+
+    std::unique_ptr<HttpProxyHandler> create_http_proxy_handler(HttpServer &server)
+    {
+        return std::make_unique<HttpProxy>(&server);
     }
 
     } // namespace yuan::net::http

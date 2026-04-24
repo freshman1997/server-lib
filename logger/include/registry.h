@@ -89,7 +89,7 @@ public:
         if (!default_logger) return;
 
         try {
-            const std::string msg = fmt::vformat(fmt_str, fmt::make_format_args(args...));
+            const std::string msg = fmt::vformat(fmt_str.get(), fmt::make_format_args(args...));
             default_logger->log_message(level, msg);
             if (file_enabled && level >= file_threshold_.load(std::memory_order_relaxed) && file_logger) {
                 file_logger->log_message(level, msg);
@@ -117,7 +117,7 @@ public:
         if (!default_logger) return;
 
         try {
-            const std::string msg = fmt::vformat(fmt_str, fmt::make_format_args(args...));
+            const std::string msg = fmt::vformat(fmt_str.get(), fmt::make_format_args(args...));
             default_logger->log_message_source(level, file, line, func, msg);
             if (file_enabled && level >= file_threshold_.load(std::memory_order_relaxed) && file_logger) {
                 file_logger->log_message_source(level, file, line, func, msg);

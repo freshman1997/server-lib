@@ -56,10 +56,10 @@
 #include "response_code.h"
 #include "ops/config_manager.h"
 #include "ops/option.h"
+#include "proxy_api.h"
 #include "header_key.h"
 #include "header_util.h"
 #include "http2/session.h"
-#include "proxy.h"
 
 namespace yuan::net::http
 {
@@ -381,12 +381,12 @@ namespace yuan::net::http
             const auto method_it = stream.pseudo_headers.find(":method");
             const auto path_it = stream.pseudo_headers.find(":path");
             const auto authority_it = stream.pseudo_headers.find(":authority");
-            LOG_INFO("[HTTP2] assembled stream={} method={} path={} authority={} body_bytes={}",
-                     stream_id,
-                     method_it != stream.pseudo_headers.end() ? method_it->second : "",
-                     path_it != stream.pseudo_headers.end() ? path_it->second : "",
-                     authority_it != stream.pseudo_headers.end() ? authority_it->second : "",
-                     stream.body.size());
+            LOG_DEBUG("[HTTP2] assembled stream={} method={} path={} authority={} body_bytes={}",
+                      stream_id,
+                      method_it != stream.pseudo_headers.end() ? method_it->second : "",
+                      path_it != stream.pseudo_headers.end() ? path_it->second : "",
+                      authority_it != stream.pseudo_headers.end() ? authority_it->second : "",
+                      stream.body.size());
         }
 
         bool maybe_reply_h2_via_dispatcher(std::uint32_t stream_id,
@@ -491,8 +491,9 @@ namespace yuan::net::http
             resp_headers.emplace_back("content-type", content_type);
 
             const std::size_t body_sz = resp->body_buffer_size();
+            std::string len_str;
             if (body_sz > 0) {
-                const std::string len_str = std::to_string(body_sz);
+                len_str = std::to_string(body_sz);
                 resp_headers.emplace_back("content-length", len_str);
             }
 
@@ -500,14 +501,7 @@ namespace yuan::net::http
             session->send_headers(stream_id, resp_headers, empty_body);
 
             if (!empty_body) {
-                const char *body_data = resp->body_begin();
-                const char *body_end = resp->body_end();
-                if (body_data && body_end > body_data) {
-                    session->send_data(stream_id,
-                                       reinterpret_cast<const std::uint8_t *>(body_data),
-                                       static_cast<std::size_t>(body_end - body_data),
-                                       true);
-                }
+                session->send_data(stream_id, resp->take_body_output_buffer(), true);
             }
 
             streams.erase(it);
@@ -643,16 +637,16 @@ namespace yuan::net::http
                 return;
             }
 
-            const auto &st = proxy->stats();
+            const auto st = proxy->snapshot_stats();
             nlohmann::json j;
-            j["total_requests"] = st.total_requests.load(std::memory_order_relaxed);
-            j["active_connections"] = st.active_connections.load(std::memory_order_relaxed);
-            j["failed_requests"] = st.failed_requests.load(std::memory_order_relaxed);
-            j["pool_hits"] = st.pool_hits.load(std::memory_order_relaxed);
-            j["pool_misses"] = st.pool_misses.load(std::memory_order_relaxed);
-            j["ws_duplicate_upgrade_skipped"] = st.ws_duplicate_upgrade_skipped.load(std::memory_order_relaxed);
-            j["ws_stale_upgrade_skipped"] = st.ws_stale_upgrade_skipped.load(std::memory_order_relaxed);
-            j["unmapped_close_events"] = st.unmapped_close_events.load(std::memory_order_relaxed);
+            j["total_requests"] = st.total_requests;
+            j["active_connections"] = st.active_connections;
+            j["failed_requests"] = st.failed_requests;
+            j["pool_hits"] = st.pool_hits;
+            j["pool_misses"] = st.pool_misses;
+            j["ws_duplicate_upgrade_skipped"] = st.ws_duplicate_upgrade_skipped;
+            j["ws_stale_upgrade_skipped"] = st.ws_stale_upgrade_skipped;
+            j["unmapped_close_events"] = st.unmapped_close_events;
             resp->json(j.dump(), ResponseCode::ok_);
             if (req->get_version() != HttpVersion::v_2_0) {
                 resp->send();
@@ -788,8 +782,13 @@ namespace yuan::net::http
             return true;
         }
 
-        proxy_ = std::make_unique<HttpProxy>(this);
-        if (!proxy_->load_proxy_config_and_init()) {
+        auto *proxy = ensure_proxy();
+        if (!proxy) {
+            LOG_ERROR("proxy config exists, but no HTTP proxy factory is installed");
+            return false;
+        }
+
+        if (!proxy->load_proxy_config_and_init()) {
             LOG_ERROR("load proxies config failed!");
             proxy_.reset();
             return false;
@@ -889,13 +888,32 @@ namespace yuan::net::http
 
     }
 
-    HttpProxy *HttpServer::ensure_proxy()
+    HttpProxyHandler *HttpServer::ensure_proxy()
     {
         if (proxy_) {
             return &*proxy_;
         }
-        proxy_ = std::make_unique<HttpProxy>(this);
-        return &*proxy_;
+        if (!proxy_factory_) {
+            return nullptr;
+        }
+        proxy_ = proxy_factory_(*this);
+        if (proxy_) {
+            proxy_->set_server(this);
+        }
+        return proxy_ ? &*proxy_ : nullptr;
+    }
+
+    void HttpServer::set_proxy_factory(ProxyFactory factory)
+    {
+        proxy_factory_ = std::move(factory);
+    }
+
+    void HttpServer::set_proxy_handler(std::unique_ptr<HttpProxyHandler> proxy)
+    {
+        proxy_ = std::move(proxy);
+        if (proxy_) {
+            proxy_->set_server(this);
+        }
     }
 
     bool HttpServer::parse_request(HttpSessionContext * context)
@@ -1247,10 +1265,11 @@ namespace yuan::net::http
         bool http2_mode = false;
         bool h2_handshake_active = false;
         ::yuan::buffer::ByteBuffer protocol_probe_data;
+        ::yuan::buffer::ByteBuffer h2_preface_data;
         std::shared_ptr<http2::Session> http2_session;
         std::chrono::steady_clock::time_point settings_sent_at;
 
-        auto enter_h2_mode = [&]() {
+        auto enter_h2_mode = [&](bool expect_client_preface) {
             auto h2_streams = std::make_shared<std::unordered_map<std::uint32_t, Http2AssembledStream>>();
             http2_session = std::make_shared<http2::Session>(conn);
             auto h2_dispatch = [this](HttpSessionContext *c) {
@@ -1263,7 +1282,7 @@ namespace yuan::net::http
             }
             settings_sent_at = std::chrono::steady_clock::now();
             http2_mode = true;
-            h2_handshake_active = true;
+            h2_handshake_active = expect_client_preface;
             return true;
         };
 
@@ -1273,7 +1292,7 @@ namespace yuan::net::http
                 co_return;
             }
             LOG_INFO("HTTP/2 via ALPN from {}", conn->get_remote_address().to_address_key());
-            if (!enter_h2_mode()) {
+            if (!enter_h2_mode(true)) {
                 co_return;
             }
         }
@@ -1286,17 +1305,27 @@ namespace yuan::net::http
 
             if (http2_mode) {
                 if (h2_handshake_active) {
-                    constexpr std::size_t kPrefaceLen = 24;
-                    auto readable = read_result.data.readable_bytes();
-                    if (readable >= kPrefaceLen) {
-                        read_result.data.consume(kPrefaceLen);
-                    } else {
-                        read_result.data.consume(readable);
-                    }
-                    h2_handshake_active = false;
-                    if (read_result.data.readable_bytes() == 0) {
+                    h2_preface_data.append(read_result.data.readable_span());
+                    const auto probe = probe_http2_preface(h2_preface_data);
+                    if (probe == Http2PrefaceProbe::need_more) {
                         continue;
                     }
+                    if (probe == Http2PrefaceProbe::not_preface) {
+                        LOG_WARN("Invalid HTTP/2 client preface from {}", conn->get_remote_address().to_address_key());
+                        break;
+                    }
+
+                    h2_preface_data.consume(kHttp2ConnectionPreface.size());
+                    h2_handshake_active = false;
+                    if (h2_preface_data.readable_bytes() == 0) {
+                        h2_preface_data.clear();
+                        continue;
+                    }
+                    if (!http2_session || !http2_session->on_bytes(h2_preface_data)) {
+                        break;
+                    }
+                    h2_preface_data.clear();
+                    continue;
                 }
                 if (!http2_session || !http2_session->on_bytes(read_result.data)) {
                     break;
@@ -1321,7 +1350,7 @@ namespace yuan::net::http
                 if (probe == Http2PrefaceProbe::is_preface) {
                     if (config::enable_http2) {
                         LOG_INFO("HTTP/2 preface accepted from {}", conn->get_remote_address().to_address_key());
-                        if (!enter_h2_mode()) {
+                        if (!enter_h2_mode(false)) {
                             break;
                         }
 

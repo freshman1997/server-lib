@@ -67,6 +67,41 @@ namespace yuan::net::http
         size_t idle_timeout_seconds = 60;
     };
 
+    struct HttpProxyStats
+    {
+        uint64_t total_requests = 0;
+        uint64_t active_connections = 0;
+        uint64_t failed_requests = 0;
+        uint64_t pool_hits = 0;
+        uint64_t pool_misses = 0;
+        uint64_t ws_duplicate_upgrade_skipped = 0;
+        uint64_t ws_stale_upgrade_skipped = 0;
+        uint64_t unmapped_close_events = 0;
+    };
+
+    class HttpProxyHandler
+    {
+    public:
+        virtual ~HttpProxyHandler() = default;
+
+        virtual bool load_proxy_config_and_init() = 0;
+        virtual void add_route(const ProxyRoute &route) = 0;
+        virtual void clear_routes() = 0;
+        virtual void set_server(HttpServer *server) = 0;
+        virtual HttpServer *get_server() const = 0;
+
+        virtual std::string find_proxy_route(const std::string &url) const = 0;
+        virtual bool is_proxy_url(const std::string &url) const = 0;
+
+        virtual void serve_proxy(HttpRequest *req, HttpResponse *resp) = 0;
+        virtual void handle_websocket_upgrade_by_url(HttpRequest *req, HttpResponse *resp, const std::string &route_key) = 0;
+        virtual void on_client_close(const std::shared_ptr<Connection> &conn) = 0;
+
+        virtual HttpProxyStats snapshot_stats() const = 0;
+        virtual const std::unordered_map<std::string, ProxyRoute> &get_routes() const = 0;
+        virtual ProxyTarget select_target_public(const ProxyRoute &route) = 0;
+    };
+
     struct PooledConnection
     {
         Connection *conn = nullptr;
@@ -143,7 +178,7 @@ namespace yuan::net::http
         std::atomic<size_t> rr_index_{ 0 };
     };
 
-    class HttpProxy : public ConnectionHandler, public std::enable_shared_from_this<HttpProxy>
+    class HttpProxy : public HttpProxyHandler, public ConnectionHandler, public std::enable_shared_from_this<HttpProxy>
     {
     public:
         struct Stats
@@ -171,25 +206,25 @@ namespace yuan::net::http
         void on_write(const std::shared_ptr<Connection> &conn) override;
         void on_close(const std::shared_ptr<Connection> &conn) override;
 
-        bool load_proxy_config_and_init();
-        void add_route(const ProxyRoute &route);
-        void clear_routes();
+        bool load_proxy_config_and_init() override;
+        void add_route(const ProxyRoute &route) override;
+        void clear_routes() override;
 
-        void set_server(HttpServer *server)
+        void set_server(HttpServer *server) override
         {
             server_ = server;
         }
-        HttpServer *get_server() const
+        HttpServer *get_server() const override
         {
             return server_;
         }
 
-        std::string find_proxy_route(const std::string &url) const;
-        bool is_proxy_url(const std::string &url) const;
+        std::string find_proxy_route(const std::string &url) const override;
+        bool is_proxy_url(const std::string &url) const override;
 
-        void serve_proxy(HttpRequest *req, HttpResponse *resp);
-        void handle_websocket_upgrade_by_url(HttpRequest *req, HttpResponse *resp, const std::string &route_key);
-        void on_client_close(const std::shared_ptr<Connection> &conn);
+        void serve_proxy(HttpRequest *req, HttpResponse *resp) override;
+        void handle_websocket_upgrade_by_url(HttpRequest *req, HttpResponse *resp, const std::string &route_key) override;
+        void on_client_close(const std::shared_ptr<Connection> &conn) override;
 
         void cleanup_idle_connections();
         std::shared_ptr<TargetConnectionPool> get_or_create_pool(const ProxyTarget &target, const ProxyRoute &route);
@@ -199,12 +234,14 @@ namespace yuan::net::http
             return stats_;
         }
 
-        const std::unordered_map<std::string, ProxyRoute> &get_routes() const
+        HttpProxyStats snapshot_stats() const override;
+
+        const std::unordered_map<std::string, ProxyRoute> &get_routes() const override
         {
             return routes_;
         }
 
-        ProxyTarget select_target_public(const ProxyRoute &route)
+        ProxyTarget select_target_public(const ProxyRoute &route) override
         {
             return select_target(route);
         }

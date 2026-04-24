@@ -3,6 +3,7 @@
 #include "response.h"
 #include "service_registry.h"
 #include "proxy.h"
+#include "reverse_proxy.h"
 
 #if __has_include("proxy/websocket_proxy.h")
 #include "proxy/websocket_proxy.h"
@@ -15,6 +16,7 @@ namespace yuan::server
     HttpService::HttpService(int port, yuan::net::http::HttpServerConfig config)
         : port_(port), config_(std::move(config)), server_(std::make_unique<yuan::net::http::HttpServer>(config_)), host_({ "http", "http", port })
     {
+        server_->set_proxy_factory(yuan::net::http::create_http_proxy_handler);
     }
 
     HttpService::~HttpService()

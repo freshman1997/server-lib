@@ -145,14 +145,14 @@ namespace yuan::net::http::http2
             }
         }
 
-        LOG_INFO("[HTTP2] peer settings applied: header_table_size={} enable_push={} max_concurrent_streams={} "
-                 "initial_window_size={} max_frame_size={} max_header_list_size={}",
-                 peer_settings_.header_table_size,
-                 peer_settings_.enable_push,
-                 peer_settings_.max_concurrent_streams,
-                 peer_settings_.initial_window_size,
-                 peer_settings_.max_frame_size,
-                 peer_settings_.max_header_list_size);
+        LOG_DEBUG("[HTTP2] peer settings applied: header_table_size={} enable_push={} max_concurrent_streams={} "
+                  "initial_window_size={} max_frame_size={} max_header_list_size={}",
+                  peer_settings_.header_table_size,
+                  peer_settings_.enable_push,
+                  peer_settings_.max_concurrent_streams,
+                  peer_settings_.initial_window_size,
+                  peer_settings_.max_frame_size,
+                  peer_settings_.max_header_list_size);
     }
 
     void Session::send_window_update(std::uint32_t stream_id, std::uint32_t increment)
@@ -406,6 +406,62 @@ namespace yuan::net::http::http2
         }
     }
 
+    void Session::send_data(std::uint32_t stream_id, ::yuan::buffer::ByteBuffer body, bool end_stream)
+    {
+        const auto len = body.readable_bytes();
+        if (len == 0) {
+            send_data(stream_id, nullptr, 0, end_stream);
+            return;
+        }
+
+        if (!conn_ || stream_id == 0) {
+            return;
+        }
+
+        auto it = streams_.find(stream_id);
+        if (it == streams_.end() || it->second.has_pending_write) {
+            send_data(stream_id,
+                      reinterpret_cast<const std::uint8_t *>(body.read_ptr()),
+                      body.readable_bytes(),
+                      end_stream);
+            return;
+        }
+
+        auto &stream = it->second;
+        const std::uint32_t available_window = (std::min)(connection_send_window_, stream.send_window);
+        if (available_window >= len && len <= peer_settings_.max_frame_size) {
+            ::yuan::buffer::ByteBuffer header(9);
+            const auto payload_len = static_cast<std::uint32_t>(len);
+            header.append_u8(static_cast<std::uint8_t>((payload_len >> 16) & 0xff));
+            header.append_u8(static_cast<std::uint8_t>((payload_len >> 8) & 0xff));
+            header.append_u8(static_cast<std::uint8_t>(payload_len & 0xff));
+            header.append_u8(static_cast<std::uint8_t>(FrameType::data));
+            header.append_u8(end_stream ? flag_end_stream : flag_none);
+            header.append_u32(stream_id & 0x7fffffffU);
+
+            conn_->write_owned(std::move(header));
+            conn_->write_owned_and_flush(std::move(body));
+
+            connection_send_window_ -= payload_len;
+            stream.send_window -= payload_len;
+
+            if (end_stream) {
+                if (stream.state == StreamState::open) {
+                    stream.state = StreamState::half_closed_local;
+                } else if (stream.state == StreamState::half_closed_remote) {
+                    stream.state = StreamState::closed;
+                    streams_.erase(it);
+                }
+            }
+            return;
+        }
+
+        send_data(stream_id,
+                  reinterpret_cast<const std::uint8_t *>(body.read_ptr()),
+                  body.readable_bytes(),
+                  end_stream);
+    }
+
     void Session::send_data(std::uint32_t stream_id, std::string_view body, bool end_stream)
     {
         send_data(stream_id, reinterpret_cast<const std::uint8_t *>(body.data()), body.size(), end_stream);
@@ -639,7 +695,7 @@ namespace yuan::net::http::http2
         };
 
         if (!seen_non_settings_frame_) {
-            LOG_INFO("[HTTP2] First non-preface frame: type={}, stream_id={}, length={}", static_cast<int>(frame.header.type), frame.header.stream_id, frame.header.length);
+            LOG_DEBUG("[HTTP2] First non-preface frame: type={}, stream_id={}, length={}", static_cast<int>(frame.header.type), frame.header.stream_id, frame.header.length);
             if (frame.header.type != FrameType::settings) {
                 return close_with_goaway(ErrorCode::protocol_error);
             }
@@ -716,7 +772,7 @@ namespace yuan::net::http::http2
             return true;
         }
         case FrameType::headers: {
-            LOG_INFO("[HTTP2] HEADERS frame: stream_id={}, length={}, flags=0x{:02x}", frame.header.stream_id, frame.header.length, frame.header.flags);
+            LOG_DEBUG("[HTTP2] HEADERS frame: stream_id={}, length={}, flags=0x{:02x}", frame.header.stream_id, frame.header.length, frame.header.flags);
             if (frame.header.stream_id == 0) {
                 LOG_ERROR("[HTTP2] HEADERS stream_id=0");
                 return close_with_goaway(ErrorCode::protocol_error);
@@ -786,7 +842,7 @@ namespace yuan::net::http::http2
                     conn_->close();
                     return false;
                 }
-                LOG_INFO("[HTTP2] HPACK decode OK for stream_id={}", frame.header.stream_id);
+                LOG_DEBUG("[HTTP2] HPACK decode OK for stream_id={}", frame.header.stream_id);
                 finalize_header_block(frame.header.stream_id, *stream, end_stream);
             } else {
                 stream->waiting_continuation = true;

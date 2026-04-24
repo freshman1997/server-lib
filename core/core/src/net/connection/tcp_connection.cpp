@@ -171,6 +171,24 @@ namespace yuan::net
         }
     }
 
+    void TcpConnection::write_owned(::yuan::buffer::ByteBuffer buffer)
+    {
+        if (buffer.empty()) {
+            return;
+        }
+
+        if ((state_ != ConnectionState::connected && state_ != ConnectionState::closing) || output_shutdown_) {
+            return;
+        }
+
+        output_buffer_.push_back(std::make_unique<::yuan::buffer::ByteBuffer>(std::move(buffer)));
+
+        channel_->enable_write();
+        if (eventHandler_) {
+            eventHandler_->update_channel(ptr_of(channel_));
+        }
+    }
+
     void TcpConnection::write_and_flush(const ::yuan::buffer::ByteBuffer & buffer)
     {
         if (buffer.empty() || state_ != ConnectionState::connected) {
@@ -178,6 +196,16 @@ namespace yuan::net
         }
 
         write(buffer);
+        flush();
+    }
+
+    void TcpConnection::write_owned_and_flush(::yuan::buffer::ByteBuffer buffer)
+    {
+        if (buffer.empty() || state_ != ConnectionState::connected) {
+            return;
+        }
+
+        write_owned(std::move(buffer));
         flush();
     }
 
@@ -378,11 +406,21 @@ namespace yuan::net
 
             do {
                 if (read && input_buffer_.writable_bytes() == 0) {
-                    if (handler) {
-                        handler->on_error(shared_from_this());
+                    if (grow_input_buffer()) {
+                        continue;
                     }
-                    close_flag = true;
                     break;
+                }
+
+                if (input_buffer_.writable_bytes() == 0) {
+                    if (!grow_input_buffer()) {
+                        if (handler) {
+                            handler->on_error(shared_from_this());
+                        }
+                        close_flag = true;
+                        break;
+                    }
+                    continue;
                 }
 
 #ifndef _WIN32
@@ -394,13 +432,25 @@ namespace yuan::net
                 if (bytes <= 0) {
                     if (bytes == 0) {
                         close_flag = true;
+#ifdef _WIN32
+                    } else if (bytes == SOCKET_ERROR) {
+                        const int err = WSAGetLastError();
+                        if (err != WSAEINTR && err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
+                            LOG_ERROR("read error: {}", err);
+                            if (handler) {
+                                handler->on_error(shared_from_this());
+                            }
+                            close_flag = true;
+                            break;
+                        }
+                        channel_->enable_read();
+                        if (eventHandler_) {
+                            eventHandler_->update_channel(ptr_of(channel_));
+                        }
+                        break;
+#else
                     } else if (bytes == -1) {
                         if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
-#ifdef _WIN32
-                            if (WSAGetLastError() == WSAEWOULDBLOCK) {
-                                goto again_read;
-                            }
-#endif
                             LOG_ERROR("read error: {}", errno);
                             if (handler) {
                                 handler->on_error(shared_from_this());
@@ -408,12 +458,12 @@ namespace yuan::net
                             close_flag = true;
                             break;
                         }
-                    again_read:
                         channel_->enable_read();
                         if (eventHandler_) {
                             eventHandler_->update_channel(ptr_of(channel_));
                         }
                         break;
+#endif
                     }
                 } else {
                     read = true;
@@ -451,11 +501,21 @@ namespace yuan::net
 
             do {
                 if (read && input_buffer_.writable_bytes() == 0) {
-                    if (handler) {
-                        handler->on_error(shared_from_this());
+                    if (grow_input_buffer()) {
+                        continue;
                     }
-                    close_flag = true;
                     break;
+                }
+
+                if (input_buffer_.writable_bytes() == 0) {
+                    if (!grow_input_buffer()) {
+                        if (handler) {
+                            handler->on_error(shared_from_this());
+                        }
+                        close_flag = true;
+                        break;
+                    }
+                    continue;
                 }
 
                 bytes = ssl_handler_->ssl_read(input_buffer_.write_ptr(), input_buffer_.writable_bytes());

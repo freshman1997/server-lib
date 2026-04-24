@@ -89,23 +89,26 @@ namespace yuan::net::http::http2
 
         struct HuffTree
         {
-            HuffNode nodes[512];
+            static constexpr int kNoSymbol = -1;
+            static constexpr int kEosSymbol = -2;
+
+            HuffNode nodes[4096];
             int count;
 
             HuffTree() : count(1)
             {
                 nodes[0].children[0] = -1;
                 nodes[0].children[1] = -1;
-                nodes[0].symbol = -1;
+                nodes[0].symbol = kNoSymbol;
             }
 
             int add_node()
             {
-                if (count >= 512) return -1;
+                if (count >= static_cast<int>(sizeof(nodes) / sizeof(nodes[0]))) return -1;
                 int id = count++;
                 nodes[id].children[0] = -1;
                 nodes[id].children[1] = -1;
-                nodes[id].symbol = -1;
+                nodes[id].symbol = kNoSymbol;
                 return id;
             }
 
@@ -121,7 +124,7 @@ namespace yuan::net::http::http2
                     }
                     cur = nodes[cur].children[bit];
                 }
-                nodes[cur].symbol = symbol;
+                nodes[cur].symbol = symbol == -1 ? kEosSymbol : symbol;
                 return true;
             }
         };
@@ -189,9 +192,12 @@ namespace yuan::net::http::http2
                 return false;
             }
 
-            if (tree.nodes[next].symbol >= 0) {
-                out.push_back(static_cast<char>(tree.nodes[next].symbol));
+            const int symbol = tree.nodes[next].symbol;
+            if (symbol >= 0) {
+                out.push_back(static_cast<char>(symbol));
                 state = 0;
+            } else if (symbol == HuffTree::kEosSymbol) {
+                return false;
             } else if (tree.nodes[next].children[0] >= 0 || tree.nodes[next].children[1] >= 0) {
                 state = next;
             } else {
@@ -202,10 +208,10 @@ namespace yuan::net::http::http2
         if (state != 0) {
             int cur = state;
             while (true) {
+                if (tree.nodes[cur].symbol == HuffTree::kEosSymbol) {
+                    break;
+                }
                 if (tree.nodes[cur].symbol >= 0) {
-                    if (tree.nodes[cur].symbol == -1) {
-                        break;
-                    }
                     return false;
                 }
                 if (tree.nodes[cur].children[1] >= 0) {

@@ -92,8 +92,10 @@ namespace yuan::net::mqtt
     ByteBuffer MqttDispatcher::handle_connect(MqttSession & session, const uint8_t * data, size_t len)
     {
         auto connect_opt = MqttCodec::decode_connect(data, len);
-        if (!connect_opt.has_value())
+        if (!connect_opt.has_value()) {
+            session.set_state(MqttSessionState::disconnecting);
             return {};
+        }
 
         auto &connect = *connect_opt;
         bool is_v5 = (connect.protocol_level == ProtocolLevel::V5_0);
@@ -107,6 +109,8 @@ namespace yuan::net::mqtt
         }
 
         if (!version_supported) {
+            session.set_protocol_level(connect.protocol_level);
+            session.set_state(MqttSessionState::disconnecting);
             MqttConnackPacket connack;
             connack.session_present = 0;
             connack.reason_code = is_v5
@@ -117,6 +121,8 @@ namespace yuan::net::mqtt
 
         if (connect.client_id.empty()) {
             if (!is_v5) {
+                session.set_protocol_level(connect.protocol_level);
+                session.set_state(MqttSessionState::disconnecting);
                 MqttConnackPacket connack;
                 connack.session_present = 0;
                 connack.reason_code = static_cast<uint8_t>(ConnackCode::IDENTIFIER_REJECTED);
@@ -134,7 +140,6 @@ namespace yuan::net::mqtt
             if (old_session->connection()) {
                 old_session->connection()->close();
             }
-            session_mgr_.remove_session(old_session->session_id());
         }
 
         std::string username;
@@ -149,6 +154,8 @@ namespace yuan::net::mqtt
         }
 
         if (handler_ && !handler_->on_connect(&session, connect.client_id, username, password)) {
+            session.set_protocol_level(connect.protocol_level);
+            session.set_state(MqttSessionState::disconnecting);
             MqttConnackPacket connack;
             connack.session_present = 0;
             connack.reason_code = is_v5

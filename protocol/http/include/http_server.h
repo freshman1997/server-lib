@@ -26,7 +26,7 @@
 
 namespace yuan::net::http
 {
-    class HttpProxy;
+    class HttpProxyHandler;
     class HttpSession;
     class HttpSessionContext;
     struct FormDataContent;
@@ -70,6 +70,8 @@ namespace yuan::net::http
         HttpServer(const HttpServer &) = delete;
         HttpServer &operator=(const HttpServer &) = delete;
 
+        using ProxyFactory = std::function<std::unique_ptr<HttpProxyHandler>(HttpServer &)>;
+
     public:
         bool init(int port);
         bool init(int port, NetworkRuntime &runtime);
@@ -81,12 +83,14 @@ namespace yuan::net::http
             return listener_.runtime();
         }
 
-        HttpProxy *get_proxy() const noexcept
+        HttpProxyHandler *get_proxy() const noexcept
         {
             return proxy_ ? &*proxy_ : nullptr;
         }
 
-        HttpProxy *ensure_proxy();
+        HttpProxyHandler *ensure_proxy();
+        void set_proxy_factory(ProxyFactory factory);
+        void set_proxy_handler(std::unique_ptr<HttpProxyHandler> proxy);
         void mount_static(const std::string &url_prefix, const std::string &root, StaticMountOptions options = {});
 
     public:
@@ -210,7 +214,8 @@ namespace yuan::net::http
         base::CompressTrie static_mount_trie_;
         std::unordered_map<std::string, StaticMount> static_mounts_;
         std::set<std::string> play_types_;
-        std::unique_ptr<HttpProxy> proxy_;
+        std::unique_ptr<HttpProxyHandler> proxy_;
+        ProxyFactory proxy_factory_;
         WsProxyHandler ws_proxy_handler_;
         AccessLogHook access_log_hook_;
         std::unordered_map<std::string, UploadFileMapping> uploaded_chunks_;

@@ -115,7 +115,7 @@ public:
 
         std::string msg;
         try {
-            msg = fmt::vformat(fmt_str, fmt::make_format_args(args...));
+            msg = fmt::vformat(fmt_str.get(), fmt::make_format_args(args...));
         } catch (...) {
             msg = "[format_error]";
         }
@@ -130,7 +130,7 @@ public:
 
         std::string msg;
         try {
-            msg = fmt::vformat(fmt_str, fmt::make_format_args(args...));
+            msg = fmt::vformat(fmt_str.get(), fmt::make_format_args(args...));
         } catch (...) {
             msg = "[format_error]";
         }

@@ -214,6 +214,7 @@ namespace yuan::net::mqtt
     public:
         MqttSession &create_session(TcpConnection *conn);
         MqttSession &create_session(const std::shared_ptr<TcpConnection> &conn);
+        std::shared_ptr<MqttSession> create_session_owner(const std::shared_ptr<TcpConnection> &conn);
         void bind_client_id(MqttSession &session, const std::string &client_id);
         void remove_session(uint64_t sid);
         MqttSession *find_by_client_id(const std::string &client_id);
@@ -222,7 +223,7 @@ namespace yuan::net::mqtt
         void cleanup_expired();
 
     private:
-        std::map<uint64_t, std::unique_ptr<MqttSession> > sessions_;
+        std::map<uint64_t, std::shared_ptr<MqttSession> > sessions_;
         std::map<std::string, uint64_t> client_id_index_;
         uint64_t next_session_id_ = 1;
     };

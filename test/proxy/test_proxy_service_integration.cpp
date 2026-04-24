@@ -609,6 +609,67 @@ namespace
         }
     }
 
+    void test_proxy_plain_http_closes_after_upstream_response()
+    {
+        std::cout << "  [ProxyService] plain HTTP closes after upstream response\n";
+
+        const uint16_t upstream_port = reserve_tcp_port();
+        const uint16_t proxy_port = reserve_tcp_port();
+        check(upstream_port != 0, "should reserve upstream HTTP port for close-after-response");
+        check(proxy_port != 0, "should reserve proxy port for close-after-response");
+
+        std::atomic_bool upstream_ready{ false };
+        const std::string body = "proxy-http-response-close-ok";
+        std::thread upstream_thread([&]() {
+            run_single_http_server(upstream_port, upstream_ready, body);
+        });
+        wait_until_ready(upstream_ready);
+        check(upstream_ready.load(), "close-after-response HTTP server should start");
+
+        yuan::server::ProxyServiceConfig config;
+        config.listen_host = "127.0.0.1";
+        config.port = proxy_port;
+        config.header_timeout_ms = 3000;
+        config.idle_timeout_ms = 10000;
+        config.connect_timeout_ms = 3000;
+        config.drain_timeout_ms = 1000;
+        config.allow_private_targets = true;
+
+        auto service = std::make_unique<yuan::server::ProxyService>(config);
+        check(service->init(), "proxy service init should succeed for close-after-response");
+        service->start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+
+        socket_t client = connect_loopback(proxy_port);
+        check(client != kInvalidSocket, "client should connect to proxy for close-after-response");
+        if (client != kInvalidSocket) {
+            (void)set_socket_timeout(client, 2500, SO_RCVTIMEO);
+            const std::string request =
+                "GET http://127.0.0.1:" + std::to_string(upstream_port) + "/close HTTP/1.1\r\n"
+                "Host: 127.0.0.1:" + std::to_string(upstream_port) + "\r\n"
+                "Connection: keep-alive\r\n\r\n";
+            check(send_all(client, request), "HTTP keep-alive proxy request should send");
+
+            const auto begin = std::chrono::steady_clock::now();
+            const std::string response = recv_some(client);
+            const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - begin).count();
+            check(response.find("HTTP/1.1 200 OK") != std::string::npos,
+                  "proxy should forward close-after-response status");
+            check(response.find(body) != std::string::npos,
+                  "proxy should forward close-after-response body");
+            check(elapsed_ms < 1500,
+                  "plain HTTP proxy should close after upstream response instead of waiting for idle timeout");
+
+            close_socket(client);
+        }
+
+        service->stop();
+        if (upstream_thread.joinable()) {
+            upstream_thread.join();
+        }
+    }
+
     void test_proxy_connect_large_tunnel_half_close_smoke()
     {
         std::cout << "  [ProxyService] CONNECT large tunnel half-close smoke\n";
@@ -951,6 +1012,7 @@ int main()
     test_proxy_connect_reconnect_storm_smoke();
     test_proxy_plain_http_forward();
     test_proxy_large_http_forward();
+    test_proxy_plain_http_closes_after_upstream_response();
     test_proxy_http_upstream_connect_timeout();
     test_proxy_http_upstream_slow_response_timeout();
 

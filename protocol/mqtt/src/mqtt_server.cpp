@@ -54,7 +54,29 @@ namespace yuan::net::mqtt
     void MqttServer::stop()
     {
         if (owned_runtime_) {
-            owned_runtime_->stop();
+            auto *runtime = owned_runtime_.get();
+            runtime->dispatch([this, runtime]() {
+                listener_.close();
+
+                auto sessions = session_mgr_.all_sessions();
+                std::vector<std::shared_ptr<TcpConnection>> connections;
+                connections.reserve(sessions.size());
+                for (auto *session : sessions) {
+                    if (!session) {
+                        continue;
+                    }
+                    if (auto conn = session->connection()) {
+                        connections.push_back(std::move(conn));
+                    }
+                }
+
+                for (auto &conn : connections) {
+                    if (conn) {
+                        conn->close();
+                    }
+                }
+                runtime->stop();
+            });
         }
     }
 
@@ -73,8 +95,24 @@ namespace yuan::net::mqtt
             co_return;
         }
 
-        auto &session = session_mgr_.create_session(tcp_conn);
+        auto session_owner = session_mgr_.create_session_owner(tcp_conn);
+        auto &session = *session_owner;
         session.set_state(MqttSessionState::connecting);
+
+        bool cleaned_up = false;
+        bool ever_connected = false;
+        auto cleanup_session = [&]() {
+            if (cleaned_up) {
+                return;
+            }
+            cleaned_up = true;
+            if (ever_connected) {
+                dispatcher_.on_session_closed(session);
+            } else {
+                session.set_state(MqttSessionState::disconnected);
+            }
+            session_mgr_.remove_session(session.session_id());
+        };
 
         ByteBuffer recv_buf;
         bool first_packet = true;
@@ -105,6 +143,7 @@ namespace yuan::net::mqtt
                             }
                         }
                         ctx.close();
+                        cleanup_session();
                         co_return;
                     }
                     break;
@@ -125,12 +164,14 @@ namespace yuan::net::mqtt
                         }
                     }
                     ctx.close();
+                    cleanup_session();
                     co_return;
                 }
 
                 if (first_packet) {
                     if (type != PacketType::CONNECT) {
                         ctx.close();
+                        cleanup_session();
                         co_return;
                     }
                     first_packet = false;
@@ -139,11 +180,15 @@ namespace yuan::net::mqtt
                 if (type != PacketType::CONNECT &&
                     session.state() != MqttSessionState::connected) {
                     ctx.close();
+                    cleanup_session();
                     co_return;
                 }
 
                 auto response = dispatcher_.dispatch(session,
                                                      reinterpret_cast<const uint8_t *>(recv_buf.read_ptr()), pkt_len);
+                if (session.state() == MqttSessionState::connected) {
+                    ever_connected = true;
+                }
 
                 recv_buf.consume(pkt_len);
 
@@ -154,6 +199,7 @@ namespace yuan::net::mqtt
                 if (session.state() == MqttSessionState::disconnected ||
                     session.state() == MqttSessionState::disconnecting) {
                     ctx.close();
+                    cleanup_session();
                     co_return;
                 }
             }
@@ -165,8 +211,7 @@ namespace yuan::net::mqtt
             }
         }
 
-        dispatcher_.on_session_closed(session);
-        session_mgr_.remove_session(session.session_id());
+        cleanup_session();
         ctx.close();
         co_return;
     }

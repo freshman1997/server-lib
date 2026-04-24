@@ -17,7 +17,7 @@
 
 namespace yuan::net::websocket
 {
-    void WebSocketProxy::install(http::HttpServer & server, http::HttpProxy & proxy)
+    void WebSocketProxy::install(http::HttpServer & server, http::HttpProxyHandler & proxy)
     {
         auto ws_proxy = std::make_shared<WebSocketProxy>(&proxy, &server);
         server.set_ws_proxy_handler(
@@ -27,7 +27,7 @@ namespace yuan::net::websocket
                 co_await ws_proxy->proxy_connection(std::move(ctx), url, route_key, client_key, subproto, std::move(leftover)); });
     }
 
-    WebSocketProxy::WebSocketProxy(http::HttpProxy * http_proxy, http::HttpServer * server)
+    WebSocketProxy::WebSocketProxy(http::HttpProxyHandler * http_proxy, http::HttpServer * server)
         : http_proxy_(http_proxy), server_(server)
     {
         server_config_.init(true);

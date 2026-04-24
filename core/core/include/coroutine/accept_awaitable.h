@@ -77,6 +77,7 @@ namespace yuan::coroutine
         void on_accept_finished() noexcept
         {
             accepted_conn_.reset();
+            acceptor_ = nullptr;
             resume();
         }
 

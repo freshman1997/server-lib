@@ -130,6 +130,27 @@ namespace yuan::net
         active_ = true;
     }
 
+    void UdpConnection::write_owned(::yuan::buffer::ByteBuffer buffer)
+    {
+        if (buffer.empty() || closed_) {
+            return;
+        }
+
+        if (adapter_) {
+            if (!proc_one_buffer(buffer)) {
+                if (connectionHandlerOwner_) {
+                    connectionHandlerOwner_->on_error(shared_from_this());
+                }
+                abort();
+                return;
+            }
+        } else {
+            output_buffer_.push_back(std::make_unique<::yuan::buffer::ByteBuffer>(std::move(buffer)));
+        }
+
+        active_ = true;
+    }
+
     void UdpConnection::write_and_flush(const ::yuan::buffer::ByteBuffer & buffer)
     {
         if (buffer.empty() || closed_) {
@@ -137,6 +158,16 @@ namespace yuan::net
         }
 
         write(buffer);
+        flush();
+    }
+
+    void UdpConnection::write_owned_and_flush(::yuan::buffer::ByteBuffer buffer)
+    {
+        if (buffer.empty() || closed_) {
+            return;
+        }
+
+        write_owned(std::move(buffer));
         flush();
     }
     void UdpConnection::flush()

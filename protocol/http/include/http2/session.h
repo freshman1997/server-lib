@@ -83,6 +83,7 @@ namespace yuan::net::http::http2
                           const std::vector<std::pair<std::string_view, std::string_view>> &headers,
                           bool end_stream);
         void send_data(std::uint32_t stream_id, const std::uint8_t *data, std::size_t len, bool end_stream);
+        void send_data(std::uint32_t stream_id, ::yuan::buffer::ByteBuffer body, bool end_stream);
         void send_data(std::uint32_t stream_id, std::string_view body, bool end_stream);
         void send_rst_stream(std::uint32_t stream_id, ErrorCode error);
         void send_goaway(ErrorCode error);

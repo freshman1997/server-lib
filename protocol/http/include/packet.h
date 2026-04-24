@@ -163,6 +163,9 @@ namespace yuan::net::http
 
         std::size_t body_buffer_size() const;
         std::string body_buffer_text() const;
+        const char *body_buffer_begin() const;
+        const char *body_buffer_end() const;
+        ::yuan::buffer::ByteBuffer take_body_output_buffer();
 
         void pack_and_send(Connection *conn);
 

@@ -27,4 +27,8 @@ else()
     target_compile_definitions(HttpProto PUBLIC YUAN_HTTP_HAS_ZLIB=0)
 endif()
 
-target_include_directories(HttpProto PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>" "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+target_include_directories(HttpProto
+    PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
+        "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+)
