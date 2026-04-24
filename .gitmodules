@@ -13,3 +13,9 @@
 [submodule "third_party/quickjs"]
 	path = third_party/quickjs
 	url = https://github.com/bellard/quickjs
+[submodule "third_party/brotli"]
+	path = third_party/brotli
+	url = https://github.com/google/brotli.git
+[submodule "third_party/zlib"]
+	path = third_party/zlib
+	url = https://github.com/madler/zlib.git

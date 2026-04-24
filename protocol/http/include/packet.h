@@ -162,6 +162,7 @@ namespace yuan::net::http
         void append_body(std::string_view text);
 
         std::size_t body_buffer_size() const;
+        std::string body_buffer_text() const;
 
         void pack_and_send(Connection *conn);
 

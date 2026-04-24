@@ -36,6 +36,141 @@ static int g_tests_failed = 0;
         }                                                    \
     } while (0)
 
+static void append_utf8(ByteBuffer &buf, const std::string &s)
+{
+    buf.append_u16(static_cast<uint16_t>(s.size()));
+    if (!s.empty()) {
+        buf.append(s.data(), s.size());
+    }
+}
+
+static std::vector<uint8_t> to_u8(const ByteBuffer &buf)
+{
+    auto span = buf.readable_span();
+    const auto *begin = reinterpret_cast<const uint8_t *>(span.data());
+    return std::vector<uint8_t>(begin, begin + span.size());
+}
+
+static std::vector<uint8_t> make_connect_packet_v311(const std::string &client_id)
+{
+    ByteBuffer body(64);
+    append_utf8(body, "MQTT");
+    body.append_u8(static_cast<uint8_t>(ProtocolLevel::V3_1_1));
+    body.append_u8(MQTT_CONNECT_FLAG_CLEAN_START);
+    body.append_u16(60);
+    append_utf8(body, client_id);
+
+    ByteBuffer packet = MqttCodec::build_fixed_header(PacketType::CONNECT, 0, body.write_offset());
+    packet.append(body.readable_span());
+    return to_u8(packet);
+}
+
+static std::vector<uint8_t> make_connect_packet_v5(const std::string &client_id, const MqttProperties &props = {})
+{
+    ByteBuffer body(128);
+    append_utf8(body, "MQTT");
+    body.append_u8(static_cast<uint8_t>(ProtocolLevel::V5_0));
+    body.append_u8(MQTT_CONNECT_FLAG_CLEAN_START);
+    body.append_u16(60);
+    encode_properties(body, props);
+    append_utf8(body, client_id);
+
+    ByteBuffer packet = MqttCodec::build_fixed_header(PacketType::CONNECT, 0, body.write_offset());
+    packet.append(body.readable_span());
+    return to_u8(packet);
+}
+
+static std::vector<uint8_t> make_publish_packet_v5(uint8_t flags, const std::string &topic,
+                                                    const MqttProperties &props,
+                                                    const std::vector<uint8_t> &payload)
+{
+    ByteBuffer body(128);
+    append_utf8(body, topic);
+    encode_properties(body, props);
+    if (!payload.empty()) {
+        body.append(payload.data(), payload.size());
+    }
+
+    ByteBuffer packet = MqttCodec::build_fixed_header(PacketType::PUBLISH, flags, body.write_offset());
+    packet.append(body.readable_span());
+    return to_u8(packet);
+}
+
+static std::vector<uint8_t> make_subscribe_packet_v5(uint16_t packet_id, const std::string &topic_filter, uint8_t options)
+{
+    ByteBuffer body(128);
+    body.append_u16(packet_id);
+    encode_properties(body, MqttProperties{});
+    append_utf8(body, topic_filter);
+    body.append_u8(options);
+
+    ByteBuffer packet = MqttCodec::build_fixed_header(PacketType::SUBSCRIBE, 0x02, body.write_offset());
+    packet.append(body.readable_span());
+    return to_u8(packet);
+}
+
+static std::vector<uint8_t> make_unsubscribe_packet_v5(uint16_t packet_id, const std::string &topic_filter)
+{
+    ByteBuffer body(128);
+    body.append_u16(packet_id);
+    encode_properties(body, MqttProperties{});
+    append_utf8(body, topic_filter);
+
+    ByteBuffer packet = MqttCodec::build_fixed_header(PacketType::UNSUBSCRIBE, 0x02, body.write_offset());
+    packet.append(body.readable_span());
+    return to_u8(packet);
+}
+
+static std::optional<PacketType> packet_type_of(const ByteBuffer &packet)
+{
+    auto span = packet.readable_span();
+    if (span.empty()) {
+        return std::nullopt;
+    }
+    uint8_t first = static_cast<uint8_t>(span[0]);
+    return static_cast<PacketType>(first >> 4);
+}
+
+static bool parse_packet_body(const std::vector<uint8_t> &packet, const uint8_t *&body, size_t &body_len)
+{
+    if (packet.size() < 2) {
+        return false;
+    }
+
+    size_t idx = 1;
+    uint32_t value = 0;
+    uint32_t multiplier = 1;
+    for (size_t i = 0; i < MQTT_VARIABLE_BYTE_INT_MAX_SIZE && idx < packet.size(); ++i, ++idx) {
+        uint8_t byte = packet[idx];
+        value += static_cast<uint32_t>(byte & 0x7F) * multiplier;
+        multiplier *= 128;
+        if ((byte & 0x80) == 0) {
+            body_len = value;
+            size_t header_len = idx + 1;
+            if (header_len + body_len > packet.size()) {
+                return false;
+            }
+            body = packet.data() + header_len;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+class CaptureHandler final : public MqttHandler
+{
+public:
+    bool on_publish(MqttSession *, const std::string &topic,
+                    const std::vector<uint8_t> &, QoS, bool) override
+    {
+        published_topics.push_back(topic);
+        return true;
+    }
+
+    std::vector<std::string> published_topics;
+};
+
 bool test_packet_type_values()
 {
     TEST_ASSERT(static_cast<uint8_t>(PacketType::CONNECT) == 1, "CONNECT should be 1");
@@ -491,6 +626,19 @@ bool test_codec_try_decode()
     return true;
 }
 
+bool test_codec_try_decode_incomplete_packet()
+{
+    std::vector<uint8_t> incomplete_publish = {
+        static_cast<uint8_t>(PacketType::PUBLISH) << 4,
+        0x7F,
+        0x00, 0x04, 't', 'e', 's', 't'
+    };
+
+    auto result = MqttCodec::try_decode(incomplete_publish.data(), incomplete_publish.size());
+    TEST_ASSERT(!result.has_value(), "Incomplete packet should not be considered decodable");
+    return true;
+}
+
 bool test_codec_decode_packet_id()
 {
     std::vector<uint8_t> data = { 0x00, 0x2A };
@@ -498,6 +646,163 @@ bool test_codec_decode_packet_id()
     auto result = MqttCodec::decode_packet_id(data.data(), data.size());
     TEST_ASSERT(result.has_value(), "Should decode packet ID");
     TEST_ASSERT(*result == 42, "Packet ID should be 42");
+    return true;
+}
+
+bool test_codec_decode_publish_v5_with_properties()
+{
+    MqttProperties props;
+    props.topic_alias = 7;
+    props.content_type = "application/json";
+    props.message_expiry_interval = 120;
+
+    auto packet = make_publish_packet_v5(0, "sensor/json", props, { '{', '}', '\n' });
+
+    const uint8_t *body = nullptr;
+    size_t body_len = 0;
+    TEST_ASSERT(parse_packet_body(packet, body, body_len), "Should parse packet body");
+
+    auto decoded = MqttCodec::decode_publish(body, body_len, 0, ProtocolLevel::V5_0);
+    TEST_ASSERT(decoded.has_value(), "Should decode v5 publish");
+    TEST_ASSERT(decoded->topic == "sensor/json", "Decoded topic should match");
+    TEST_ASSERT(decoded->properties.topic_alias.has_value(), "Topic alias property should exist");
+    TEST_ASSERT(*decoded->properties.topic_alias == 7, "Topic alias should match");
+    TEST_ASSERT(decoded->properties.content_type.has_value(), "Content type should exist");
+    TEST_ASSERT(*decoded->properties.content_type == "application/json", "Content type should match");
+    TEST_ASSERT(decoded->properties.message_expiry_interval.has_value(), "Message expiry should exist");
+    TEST_ASSERT(*decoded->properties.message_expiry_interval == 120, "Message expiry should match");
+    return true;
+}
+
+bool test_properties_roundtrip_u32_endianness()
+{
+    MqttProperties props;
+    props.session_expiry_interval = 0x11223344;
+    props.maximum_packet_size = 0xA1B2C3D4;
+
+    ByteBuffer buf;
+    encode_properties(buf, props);
+
+    size_t offset = 0;
+    MqttProperties decoded;
+    size_t consumed = decode_properties(
+        reinterpret_cast<const uint8_t *>(buf.read_ptr()),
+        buf.readable_bytes(),
+        offset,
+        decoded);
+
+    TEST_ASSERT(consumed > 0, "Should decode encoded properties");
+    TEST_ASSERT(decoded.session_expiry_interval.has_value(), "Session expiry should exist");
+    TEST_ASSERT(*decoded.session_expiry_interval == 0x11223344, "Session expiry endian should be correct");
+    TEST_ASSERT(decoded.maximum_packet_size.has_value(), "Maximum packet size should exist");
+    TEST_ASSERT(*decoded.maximum_packet_size == 0xA1B2C3D4, "Maximum packet size endian should be correct");
+    return true;
+}
+
+bool test_dispatcher_connect_and_topic_alias_publish()
+{
+    MqttServerConfig config;
+    MqttSessionManager session_mgr;
+    MqttTopicTree tree;
+    MqttRetainedStore retained_store;
+    CaptureHandler handler;
+    MqttDispatcher dispatcher(config, session_mgr, tree, retained_store, &handler);
+
+    MqttSession &session = session_mgr.create_session(nullptr);
+
+    auto connect_packet = make_connect_packet_v5("client-dispatch");
+    auto connack = dispatcher.dispatch(session, connect_packet.data(), connect_packet.size());
+    TEST_ASSERT(connack.readable_bytes() > 0, "CONNECT should return CONNACK");
+    TEST_ASSERT(session.state() == MqttSessionState::connected, "Session should become connected");
+
+    MqttProperties p1;
+    p1.topic_alias = 1;
+    auto publish_with_topic = make_publish_packet_v5(0, "sensor/alias", p1, { 1, 2, 3 });
+    auto r1 = dispatcher.dispatch(session, publish_with_topic.data(), publish_with_topic.size());
+    TEST_ASSERT(r1.readable_bytes() == 0, "QoS0 publish should not require ACK");
+    TEST_ASSERT(handler.published_topics.size() == 1, "Handler should receive first publish");
+    TEST_ASSERT(handler.published_topics[0] == "sensor/alias", "First publish topic should match");
+
+    MqttProperties p2;
+    p2.topic_alias = 1;
+    auto publish_alias_only = make_publish_packet_v5(0, "", p2, { 9, 9 });
+    auto r2 = dispatcher.dispatch(session, publish_alias_only.data(), publish_alias_only.size());
+    TEST_ASSERT(r2.readable_bytes() == 0, "Alias-only QoS0 publish should not require ACK");
+    TEST_ASSERT(handler.published_topics.size() == 2, "Handler should receive alias publish");
+    TEST_ASSERT(handler.published_topics[1] == "sensor/alias", "Alias-only publish should resolve topic");
+
+    return true;
+}
+
+bool test_dispatcher_subscribe_and_unsubscribe_flow()
+{
+    MqttServerConfig config;
+    MqttSessionManager session_mgr;
+    MqttTopicTree tree;
+    MqttRetainedStore retained_store;
+    MqttDispatcher dispatcher(config, session_mgr, tree, retained_store, nullptr);
+
+    MqttSession &session = session_mgr.create_session(nullptr);
+    auto connect_packet = make_connect_packet_v5("client-sub");
+    auto connack = dispatcher.dispatch(session, connect_packet.data(), connect_packet.size());
+    TEST_ASSERT(connack.readable_bytes() > 0, "CONNECT should return CONNACK");
+
+    auto subscribe_packet = make_subscribe_packet_v5(7, "sensor/+", 0x01);
+    auto suback = dispatcher.dispatch(session, subscribe_packet.data(), subscribe_packet.size());
+    TEST_ASSERT(suback.readable_bytes() > 0, "SUBSCRIBE should return SUBACK");
+    auto suback_type = packet_type_of(suback);
+    TEST_ASSERT(suback_type.has_value(), "SUBACK packet should be parsable");
+    TEST_ASSERT(*suback_type == PacketType::SUBACK, "Response should be SUBACK");
+
+    auto matches = tree.match("sensor/temp");
+    TEST_ASSERT(matches.size() == 1, "Tree should contain subscribed filter");
+
+    auto unsubscribe_packet = make_unsubscribe_packet_v5(8, "sensor/+");
+    auto unsuback = dispatcher.dispatch(session, unsubscribe_packet.data(), unsubscribe_packet.size());
+    TEST_ASSERT(unsuback.readable_bytes() > 0, "UNSUBSCRIBE should return UNSUBACK");
+    auto unsuback_type = packet_type_of(unsuback);
+    TEST_ASSERT(unsuback_type.has_value(), "UNSUBACK packet should be parsable");
+    TEST_ASSERT(*unsuback_type == PacketType::UNSUBACK, "Response should be UNSUBACK");
+
+    auto matches_after = tree.match("sensor/temp");
+    TEST_ASSERT(matches_after.empty(), "Unsubscribe should remove filter from topic tree");
+    return true;
+}
+
+bool test_dispatcher_qos_handshake_flow()
+{
+    MqttServerConfig config;
+    MqttSessionManager session_mgr;
+    MqttTopicTree tree;
+    MqttRetainedStore retained_store;
+    MqttDispatcher dispatcher(config, session_mgr, tree, retained_store, nullptr);
+
+    MqttSession &session = session_mgr.create_session(nullptr);
+    auto connect_packet = make_connect_packet_v5("client-qos");
+    auto connack = dispatcher.dispatch(session, connect_packet.data(), connect_packet.size());
+    TEST_ASSERT(connack.readable_bytes() > 0, "CONNECT should return CONNACK");
+
+    auto pubrec_packet = MqttCodec::build_fixed_header(PacketType::PUBREC, 0, 2);
+    pubrec_packet.append_u16(100);
+    auto pubrel = dispatcher.dispatch(
+        session,
+        reinterpret_cast<const uint8_t *>(pubrec_packet.read_ptr()),
+        pubrec_packet.readable_bytes());
+    TEST_ASSERT(pubrel.readable_bytes() > 0, "PUBREC should trigger PUBREL");
+    auto pubrel_type = packet_type_of(pubrel);
+    TEST_ASSERT(pubrel_type.has_value(), "PUBREL packet should be parsable");
+    TEST_ASSERT(*pubrel_type == PacketType::PUBREL, "Response should be PUBREL");
+
+    auto pubrel_packet = MqttCodec::build_fixed_header(PacketType::PUBREL, 0x02, 2);
+    pubrel_packet.append_u16(100);
+    auto pubcomp = dispatcher.dispatch(
+        session,
+        reinterpret_cast<const uint8_t *>(pubrel_packet.read_ptr()),
+        pubrel_packet.readable_bytes());
+    TEST_ASSERT(pubcomp.readable_bytes() > 0, "PUBREL should trigger PUBCOMP");
+    auto pubcomp_type = packet_type_of(pubcomp);
+    TEST_ASSERT(pubcomp_type.has_value(), "PUBCOMP packet should be parsable");
+    TEST_ASSERT(*pubcomp_type == PacketType::PUBCOMP, "Response should be PUBCOMP");
     return true;
 }
 
@@ -510,8 +815,7 @@ bool test_topic_tree_basic_subscribe()
     sub.qos = QoS::AT_LEAST_ONCE;
 
     auto result = tree.subscribe("sensor/temperature", sub);
-    TEST_ASSERT(result.has_value(), "Subscribe should succeed");
-    TEST_ASSERT(*result == QoS::AT_LEAST_ONCE, "Granted QoS should match");
+    TEST_ASSERT(!result.has_value(), "First subscribe should not replace existing QoS");
 
     auto matches = tree.match("sensor/temperature");
     TEST_ASSERT(matches.size() == 1, "Should match 1 subscription");
@@ -1016,7 +1320,9 @@ int main()
     std::cout << "\n--- Codec (Decode) ---" << std::endl;
     RUN_TEST(test_codec_decode_connect_v311);
     RUN_TEST(test_codec_decode_connect_v5);
+    RUN_TEST(test_codec_decode_publish_v5_with_properties);
     RUN_TEST(test_codec_try_decode);
+    RUN_TEST(test_codec_try_decode_incomplete_packet);
     RUN_TEST(test_codec_decode_packet_id);
 
     std::cout << "\n--- Topic Tree ---" << std::endl;
@@ -1048,6 +1354,14 @@ int main()
     std::cout << "\n--- Session Manager ---" << std::endl;
     RUN_TEST(test_session_manager_basic);
     RUN_TEST(test_session_manager_all_sessions);
+
+    std::cout << "\n--- Dispatcher ---" << std::endl;
+    RUN_TEST(test_dispatcher_connect_and_topic_alias_publish);
+    RUN_TEST(test_dispatcher_subscribe_and_unsubscribe_flow);
+    RUN_TEST(test_dispatcher_qos_handshake_flow);
+
+    std::cout << "\n--- Property Encode/Decode ---" << std::endl;
+    RUN_TEST(test_properties_roundtrip_u32_endianness);
 
     std::cout << "\n--- Server ---" << std::endl;
     RUN_TEST(test_server_creation);

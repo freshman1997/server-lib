@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mini_nginx</title>
+  <style>
+    :root {
+      --bg: #f2f5f7;
+      --fg: #102126;
+      --card: #ffffff;
+      --accent: #0d7a6f;
+    }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", sans-serif;
+      background: radial-gradient(circle at top right, #d5e7e4, var(--bg));
+      color: var(--fg);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .card {
+      width: min(680px, 100%);
+      background: var(--card);
+      border-radius: 14px;
+      padding: 24px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+    }
+    h1 { margin: 0 0 10px; }
+    p { margin: 0; line-height: 1.7; }
+    code { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>mini_nginx is running</h1>
+    <p>
+      This page is served by the new static mount pipeline.
+      Try directory listing or JSON listing by appending <code>?json=1</code>.
+    </p>
+  </main>
+</body>
+</html>

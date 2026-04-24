@@ -109,6 +109,8 @@ namespace yuan::base
         // --------------------------------------------------------
         bool has_key_with_prefix(const std::string &word) const;
 
+        void clear();
+
         // 统计信息
         size_t size() const { return size_; }
         size_t node_count() const { return node_count_; }

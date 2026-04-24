@@ -14,6 +14,8 @@ namespace yuan::net::http::http_header_key
     extern const char *accept_language;
     extern const char *accept_charset;
     extern const char *accept_encoding;
+    extern const char *if_none_match;
+    extern const char *if_modified_since;
     extern const char *user_agent;
     extern const char *host;
     extern const char *cookie;
@@ -34,6 +36,8 @@ namespace yuan::net::http::http_header_key
     extern const char *transfer_encoding;
     extern const char *content_disposition;
     extern const char *content_encoding;
+    extern const char *etag;
+    extern const char *last_modified;
     extern const char *accept_ranges;
     extern const char *location;
 }

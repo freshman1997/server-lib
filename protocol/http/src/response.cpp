@@ -77,6 +77,8 @@ namespace yuan::net::http
 
     void HttpResponse::process_error(ResponseCode errorCode)
 {
+    set_response_code(errorCode);
+
     auto it = responseCodeDescs.find(errorCode);
     if (it == responseCodeDescs.end()) {
         errorCode = ResponseCode::internal_server_error;
@@ -171,7 +173,7 @@ namespace yuan::net::http
         ++sse_event_count_;
         append_body(e.serialize());
 
-        // SSE事件需要立即发�?        pack_and_send(context_->get_connection());
+        // SSE事件需要立即发�?        pack_and_send(context_->get_connection());
     }
 }
 

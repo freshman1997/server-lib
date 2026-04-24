@@ -2,6 +2,7 @@
 #define __NET_SECUITY_SSL_ACTION_H__
 #include <memory>
 #include <string>
+#include <vector>
 #include "ssl_handler.h"
 
 namespace yuan::net
@@ -19,6 +20,8 @@ namespace yuan::net
         virtual const std::string *get_error_message() const = 0;
 
         virtual std::shared_ptr<SSLHandler> create_handler(int fd, SSLHandler::SSLMode mode) = 0;
+
+        virtual void set_alpn_protocols(const std::vector<std::string> &protocols) = 0;
     };
 }
 

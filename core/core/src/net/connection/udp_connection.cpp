@@ -278,11 +278,11 @@ namespace yuan::net
 
     void UdpConnection::do_close()
     {
-        if (is_closing_) {
+        if (cleanup_done_) {
             return;
         }
-        is_closing_ = true;
         cleanup_done_ = true;
+        is_closing_ = true;
         if (alive_timer_) {
             alive_timer_->cancel();
             alive_timer_ = nullptr;

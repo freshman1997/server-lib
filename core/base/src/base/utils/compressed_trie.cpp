@@ -50,6 +50,13 @@ bool CompressTrie::has_key_with_prefix(const std::string &word) const
     return r.match_length >= static_cast<int>(word.size());
 }
 
+void CompressTrie::clear()
+{
+    root_ = std::make_unique<Node>();
+    size_ = 0;
+    node_count_ = 1;
+}
+
 
 // ============================================================
 // do_insert - 内部递归插入（Radix Tree 核心算法）

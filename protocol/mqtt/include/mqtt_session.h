@@ -214,6 +214,7 @@ namespace yuan::net::mqtt
     public:
         MqttSession &create_session(TcpConnection *conn);
         MqttSession &create_session(const std::shared_ptr<TcpConnection> &conn);
+        void bind_client_id(MqttSession &session, const std::string &client_id);
         void remove_session(uint64_t sid);
         MqttSession *find_by_client_id(const std::string &client_id);
         MqttSession *find_by_connection(TcpConnection *conn);

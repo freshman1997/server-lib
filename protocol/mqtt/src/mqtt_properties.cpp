@@ -185,10 +185,7 @@ namespace yuan::net::mqtt
         };
         auto write_u32_prop = [&](PropertyId id, uint32_t val) {
             prop_buf.append_u8(static_cast<uint8_t>(id));
-            prop_buf.append_u8(val & 0xFF);
-            prop_buf.append_u8((val >> 8) & 0xFF);
-            prop_buf.append_u8((val >> 16) & 0xFF);
-            prop_buf.append_u8((val >> 24) & 0xFF);
+            prop_buf.append_u32(val);
         };
 
         if (props.payload_format_indicator)
@@ -277,13 +274,15 @@ namespace yuan::net::mqtt
     {
         uint32_t value = 0;
         uint32_t multiplier = 1;
-        for (size_t i = 0; i < 4 && offset + i < len; ++i) {
-            uint8_t byte = data[offset + i];
+        size_t consumed = 0;
+        for (; consumed < 4 && offset + consumed < len; ++consumed) {
+            uint8_t byte = data[offset + consumed];
             value += (byte & 0x7F) * multiplier;
             multiplier *= 128;
-            offset += i + 1;
-            if ((byte & 0x80) == 0)
+            if ((byte & 0x80) == 0) {
+                offset += consumed + 1;
                 return value;
+            }
         }
         return std::nullopt;
     }

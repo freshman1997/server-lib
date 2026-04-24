@@ -5,7 +5,29 @@
 
 namespace yuan::net::http::config
 {
-    int connection_idle_timeout = 30 * 1000;
+    namespace
+    {
+        constexpr int kDefaultConnectionIdleTimeout = 30 * 1000;
+        constexpr uint32_t kDefaultMaxHeaderLength = 1024 * 1024;
+        constexpr uint32_t kDefaultClientMaxContentLength = 1024 * 1024 * 5;
+        constexpr bool kDefaultCloseIdleConnection = false;
+        constexpr bool kDefaultFormDataUploadSave = false;
+        constexpr bool kDefaultEnableHttp2 = false;
+        constexpr bool kDefaultEnableHttp3 = false;
+
+        void reset_runtime_defaults()
+        {
+            connection_idle_timeout = kDefaultConnectionIdleTimeout;
+            max_header_length = kDefaultMaxHeaderLength;
+            client_max_content_length = kDefaultClientMaxContentLength;
+            close_idle_connection = kDefaultCloseIdleConnection;
+            form_data_upload_save = kDefaultFormDataUploadSave;
+            enable_http2 = kDefaultEnableHttp2;
+            enable_http3 = kDefaultEnableHttp3;
+        }
+    }
+
+    int connection_idle_timeout = kDefaultConnectionIdleTimeout;
     
     const char * config_file_name = "http.json";
 
@@ -20,13 +42,16 @@ namespace yuan::net::http::config
     const char * playable_types = KEY_TO_STRING(playable_types);
 
     // 最大包体长度默认 2 m
-    uint32_t max_header_length = 1024 * 1024;
+    uint32_t max_header_length = kDefaultMaxHeaderLength;
 
-    uint32_t client_max_content_length = 1024 * 1024 * 5;
+    uint32_t client_max_content_length = kDefaultClientMaxContentLength;
 
-    bool close_idle_connection = false;
+    bool close_idle_connection = kDefaultCloseIdleConnection;
 
-    bool form_data_upload_save = false;
+    bool form_data_upload_save = kDefaultFormDataUploadSave;
+
+    bool enable_http2 = kDefaultEnableHttp2;
+    bool enable_http3 = kDefaultEnableHttp3;
 
     int proxy_connect_timeout = 5 * 1000;
 
@@ -37,6 +62,8 @@ namespace yuan::net::http::config
 
     void load_config()
     {
+        reset_runtime_defaults();
+
         auto cfgManager = HttpConfigManager::get_instance();
         if (!cfgManager->good()) {
             return;
@@ -47,6 +74,8 @@ namespace yuan::net::http::config
         max_header_length = cfgManager->get_uint_property(KEY_TO_STRING(max_header_length), max_header_length);
         close_idle_connection = cfgManager->get_uint_property(KEY_TO_STRING(close_idle_connection), close_idle_connection);
         form_data_upload_save = cfgManager->get_bool_property(KEY_TO_STRING(form_data_upload_save), form_data_upload_save);
+        enable_http2 = cfgManager->get_bool_property(KEY_TO_STRING(enable_http2), enable_http2);
+        enable_http3 = cfgManager->get_bool_property(KEY_TO_STRING(enable_http3), enable_http3);
     }
 
     const std::string_view file_list_html_text = 

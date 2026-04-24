@@ -242,6 +242,23 @@ For Edge, replace `chrome.exe` with `msedge.exe`.
 3. Run `proxy_tool udp-echo 19090`
 4. Run `proxy_tool udp-probe 127.0.0.1 1080 127.0.0.1 19090 PING-UDP`
 
+## Production readiness and soak
+
+Use these files under `test/proxy/`:
+
+- `PRODUCTION_READINESS.md` production gating checklist
+- `run_proxy_soak.ps1` long-running proxy traffic generator and logger
+- `analyze_proxy_soak.ps1` parser for `traffic aggregate 1s` metrics lines
+
+Example:
+
+```powershell
+.	estepoxyun_proxy_soak.ps1 -ProxyServerPath .\build\test\proxy\proxy_server.exe -DurationSec 1800 -Concurrency 8
+.	estepoxyanalyze_proxy_soak.ps1 -ProxyLog .\logs\proxy_soak\proxy-<timestamp>.log -IdleTailSeconds 30
+```
+
+If your paths differ, adjust `-ProxyServerPath` and `-ProxyLog`.
+
 ## VS Code notes
 
 - Keep the repository root as the workspace folder so relative paths in tasks resolve correctly.

@@ -10,6 +10,8 @@ namespace yuan::net::http::http_header_key
     const char *accept_language = "accept-language";
     const char *accept_charset = "accept-charset";
     const char *accept_encoding = "accept-encoding";
+    const char *if_none_match = "if-none-match";
+    const char *if_modified_since = "if-modified-since";
     const char *user_agent = "user-agent";
     const char *host = "host";
     const char *cookie = "cookie";
@@ -29,6 +31,8 @@ namespace yuan::net::http::http_header_key
     const char *transfer_encoding = "transfer-encoding";
     const char *content_disposition = "content-disposition";
     const char *content_encoding = "content-encoding";
+    const char *etag = "etag";
+    const char *last_modified = "last-modified";
     const char *accept_ranges = "accept-ranges";
     const char *location = "location";
 }

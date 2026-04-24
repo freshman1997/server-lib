@@ -6,6 +6,36 @@
 
 namespace yuan::net::mqtt
 {
+    namespace
+    {
+        bool parse_remaining_length(const uint8_t * data, size_t len, size_t & header_len, size_t & body_len)
+        {
+            if (!data || len < 2)
+                return false;
+
+            uint32_t value = 0;
+            uint32_t multiplier = 1;
+            size_t consumed = 0;
+            for (; consumed < MQTT_VARIABLE_BYTE_INT_MAX_SIZE && (1 + consumed) < len; ++consumed) {
+                uint8_t byte = data[1 + consumed];
+                value += (static_cast<uint32_t>(byte & 0x7F) * multiplier);
+                multiplier *= 128;
+                if ((byte & 0x80) == 0)
+                    break;
+            }
+
+            if (consumed >= MQTT_VARIABLE_BYTE_INT_MAX_SIZE)
+                return false;
+
+            if ((data[1 + consumed] & 0x80) != 0)
+                return false;
+
+            header_len = 1 + consumed + 1;
+            body_len = value;
+            return header_len + body_len == len;
+        }
+    }
+
     MqttDispatcher::MqttDispatcher(const MqttServerConfig & config,
                                    MqttSessionManager & session_mgr,
                                    MqttTopicTree & topic_tree,
@@ -24,29 +54,36 @@ namespace yuan::net::mqtt
         auto pkt_type = static_cast<PacketType>((first_byte >> 4) & 0x0F);
         uint8_t flags = first_byte & 0x0F;
 
+        size_t fixed_header_len = 0;
+        size_t body_len = 0;
+        if (!parse_remaining_length(data, len, fixed_header_len, body_len))
+            return {};
+
+        const uint8_t * body = data + fixed_header_len;
+
         switch (pkt_type) {
         case PacketType::CONNECT:
-            return handle_connect(session, data, len);
+            return handle_connect(session, body, body_len);
         case PacketType::PUBLISH:
-            return handle_publish(session, data, len, flags);
+            return handle_publish(session, body, body_len, flags);
         case PacketType::PUBACK:
-            return handle_puback(session, data, len);
+            return handle_puback(session, body, body_len);
         case PacketType::PUBREC:
-            return handle_pubrec(session, data, len);
+            return handle_pubrec(session, body, body_len);
         case PacketType::PUBREL:
-            return handle_pubrel(session, data, len);
+            return handle_pubrel(session, body, body_len);
         case PacketType::PUBCOMP:
-            return handle_pubcomp(session, data, len);
+            return handle_pubcomp(session, body, body_len);
         case PacketType::SUBSCRIBE:
-            return handle_subscribe(session, data, len);
+            return handle_subscribe(session, body, body_len);
         case PacketType::UNSUBSCRIBE:
-            return handle_unsubscribe(session, data, len);
+            return handle_unsubscribe(session, body, body_len);
         case PacketType::PINGREQ:
             return handle_pingreq(session);
         case PacketType::DISCONNECT:
-            return handle_disconnect(session, data, len);
+            return handle_disconnect(session, body, body_len);
         case PacketType::AUTH:
-            return handle_auth(session, data, len);
+            return handle_auth(session, body, body_len);
         default:
             return {};
         }
@@ -120,7 +157,7 @@ namespace yuan::net::mqtt
             return MqttCodec::encode_connack(connack, connect.protocol_level);
         }
 
-        session.set_client_id(connect.client_id);
+        session_mgr_.bind_client_id(session, connect.client_id);
         session.set_protocol_level(connect.protocol_level);
         session.set_keep_alive(connect.keep_alive == 0 ? config_.keep_alive_default : connect.keep_alive);
         session.set_clean_start(connect.connect_flags & MQTT_CONNECT_FLAG_CLEAN_START);
@@ -195,15 +232,11 @@ namespace yuan::net::mqtt
         QoS qos = static_cast<QoS>((flags >> MQTT_PUBLISH_FLAG_QOS_SHIFT) & 0x03);
         uint8_t retain = (flags & MQTT_PUBLISH_FLAG_RETAIN) ? 1 : 0;
 
-        auto publish_opt = MqttCodec::decode_publish(data, len, flags);
+        auto publish_opt = MqttCodec::decode_publish(data, len, flags, session.protocol_level());
         if (!publish_opt.has_value())
             return {};
 
         auto &pkt = *publish_opt;
-
-        if (pkt.topic.empty() || !MqttTopicTree::validate_topic_name(pkt.topic)) {
-            return {};
-        }
 
         bool is_v5 = (session.protocol_level() == ProtocolLevel::V5_0);
         if (is_v5 && pkt.properties.topic_alias.has_value()) {
@@ -219,6 +252,10 @@ namespace yuan::net::mqtt
             } else {
                 session.set_topic_alias(alias, pkt.topic);
             }
+        }
+
+        if (pkt.topic.empty() || !MqttTopicTree::validate_topic_name(pkt.topic)) {
+            return {};
         }
 
         if (handler_ && !handler_->on_publish(&session, pkt.topic, pkt.payload, qos, retain)) {

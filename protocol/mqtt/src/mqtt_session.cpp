@@ -125,6 +125,17 @@ namespace yuan::net::mqtt
         return ref;
     }
 
+    void MqttSessionManager::bind_client_id(MqttSession & session, const std::string & client_id)
+    {
+        const auto &old_client_id = session.client_id();
+        if (!old_client_id.empty() && old_client_id != client_id)
+            client_id_index_.erase(old_client_id);
+
+        session.set_client_id(client_id);
+        if (!client_id.empty())
+            client_id_index_[client_id] = session.session_id();
+    }
+
     void MqttSessionManager::remove_session(uint64_t sid)
     {
         auto it = sessions_.find(sid);
@@ -139,11 +150,19 @@ namespace yuan::net::mqtt
     MqttSession *MqttSessionManager::find_by_client_id(const std::string & client_id)
     {
         auto idx_it = client_id_index_.find(client_id);
-        if (idx_it == client_id_index_.end())
-            return nullptr;
-        auto sess_it = sessions_.find(idx_it->second);
-        if (sess_it != sessions_.end())
-            return ptr_of(sess_it->second);
+        if (idx_it != client_id_index_.end()) {
+            auto sess_it = sessions_.find(idx_it->second);
+            if (sess_it != sessions_.end() && sess_it->second->client_id() == client_id)
+                return ptr_of(sess_it->second);
+        }
+
+        for (auto &pair : sessions_) {
+            if (pair.second->client_id() == client_id) {
+                client_id_index_[client_id] = pair.first;
+                return ptr_of(pair.second);
+            }
+        }
+
         return nullptr;
     }
 

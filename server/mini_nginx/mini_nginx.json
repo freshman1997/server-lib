@@ -1,0 +1,70 @@
+{
+  "server": {
+    "listen": 8080,
+    "server_name": "mini-nginx",
+    "thread_pool_size": 2,
+    "enable_keep_alive": true,
+    "enable_cors": true,
+    "enable_http2": true,
+    "max_body_size": 10485760
+  },
+  "access_log": {
+    "enabled": true,
+    "json": true,
+    "path": "server/mini_nginx/access.log"
+  },
+  "reload_check_interval_ms": 1000,
+  "static": [
+    {
+      "location": "/static",
+      "root": "server/mini_nginx/www",
+      "auto_index": true,
+      "enable_legacy_embedded_pages": false,
+      "enable_range": true,
+      "index": ["index.html", "index.htm"],
+      "try_files": ["$uri", "$uri/index.html", "/index.html", "=404"],
+      "error_page": {
+        "404": "/404.html"
+      }
+    }
+  ],
+  "upstreams": {
+    "api_backend": {
+      "balance": "round_robin",
+      "connect_timeout": 3000,
+      "read_timeout": 30000,
+      "write_timeout": 10000,
+      "max_retries": 1,
+      "pool_size": 16,
+      "idle_timeout": 60,
+      "servers": [
+        { "host": "127.0.0.1", "port": 9001, "weight": 1 },
+        { "host": "127.0.0.1", "port": 9002, "weight": 1 }
+      ]
+    },
+    "ws_backend": {
+      "balance": "round_robin",
+      "connect_timeout": 3000,
+      "read_timeout": 60000,
+      "write_timeout": 60000,
+      "max_retries": 0,
+      "pool_size": 4,
+      "idle_timeout": 30,
+      "servers": [
+        { "host": "127.0.0.1", "port": 9010, "weight": 1 }
+      ]
+    }
+  },
+  "routes": [
+    {
+      "path": "/api/",
+      "proxy_pass": "api_backend",
+      "strip_prefix": false
+    },
+    {
+      "path": "/ws/",
+      "proxy_pass": "ws_backend",
+      "strip_prefix": false
+    }
+  ]
+}

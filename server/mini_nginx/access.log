@@ -1,0 +1,14 @@
+2026-04-22 13:58:43 ip=127.0.0.1 method=GET url=/
+2026-04-22 13:58:43 ip=127.0.0.1 method=GET url=/
+2026-04-22 14:01:56 ip=127.0.0.1 method=GET url=/static/
+2026-04-22 14:01:56 ip=127.0.0.1 method=GET url=/static/
+2026-04-22 14:03:55 ip=127.0.0.1 method=GET url=/static/
+2026-04-22 14:03:55 ip=127.0.0.1 method=GET url=/static/
+2026-04-22 14:03:55 ip=127.0.0.1 method=GET url=/static/index.html
+2026-04-22 14:04:32 ip=127.0.0.1 method=GET url=/static/assets/
+{"ip":"127.0.0.1","latency_ms":0,"method":"GET","status":400,"ts":"2026-04-22 15:32:32","upstream":"127.0.0.1:8080","url":"/static/assets/readme.txt"}
+{"ip":"127.0.0.1:57276","latency_ms":0,"method":"GET","status":200,"ts":"2026-04-22 15:53:46","upstream":"127.0.0.1:8080","url":"/static/assets/readme.txt"}
+{"ip":"127.0.0.1:55060","latency_ms":0,"method":"GET","status":200,"ts":"2026-04-22 16:01:59","upstream":"127.0.0.1:8080","url":"/static/missing/path"}
+{"ip":"127.0.0.1:55062","latency_ms":0,"method":"GET","status":200,"ts":"2026-04-22 16:01:59","upstream":"127.0.0.1:8080","url":"/static/assets/"}
+{"ip":"127.0.0.1:56672","latency_ms":0,"method":"GET","status":200,"ts":"2026-04-22 16:04:52","upstream":"127.0.0.1:8080","url":"/static/missing/path"}
+{"ip":"127.0.0.1:56673","latency_ms":0,"method":"GET","status":200,"ts":"2026-04-22 16:04:52","upstream":"127.0.0.1:8080","url":"/static/unknown"}

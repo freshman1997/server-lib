@@ -19,6 +19,8 @@ namespace yuan::net
 
         virtual std::shared_ptr<SSLHandler> create_handler(int fd, SSLHandler::SSLMode mode);
 
+        virtual void set_alpn_protocols(const std::vector<std::string> &protocols) override;
+
     public:
         void set_error_msg(const char *msg, size_t len);
 
@@ -45,6 +47,8 @@ namespace yuan::net
         virtual bool ssl_want_read() const override;
 
         virtual bool ssl_want_write() const override;
+
+        virtual std::string_view get_alpn_selected() const override;
 
     private:
         void set_ssl_data(OpenSSLModule *module, void *ssl, SSLMode mode);

@@ -25,6 +25,12 @@ option(YUAN_ENABLE_WS_SSL "Enable WebSocket SSL support" OFF)
 option(YUAN_ENABLE_PLUGIN_SYSTEM "Build and integrate the plugin system" ${YUAN_BUILD_PLUGINS})
 option(YUAN_ENABLE_SSH "Enable SSH protocol support" ON)
 option(YUAN_ENABLE_SSH_SFTP "Enable SSH SFTP subsystem support" ON)
+option(YUAN_FORCE_STATIC_LINK "Prefer static libraries and runtime" ON)
+option(KCP_BUILD_TESTING "Build kcp tests" OFF)
+
+if (YUAN_FORCE_STATIC_LINK)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
+endif()
 
 # Backward-compatible variables used by existing subdirectories.
 set(HTTP_USE_SSL ${YUAN_ENABLE_HTTP_SSL})
@@ -37,15 +43,42 @@ target_compile_features(webserver_project_options INTERFACE cxx_std_20)
 include_directories(
     third_party/json/include/
     third_party/kcp/
+    third_party/brotli/c/include/
     third_party/openssl-3.4.0/include/
     third_party/fmt/include/
 )
 
 add_subdirectory(third_party/kcp)
 add_subdirectory(third_party/fmt)
+
+set(BROTLI_BUILD_TOOLS OFF CACHE BOOL "Disable Brotli CLI tools" FORCE)
+set(BROTLI_DISABLE_TESTS ON CACHE BOOL "Disable Brotli tests" FORCE)
+add_subdirectory(third_party/brotli)
+
+set(ZLIB_BUILD_TESTING OFF CACHE BOOL "Disable zlib tests" FORCE)
+set(ZLIB_BUILD_SHARED OFF CACHE BOOL "Disable zlib shared lib" FORCE)
+set(ZLIB_BUILD_STATIC ON CACHE BOOL "Enable zlib static lib" FORCE)
+set(ZLIB_INSTALL OFF CACHE BOOL "Disable zlib install" FORCE)
+add_subdirectory(third_party/zlib)
+
+if (YUAN_FORCE_STATIC_LINK AND MINGW)
+    add_link_options(-static-libgcc -static-libstdc++)
+endif()
+
 add_subdirectory(core/base)
 add_subdirectory(logger)
 add_subdirectory(core)
+
+if (YUAN_FORCE_STATIC_LINK)
+    set_target_properties(kcp PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS OFF)
+    if (TARGET fmt)
+        set_target_properties(fmt PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS OFF)
+    endif()
+    if (TARGET fmtd)
+        set_target_properties(fmtd PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS OFF)
+    endif()
+endif()
+
 add_subdirectory(protocol/http)
 add_subdirectory(protocol/ftp)
 add_subdirectory(protocol/websocket)
@@ -54,12 +87,14 @@ add_subdirectory(protocol/dns)
 add_subdirectory(protocol/socks5)
 add_subdirectory(protocol/mqtt)
 add_subdirectory(protocol/smb)
+add_subdirectory(protocol/shadowsocks)
 
 if (YUAN_ENABLE_SSH)
     add_subdirectory(protocol/ssh)
 endif()
 
 if (YUAN_BUILD_SERVERS OR YUAN_BUILD_TESTS OR YUAN_BUILD_EXAMPLE)
+    add_subdirectory(server/proxy)
     add_subdirectory(server/services)
 endif()
 
@@ -72,7 +107,17 @@ if (YUAN_BUILD_TESTS)
 endif()
 
 if (YUAN_ENABLE_PLUGIN_SYSTEM)
+    if (YUAN_FORCE_STATIC_LINK)
+        set(YUAN_BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
+        set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries" FORCE)
+    endif()
+
     add_subdirectory(plugins)
+
+    if (YUAN_FORCE_STATIC_LINK)
+        set(BUILD_SHARED_LIBS ${YUAN_BUILD_SHARED_LIBS_SAVED} CACHE BOOL "Build shared libraries" FORCE)
+        unset(YUAN_BUILD_SHARED_LIBS_SAVED)
+    endif()
 endif()
 
 if (YUAN_BUILD_LIBS)

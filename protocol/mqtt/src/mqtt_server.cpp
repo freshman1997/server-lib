@@ -95,6 +95,18 @@ namespace yuan::net::mqtt
                     recv_buf.readable_bytes());
 
                 if (!decoded) {
+                    if (recv_buf.readable_bytes() > config_.max_packet_size) {
+                        if (session.protocol_level() == ProtocolLevel::V5_0) {
+                            auto disc = MqttCodec::encode_disconnect(
+                                static_cast<uint8_t>(DisconnectReason::PACKET_TOO_LARGE),
+                                session.protocol_level(), {});
+                            if (disc.readable_bytes() > 0) {
+                                co_await ctx.write_async(std::move(disc));
+                            }
+                        }
+                        ctx.close();
+                        co_return;
+                    }
                     break;
                 }
 
@@ -102,6 +114,19 @@ namespace yuan::net::mqtt
                     type,
                     pkt_len
                 ] = *decoded;
+
+                if (pkt_len > config_.max_packet_size) {
+                    if (session.protocol_level() == ProtocolLevel::V5_0) {
+                        auto disc = MqttCodec::encode_disconnect(
+                            static_cast<uint8_t>(DisconnectReason::PACKET_TOO_LARGE),
+                            session.protocol_level(), {});
+                        if (disc.readable_bytes() > 0) {
+                            co_await ctx.write_async(std::move(disc));
+                        }
+                    }
+                    ctx.close();
+                    co_return;
+                }
 
                 if (first_packet) {
                     if (type != PacketType::CONNECT) {

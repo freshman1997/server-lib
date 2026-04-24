@@ -12,10 +12,12 @@
 #include <cassert>
 #include <cerrno>
 #ifdef _WIN32
+#include <ws2tcpip.h>
 #include <winsock2.h>
 #include <windows.h>
 #include <io.h>
 #else
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -24,6 +26,24 @@ namespace yuan::net
 {
     namespace
     {
+        bool is_connect_completed(int fd)
+        {
+            int so_error = 0;
+#ifdef _WIN32
+            int len = static_cast<int>(sizeof(so_error));
+            if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&so_error), &len) != 0) {
+                return false;
+            }
+            return so_error == 0 || so_error == WSAEISCONN;
+#else
+            socklen_t len = static_cast<socklen_t>(sizeof(so_error));
+            if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &len) != 0) {
+                return false;
+            }
+            return so_error == 0 || so_error == EISCONN;
+#endif
+        }
+
         template<typename T>
         T *ptr_of(std::unique_ptr<T> &owner)
         {
@@ -308,6 +328,11 @@ namespace yuan::net
         auto *handler = ptr_of(handler_owner);
 
         if (state_ == ConnectionState::connecting && handler) {
+            if (!is_connect_completed(channel_->get_fd())) {
+                handler->on_error(shared_from_this());
+                close();
+                return;
+            }
             state_ = ConnectionState::connected;
             handler->on_connected(shared_from_this());
         }
@@ -490,6 +515,11 @@ namespace yuan::net
         auto *handler = ptr_of(handler_owner);
 
         if (state_ == ConnectionState::connecting && handler) {
+            if (!is_connect_completed(channel_->get_fd())) {
+                handler->on_error(shared_from_this());
+                close();
+                return;
+            }
             state_ = ConnectionState::connected;
             handler->on_connected(shared_from_this());
         }

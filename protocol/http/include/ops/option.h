@@ -46,6 +46,10 @@ namespace yuan::net::http::config
     // 上传的文件是否保存到文件中
     extern bool form_data_upload_save;
 
+    // runtime capability toggles (protocol stack hooks)
+    extern bool enable_http2;
+    extern bool enable_http3;
+
     /* default config value end */
 
     extern int proxy_connect_timeout;

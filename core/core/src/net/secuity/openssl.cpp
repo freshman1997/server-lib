@@ -9,6 +9,32 @@
 
 namespace yuan::net
 {
+    namespace
+    {
+        static int alpn_select_callback(SSL *, const unsigned char **out, unsigned char *outlen,
+                                         const unsigned char *in, unsigned int inlen, void *arg)
+        {
+            auto *protocols = static_cast<std::vector<std::string> *>(arg);
+            for (const auto &proto : *protocols) {
+                const unsigned char *p = in;
+                const unsigned char *end = in + inlen;
+                while (p < end) {
+                    const unsigned char proto_len = *p;
+                    if (p + 1 + proto_len > end) {
+                        break;
+                    }
+                    if (proto_len == proto.size() &&
+                        std::memcmp(p + 1, proto.data(), proto_len) == 0) {
+                        *out = p + 1;
+                        *outlen = proto_len;
+                        return SSL_TLSEXT_ERR_OK;
+                    }
+                    p += 1 + proto_len;
+                }
+            }
+            return SSL_TLSEXT_ERR_NOACK;
+        }
+    }
     static int set_err_msg(const char * msg, size_t len, void * udata)
     {
         OpenSSLModule *this_ = (OpenSSLModule *)udata;
@@ -25,11 +51,16 @@ namespace yuan::net
                 SSL_CTX_free(ctx_);
                 ctx_ = nullptr;
             }
+            delete[] alpn_protocols_storage_;
+            alpn_protocols_storage_ = nullptr;
         }
 
     public:
         std::string errmsg_;
         SSL_CTX *ctx_ = nullptr;
+        std::vector<std::string> alpn_protocols_;
+        unsigned char *alpn_protocols_storage_ = nullptr;
+        std::size_t alpn_protocols_storage_len_ = 0;
     };
 
     OpenSSLModule::OpenSSLModule()
@@ -88,6 +119,37 @@ namespace yuan::net
         }
 
         return true;
+    }
+
+    void OpenSSLModule::set_alpn_protocols(const std::vector<std::string> &protocols)
+    {
+        if (!data_->ctx_ || protocols.empty()) {
+            return;
+        }
+
+        data_->alpn_protocols_ = protocols;
+
+        if (data_->alpn_protocols_storage_) {
+            delete[] data_->alpn_protocols_storage_;
+        }
+        data_->alpn_protocols_storage_ = nullptr;
+
+        std::size_t total = 0;
+        for (const auto &p : protocols) {
+            total += 1 + p.size();
+        }
+
+        auto *wire = new unsigned char[total];
+        std::size_t off = 0;
+        for (const auto &p : protocols) {
+            wire[off++] = static_cast<unsigned char>(p.size());
+            std::memcpy(wire + off, p.data(), p.size());
+            off += p.size();
+        }
+        data_->alpn_protocols_storage_ = wire;
+        data_->alpn_protocols_storage_len_ = total;
+
+        SSL_CTX_set_alpn_select_cb(data_->ctx_, alpn_select_callback, &data_->alpn_protocols_);
     }
 
     const std::string *OpenSSLModule::get_error_message() const
@@ -188,6 +250,20 @@ namespace yuan::net
     bool OpenSSLHandler::ssl_want_write() const
     {
         return data_->ssl_ && SSL_want_write(data_->ssl_);
+    }
+
+    std::string_view OpenSSLHandler::get_alpn_selected() const
+    {
+        if (!data_->ssl_) {
+            return {};
+        }
+        const unsigned char *proto = nullptr;
+        unsigned int len = 0;
+        SSL_get0_alpn_selected(data_->ssl_, &proto, &len);
+        if (!proto || len == 0) {
+            return {};
+        }
+        return {reinterpret_cast<const char *>(proto), len};
     }
 
     void OpenSSLHandler::set_ssl_data(OpenSSLModule * module, void * ssl, SSLMode mode)

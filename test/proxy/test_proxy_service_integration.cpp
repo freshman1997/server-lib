@@ -330,6 +330,98 @@ namespace
         close_socket(listener);
     }
 
+    void run_echo_server_n_connections(uint16_t port,
+                                       std::atomic_bool &ready,
+                                       int max_connections,
+                                       std::atomic_int *accepted = nullptr)
+    {
+        socket_t listener = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listener == kInvalidSocket) {
+            return;
+        }
+
+        int reuse = 1;
+#ifdef _WIN32
+        ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&reuse), sizeof(reuse));
+#else
+        ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#endif
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listener, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) != 0 ||
+            ::listen(listener, 16) != 0) {
+            close_socket(listener);
+            return;
+        }
+
+        ready.store(true);
+        for (int i = 0; i < max_connections; ++i) {
+            socket_t client = ::accept(listener, nullptr, nullptr);
+            if (client == kInvalidSocket) {
+                continue;
+            }
+            if (accepted) {
+                accepted->fetch_add(1);
+            }
+
+            char buf[4096];
+            while (true) {
+#ifdef _WIN32
+                const int rc = ::recv(client, buf, static_cast<int>(sizeof(buf)), 0);
+#else
+                const ssize_t rc = ::recv(client, buf, sizeof(buf), 0);
+#endif
+                if (rc <= 0) {
+                    break;
+                }
+                const std::string chunk(buf, static_cast<std::size_t>(rc));
+                if (!send_all(client, chunk)) {
+                    break;
+                }
+            }
+            close_socket(client);
+        }
+
+        close_socket(listener);
+    }
+
+    void run_single_hang_server(uint16_t port, std::atomic_bool &ready, int hold_ms)
+    {
+        socket_t listener = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listener == kInvalidSocket) {
+            return;
+        }
+
+        int reuse = 1;
+#ifdef _WIN32
+        ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&reuse), sizeof(reuse));
+#else
+        ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#endif
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listener, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) != 0 ||
+            ::listen(listener, 8) != 0) {
+            close_socket(listener);
+            return;
+        }
+
+        ready.store(true);
+        socket_t client = ::accept(listener, nullptr, nullptr);
+        if (client != kInvalidSocket) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(hold_ms));
+            close_socket(client);
+        }
+
+        close_socket(listener);
+    }
+
     void wait_until_ready(const std::atomic_bool &ready)
     {
         for (int i = 0; i < 100 && !ready.load(); ++i) {
@@ -598,6 +690,100 @@ namespace
         check(upstream_sent.load() > 0, "upstream should echo half-close smoke payload bytes");
     }
 
+    void test_proxy_http_upstream_connect_timeout()
+    {
+        std::cout << "  [ProxyService] HTTP upstream connect timeout\n";
+
+        const uint16_t proxy_port = reserve_tcp_port();
+        check(proxy_port != 0, "should reserve proxy port for connect-timeout case");
+
+        yuan::server::ProxyServiceConfig config;
+        config.listen_host = "127.0.0.1";
+        config.port = proxy_port;
+        config.header_timeout_ms = 3000;
+        config.idle_timeout_ms = 3000;
+        config.connect_timeout_ms = 200;
+        config.drain_timeout_ms = 1000;
+        config.allow_private_targets = true;
+
+        auto service = std::make_unique<yuan::server::ProxyService>(config);
+        check(service->init(), "proxy service init should succeed for connect-timeout case");
+        service->start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+
+        socket_t client = connect_loopback(proxy_port);
+        check(client != kInvalidSocket, "client should connect to proxy for connect-timeout case");
+        if (client != kInvalidSocket) {
+            const std::string request =
+                "GET http://127.0.0.1:1/timeout HTTP/1.1\r\n"
+                "Host: 127.0.0.1:1\r\n"
+                "Connection: close\r\n\r\n";
+            check(send_all(client, request), "timeout case request should send");
+
+            const std::string response = recv_some(client);
+            const bool has_timeout = response.find("504") != std::string::npos;
+            const bool has_bad_gateway = response.find("502") != std::string::npos;
+            check(has_timeout || has_bad_gateway,
+                  "proxy should return 504 or 502 when upstream connect fails quickly");
+
+            close_socket(client);
+        }
+
+        service->stop();
+    }
+
+    void test_proxy_http_upstream_slow_response_timeout()
+    {
+        std::cout << "  [ProxyService] HTTP upstream slow response timeout\n";
+
+        const uint16_t upstream_port = reserve_tcp_port();
+        const uint16_t proxy_port = reserve_tcp_port();
+        check(upstream_port != 0, "should reserve upstream slow server port");
+        check(proxy_port != 0, "should reserve proxy port for slow upstream case");
+
+        std::atomic_bool upstream_ready{ false };
+        std::thread upstream_thread([&]() {
+            run_single_hang_server(upstream_port, upstream_ready, 2000);
+        });
+        wait_until_ready(upstream_ready);
+        check(upstream_ready.load(), "slow upstream server should start");
+
+        yuan::server::ProxyServiceConfig config;
+        config.listen_host = "127.0.0.1";
+        config.port = proxy_port;
+        config.header_timeout_ms = 300;
+        config.idle_timeout_ms = 3000;
+        config.connect_timeout_ms = 1000;
+        config.drain_timeout_ms = 500;
+        config.allow_private_targets = true;
+
+        auto service = std::make_unique<yuan::server::ProxyService>(config);
+        check(service->init(), "proxy service init should succeed for slow upstream case");
+        service->start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+
+        socket_t client = connect_loopback(proxy_port);
+        check(client != kInvalidSocket, "client should connect to proxy for slow upstream case");
+        if (client != kInvalidSocket) {
+            const std::string request =
+                "GET http://127.0.0.1:" + std::to_string(upstream_port) + "/slow HTTP/1.1\r\n"
+                "Host: 127.0.0.1:" + std::to_string(upstream_port) + "\r\n"
+                "Connection: close\r\n\r\n";
+            check(send_all(client, request), "slow upstream request should send");
+
+            const std::string response = recv_some(client);
+            check(response.find("HTTP/1.1 200") == std::string::npos,
+                  "proxy should not report 200 when upstream stalls then closes without response");
+
+            close_socket(client);
+        }
+
+        service->stop();
+        if (upstream_thread.joinable()) {
+            upstream_thread.join();
+        }
+    }
+
     void test_proxy_connect_large_tunnel_no_half_close()
     {
         std::cout << "  [ProxyService] CONNECT large tunnel no half-close\n";
@@ -658,6 +844,101 @@ namespace
             upstream_thread.join();
         }
     }
+
+    void test_proxy_connect_reconnect_storm_smoke()
+    {
+        std::cout << "  [ProxyService] CONNECT reconnect storm smoke\n";
+
+        const uint16_t upstream_port = reserve_tcp_port();
+        const uint16_t proxy_port = reserve_tcp_port();
+        check(upstream_port != 0, "should reserve upstream echo port for reconnect storm");
+        check(proxy_port != 0, "should reserve proxy port for reconnect storm");
+
+        constexpr int kRounds = 20;
+        std::atomic_bool upstream_ready{ false };
+        std::atomic_int upstream_accepted{ 0 };
+        std::thread upstream_thread([&]() {
+            run_echo_server_n_connections(upstream_port, upstream_ready, kRounds, &upstream_accepted);
+        });
+        wait_until_ready(upstream_ready);
+        check(upstream_ready.load(), "reconnect storm echo server should start");
+
+        yuan::server::ProxyServiceConfig config;
+        config.listen_host = "127.0.0.1";
+        config.port = proxy_port;
+        config.header_timeout_ms = 3000;
+        config.idle_timeout_ms = 3000;
+        config.connect_timeout_ms = 3000;
+        config.drain_timeout_ms = 800;
+        config.allow_private_targets = true;
+
+        auto service = std::make_unique<yuan::server::ProxyService>(config);
+        check(service->init(), "proxy service init should succeed for reconnect storm");
+        service->start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+
+        int established = 0;
+        int payload_ok = 0;
+        const std::string payload(4096, 'r');
+
+        for (int i = 0; i < kRounds; ++i) {
+            socket_t client = connect_loopback(proxy_port);
+            if (client == kInvalidSocket) {
+                continue;
+            }
+
+            const std::string connect_request =
+                "CONNECT 127.0.0.1:" + std::to_string(upstream_port) + " HTTP/1.1\r\n"
+                "Host: 127.0.0.1:" + std::to_string(upstream_port) + "\r\n"
+                "Connection: keep-alive\r\n\r\n";
+
+            if (!send_all(client, connect_request)) {
+                close_socket(client);
+                continue;
+            }
+
+            std::string response;
+            if (!wait_for_contains(client, response, "\r\n\r\n") ||
+                response.find("200 Connection Established") == std::string::npos) {
+                close_socket(client);
+                continue;
+            }
+            ++established;
+
+            if (!send_all(client, payload)) {
+                close_socket(client);
+                continue;
+            }
+
+            std::string echoed;
+            if (wait_for_contains(client, echoed, std::string_view(payload).substr(0, 64), 32)) {
+                const std::string full_echo = recv_with_grace(client, payload.size(), 2000);
+                if (!full_echo.empty()) {
+                    echoed += full_echo;
+                }
+            }
+            if (echoed.size() >= 64 && payload.compare(0, 64, echoed, 0, 64) == 0) {
+                ++payload_ok;
+            }
+
+            if ((i % 2) == 0) {
+                (void)shutdown_socket_write(client);
+            }
+            close_socket(client);
+        }
+
+        service->stop();
+        if (upstream_thread.joinable()) {
+            upstream_thread.join();
+        }
+
+        check(established >= kRounds - 2,
+              "reconnect storm should establish most CONNECT tunnels");
+        check(payload_ok >= kRounds - 2,
+              "reconnect storm should echo payload on most tunnels");
+        check(upstream_accepted.load() >= kRounds - 2,
+              "upstream should accept most reconnect storm tunnels");
+    }
 }
 
 int main()
@@ -667,8 +948,11 @@ int main()
     test_proxy_connect_tunnel();
     test_proxy_connect_large_tunnel_half_close_smoke();
     test_proxy_connect_large_tunnel_no_half_close();
+    test_proxy_connect_reconnect_storm_smoke();
     test_proxy_plain_http_forward();
     test_proxy_large_http_forward();
+    test_proxy_http_upstream_connect_timeout();
+    test_proxy_http_upstream_slow_response_timeout();
 
     std::cout << '\n';
     if (g_failed > 0) {

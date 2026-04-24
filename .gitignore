@@ -19,3 +19,5 @@ GTAGS
 *.obj
 *.so
 *.dll
+logs
+test_http_static

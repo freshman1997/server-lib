@@ -1,0 +1,134 @@
+{
+  "gpt-5.4-nano": {
+    "context": 272000,
+    "output": 128000,
+    "input": [
+      "text",
+      "image"
+    ],
+    "_querySource": "litellm(exact:gpt-5.4-nano)",
+    "_queriedAt": "2026-04-07T02:31:13.869Z"
+  },
+  "gpt-5.4-mini": {
+    "context": 272000,
+    "output": 128000,
+    "input": [
+      "text",
+      "image"
+    ],
+    "_querySource": "litellm(exact:gpt-5.4-mini)",
+    "_queriedAt": "2026-04-07T02:31:13.891Z"
+  },
+  "gemini-3.1-flash-lite-preview": {
+    "context": 1048576,
+    "output": 65536,
+    "input": [
+      "text",
+      "image"
+    ],
+    "_querySource": "litellm(exact:gemini-3.1-flash-lite-preview)",
+    "_queriedAt": "2026-04-07T02:31:14.076Z"
+  },
+  "gemini-3.1-pro-preview": {
+    "context": 1048576,
+    "output": 65536,
+    "input": [
+      "text",
+      "image"
+    ],
+    "_querySource": "litellm(exact:gemini-3.1-pro-preview)",
+    "_queriedAt": "2026-04-07T02:31:14.077Z"
+  },
+  "claude-sonnet-4-5": {
+    "context": 200000,
+    "output": 64000,
+    "input": [
+      "text",
+      "image"
+    ],
+    "_querySource": "litellm(exact:claude-sonnet-4-5)",
+    "_queriedAt": "2026-04-07T02:31:14.089Z"
+  },
+  "claude-haiku-4-5": {
+    "context": 200000,
+    "output": 64000,
+    "input": [
+      "text",
+      "image"
+    ],
+    "_querySource": "litellm(exact:claude-haiku-4-5)",
+    "_queriedAt": "2026-04-07T02:31:14.090Z"
+  },
+  "MiniMax-M2.7": {
+    "context": 128000,
+    "output": 16384,
+    "input": [
+      "text"
+    ],
+    "_querySource": "manual",
+    "_queriedAt": "2026-04-07T02:32:53.960Z"
+  },
+  "qwen3.6-plus": {
+    "context": 32768,
+    "output": 8192,
+    "input": [
+      "text"
+    ],
+    "_querySource": "manual",
+    "_queriedAt": "2026-04-07T02:32:53.961Z"
+  },
+  "kimi-k2.5-ali": {
+    "context": 128000,
+    "output": 8192,
+    "input": [
+      "text"
+    ],
+    "_querySource": "manual",
+    "_queriedAt": "2026-04-07T02:32:54.242Z"
+  },
+  "MiniMax-M2.7-anthropic": {
+    "context": 128000,
+    "output": 8192,
+    "input": [
+      "text"
+    ],
+    "_querySource": "manual",
+    "_queriedAt": "2026-04-07T02:32:54.271Z"
+  },
+  "MiniMax-M2.7-highspeed-anthropic": {
+    "context": 32768,
+    "output": 8192,
+    "input": [
+      "text"
+    ],
+    "_querySource": "manual",
+    "_queriedAt": "2026-04-07T02:32:54.272Z"
+  },
+  "glm-5-ali": {
+    "context": 128000,
+    "output": 8192,
+    "input": [
+      "text"
+    ],
+    "_querySource": "manual",
+    "_queriedAt": "2026-04-07T02:32:54.276Z"
+  },
+  "claude-sonnet-4-6-sp": {
+    "context": 200000,
+    "output": 8192,
+    "input": [
+      "text"
+    ],
+    "_querySource": "manual",
+    "_queriedAt": "2026-04-07T02:32:54.283Z"
+  },
+  "MiniMax-M2.7-highspeed": {
+    "context": 128000,
+    "output": 16384,
+    "input": [
+      "text"
+    ],
+    "_querySource": "manual",
+    "_queriedAt": "2026-04-07T02:32:54.309Z"
+  }
+}

@@ -10,6 +10,19 @@
 #include "logger.h"
 namespace yuan::net::http
 {
+    namespace
+    {
+        std::string normalize_header_key(std::string_view key)
+        {
+            std::string normalized;
+            normalized.reserve(key.size());
+            for (char ch : key) {
+                normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+            }
+            return normalized;
+        }
+    }
+
     static const char *http_version_descs[4] = {
         "1.0",
         "1.1",
@@ -115,16 +128,13 @@ namespace yuan::net::http
         content_type_extra_.clear();
         error_code_ = ResponseCode::internal_server_error;
         buffer_.clear();
-        buffer_.shrink_to_fit();
         input_cache_.clear();
         pre_content_parser_.reset();
         chunked_checksum_.clear();
-        chunked_checksum_.shrink_to_fit();
         is_download_file_ = false;
         is_upload_file_ = false;
         task_.reset();
         original_file_name_.clear();
-        original_file_name_.shrink_to_fit();
     }
 
     void HttpPacket::set_pre_content_parser(ContentParser * parser)
@@ -139,39 +149,41 @@ namespace yuan::net::http
 
     const std::string *HttpPacket::get_header(std::string_view key) const
     {
-        for (const auto &item : headers_) {
-            if (std::string_view(item.first) == key) {
-                return &item.second;
-            }
+        if (key.empty()) {
+            return nullptr;
+        }
+
+        const auto it = headers_.find(normalize_header_key(key));
+        if (it != headers_.end()) {
+            return &it->second;
         }
         return nullptr;
     }
 
     void HttpPacket::add_header(const std::string & k, const std::string & v)
     {
-        headers_[k] = v;
+        headers_[normalize_header_key(k)] = v;
     }
 
     void HttpPacket::add_header(std::string && k, std::string && v)
     {
-        headers_[std::move(k)] = std::move(v);
+        headers_[normalize_header_key(k)] = std::move(v);
     }
 
     void HttpPacket::add_header(const char * k, const char * v)
     {
-        headers_.emplace(k, v);
+        if (!k || !v) {
+            return;
+        }
+        headers_[normalize_header_key(k)] = v;
     }
 
     void HttpPacket::remove_header(std::string_view k)
     {
-        auto it = headers_.begin();
-        while (it != headers_.end()) {
-            if (std::string_view(it->first) == k) {
-                it = headers_.erase(it);
-                return;
-            }
-            ++it;
+        if (k.empty()) {
+            return;
         }
+        headers_.erase(normalize_header_key(k));
     }
 
     void HttpPacket::clear_header()
@@ -338,7 +350,7 @@ namespace yuan::net::http
             return false;
 
         const std::string *ctype = get_header(http_header_key::content_type);
-        if (!ctype)
+        if (!ctype && !is_chunked())
             return true;
 
         is_good_ = ContentParserFactory::get_instance()->parse_content(this);
@@ -483,6 +495,12 @@ namespace yuan::net::http
     std::size_t HttpPacket::body_buffer_size() const
     {
         return buffer_.readable_bytes();
+    }
+
+    std::string HttpPacket::body_buffer_text() const
+    {
+        const auto span = buffer_.readable_span();
+        return span.empty() ? std::string() : std::string(span.data(), span.size());
     }
 
     void HttpPacket::pack_and_send(Connection * conn)

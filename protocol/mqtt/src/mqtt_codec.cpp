@@ -100,6 +100,8 @@ namespace yuan::net::mqtt
             return std::nullopt;
 
         size_t total = 1 + vbi_bytes + *remaining;
+        if (total > len)
+            return std::nullopt;
         return std::make_pair(static_cast<PacketType>(type_val), total);
     }
 
@@ -173,7 +175,7 @@ namespace yuan::net::mqtt
         return pkt;
     }
 
-    std::optional<MqttPublishPacket> MqttCodec::decode_publish(const uint8_t * data, size_t len, uint8_t flags)
+    std::optional<MqttPublishPacket> MqttCodec::decode_publish(const uint8_t * data, size_t len, uint8_t flags, ProtocolLevel level)
     {
         size_t offset = 0;
 
@@ -192,6 +194,11 @@ namespace yuan::net::mqtt
                 return std::nullopt;
             pkt.packet_id = (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
             offset += 2;
+        }
+
+        if (level == ProtocolLevel::V5_0) {
+            if (decode_properties(data, len, offset, pkt.properties) == 0)
+                return std::nullopt;
         }
 
         if (offset < len) {

@@ -23,7 +23,7 @@ namespace yuan::net::mqtt
         try_decode(const uint8_t *data, size_t len);
 
         static std::optional<MqttConnectPacket> decode_connect(const uint8_t *data, size_t len);
-        static std::optional<MqttPublishPacket> decode_publish(const uint8_t *data, size_t len, uint8_t flags);
+        static std::optional<MqttPublishPacket> decode_publish(const uint8_t *data, size_t len, uint8_t flags, ProtocolLevel level);
         static std::optional<MqttSubscribePacket> decode_subscribe(const uint8_t *data, size_t len, ProtocolLevel level);
         static std::optional<MqttUnsubscribePacket> decode_unsubscribe(const uint8_t *data, size_t len, ProtocolLevel level);
         static std::optional<uint16_t> decode_packet_id(const uint8_t *data, size_t len);

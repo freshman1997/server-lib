@@ -111,10 +111,10 @@ namespace yuan::timer
 
                     if (timer->get_remain() < time_unit_) {
                         timer->trigger();
-                        if (timer->is_cancel()) {
-                            delete timer;
-                        } else if (timer->ready()) {
+                        if (timer->ready()) {
                             place_timer(timer);
+                        } else {
+                            delete timer;
                         }
                     } else {
                         place_timer(timer);

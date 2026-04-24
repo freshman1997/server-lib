@@ -1,6 +1,7 @@
 #ifndef __NET_SECUITY_SSL_HANDLER_H__
 #define __NET_SECUITY_SSL_HANDLER_H__
 #include <cstddef>
+#include <string_view>
 
 namespace yuan::net
 {
@@ -31,6 +32,11 @@ namespace yuan::net
         virtual bool ssl_want_write() const
         {
             return false;
+        }
+
+        virtual std::string_view get_alpn_selected() const
+        {
+            return {};
         }
     };
 }
