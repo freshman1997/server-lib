@@ -32,6 +32,61 @@ static int g_tests_run = 0;
 static int g_tests_passed = 0;
 static int g_tests_failed = 0;
 
+static void test_write_le16(std::vector<uint8_t> &buf, size_t offset, uint16_t value)
+{
+    buf[offset] = static_cast<uint8_t>(value & 0xFF);
+    buf[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+}
+
+static void test_write_le32(std::vector<uint8_t> &buf, size_t offset, uint32_t value)
+{
+    buf[offset] = static_cast<uint8_t>(value & 0xFF);
+    buf[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+    buf[offset + 2] = static_cast<uint8_t>((value >> 16) & 0xFF);
+    buf[offset + 3] = static_cast<uint8_t>((value >> 24) & 0xFF);
+}
+
+static std::vector<uint8_t> utf16_bytes(const std::string &text)
+{
+    std::vector<uint8_t> out;
+    out.reserve(text.size() * 2);
+    for (char ch : text) {
+        out.push_back(static_cast<uint8_t>(ch));
+        out.push_back(0);
+    }
+    return out;
+}
+
+static void append_security_buffer(std::vector<uint8_t> &msg,
+                                   size_t descriptor_offset,
+                                   const std::vector<uint8_t> &data)
+{
+    const auto offset = static_cast<uint32_t>(msg.size());
+    test_write_le16(msg, descriptor_offset, static_cast<uint16_t>(data.size()));
+    test_write_le16(msg, descriptor_offset + 2, static_cast<uint16_t>(data.size()));
+    test_write_le32(msg, descriptor_offset + 4, offset);
+    msg.insert(msg.end(), data.begin(), data.end());
+}
+
+static std::vector<uint8_t> build_test_type3(const std::string &user,
+                                             const std::string &domain,
+                                             const std::string &workstation,
+                                             const std::vector<uint8_t> &nt_response)
+{
+    std::vector<uint8_t> msg(64, 0);
+    std::memcpy(msg.data(), "NTLMSSP\0", 8);
+    test_write_le32(msg, 8, NTLMSSP_MESSAGE_TYPE_AUTHENTICATE);
+    append_security_buffer(msg, 12, {});
+    append_security_buffer(msg, 20, nt_response);
+    append_security_buffer(msg, 28, utf16_bytes(user));
+    append_security_buffer(msg, 36, utf16_bytes(domain));
+    append_security_buffer(msg, 44, utf16_bytes(workstation));
+    append_security_buffer(msg, 52, {});
+    test_write_le32(msg, 60, NTLMSSP_NEGOTIATE_UNICODE | NTLMSSP_NEGOTIATE_NTLM |
+                             NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY);
+    return msg;
+}
+
 #define TEST_ASSERT(expr, msg)                                                              \
     do {                                                                                    \
         if (!(expr)) {                                                                      \
@@ -617,6 +672,65 @@ bool test_ntlm_auth()
     return true;
 }
 
+bool test_ntlmv2_password_proof_auth()
+{
+    SmbNtlmAuth ntlm("TESTSERVER", "DOMAIN");
+    ntlm.set_password_lookup([](const std::string &user, const std::string &domain)->std::optional<std::string> {
+        return (user == "alice" && domain == "DOMAIN") ? std::optional<std::string>("secret") : std::nullopt;
+    });
+    ntlm.set_credentials_db([](const std::string &user, const std::string &domain, const std::string &password)->bool {
+        return user == "alice" && domain == "DOMAIN" && password == "secret";
+    });
+
+    const std::vector<uint8_t> type1 = {
+        'N', 'T', 'L', 'M', 'S', 'S', 'P', '\0',
+        0x01, 0x00, 0x00, 0x00,
+        static_cast<uint8_t>(NTLMSSP_NEGOTIATE_UNICODE & 0xFF),
+        static_cast<uint8_t>((NTLMSSP_NEGOTIATE_NTLM >> 8) & 0xFF),
+        static_cast<uint8_t>((NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY >> 16) & 0xFF),
+        0x00
+    };
+    auto type2 = ntlm.process_inbound_token(type1);
+    TEST_ASSERT(type2.size() >= 48, "NTLM Type2 should include challenge and target info");
+
+    std::array<uint8_t, 8> challenge{};
+    std::memcpy(challenge.data(), type2.data() + 24, challenge.size());
+    const uint16_t target_info_len = static_cast<uint16_t>(type2[40] | (type2[41] << 8));
+    const uint32_t target_info_offset = static_cast<uint32_t>(type2[44]) |
+                                        (static_cast<uint32_t>(type2[45]) << 8) |
+                                        (static_cast<uint32_t>(type2[46]) << 16) |
+                                        (static_cast<uint32_t>(type2[47]) << 24);
+    TEST_ASSERT(target_info_offset + target_info_len <= type2.size(), "Type2 target info should be in range");
+
+    std::vector<uint8_t> blob(type2.begin() + target_info_offset,
+                              type2.begin() + target_info_offset + target_info_len);
+    auto response = SmbNtlmAuth::ntlmv2_response("secret", "alice", "DOMAIN", challenge, blob);
+    TEST_ASSERT(SmbNtlmAuth::verify_ntlmv2_response("secret", "alice", "DOMAIN", challenge, response),
+                "Static NTLMv2 verifier should accept correct response");
+    TEST_ASSERT(!SmbNtlmAuth::verify_ntlmv2_response("bad", "alice", "DOMAIN", challenge, response),
+                "Static NTLMv2 verifier should reject wrong password");
+
+    auto type3 = build_test_type3("alice", "DOMAIN", "WORKSTATION", response);
+    auto final = ntlm.process_inbound_token(type3);
+    TEST_ASSERT(final.empty(), "NTLM authenticate should not need outbound token");
+    TEST_ASSERT(ntlm.is_complete(), "NTLM auth should be complete after Type3");
+    TEST_ASSERT(ntlm.result().success, "NTLM auth should accept valid NTLMv2 proof");
+    TEST_ASSERT(!ntlm.result().session_key.empty(), "NTLM auth should derive a session key");
+
+    SmbNtlmAuth wrong("TESTSERVER", "DOMAIN");
+    wrong.set_password_lookup([](const std::string &, const std::string &)->std::optional<std::string> {
+        return std::string("bad");
+    });
+    auto wrong_type2 = wrong.process_inbound_token(type1);
+    TEST_ASSERT(!wrong_type2.empty(), "Wrong-password auth should still issue challenge");
+    auto rejected = wrong.process_inbound_token(type3);
+    TEST_ASSERT(rejected.empty(), "Rejected auth should not emit token");
+    TEST_ASSERT(wrong.is_complete(), "Rejected auth should complete as failed");
+    TEST_ASSERT(!wrong.result().success, "Wrong password should reject NTLMv2 proof");
+
+    return true;
+}
+
 bool test_spnego_auth()
 {
     SmbSpnegoAuth spnego("MYSERVER", "WORKGROUP");
@@ -852,6 +966,122 @@ bool test_local_file_system_directory()
     return true;
 }
 
+bool test_local_file_system_set_info_rename_delete()
+{
+    std::string test_dir = "/tmp/smb_fs_mutation_test_" + std::to_string(std::hash<std::thread::id> {}(std::this_thread::get_id()));
+    std::filesystem::create_directories(test_dir);
+
+    {
+        std::ofstream ofs(test_dir + "/old.txt");
+        ofs << "rename me" << std::endl;
+    }
+
+    LocalFileSystem fs(test_dir);
+
+    auto open_result = fs.open("old.txt", FILE_GENERIC_READ | FILE_GENERIC_WRITE, FILE_OPEN, 0);
+    TEST_ASSERT(open_result.success, "Open file for mutation should succeed");
+
+    auto new_name = Smb2Codec::utf8_to_utf16le("new.txt");
+    std::vector<uint8_t> rename_info(20 + new_name.size() * 2, 0);
+    rename_info[0] = 1;
+    uint32_t name_len = static_cast<uint32_t>(new_name.size() * 2);
+    std::memcpy(rename_info.data() + 16, &name_len, sizeof(name_len));
+    for (size_t i = 0; i < new_name.size(); ++i) {
+        rename_info[20 + i * 2] = static_cast<uint8_t>(new_name[i] & 0xFF);
+        rename_info[21 + i * 2] = static_cast<uint8_t>((new_name[i] >> 8) & 0xFF);
+    }
+
+    auto rename_status = fs.set_info(open_result.handle, FileInfoClass::FileRenameInformation,
+                                     rename_info.data(), static_cast<uint32_t>(rename_info.size()));
+    TEST_ASSERT(rename_status == NtStatus::SUCCESS, "Rename via FileRenameInformation should succeed");
+    TEST_ASSERT(std::filesystem::exists(test_dir + "/new.txt"), "Renamed file should exist");
+    TEST_ASSERT(!std::filesystem::exists(test_dir + "/old.txt"), "Old file name should be gone");
+
+    uint8_t delete_info[1] = { 1 };
+    auto delete_status = fs.set_info(open_result.handle, FileInfoClass::FileDispositionInformation,
+                                     delete_info, sizeof(delete_info));
+    TEST_ASSERT(delete_status == NtStatus::SUCCESS, "Delete via FileDispositionInformation should succeed");
+    TEST_ASSERT(!std::filesystem::exists(test_dir + "/new.txt"), "Deleted file should be gone");
+
+    fs.close(open_result.handle);
+    std::filesystem::remove_all(test_dir);
+    return true;
+}
+
+bool test_local_file_system_absolute_rename()
+{
+    std::string test_dir = "/tmp/smb_fs_abs_rename_test_" + std::to_string(std::hash<std::thread::id> {}(std::this_thread::get_id()));
+    std::filesystem::create_directories(test_dir);
+
+    {
+        std::ofstream ofs(test_dir + "/old.txt");
+        ofs << "rename me from root" << std::endl;
+    }
+
+    LocalFileSystem fs(test_dir);
+
+    auto open_result = fs.open("old.txt", FILE_GENERIC_READ | FILE_GENERIC_WRITE, FILE_OPEN, 0);
+    TEST_ASSERT(open_result.success, "Open file for absolute rename should succeed");
+
+    auto new_name = Smb2Codec::utf8_to_utf16le("\\new.txt");
+    std::vector<uint8_t> rename_info(20 + new_name.size() * 2, 0);
+    rename_info[0] = 1;
+    uint32_t name_len = static_cast<uint32_t>(new_name.size() * 2);
+    std::memcpy(rename_info.data() + 16, &name_len, sizeof(name_len));
+    for (size_t i = 0; i < new_name.size(); ++i) {
+        rename_info[20 + i * 2] = static_cast<uint8_t>(new_name[i] & 0xFF);
+        rename_info[21 + i * 2] = static_cast<uint8_t>((new_name[i] >> 8) & 0xFF);
+    }
+
+    auto rename_status = fs.set_info(open_result.handle, FileInfoClass::FileRenameInformation,
+                                     rename_info.data(), static_cast<uint32_t>(rename_info.size()));
+    TEST_ASSERT(rename_status == NtStatus::SUCCESS, "Root-relative SMB rename should succeed");
+    TEST_ASSERT(std::filesystem::exists(test_dir + "/new.txt"), "Root-relative renamed file should exist in share");
+    TEST_ASSERT(!std::filesystem::exists(test_dir + "/old.txt"), "Root-relative old file should be gone");
+
+    fs.close(open_result.handle);
+    std::filesystem::remove_all(test_dir);
+    return true;
+}
+
+bool test_local_file_system_directory_cursor()
+{
+    std::string test_dir = "/tmp/smb_fs_cursor_test_" + std::to_string(std::hash<std::thread::id> {}(std::this_thread::get_id()));
+    std::filesystem::create_directories(test_dir);
+
+    {
+        std::ofstream ofs(test_dir + "/a.txt");
+        ofs << "a" << std::endl;
+    }
+    {
+        std::ofstream ofs(test_dir + "/b.txt");
+        ofs << "b" << std::endl;
+    }
+
+    LocalFileSystem fs(test_dir);
+
+    auto open_result = fs.open("", FILE_GENERIC_READ, FILE_OPEN, FILE_DIRECTORY_FILE);
+    TEST_ASSERT(open_result.success, "Open directory for cursor test should succeed");
+
+    auto first = fs.query_directory(open_result.handle, "*.txt", FileInfoClass::FileIdBothDirectoryInformation, true, 1);
+    TEST_ASSERT(first.has_value(), "First paged query should return an entry");
+    TEST_ASSERT(first->size() == 1, "First paged query should return one entry");
+
+    auto second = fs.query_directory(open_result.handle, "*.txt", FileInfoClass::FileIdBothDirectoryInformation, false, 1);
+    TEST_ASSERT(second.has_value(), "Second paged query should return an entry");
+    TEST_ASSERT(second->size() == 1, "Second paged query should return one entry");
+
+    auto done = fs.query_directory(open_result.handle, "*.txt", FileInfoClass::FileIdBothDirectoryInformation, false, 1);
+    TEST_ASSERT(!done.has_value(), "Paged directory query should end with no more files");
+
+    auto restarted = fs.query_directory(open_result.handle, "*.txt", FileInfoClass::FileIdBothDirectoryInformation, true, 1);
+    TEST_ASSERT(restarted.has_value(), "Restarted directory query should return entries again");
+
+    fs.close(open_result.handle);
+    std::filesystem::remove_all(test_dir);
+    return true;
+}
+
 bool test_dispatcher_negotiate()
 {
     SmbServerConfig config;
@@ -901,6 +1131,325 @@ bool test_dispatcher_negotiate()
         reinterpret_cast<const uint8_t *>(resp_span.data()), resp_span.size());
     TEST_ASSERT(resp_hdr.has_value(), "Should decode negotiate response header");
     TEST_ASSERT(resp_hdr->status == 0, "Negotiate should succeed");
+
+    session_mgr.remove_session(session->session_id());
+    return true;
+}
+
+bool test_dispatcher_negotiate_conservative_capabilities()
+{
+    SmbServerConfig config;
+    config.enable_encryption = false;
+    SmbShareManager share_mgr;
+    SmbLockManager lock_mgr;
+    SmbPipeManager pipe_mgr;
+    SmbDfsResolver dfs;
+    SmbChangeNotifier cn;
+
+    SmbDispatcher disp(config, share_mgr, lock_mgr, pipe_mgr, dfs, cn);
+
+    SmbSessionManager session_mgr;
+    SmbSession *session = session_mgr.create_session(nullptr);
+
+    Smb2Header hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
+    hdr.protocol_id = SMB2_PROTOCOL_ID;
+    hdr.command = static_cast<uint16_t>(Smb2Command::NEGOTIATE);
+    hdr.credit_request = 1;
+
+    ByteBuffer req_buf = Smb2Codec::encode_header(hdr);
+    Smb2Codec::write_le16(req_buf, 36);
+    Smb2Codec::write_le16(req_buf, 1);
+    Smb2Codec::write_le16(req_buf, 0);
+    Smb2Codec::write_le16(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    for (int i = 0; i < 16; ++i) {
+        req_buf.append_u8(0);
+    }
+    Smb2Codec::write_le64(req_buf, 0);
+    Smb2Codec::write_le16(req_buf, static_cast<uint16_t>(DialectRevision::SMB_3_1_1));
+
+    auto span = req_buf.readable_span();
+    auto resp = disp.dispatch(*session, hdr,
+                              reinterpret_cast<const uint8_t *>(span.data()),
+                              span.size());
+    auto resp_span = resp.readable_span();
+    const auto *raw = reinterpret_cast<const uint8_t *>(resp_span.data());
+    auto resp_hdr = Smb2Codec::decode_header(raw, resp_span.size());
+    TEST_ASSERT(resp_hdr.has_value(), "Should decode conservative negotiate response");
+    TEST_ASSERT(resp_hdr->status == 0, "Conservative negotiate should succeed");
+
+    const uint32_t caps = Smb2Codec::read_le32(raw + SMB2_HEADER_SIZE + 24);
+    TEST_ASSERT((caps & SMB2_GLOBAL_CAP_ENCRYPTION) == 0, "Encryption should not be advertised when disabled");
+    TEST_ASSERT((caps & SMB2_GLOBAL_CAP_MULTI_CHANNEL) == 0, "Multi-channel should not be advertised before support");
+    TEST_ASSERT((caps & SMB2_GLOBAL_CAP_PERSISTENT_HANDLES) == 0, "Persistent handles should not be advertised before support");
+    TEST_ASSERT((caps & SMB2_GLOBAL_CAP_DIRECTORY_LEASING) == 0, "Directory leasing should not be advertised before support");
+    TEST_ASSERT((caps & SMB2_GLOBAL_CAP_LARGE_MTU) != 0, "Large MTU should still be advertised");
+
+    session_mgr.remove_session(session->session_id());
+    return true;
+}
+
+bool test_dispatcher_query_filesystem_info()
+{
+    std::string test_dir = "/tmp/smb_fs_info_test_" + std::to_string(std::hash<std::thread::id> {}(std::this_thread::get_id()));
+    std::filesystem::create_directories(test_dir);
+
+    SmbServerConfig config;
+    SmbShareManager share_mgr;
+    SmbShareConfig share_cfg;
+    share_cfg.name = "public";
+    share_cfg.type = ShareType::DISK;
+    share_cfg.path = test_dir;
+    share_mgr.add_share(share_cfg);
+
+    LocalFileSystem fs(test_dir);
+    SmbShare *share = share_mgr.find_share("public");
+    TEST_ASSERT(share != nullptr, "Filesystem info share should exist");
+    share->set_file_system(&fs);
+
+    SmbLockManager lock_mgr;
+    SmbPipeManager pipe_mgr;
+    SmbDfsResolver dfs;
+    SmbChangeNotifier cn;
+    SmbDispatcher disp(config, share_mgr, lock_mgr, pipe_mgr, dfs, cn);
+
+    SmbSessionManager session_mgr;
+    SmbSession *session = session_mgr.create_session(nullptr);
+    session->set_state(SmbSession::State::active);
+
+    TreeConnection tree;
+    tree.share_name = "public";
+    tree.share = share;
+    const uint32_t tree_id = session->add_tree_connection(std::move(tree));
+
+    auto open_result = fs.open("", FILE_GENERIC_READ, FILE_OPEN, FILE_DIRECTORY_FILE);
+    TEST_ASSERT(open_result.success, "Open share root for filesystem info should succeed");
+
+    FileId fid = session->allocate_file_id();
+    OpenFile of;
+    of.file_id = fid;
+    of.path = test_dir;
+    of.is_directory = true;
+    of.file_handle = open_result.handle;
+    of.tree_id = tree_id;
+    share->add_open_file(fid, std::move(of));
+
+    Smb2Header hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
+    hdr.protocol_id = SMB2_PROTOCOL_ID;
+    hdr.command = static_cast<uint16_t>(Smb2Command::QUERY_INFO);
+    hdr.tree_id = tree_id;
+    hdr.session_id = session->session_id();
+    hdr.credit_request = 1;
+
+    ByteBuffer req_buf = Smb2Codec::encode_header(hdr);
+    Smb2Codec::write_le16(req_buf, 41);
+    req_buf.append_u8(SMB2_0_INFO_FILESYSTEM);
+    req_buf.append_u8(static_cast<uint8_t>(FileInfoClass::FileFsAttributeInformation));
+    Smb2Codec::write_le32(req_buf, 1024);
+    Smb2Codec::write_le16(req_buf, 0);
+    Smb2Codec::write_le16(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le64(req_buf, fid.persistent);
+    Smb2Codec::write_le64(req_buf, fid.volatile_id);
+    req_buf.append_u8(0);
+
+    auto span = req_buf.readable_span();
+    auto resp = disp.dispatch(*session, hdr,
+                              reinterpret_cast<const uint8_t *>(span.data()),
+                              span.size());
+    auto resp_span = resp.readable_span();
+    const auto *raw = reinterpret_cast<const uint8_t *>(resp_span.data());
+    auto resp_hdr = Smb2Codec::decode_header(raw, resp_span.size());
+    TEST_ASSERT(resp_hdr.has_value(), "Should decode filesystem info response");
+    TEST_ASSERT(resp_hdr->status == 0, "Filesystem info should succeed");
+
+    const uint32_t output_len = Smb2Codec::read_le32(raw + SMB2_HEADER_SIZE + 4);
+    TEST_ASSERT(output_len >= 20, "Filesystem attribute info should include payload");
+    const uint32_t fs_attrs = Smb2Codec::read_le32(raw + SMB2_HEADER_SIZE + 8);
+    TEST_ASSERT((fs_attrs & FILE_UNICODE_ON_DISK) != 0, "Filesystem attrs should advertise unicode names");
+
+    share->remove_open_file(fid);
+    fs.close(open_result.handle);
+    session_mgr.remove_session(session->session_id());
+    std::filesystem::remove_all(test_dir);
+    return true;
+}
+
+bool test_dispatcher_ioctl_validate_negotiate_info()
+{
+    SmbServerConfig config;
+    config.enable_encryption = true;
+    SmbShareManager share_mgr;
+    SmbLockManager lock_mgr;
+    SmbPipeManager pipe_mgr;
+    SmbDfsResolver dfs;
+    SmbChangeNotifier cn;
+    SmbDispatcher disp(config, share_mgr, lock_mgr, pipe_mgr, dfs, cn);
+
+    SmbSessionManager session_mgr;
+    SmbSession *session = session_mgr.create_session(nullptr);
+    session->set_dialect(DialectRevision::SMB_3_1_1);
+    session->set_server_capabilities(SMB2_GLOBAL_CAP_LEASING | SMB2_GLOBAL_CAP_LARGE_MTU | SMB2_GLOBAL_CAP_ENCRYPTION);
+    session->set_server_security_mode(static_cast<uint16_t>(SecurityMode::NEGOTIATE_SIGNING_ENABLED));
+
+    Smb2Header hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
+    hdr.protocol_id = SMB2_PROTOCOL_ID;
+    hdr.command = static_cast<uint16_t>(Smb2Command::IOCTL);
+    hdr.session_id = session->session_id();
+    hdr.credit_request = 1;
+
+    std::vector<uint8_t> input;
+    input.resize(24 + 2, 0);
+    test_write_le32(input, 0, session->server_capabilities());
+    test_write_le16(input, 20, session->server_security_mode());
+    test_write_le16(input, 22, 1);
+    test_write_le16(input, 24, static_cast<uint16_t>(DialectRevision::SMB_3_1_1));
+
+    ByteBuffer req_buf = Smb2Codec::encode_header(hdr);
+    Smb2Codec::write_le16(req_buf, 57);
+    Smb2Codec::write_le16(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, FSCTL_VALIDATE_NEGOTIATE_INFO);
+    Smb2Codec::write_le64(req_buf, 0);
+    Smb2Codec::write_le64(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, SMB2_HEADER_SIZE + 56);
+    Smb2Codec::write_le32(req_buf, static_cast<uint32_t>(input.size()));
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 1024);
+    Smb2Codec::write_le32(req_buf, 1);
+    Smb2Codec::write_le32(req_buf, 0);
+    req_buf.append(input.data(), input.size());
+
+    auto span = req_buf.readable_span();
+    auto resp = disp.dispatch(*session, hdr,
+                              reinterpret_cast<const uint8_t *>(span.data()),
+                              span.size());
+    auto resp_span = resp.readable_span();
+    const auto *raw = reinterpret_cast<const uint8_t *>(resp_span.data());
+    auto resp_hdr = Smb2Codec::decode_header(raw, resp_span.size());
+    TEST_ASSERT(resp_hdr.has_value(), "Should decode validate negotiate response");
+    TEST_ASSERT(resp_hdr->status == 0, "Validate negotiate should succeed");
+    TEST_ASSERT(Smb2Codec::read_le32(raw + SMB2_HEADER_SIZE + 4) == FSCTL_VALIDATE_NEGOTIATE_INFO,
+                "Validate negotiate ctl code should echo");
+    TEST_ASSERT(Smb2Codec::read_le32(raw + SMB2_HEADER_SIZE + 36) == 24,
+                "Validate negotiate output should be 24 bytes");
+    TEST_ASSERT(Smb2Codec::read_le16(raw + SMB2_HEADER_SIZE + 48 + 22) ==
+                    static_cast<uint16_t>(DialectRevision::SMB_3_1_1),
+                "Validate negotiate output dialect should match session");
+
+    session_mgr.remove_session(session->session_id());
+    return true;
+}
+
+bool test_dispatcher_ioctl_query_network_interface_info()
+{
+    SmbServerConfig config;
+    SmbShareManager share_mgr;
+    SmbLockManager lock_mgr;
+    SmbPipeManager pipe_mgr;
+    SmbDfsResolver dfs;
+    SmbChangeNotifier cn;
+    SmbDispatcher disp(config, share_mgr, lock_mgr, pipe_mgr, dfs, cn);
+
+    SmbSessionManager session_mgr;
+    SmbSession *session = session_mgr.create_session(nullptr);
+
+    Smb2Header hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
+    hdr.protocol_id = SMB2_PROTOCOL_ID;
+    hdr.command = static_cast<uint16_t>(Smb2Command::IOCTL);
+    hdr.session_id = session->session_id();
+    hdr.credit_request = 1;
+
+    ByteBuffer req_buf = Smb2Codec::encode_header(hdr);
+    Smb2Codec::write_le16(req_buf, 57);
+    Smb2Codec::write_le16(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, FSCTL_QUERY_NETWORK_INTERFACE_INFO);
+    Smb2Codec::write_le64(req_buf, 0);
+    Smb2Codec::write_le64(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 1024);
+    Smb2Codec::write_le32(req_buf, 1);
+    Smb2Codec::write_le32(req_buf, 0);
+    req_buf.append_u8(0);
+
+    auto span = req_buf.readable_span();
+    auto resp = disp.dispatch(*session, hdr,
+                              reinterpret_cast<const uint8_t *>(span.data()),
+                              span.size());
+    auto resp_span = resp.readable_span();
+    const auto *raw = reinterpret_cast<const uint8_t *>(resp_span.data());
+    auto resp_hdr = Smb2Codec::decode_header(raw, resp_span.size());
+    TEST_ASSERT(resp_hdr.has_value(), "Should decode network interface response");
+    TEST_ASSERT(resp_hdr->status == 0, "Query network interface should succeed");
+    TEST_ASSERT(Smb2Codec::read_le32(raw + SMB2_HEADER_SIZE + 36) == 152,
+                "Network interface response should contain one 152-byte entry");
+    TEST_ASSERT(Smb2Codec::read_le32(raw + SMB2_HEADER_SIZE + 48 + 8) == SMB2_NETWORK_INTERFACE_RSS_CAPABLE,
+                "Network interface should advertise RSS capability");
+    TEST_ASSERT(Smb2Codec::read_le16(raw + SMB2_HEADER_SIZE + 48 + 24) == 2,
+                "Network interface sockaddr should be IPv4");
+
+    session_mgr.remove_session(session->session_id());
+    return true;
+}
+
+bool test_dispatcher_change_notify_completes_empty()
+{
+    SmbServerConfig config;
+    SmbShareManager share_mgr;
+    SmbLockManager lock_mgr;
+    SmbPipeManager pipe_mgr;
+    SmbDfsResolver dfs;
+    SmbChangeNotifier cn;
+    SmbDispatcher disp(config, share_mgr, lock_mgr, pipe_mgr, dfs, cn);
+
+    SmbSessionManager session_mgr;
+    SmbSession *session = session_mgr.create_session(nullptr);
+    session->set_state(SmbSession::State::active);
+
+    FileId fid;
+    fid.persistent = 10;
+    fid.volatile_id = 10;
+
+    Smb2Header hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
+    hdr.protocol_id = SMB2_PROTOCOL_ID;
+    hdr.command = static_cast<uint16_t>(Smb2Command::CHANGE_NOTIFY);
+    hdr.session_id = session->session_id();
+    hdr.credit_request = 1;
+
+    ByteBuffer req_buf = Smb2Codec::encode_header(hdr);
+    Smb2Codec::write_le16(req_buf, 32);
+    Smb2Codec::write_le16(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 1024);
+    Smb2Codec::write_le64(req_buf, fid.persistent);
+    Smb2Codec::write_le64(req_buf, fid.volatile_id);
+    Smb2Codec::write_le32(req_buf, 0x00000003);
+    Smb2Codec::write_le32(req_buf, 0);
+
+    auto span = req_buf.readable_span();
+    auto resp = disp.dispatch(*session, hdr,
+                              reinterpret_cast<const uint8_t *>(span.data()),
+                              span.size());
+    auto resp_span = resp.readable_span();
+    const auto *raw = reinterpret_cast<const uint8_t *>(resp_span.data());
+    auto resp_hdr = Smb2Codec::decode_header(raw, resp_span.size());
+    TEST_ASSERT(resp_hdr.has_value(), "Should decode change notify response");
+    TEST_ASSERT(resp_hdr->status == 0, "Change notify should complete successfully");
+    TEST_ASSERT(resp_hdr->command == static_cast<uint16_t>(Smb2Command::CHANGE_NOTIFY),
+                "Change notify response command should match");
+    TEST_ASSERT(Smb2Codec::read_le32(raw + SMB2_HEADER_SIZE + 4) == 0,
+                "Change notify fallback should return empty buffer");
 
     session_mgr.remove_session(session->session_id());
     return true;
@@ -1051,6 +1600,7 @@ int main()
 
     std::cout << "\n--- Authentication ---" << std::endl;
     RUN_TEST(test_ntlm_auth);
+    RUN_TEST(test_ntlmv2_password_proof_auth);
     RUN_TEST(test_spnego_auth);
 
     std::cout << "\n--- Crypto ---" << std::endl;
@@ -1069,9 +1619,17 @@ int main()
     std::cout << "\n--- File System ---" << std::endl;
     RUN_TEST(test_local_file_system);
     RUN_TEST(test_local_file_system_directory);
+    RUN_TEST(test_local_file_system_set_info_rename_delete);
+    RUN_TEST(test_local_file_system_absolute_rename);
+    RUN_TEST(test_local_file_system_directory_cursor);
 
     std::cout << "\n--- Dispatcher ---" << std::endl;
     RUN_TEST(test_dispatcher_negotiate);
+    RUN_TEST(test_dispatcher_negotiate_conservative_capabilities);
+    RUN_TEST(test_dispatcher_query_filesystem_info);
+    RUN_TEST(test_dispatcher_ioctl_validate_negotiate_info);
+    RUN_TEST(test_dispatcher_ioctl_query_network_interface_info);
+    RUN_TEST(test_dispatcher_change_notify_completes_empty);
     RUN_TEST(test_dispatcher_echo);
 
     std::cout << "\n=== Results: " << g_tests_passed << "/" << g_tests_run

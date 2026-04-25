@@ -2,6 +2,7 @@
 #define __NET_SMB_SMB_HANDLER_H__
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,13 @@ namespace yuan::net::smb
         virtual bool on_authenticate(SmbSession *session, const std::string &user, const std::string &domain)
         {
             return true;
+        }
+        virtual std::optional<std::string> on_password_lookup(SmbSession *session, const std::string &user, const std::string &domain)
+        {
+            (void)session;
+            (void)user;
+            (void)domain;
+            return std::nullopt;
         }
         virtual bool on_tree_connect(SmbSession *session, const std::string &path)
         {

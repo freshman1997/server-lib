@@ -5,6 +5,8 @@
 #include "openssl/rand.h"
 #include <cstring>
 #include <algorithm>
+#include <array>
+#include <cctype>
 
 namespace yuan::net::smb
 {
@@ -27,6 +29,124 @@ namespace yuan::net::smb
         p[1] = static_cast<uint8_t>(v >> 8);
         p[2] = static_cast<uint8_t>(v >> 16);
         p[3] = static_cast<uint8_t>(v >> 24);
+    }
+
+    static bool constant_time_equal(const std::vector<uint8_t> &lhs, const std::vector<uint8_t> &rhs)
+    {
+        if (lhs.size() != rhs.size()) {
+            return false;
+        }
+        uint8_t diff = 0;
+        for (size_t i = 0; i < lhs.size(); ++i) {
+            diff |= static_cast<uint8_t>(lhs[i] ^ rhs[i]);
+        }
+        return diff == 0;
+    }
+
+    static uint32_t rotl32(uint32_t value, uint32_t bits)
+    {
+        return (value << bits) | (value >> (32 - bits));
+    }
+
+    static uint32_t md4_f(uint32_t x, uint32_t y, uint32_t z)
+    {
+        return (x & y) | (~x & z);
+    }
+
+    static uint32_t md4_g(uint32_t x, uint32_t y, uint32_t z)
+    {
+        return (x & y) | (x & z) | (y & z);
+    }
+
+    static uint32_t md4_h(uint32_t x, uint32_t y, uint32_t z)
+    {
+        return x ^ y ^ z;
+    }
+
+    static std::vector<uint8_t> md4_internal(const std::vector<uint8_t> &input)
+    {
+        std::vector<uint8_t> msg = input;
+        const uint64_t bit_len = static_cast<uint64_t>(msg.size()) * 8ULL;
+        msg.push_back(0x80);
+        while ((msg.size() % 64) != 56) {
+            msg.push_back(0);
+        }
+        for (int i = 0; i < 8; ++i) {
+            msg.push_back(static_cast<uint8_t>((bit_len >> (i * 8)) & 0xFF));
+        }
+
+        uint32_t a = 0x67452301;
+        uint32_t b = 0xefcdab89;
+        uint32_t c = 0x98badcfe;
+        uint32_t d = 0x10325476;
+
+        auto round1 = [](uint32_t &aa, uint32_t bb, uint32_t cc, uint32_t dd, uint32_t x, uint32_t s) {
+            aa = rotl32(aa + md4_f(bb, cc, dd) + x, s);
+        };
+        auto round2 = [](uint32_t &aa, uint32_t bb, uint32_t cc, uint32_t dd, uint32_t x, uint32_t s) {
+            aa = rotl32(aa + md4_g(bb, cc, dd) + x + 0x5a827999, s);
+        };
+        auto round3 = [](uint32_t &aa, uint32_t bb, uint32_t cc, uint32_t dd, uint32_t x, uint32_t s) {
+            aa = rotl32(aa + md4_h(bb, cc, dd) + x + 0x6ed9eba1, s);
+        };
+
+        for (size_t offset = 0; offset < msg.size(); offset += 64) {
+            uint32_t x[16] = {};
+            for (int i = 0; i < 16; ++i) {
+                const size_t j = offset + i * 4;
+                x[i] = static_cast<uint32_t>(msg[j]) |
+                       (static_cast<uint32_t>(msg[j + 1]) << 8) |
+                       (static_cast<uint32_t>(msg[j + 2]) << 16) |
+                       (static_cast<uint32_t>(msg[j + 3]) << 24);
+            }
+
+            uint32_t aa = a;
+            uint32_t bb = b;
+            uint32_t cc = c;
+            uint32_t dd = d;
+
+            round1(a, b, c, d, x[0], 3); round1(d, a, b, c, x[1], 7);
+            round1(c, d, a, b, x[2], 11); round1(b, c, d, a, x[3], 19);
+            round1(a, b, c, d, x[4], 3); round1(d, a, b, c, x[5], 7);
+            round1(c, d, a, b, x[6], 11); round1(b, c, d, a, x[7], 19);
+            round1(a, b, c, d, x[8], 3); round1(d, a, b, c, x[9], 7);
+            round1(c, d, a, b, x[10], 11); round1(b, c, d, a, x[11], 19);
+            round1(a, b, c, d, x[12], 3); round1(d, a, b, c, x[13], 7);
+            round1(c, d, a, b, x[14], 11); round1(b, c, d, a, x[15], 19);
+
+            round2(a, b, c, d, x[0], 3); round2(d, a, b, c, x[4], 5);
+            round2(c, d, a, b, x[8], 9); round2(b, c, d, a, x[12], 13);
+            round2(a, b, c, d, x[1], 3); round2(d, a, b, c, x[5], 5);
+            round2(c, d, a, b, x[9], 9); round2(b, c, d, a, x[13], 13);
+            round2(a, b, c, d, x[2], 3); round2(d, a, b, c, x[6], 5);
+            round2(c, d, a, b, x[10], 9); round2(b, c, d, a, x[14], 13);
+            round2(a, b, c, d, x[3], 3); round2(d, a, b, c, x[7], 5);
+            round2(c, d, a, b, x[11], 9); round2(b, c, d, a, x[15], 13);
+
+            round3(a, b, c, d, x[0], 3); round3(d, a, b, c, x[8], 9);
+            round3(c, d, a, b, x[4], 11); round3(b, c, d, a, x[12], 15);
+            round3(a, b, c, d, x[2], 3); round3(d, a, b, c, x[10], 9);
+            round3(c, d, a, b, x[6], 11); round3(b, c, d, a, x[14], 15);
+            round3(a, b, c, d, x[1], 3); round3(d, a, b, c, x[9], 9);
+            round3(c, d, a, b, x[5], 11); round3(b, c, d, a, x[13], 15);
+            round3(a, b, c, d, x[3], 3); round3(d, a, b, c, x[11], 9);
+            round3(c, d, a, b, x[7], 11); round3(b, c, d, a, x[15], 15);
+
+            a += aa;
+            b += bb;
+            c += cc;
+            d += dd;
+        }
+
+        std::vector<uint8_t> digest(16);
+        const uint32_t words[4] = { a, b, c, d };
+        for (int i = 0; i < 4; ++i) {
+            digest[i * 4] = static_cast<uint8_t>(words[i] & 0xFF);
+            digest[i * 4 + 1] = static_cast<uint8_t>((words[i] >> 8) & 0xFF);
+            digest[i * 4 + 2] = static_cast<uint8_t>((words[i] >> 16) & 0xFF);
+            digest[i * 4 + 3] = static_cast<uint8_t>((words[i] >> 24) & 0xFF);
+        }
+        return digest;
     }
 
     static std::vector<uint8_t> to_utf16le(const std::string & s)
@@ -75,6 +195,11 @@ namespace yuan::net::smb
         credential_validator_ = std::move(validator);
     }
 
+    void SmbNtlmAuth::set_password_lookup(std::function<std::optional<std::string>(const std::string &, const std::string &)> lookup)
+    {
+        password_lookup_ = std::move(lookup);
+    }
+
     std::array<uint8_t, 8> SmbNtlmAuth::generate_server_challenge()
     {
         std::array<uint8_t, 8> challenge{};
@@ -84,13 +209,7 @@ namespace yuan::net::smb
 
     std::vector<uint8_t> SmbNtlmAuth::md4(const std::vector<uint8_t> & data)
     {
-        std::vector<uint8_t> digest(MD4_DIGEST_LENGTH);
-        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-        EVP_DigestInit_ex(ctx, EVP_md4(), nullptr);
-        EVP_DigestUpdate(ctx, data.data(), data.size());
-        EVP_DigestFinal_ex(ctx, digest.data(), nullptr);
-        EVP_MD_CTX_free(ctx);
-        return digest;
+        return md4_internal(data);
     }
 
     std::vector<uint8_t> SmbNtlmAuth::md5(const std::vector<uint8_t> & data)
@@ -122,9 +241,11 @@ namespace yuan::net::smb
     {
         auto ntlm_hash = ntlmowfv1(password);
         std::string upper_user = username;
-        std::transform(upper_user.begin(), upper_user.end(), upper_user.begin(), ::toupper);
+        std::transform(upper_user.begin(), upper_user.end(), upper_user.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
         std::string upper_domain = domain;
-        std::transform(upper_domain.begin(), upper_domain.end(), upper_domain.begin(), ::toupper);
+        std::transform(upper_domain.begin(), upper_domain.end(), upper_domain.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
         auto identity = to_utf16le(upper_user + upper_domain);
         return hmac_md5(ntlm_hash, identity);
     }
@@ -144,6 +265,33 @@ namespace yuan::net::smb
         response.insert(response.end(), nt_proof_str.begin(), nt_proof_str.end());
         response.insert(response.end(), target_info.begin(), target_info.end());
         return response;
+    }
+
+    bool SmbNtlmAuth::verify_ntlmv2_response(const std::string & password,
+                                             const std::string & username,
+                                             const std::string & domain,
+                                             const std::array<uint8_t, 8> & server_challenge,
+                                             const std::vector<uint8_t> & ntlm_response)
+    {
+        if (ntlm_response.size() < 16) {
+            return false;
+        }
+        std::vector<uint8_t> blob(ntlm_response.begin() + 16, ntlm_response.end());
+        auto expected = ntlmv2_response(password, username, domain, server_challenge, blob);
+        return constant_time_equal(expected, ntlm_response);
+    }
+
+    std::vector<uint8_t> SmbNtlmAuth::session_base_key(const std::string & password,
+                                                       const std::string & username,
+                                                       const std::string & domain,
+                                                       const std::vector<uint8_t> & ntlm_response)
+    {
+        if (ntlm_response.size() < 16) {
+            return {};
+        }
+        auto ntlmv2_hash = ntlmowfv2(password, username, domain);
+        std::vector<uint8_t> nt_proof(ntlm_response.begin(), ntlm_response.begin() + 16);
+        return hmac_md5(ntlmv2_hash, nt_proof);
     }
 
     std::optional<NtlmType1Message> SmbNtlmAuth::parse_type1(const uint8_t * data, size_t len)
@@ -222,6 +370,14 @@ namespace yuan::net::smb
             msg.workstation = from_utf16le(data + ws_offset, ws_len);
         }
 
+        if (len >= 64) {
+            uint16_t key_len = read_u16_le(data + 52);
+            uint32_t key_offset = read_u32_le(data + 56);
+            if (key_offset + key_len <= len) {
+                msg.encrypted_session_key.assign(data + key_offset, data + key_offset + key_len);
+            }
+        }
+
         return msg;
     }
 
@@ -231,7 +387,7 @@ namespace yuan::net::smb
                                                   uint32_t flags)
     {
         auto target_name_utf16 = to_utf16le(target_name);
-        uint32_t target_name_offset = 32 + 8;
+        uint32_t target_name_offset = 48;
         uint32_t target_info_offset = target_name_offset + static_cast<uint32_t>(target_name_utf16.size());
         if (target_info_offset % 2 != 0)
             target_info_offset++;
@@ -277,18 +433,18 @@ namespace yuan::net::smb
             std::vector<uint8_t> target_info;
             auto add_av = [&](uint16_t id, const std::string &val) {
                 auto utf16 = to_utf16le(val);
-                write_u16_le(target_info.data() + target_info.size(), id);
                 target_info.resize(target_info.size() + 2);
-                write_u16_le(target_info.data() + target_info.size(), static_cast<uint16_t>(utf16.size()));
+                write_u16_le(target_info.data() + target_info.size() - 2, id);
                 target_info.resize(target_info.size() + 2);
+                write_u16_le(target_info.data() + target_info.size() - 2, static_cast<uint16_t>(utf16.size()));
                 target_info.insert(target_info.end(), utf16.begin(), utf16.end());
             };
             add_av(NTLMSSP_AV_HOSTNAME, server_name_);
             add_av(NTLMSSP_AV_DOMAINNAME, domain_name_);
-            write_u16_le(target_info.data() + target_info.size(), NTLMSSP_AV_EOL);
             target_info.resize(target_info.size() + 2);
-            write_u16_le(target_info.data() + target_info.size(), 0);
+            write_u16_le(target_info.data() + target_info.size() - 2, NTLMSSP_AV_EOL);
             target_info.resize(target_info.size() + 2);
+            write_u16_le(target_info.data() + target_info.size() - 2, 0);
 
             auto type2 = build_type2(server_challenge_, domain_name_, target_info, negotiate_flags_);
             state_ = AuthState::challenge_sent;
@@ -304,7 +460,18 @@ namespace yuan::net::smb
             }
 
             bool valid = false;
-            if (credential_validator_) {
+            std::optional<std::string> password;
+            if (password_lookup_) {
+                password = password_lookup_(msg->user_name, msg->domain_name);
+                if (password) {
+                    valid = verify_ntlmv2_response(*password, msg->user_name, msg->domain_name,
+                                                   server_challenge_, msg->ntlm_response);
+                    if (valid && credential_validator_) {
+                        valid = credential_validator_(msg->user_name, msg->domain_name, *password);
+                    }
+                }
+            }
+            if (!valid && !password && credential_validator_) {
                 valid = credential_validator_(msg->user_name, msg->domain_name, "");
             }
 
@@ -314,12 +481,9 @@ namespace yuan::net::smb
                 result_.user_name = msg->user_name;
                 result_.domain_name = msg->domain_name;
 
-                if (msg->ntlm_response.size() >= 16) {
-                    auto ntlmv2_hash = ntlmowfv2("", msg->user_name, msg->domain_name);
-                    std::vector<uint8_t> temp(server_challenge_.begin(), server_challenge_.end());
-                    temp.insert(temp.end(), msg->ntlm_response.begin() + 16, msg->ntlm_response.end());
-                    auto session_base = hmac_md5(ntlmv2_hash, temp);
-                    result_.session_key = hmac_md5(session_base, std::vector<uint8_t>{});
+                if (password) {
+                    result_.session_key = session_base_key(*password, msg->user_name,
+                                                           msg->domain_name, msg->ntlm_response);
                 }
             } else {
                 state_ = AuthState::failed;

@@ -52,10 +52,10 @@ Goal: SMB/SFTP use the same NAS identity, share, permission, and storage model.
 | ID | Task | Output | Validation |
 | --- | --- | --- | --- |
 | N3.1 | Adapt SFTP to `NasStorageBackend` | shared filesystem behavior | OpenSSH SFTP tests |
-| N3.2 | Adapt SMB share manager to NAS shares | SMB share config generated from NAS config | `smbclient` tests |
-| N3.3 | Map SMB auth to NAS users | NTLM/password validation through NAS auth | Windows/Linux login tests |
-| N3.4 | Map SMB permissions to NAS ACL | read/write/delete checks | SMB ACL tests |
-| N3.5 | Add SMB interop matrix | Windows, macOS, Linux CIFS | manual/optional scripts |
+| N3.2 | Adapt SMB share manager to NAS shares | done: SMB share config generated from NAS config/metadata | adapter unit tests; `smbclient` tests still needed |
+| N3.3 | Map SMB auth to NAS users | in progress: SMB handler validates enabled NAS users and NTLMv2 proof for `plain:` dev passwords; production password hash format still needed | NTLMv2 and adapter unit tests; Windows/Linux login tests still needed |
+| N3.4 | Map SMB permissions to NAS ACL | done: SMB tree/create/read/write/query/set-info checks use NAS ACL | adapter unit tests; real SMB ACL tests still needed |
+| N3.5 | Add SMB interop matrix | in progress: optional `smbclient_nas_smoke` script covers list/upload/download/rename/delete; see `docs/SMB_SMBD_COMPAT_MATRIX.md` and `docs/SMB_NAS_PROGRESS.md` | Windows/macOS/Linux CIFS matrix still needed |
 
 ## Phase 4 - Stability
 
@@ -73,8 +73,11 @@ Goal: sustained use without data loss or resource leaks.
 
 Work in this order:
 
-1. Add rclone/cadaver/manual interop scripts.
-2. Add concurrency and soak tests for large WebDAV workflows.
+1. Add an automated local SMB/NAS server fixture for `smbclient_nas_smoke.sh`.
+2. Run and document Linux `smbclient` interop with normal and signing-required modes.
+3. Replace empty SMB `CHANGE_NOTIFY` completion with real async directory notifications.
+4. Add rclone/cadaver/manual WebDAV interop scripts.
+5. Add concurrency and soak tests for large WebDAV workflows.
 
 ## Current Acceptance Command
 

@@ -5,6 +5,7 @@
 #include "auth/smb_ntlm.h"
 #include <functional>
 #include <memory>
+#include <optional>
 
 namespace yuan::net::smb
 {
@@ -19,6 +20,7 @@ namespace yuan::net::smb
         bool is_complete() const override;
 
         void set_credentials_db(std::function<bool(const std::string &, const std::string &, const std::string &)> validator);
+        void set_password_lookup(std::function<std::optional<std::string>(const std::string &, const std::string &)> lookup);
 
     private:
         std::vector<uint8_t> extract_mech_token(const std::vector<uint8_t> &spnego_token);

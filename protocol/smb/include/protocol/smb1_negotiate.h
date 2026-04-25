@@ -59,6 +59,15 @@ namespace yuan::net::smb
             if (end > len) {
                 end = len;
             }
+            if ((offset >= end || data[offset] != 0x02) && len > 32) {
+                for (size_t i = 32; i < len; ++i) {
+                    if (data[i] == 0x02) {
+                        offset = i;
+                        end = len;
+                        break;
+                    }
+                }
+            }
 
             while (offset < end) {
                 if (data[offset] != 0x02) {
@@ -79,7 +88,7 @@ namespace yuan::net::smb
             }
 
             for (const auto &d : req.dialects) {
-                if (d == "SMB 2.002" || d == "SMB 2.???") {
+                if (d == "SMB 2.002" || d == "SMB 2.???" || d == "SMB 2.1") {
                     req.supports_smb2 = true;
                     break;
                 }

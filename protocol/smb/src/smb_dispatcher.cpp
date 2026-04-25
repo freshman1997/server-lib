@@ -2,9 +2,221 @@
 #include <cstring>
 #include <random>
 #include <algorithm>
+#include <filesystem>
 
 namespace yuan::net::smb
 {
+    namespace
+    {
+        void write_le32_at(ByteBuffer &buf, size_t offset, uint32_t value)
+        {
+            if (offset + 4 > buf.write_offset()) {
+                return;
+            }
+            uint8_t le[4] = {
+                static_cast<uint8_t>(value & 0xFF),
+                static_cast<uint8_t>((value >> 8) & 0xFF),
+                static_cast<uint8_t>((value >> 16) & 0xFF),
+                static_cast<uint8_t>((value >> 24) & 0xFF)
+            };
+            std::memcpy(buf.data() + offset, le, sizeof(le));
+        }
+
+        void append_utf16le(ByteBuffer &buf, const std::u16string &text)
+        {
+            for (char16_t c : text) {
+                Smb2Codec::write_le16(buf, static_cast<uint16_t>(c));
+            }
+        }
+
+        void append_directory_entry(ByteBuffer &buf, const DirEntry &entry, FileInfoClass info_class)
+        {
+            const uint32_t name_len = static_cast<uint32_t>(entry.file_name.size() * 2);
+            Smb2Codec::write_le32(buf, 0);
+            Smb2Codec::write_le32(buf, 0);
+            Smb2Codec::write_le64(buf, entry.creation_time);
+            Smb2Codec::write_le64(buf, entry.last_access_time);
+            Smb2Codec::write_le64(buf, entry.last_write_time);
+            Smb2Codec::write_le64(buf, entry.change_time);
+            Smb2Codec::write_le64(buf, entry.end_of_file);
+            Smb2Codec::write_le64(buf, entry.allocation_size);
+            Smb2Codec::write_le32(buf, entry.file_attributes);
+            Smb2Codec::write_le32(buf, name_len);
+
+            switch (info_class) {
+            case FileInfoClass::FileFullDirectoryInformation:
+                Smb2Codec::write_le32(buf, 0);
+                break;
+            case FileInfoClass::FileBothDirectoryInformation:
+                Smb2Codec::write_le32(buf, 0);
+                buf.append_u8(0);
+                buf.append_u8(0);
+                for (size_t i = 0; i < 24; ++i) {
+                    buf.append_u8(0);
+                }
+                break;
+            case FileInfoClass::FileIdFullDirectoryInformation:
+                Smb2Codec::write_le32(buf, 0);
+                Smb2Codec::write_le64(buf, entry.file_id.persistent);
+                break;
+            case FileInfoClass::FileIdBothDirectoryInformation:
+                Smb2Codec::write_le32(buf, 0);
+                buf.append_u8(0);
+                buf.append_u8(0);
+                for (size_t i = 0; i < 24; ++i) {
+                    buf.append_u8(0);
+                }
+                Smb2Codec::write_le64(buf, entry.file_id.persistent);
+                break;
+            case FileInfoClass::FileDirectoryInformation:
+            default:
+                break;
+            }
+
+            append_utf16le(buf, entry.file_name);
+        }
+
+        void append_utf16le_string(ByteBuffer &buf, const std::string &text)
+        {
+            append_utf16le(buf, Smb2Codec::utf8_to_utf16le(text));
+        }
+
+        std::vector<uint8_t> buffer_to_vector(ByteBuffer &buf)
+        {
+            auto span = buf.readable_span();
+            return std::vector<uint8_t>(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+        }
+
+        std::vector<uint8_t> build_filesystem_info(const SmbShare &share, uint8_t file_info_class)
+        {
+            constexpr uint32_t bytes_per_sector = 4096;
+            constexpr uint32_t sectors_per_unit = 1;
+            constexpr uint32_t fs_attrs = FILE_CASE_SENSITIVE_SEARCH |
+                                          FILE_CASE_PRESERVED_NAMES |
+                                          FILE_UNICODE_ON_DISK |
+                                          FILE_SUPPORTS_SPARSE_FILES |
+                                          FILE_SUPPORTS_REPARSE_POINTS |
+                                          FILE_SUPPORTS_EXTENDED_ATTRIBUTES;
+
+            std::error_code ec;
+            auto space = std::filesystem::space(share.path().empty() ? "." : share.path(), ec);
+            uint64_t total_units = 0;
+            uint64_t available_units = 0;
+            if (!ec && space.capacity != static_cast<uintmax_t>(-1)) {
+                total_units = static_cast<uint64_t>(space.capacity / bytes_per_sector);
+                available_units = static_cast<uint64_t>(space.available / bytes_per_sector);
+            }
+
+            ByteBuffer buf(128);
+            switch (static_cast<FileInfoClass>(file_info_class)) {
+            case FileInfoClass::FileFsVolumeInformation: {
+                const std::string label = share.name().empty() ? "YUAN" : share.name();
+                Smb2Codec::write_le64(buf, Smb2Codec::filetime_now());
+                Smb2Codec::write_le32(buf, static_cast<uint32_t>(std::hash<std::string>{}(share.name())));
+                Smb2Codec::write_le32(buf, static_cast<uint32_t>(label.size() * 2));
+                buf.append_u8(0);
+                buf.append_u8(0);
+                append_utf16le_string(buf, label);
+                return buffer_to_vector(buf);
+            }
+            case FileInfoClass::FileFsSizeInformation:
+                Smb2Codec::write_le64(buf, total_units);
+                Smb2Codec::write_le64(buf, available_units);
+                Smb2Codec::write_le32(buf, sectors_per_unit);
+                Smb2Codec::write_le32(buf, bytes_per_sector);
+                return buffer_to_vector(buf);
+            case FileInfoClass::FileFsDeviceInformation:
+                Smb2Codec::write_le32(buf, share.type() == ShareType::PIPE ? FILE_DEVICE_NAMED_PIPE : FILE_DEVICE_DISK);
+                Smb2Codec::write_le32(buf, FILE_DEVICE_SECURE_OPEN);
+                return buffer_to_vector(buf);
+            case FileInfoClass::FileFsAttributeInformation: {
+                const std::string fs_name = "NTFS";
+                Smb2Codec::write_le32(buf, fs_attrs);
+                Smb2Codec::write_le32(buf, 255);
+                Smb2Codec::write_le32(buf, static_cast<uint32_t>(fs_name.size() * 2));
+                append_utf16le_string(buf, fs_name);
+                return buffer_to_vector(buf);
+            }
+            case FileInfoClass::FileFsFullSizeInformation:
+                Smb2Codec::write_le64(buf, total_units);
+                Smb2Codec::write_le64(buf, available_units);
+                Smb2Codec::write_le64(buf, available_units);
+                Smb2Codec::write_le32(buf, sectors_per_unit);
+                Smb2Codec::write_le32(buf, bytes_per_sector);
+                return buffer_to_vector(buf);
+            case FileInfoClass::FileFsSectorSizeInformation:
+                Smb2Codec::write_le32(buf, bytes_per_sector);
+                Smb2Codec::write_le32(buf, bytes_per_sector);
+                Smb2Codec::write_le32(buf, bytes_per_sector);
+                Smb2Codec::write_le32(buf, bytes_per_sector);
+                Smb2Codec::write_le32(buf, 0);
+                Smb2Codec::write_le32(buf, 0);
+                Smb2Codec::write_le32(buf, 0);
+                return buffer_to_vector(buf);
+            default:
+                return {};
+            }
+        }
+
+        std::vector<uint8_t> build_validate_negotiate_info(const SmbSession &session,
+                                                           uint32_t capabilities,
+                                                           uint16_t security_mode,
+                                                           const uint8_t server_guid[16])
+        {
+            ByteBuffer buf(24);
+            Smb2Codec::write_le32(buf, capabilities);
+            buf.append(server_guid, 16);
+            Smb2Codec::write_le16(buf, security_mode);
+            Smb2Codec::write_le16(buf, static_cast<uint16_t>(session.dialect()));
+            return buffer_to_vector(buf);
+        }
+
+        bool validate_negotiate_info_request(const SmbSession &session,
+                                             const std::vector<uint8_t> &input)
+        {
+            if (input.size() < 24) {
+                return false;
+            }
+
+            const uint16_t dialect_count = Smb2Codec::read_le16(input.data() + 22);
+            if (input.size() < 24u + static_cast<size_t>(dialect_count) * 2u) {
+                return false;
+            }
+
+            for (uint16_t i = 0; i < dialect_count; ++i) {
+                const uint16_t dialect = Smb2Codec::read_le16(input.data() + 24u + i * 2u);
+                if (dialect == static_cast<uint16_t>(session.dialect())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        std::vector<uint8_t> build_network_interface_info()
+        {
+            ByteBuffer buf(152);
+            Smb2Codec::write_le32(buf, 0);
+            Smb2Codec::write_le32(buf, 1);
+            Smb2Codec::write_le32(buf, SMB2_NETWORK_INTERFACE_RSS_CAPABLE);
+            Smb2Codec::write_le32(buf, 0);
+            Smb2Codec::write_le64(buf, 1000000000ULL);
+
+            Smb2Codec::write_le16(buf, 2);
+            Smb2Codec::write_le16(buf, 0);
+            buf.append_u8(127);
+            buf.append_u8(0);
+            buf.append_u8(0);
+            buf.append_u8(1);
+            for (size_t i = 0; i < 120; ++i) {
+                buf.append_u8(0);
+            }
+
+            return buffer_to_vector(buf);
+        }
+    }
+
     SmbDispatcher::SmbDispatcher(const SmbServerConfig & config,
                                  SmbShareManager & share_mgr,
                                  SmbLockManager & lock_mgr,
@@ -178,8 +390,13 @@ namespace yuan::net::smb
             auto auth = std::make_unique<SmbSpnegoAuth>(config_.server_name, config_.domain_name);
             if (handler_) {
                 auth->set_credentials_db(
-                    [this](const std::string & u, const std::string & d, const std::string & p)->bool {
-                        return handler_->on_authenticate(nullptr, u, d);
+                    [this, &session](const std::string & u, const std::string & d, const std::string & p)->bool {
+                        (void)p;
+                        return handler_->on_authenticate(&session, u, d);
+                    });
+                auth->set_password_lookup(
+                    [this, &session](const std::string & u, const std::string & d)->std::optional<std::string> {
+                        return handler_->on_password_lookup(&session, u, d);
                     });
             }
             session.set_auth(std::move(auth));
@@ -567,10 +784,11 @@ namespace yuan::net::smb
             return make_error(header, NtStatus::INTERNAL_ERROR);
 
         bool restart = (req->flags & SL_RESTART_SCAN) != 0;
+        const bool single_entry = (req->flags & SL_RETURN_SINGLE_ENTRY) != 0;
         std::string pattern = Smb2Codec::utf16le_to_utf8(req->file_name);
         auto entries = fs->query_directory(of->file_handle, pattern,
                                            static_cast<FileInfoClass>(req->file_information_class),
-                                           restart);
+                                           restart, single_entry ? 1u : 0u);
         if (!entries) {
             return make_error(header, NtStatus::NO_MORE_FILES);
         }
@@ -578,31 +796,30 @@ namespace yuan::net::smb
         Smb2QueryDirectoryResponse resp;
         resp.output_buffer_offset = SMB2_HEADER_SIZE + 8;
         ByteBuffer dir_buf(req->output_buffer_length);
+        size_t previous_entry_start = 0;
+        bool has_previous_entry = false;
 
         for (const auto &entry : *entries) {
             size_t entry_start = dir_buf.write_offset();
-            Smb2Codec::write_le32(dir_buf, 0);
-            Smb2Codec::write_le64(dir_buf, entry.creation_time);
-            Smb2Codec::write_le64(dir_buf, entry.last_access_time);
-            Smb2Codec::write_le64(dir_buf, entry.last_write_time);
-            Smb2Codec::write_le64(dir_buf, entry.change_time);
-            Smb2Codec::write_le64(dir_buf, entry.end_of_file);
-            Smb2Codec::write_le64(dir_buf, entry.allocation_size);
-            Smb2Codec::write_le32(dir_buf, entry.file_attributes);
-            uint32_t name_len = static_cast<uint32_t>(entry.file_name.size()) * 2;
-            Smb2Codec::write_le32(dir_buf, name_len);
-            Smb2Codec::write_le64(dir_buf, entry.file_id.persistent);
-            Smb2Codec::write_le64(dir_buf, entry.file_id.volatile_id);
-
-            for (char16_t c : entry.file_name) {
-                Smb2Codec::write_le16(dir_buf, static_cast<uint16_t>(c));
-            }
+            append_directory_entry(dir_buf, entry, static_cast<FileInfoClass>(req->file_information_class));
 
             size_t pad = (4 - (dir_buf.write_offset() & 3)) & 3;
             for (size_t p = 0; p < pad; ++p)
                 dir_buf.append_u8(0);
 
             if (dir_buf.write_offset() - entry_start > req->output_buffer_length) {
+                dir_buf.set_write_offset(entry_start);
+                break;
+            }
+
+            if (has_previous_entry) {
+                write_le32_at(dir_buf, previous_entry_start,
+                              static_cast<uint32_t>(entry_start - previous_entry_start));
+            }
+            previous_entry_start = entry_start;
+            has_previous_entry = true;
+
+            if (single_entry) {
                 break;
             }
         }
@@ -638,16 +855,31 @@ namespace yuan::net::smb
         if (!fs || !of->file_handle)
             return make_error(header, NtStatus::INTERNAL_ERROR);
 
-        auto info_data = fs->query_info(of->file_handle,
-                                        static_cast<FileInfoClass>(req->file_info_class));
-        if (!info_data) {
+        std::vector<uint8_t> info_buffer;
+        if (req->info_type == SMB2_0_INFO_FILESYSTEM) {
+            info_buffer = build_filesystem_info(*tree->share, req->file_info_class);
+            if (info_buffer.empty()) {
+                return make_error(header, NtStatus::NOT_SUPPORTED);
+            }
+        } else if (req->info_type == SMB2_0_INFO_FILE) {
+            auto info_data = fs->query_info(of->file_handle,
+                                            static_cast<FileInfoClass>(req->file_info_class));
+            if (!info_data) {
+                return make_error(header, NtStatus::NOT_SUPPORTED);
+            }
+            info_buffer = std::move(*info_data);
+        } else {
             return make_error(header, NtStatus::NOT_SUPPORTED);
+        }
+
+        if (req->output_buffer_length > 0 && info_buffer.size() > req->output_buffer_length) {
+            info_buffer.resize(req->output_buffer_length);
         }
 
         Smb2QueryInfoResponse resp;
         resp.output_buffer_offset = SMB2_HEADER_SIZE + 8;
-        resp.output_buffer_length = static_cast<uint32_t>(info_data->size());
-        resp.buffer = std::move(*info_data);
+        resp.output_buffer_length = static_cast<uint32_t>(info_buffer.size());
+        resp.buffer = std::move(info_buffer);
 
         return Smb2Codec::encode_query_info_response(header, resp);
     }
@@ -727,7 +959,17 @@ namespace yuan::net::smb
         resp.ctl_code = req->ctl_code;
         resp.file_id = req->file_id;
 
-        if (req->ctl_code == FSCTL_DFS_GET_REFERRALS || req->ctl_code == FSCTL_DFS_GET_REFERRALS_EX) {
+        if (req->ctl_code == FSCTL_VALIDATE_NEGOTIATE_INFO) {
+            if (!validate_negotiate_info_request(session, req->input_buffer)) {
+                return make_error(header, NtStatus::ACCESS_DENIED);
+            }
+            resp.output_buffer = build_validate_negotiate_info(
+                session, session.server_capabilities(), session.server_security_mode(), server_guid_);
+        } else if (req->ctl_code == FSCTL_QUERY_NETWORK_INTERFACE_INFO) {
+            resp.output_buffer = build_network_interface_info();
+        } else if (req->ctl_code == FSCTL_LMR_REQUEST_RESILIENCY) {
+            resp.output_buffer.clear();
+        } else if (req->ctl_code == FSCTL_DFS_GET_REFERRALS || req->ctl_code == FSCTL_DFS_GET_REFERRALS_EX) {
             auto referral = dfs_resolver_.resolve(
                 std::string(req->input_buffer.data(), req->input_buffer.data() + req->input_buffer.size()));
             if (referral) {
@@ -826,7 +1068,10 @@ namespace yuan::net::smb
             [&session, header](const FileId &, uint32_t) {
             });
 
-        return make_error(header, NtStatus::PENDING);
+        Smb2ChangeNotifyResponse resp;
+        resp.output_buffer_offset = SMB2_HEADER_SIZE + 8;
+        resp.output_buffer_length = 0;
+        return Smb2Codec::encode_change_notify_response(header, resp);
     }
 
     ByteBuffer SmbDispatcher::handle_cancel(SmbSession & session, const Smb2Header & header,
@@ -902,11 +1147,8 @@ namespace yuan::net::smb
         if (dialect >= DialectRevision::SMB_2_1) {
             caps |= SMB2_GLOBAL_CAP_LEASING | SMB2_GLOBAL_CAP_LARGE_MTU;
         }
-        if (dialect >= DialectRevision::SMB_3_0) {
-            caps |= SMB2_GLOBAL_CAP_ENCRYPTION | SMB2_GLOBAL_CAP_MULTI_CHANNEL;
-        }
-        if (dialect >= DialectRevision::SMB_3_0) {
-            caps |= SMB2_GLOBAL_CAP_PERSISTENT_HANDLES | SMB2_GLOBAL_CAP_DIRECTORY_LEASING;
+        if (dialect >= DialectRevision::SMB_3_0 && config_.enable_encryption) {
+            caps |= SMB2_GLOBAL_CAP_ENCRYPTION;
         }
         return caps;
     }

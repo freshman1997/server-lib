@@ -30,6 +30,11 @@ namespace yuan::net::smb
         ntlm_auth_->set_credentials_db(std::move(validator));
     }
 
+    void SmbSpnegoAuth::set_password_lookup(std::function<std::optional<std::string>(const std::string &, const std::string &)> lookup)
+    {
+        ntlm_auth_->set_password_lookup(std::move(lookup));
+    }
+
     std::vector<uint8_t> SmbSpnegoAuth::extract_mech_token(const std::vector<uint8_t> & spnego_token)
     {
         const uint8_t ntlmssp_sig[] = { 'N', 'T', 'L', 'M', 'S', 'S', 'P', '\0' };
@@ -135,6 +140,10 @@ namespace yuan::net::smb
 
     std::vector<uint8_t> SmbSpnegoAuth::process_inbound_token(const std::vector<uint8_t> & token)
     {
+        if (token.empty()) {
+            return wrap_ntlm_token({}, true, true);
+        }
+
         auto ntlm_token = extract_mech_token(token);
         auto response = ntlm_auth_->process_inbound_token(ntlm_token);
 

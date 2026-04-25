@@ -82,7 +82,8 @@ namespace yuan::net::smb
         virtual std::optional<std::vector<uint8_t> > query_info(void *handle, FileInfoClass info_class) = 0;
         virtual NtStatus set_info(void *handle, FileInfoClass info_class, const uint8_t *data, uint32_t len) = 0;
         virtual std::optional<std::vector<DirEntry> > query_directory(void *handle, const std::string &pattern,
-                                                                      FileInfoClass info_class, bool restart) = 0;
+                                                                      FileInfoClass info_class, bool restart,
+                                                                      uint32_t max_entries = 0) = 0;
         virtual NtStatus rename(void *handle, const std::string &new_path, bool replace) = 0;
         virtual NtStatus delete_file(void *handle) = 0;
         virtual NtStatus flush(void *handle) = 0;
@@ -105,7 +106,8 @@ namespace yuan::net::smb
         std::optional<std::vector<uint8_t> > query_info(void *handle, FileInfoClass info_class) override;
         NtStatus set_info(void *handle, FileInfoClass info_class, const uint8_t *data, uint32_t len) override;
         std::optional<std::vector<DirEntry> > query_directory(void *handle, const std::string &pattern,
-                                                              FileInfoClass info_class, bool restart) override;
+                                                              FileInfoClass info_class, bool restart,
+                                                              uint32_t max_entries = 0) override;
         NtStatus rename(void *handle, const std::string &new_path, bool replace) override;
         NtStatus delete_file(void *handle) override;
         NtStatus flush(void *handle) override;

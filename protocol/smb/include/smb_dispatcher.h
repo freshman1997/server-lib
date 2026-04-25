@@ -45,6 +45,11 @@ namespace yuan::net::smb
             crypto_ = crypto;
         }
 
+        void set_handler(SmbHandler *handler)
+        {
+            handler_ = handler;
+        }
+
     private:
         ByteBuffer handle_negotiate(SmbSession &session, const Smb2Header &header, const uint8_t *data, size_t len);
         ByteBuffer handle_session_setup(SmbSession &session, const Smb2Header &header, const uint8_t *data, size_t len);

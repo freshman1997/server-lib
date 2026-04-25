@@ -35,6 +35,7 @@ namespace yuan::net::smb
         std::string workstation;
         std::vector<uint8_t> lm_response;
         std::vector<uint8_t> ntlm_response;
+        std::vector<uint8_t> encrypted_session_key;
         uint32_t flags = 0;
     };
 
@@ -55,6 +56,7 @@ namespace yuan::net::smb
         bool is_complete() const override;
 
         void set_credentials_db(std::function<bool(const std::string &, const std::string &, const std::string &)> validator);
+        void set_password_lookup(std::function<std::optional<std::string>(const std::string &, const std::string &)> lookup);
 
         static std::optional<NtlmType1Message> parse_type1(const uint8_t *data, size_t len);
         static std::optional<NtlmType3Message> parse_type3(const uint8_t *data, size_t len);
@@ -69,6 +71,15 @@ namespace yuan::net::smb
                                                     const std::vector<uint8_t> &target_info);
         static std::vector<uint8_t> ntlmowfv1(const std::string &password);
         static std::vector<uint8_t> ntlmowfv2(const std::string &password, const std::string &username, const std::string &domain);
+        static bool verify_ntlmv2_response(const std::string &password,
+                                           const std::string &username,
+                                           const std::string &domain,
+                                           const std::array<uint8_t, 8> &server_challenge,
+                                           const std::vector<uint8_t> &ntlm_response);
+        static std::vector<uint8_t> session_base_key(const std::string &password,
+                                                     const std::string &username,
+                                                     const std::string &domain,
+                                                     const std::vector<uint8_t> &ntlm_response);
         static std::vector<uint8_t> hmac_md5(const std::vector<uint8_t> &key, const std::vector<uint8_t> &data);
         static std::vector<uint8_t> md4(const std::vector<uint8_t> &data);
         static std::vector<uint8_t> md5(const std::vector<uint8_t> &data);
@@ -82,6 +93,7 @@ namespace yuan::net::smb
         std::array<uint8_t, 8> server_challenge_{};
         uint32_t negotiate_flags_ = 0;
         std::function<bool(const std::string &, const std::string &, const std::string &)> credential_validator_;
+        std::function<std::optional<std::string>(const std::string &, const std::string &)> password_lookup_;
     };
 }
 #endif

@@ -188,6 +188,23 @@ namespace yuan::net::smb
     constexpr uint32_t FILE_READ_DATA_FLAG = 0x01;
     constexpr uint32_t FILE_WRITE_DATA_FLAG = 0x02;
 
+    constexpr uint8_t SMB2_0_INFO_FILE = 0x01;
+    constexpr uint8_t SMB2_0_INFO_FILESYSTEM = 0x02;
+    constexpr uint8_t SMB2_0_INFO_SECURITY = 0x03;
+    constexpr uint8_t SMB2_0_INFO_QUOTA = 0x04;
+
+    constexpr uint32_t FILE_CASE_SENSITIVE_SEARCH = 0x00000001;
+    constexpr uint32_t FILE_CASE_PRESERVED_NAMES = 0x00000002;
+    constexpr uint32_t FILE_UNICODE_ON_DISK = 0x00000004;
+    constexpr uint32_t FILE_PERSISTENT_ACLS = 0x00000008;
+    constexpr uint32_t FILE_SUPPORTS_SPARSE_FILES = 0x00000040;
+    constexpr uint32_t FILE_SUPPORTS_REPARSE_POINTS = 0x00000080;
+    constexpr uint32_t FILE_SUPPORTS_EXTENDED_ATTRIBUTES = 0x00800000;
+
+    constexpr uint32_t FILE_DEVICE_DISK = 0x00000007;
+    constexpr uint32_t FILE_DEVICE_NAMED_PIPE = 0x00000011;
+    constexpr uint32_t FILE_DEVICE_SECURE_OPEN = 0x00000100;
+
     constexpr uint32_t SL_RESTART_SCAN = 0x00000001;
     constexpr uint32_t SL_RETURN_SINGLE_ENTRY = 0x00000002;
     constexpr uint32_t SL_INDEX_SPECIFIED = 0x00000004;
@@ -271,9 +288,13 @@ namespace yuan::net::smb
     constexpr uint32_t FSCTL_SRV_READ_HASH = 0x001441BB;
     constexpr uint32_t FSCTL_LMR_REQUEST_RESILIENCY = 0x001401D4;
     constexpr uint32_t FSCTL_QUERY_NETWORK_INTERFACE_INFO = 0x001401FC;
+    constexpr uint32_t FSCTL_VALIDATE_NEGOTIATE_INFO = 0x00140204;
     constexpr uint32_t FSCTL_SET_REPARSE_POINT = 0x000900A4;
     constexpr uint32_t FSCTL_GET_REPARSE_POINT = 0x000900A8;
     constexpr uint32_t FSCTL_DELETE_REPARSE_POINT = 0x000900AC;
+
+    constexpr uint32_t SMB2_NETWORK_INTERFACE_RSS_CAPABLE = 0x00000001;
+    constexpr uint32_t SMB2_NETWORK_INTERFACE_RDMA_CAPABLE = 0x00000002;
 
     constexpr uint32_t NTLMSSP_NEGOTIATE_56 = 0x80000000;
     constexpr uint32_t NTLMSSP_NEGOTIATE_128 = 0x20000000;

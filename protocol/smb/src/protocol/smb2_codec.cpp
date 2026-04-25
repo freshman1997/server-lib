@@ -59,18 +59,16 @@ namespace yuan::net::smb
 
     bool Smb2Codec::is_smb2_header(const uint8_t * data, size_t len)
     {
-        if (len < 4)
+        if (len < SMB2_HEADER_SIZE)
             return false;
-        uint32_t pid = read_le32(data);
-        return pid == SMB2_PROTOCOL_ID;
+        return data[0] == 0xFE && data[1] == 'S' && data[2] == 'M' && data[3] == 'B';
     }
 
     bool Smb2Codec::is_transform_header(const uint8_t * data, size_t len)
     {
-        if (len < 4)
+        if (len < SMB2_TRANSFORM_HEADER_SIZE)
             return false;
-        uint32_t pid = read_le32(data);
-        return pid == SMB2_TRANSFORM_PROTOCOL_ID;
+        return data[0] == 0xFD && data[1] == 'S' && data[2] == 'M' && data[3] == 'B';
     }
 
     std::optional<Smb2Header> Smb2Codec::decode_header(const uint8_t * data, size_t len)
@@ -79,7 +77,10 @@ namespace yuan::net::smb
             return std::nullopt;
 
         Smb2Header hdr;
-        hdr.protocol_id = read_le32(data);
+        if (!is_smb2_header(data, len)) {
+            return std::nullopt;
+        }
+        hdr.protocol_id = SMB2_PROTOCOL_ID;
         hdr.structure_size = read_le16(data + 4);
         hdr.credit_charge = read_le16(data + 6);
         hdr.status = read_le32(data + 8);
@@ -98,7 +99,8 @@ namespace yuan::net::smb
     ByteBuffer Smb2Codec::encode_header(const Smb2Header & header)
     {
         ByteBuffer buf(SMB2_HEADER_SIZE);
-        write_le32(buf, header.protocol_id);
+        uint8_t protocol_id[4] = { 0xFE, 'S', 'M', 'B' };
+        buf.append(protocol_id, sizeof(protocol_id));
         write_le16(buf, header.structure_size);
         write_le16(buf, header.credit_charge);
         write_le32(buf, header.status);
@@ -120,7 +122,10 @@ namespace yuan::net::smb
             return std::nullopt;
 
         Smb2TransformHeader hdr;
-        hdr.protocol_id = read_le32(data);
+        if (!is_transform_header(data, len)) {
+            return std::nullopt;
+        }
+        hdr.protocol_id = SMB2_TRANSFORM_PROTOCOL_ID;
         std::memcpy(hdr.signature, data + 4, SMB2_SIGNATURE_SIZE);
         std::memcpy(hdr.nonce, data + 20, 16);
         hdr.original_message_size = read_le32(data + 36);
@@ -133,7 +138,8 @@ namespace yuan::net::smb
     ByteBuffer Smb2Codec::encode_transform_header(const Smb2TransformHeader & header)
     {
         ByteBuffer buf(SMB2_TRANSFORM_HEADER_SIZE);
-        write_le32(buf, header.protocol_id);
+        uint8_t protocol_id[4] = { 0xFD, 'S', 'M', 'B' };
+        buf.append(protocol_id, sizeof(protocol_id));
         buf.append(header.signature, SMB2_SIGNATURE_SIZE);
         buf.append(header.nonce, 16);
         write_le32(buf, header.original_message_size);
@@ -145,7 +151,7 @@ namespace yuan::net::smb
 
     std::optional<Smb2NegotiateRequest> Smb2Codec::decode_negotiate_request(const uint8_t * data, size_t len)
     {
-        if (len < SMB2_HEADER_SIZE + 36)
+        if (len < SMB2_HEADER_SIZE + 8)
             return std::nullopt;
 
         const uint8_t *p = data + SMB2_HEADER_SIZE;
@@ -154,19 +160,23 @@ namespace yuan::net::smb
         req.dialect_count = read_le16(p + 2);
         req.security_mode = read_le16(p + 4);
         req.reserved = read_le16(p + 6);
-        req.capabilities = read_le32(p + 8);
-        std::memcpy(req.client_guid, p + 12, 16);
-        req.client_start_time = read_le64(p + 28);
+        size_t dialects_offset = 8;
+        if (len >= SMB2_HEADER_SIZE + 36) {
+            req.capabilities = read_le32(p + 8);
+            std::memcpy(req.client_guid, p + 12, 16);
+            req.client_start_time = read_le64(p + 28);
+            dialects_offset = 36;
+        }
 
-        if (len < SMB2_HEADER_SIZE + 36 + req.dialect_count * 2)
+        if (len < SMB2_HEADER_SIZE + dialects_offset + req.dialect_count * 2)
             return std::nullopt;
 
-        const uint8_t *dialects = p + 36;
+        const uint8_t *dialects = p + dialects_offset;
         for (uint16_t i = 0; i < req.dialect_count; ++i) {
             req.dialects.push_back(read_le16(dialects + i * 2));
         }
 
-        size_t dialects_end = 36 + req.dialect_count * 2;
+        size_t dialects_end = dialects_offset + req.dialect_count * 2;
         if (len > SMB2_HEADER_SIZE + dialects_end) {
             req.preauth_hash.assign(p + dialects_end, p + len);
         }

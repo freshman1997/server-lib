@@ -7,6 +7,24 @@
 
 namespace yuan::net::smb
 {
+    namespace
+    {
+        bool command_allows_unsigned(uint16_t command)
+        {
+            return command == static_cast<uint16_t>(Smb2Command::NEGOTIATE) ||
+                   command == static_cast<uint16_t>(Smb2Command::SESSION_SETUP);
+        }
+
+        std::vector<uint8_t> copy_with_zero_signature(const uint8_t *data, size_t len)
+        {
+            std::vector<uint8_t> signed_view(data, data + len);
+            if (signed_view.size() >= SMB2_HEADER_SIZE) {
+                std::memset(signed_view.data() + 48, 0, SMB2_SIGNATURE_SIZE);
+            }
+            return signed_view;
+        }
+    }
+
     SmbServer::SmbServer()
         : config_(), dispatcher_(config_, share_mgr_, lock_mgr_, pipe_mgr_, dfs_resolver_, change_notifier_)
     {
@@ -153,6 +171,17 @@ namespace yuan::net::smb
             return {};
         }
 
+        if (session->is_signed() && !command_allows_unsigned(header->command)) {
+            if ((header->flags & SMB2_FLAGS_SIGNED) != 0) {
+                auto signed_view = copy_with_zero_signature(data, len);
+                if (!crypto_->verify(session->signing_key(), signed_view.data(), signed_view.size(), header->signature)) {
+                    return Smb2Codec::build_error_response(*header, NtStatus::ACCESS_DENIED);
+                }
+            } else if (config_.require_signing) {
+                return Smb2Codec::build_error_response(*header, NtStatus::ACCESS_DENIED);
+            }
+        }
+
         if (header->command == static_cast<uint16_t>(Smb2Command::CANCEL)) {
             return dispatcher_.dispatcher().dispatch(*session, *header,
                                                      data, len);
@@ -288,12 +317,21 @@ namespace yuan::net::smb
         const uint8_t *data = reinterpret_cast<const uint8_t *>(span.data());
         size_t total = resp.readable_bytes();
 
-        auto signature = crypto_->sign(session->signing_key(), data, total);
+        std::vector<uint8_t> signed_view(data, data + total);
+        uint32_t flags = Smb2Codec::read_le32(signed_view.data() + 16);
+        flags |= SMB2_FLAGS_SIGNED;
+        signed_view[16] = static_cast<uint8_t>(flags & 0xFF);
+        signed_view[17] = static_cast<uint8_t>((flags >> 8) & 0xFF);
+        signed_view[18] = static_cast<uint8_t>((flags >> 16) & 0xFF);
+        signed_view[19] = static_cast<uint8_t>((flags >> 24) & 0xFF);
+        std::memset(signed_view.data() + 48, 0, SMB2_SIGNATURE_SIZE);
+
+        auto signature = crypto_->sign(session->signing_key(), signed_view.data(), signed_view.size());
         if (signature.size() >= 16) {
             ByteBuffer signed_buf(total);
-            signed_buf.append(data, 48);
+            signed_buf.append(signed_view.data(), 48);
             signed_buf.append(signature.data(), 16);
-            signed_buf.append(data + 64, total - 64);
+            signed_buf.append(signed_view.data() + 64, total - 64);
             resp = std::move(signed_buf);
         }
     }

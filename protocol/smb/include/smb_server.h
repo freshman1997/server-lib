@@ -124,6 +124,7 @@ namespace yuan::net::smb
             void set_handler_ptr(SmbHandler *handler)
             {
                 handler_ = handler;
+                dispatcher_.set_handler(handler);
             }
 
             SmbHandler *handler_ptr() const

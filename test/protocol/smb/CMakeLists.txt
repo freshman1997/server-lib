@@ -3,5 +3,8 @@ if(TARGET SmbProto)
     target_link_libraries(test_smb PUBLIC SmbProto)
     if(BUILD_TESTING)
         add_test(NAME smb COMMAND test_smb)
+        add_test(NAME smbclient_nas_smoke
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/smbclient_nas_smoke.sh")
+        set_tests_properties(smbclient_nas_smoke PROPERTIES SKIP_RETURN_CODE 77)
     endif()
 endif()

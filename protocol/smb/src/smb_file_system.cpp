@@ -1,10 +1,13 @@
 #include "smb_file_system.h"
+#include "protocol/smb2_codec.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #ifdef _WIN32
@@ -17,6 +20,9 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#ifndef O_DIRECTORY
+#define O_DIRECTORY 0
+#endif
 #endif
 
 namespace yuan::net::smb
@@ -32,6 +38,10 @@ namespace yuan::net::smb
 #endif
             std::string path;
             bool is_directory = false;
+            std::string directory_pattern;
+            std::optional<FileInfoClass> directory_info_class;
+            std::vector<DirEntry> directory_entries;
+            size_t directory_cursor = 0;
         };
 
         static constexpr uint64_t EPOCH_DIFFERENCE = 116444736000000000ULL;
@@ -93,7 +103,8 @@ namespace yuan::net::smb
                         ++ni;
                     }
                     return false;
-                } else if (pattern[pi] == name[ni]) {
+                } else if (std::tolower(static_cast<unsigned char>(pattern[pi])) ==
+                           std::tolower(static_cast<unsigned char>(name[ni]))) {
                     ++pi;
                     ++ni;
                 } else {
@@ -105,6 +116,27 @@ namespace yuan::net::smb
                 ++pi;
             }
             return pi == pattern.size() && ni == name.size();
+        }
+
+        static bool is_path_within(const std::filesystem::path &root, const std::filesystem::path &path)
+        {
+            auto root_str = root.string();
+            auto path_str = path.string();
+            if (path_str == root_str) {
+                return true;
+            }
+            if (!root_str.empty() && root_str.back() != std::filesystem::path::preferred_separator) {
+                root_str.push_back(std::filesystem::path::preferred_separator);
+            }
+            return path_str.rfind(root_str, 0) == 0;
+        }
+
+        static bool same_directory_query(const LocalHandle &handle, const std::string &pattern,
+                                         FileInfoClass info_class)
+        {
+            return handle.directory_info_class.has_value() &&
+                   handle.directory_pattern == pattern &&
+                   *handle.directory_info_class == info_class;
         }
     }
 
@@ -122,7 +154,6 @@ namespace yuan::net::smb
     {
         std::string normalized = relative;
         std::replace(normalized.begin(), normalized.end(), '\\', '/');
-
         while (!normalized.empty() && normalized.front() == '/') {
             normalized.erase(normalized.begin());
         }
@@ -133,9 +164,7 @@ namespace yuan::net::smb
         fs::path canonical = fs::weakly_canonical(combined);
         fs::path canonical_root = fs::weakly_canonical(root);
 
-        auto root_str = canonical_root.string();
-        auto canon_str = canonical.string();
-        if (canon_str.size() < root_str.size() || canon_str.substr(0, root_str.size()) != root_str) {
+        if (!is_path_within(canonical_root, canonical)) {
             return root_path_;
         }
         return canonical.string();
@@ -181,6 +210,16 @@ namespace yuan::net::smb
         auto *h = new LocalHandle();
         h->path = full_path;
         h->is_directory = (create_options & FILE_DIRECTORY_FILE) != 0;
+
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const bool existed_before = fs::exists(full_path, ec);
+        const bool is_existing_directory = existed_before && fs::is_directory(full_path, ec);
+        if ((create_options & FILE_NON_DIRECTORY_FILE) != 0 && is_existing_directory) {
+            delete h;
+            result.status = NtStatus::NOT_SUPPORTED;
+            return result;
+        }
 
 #ifdef _WIN32
         DWORD access = 0;
@@ -267,6 +306,65 @@ namespace yuan::net::smb
         result.status = NtStatus::SUCCESS;
         return result;
 #else
+        if (h->is_directory || is_existing_directory) {
+            if (!existed_before) {
+                if (create_disposition == FILE_OPEN) {
+                    delete h;
+                    result.status = NtStatus::OBJECT_NAME_NOT_FOUND;
+                    return result;
+                }
+                if (!fs::create_directories(full_path, ec) || ec) {
+                    delete h;
+                    result.status = NtStatus::UNSUCCESSFUL;
+                    return result;
+                }
+            } else if (create_disposition == FILE_CREATE) {
+                delete h;
+                result.status = NtStatus::OBJECT_NAME_COLLISION;
+                return result;
+            }
+
+            int fd = ::open(full_path.c_str(), O_RDONLY | O_DIRECTORY);
+            if (fd < 0) {
+                delete h;
+                switch (errno) {
+                case ENOENT:
+                    result.status = NtStatus::OBJECT_NAME_NOT_FOUND;
+                    break;
+                case ENOTDIR:
+                    result.status = NtStatus::NOT_A_DIRECTORY;
+                    break;
+                case EACCES:
+                    result.status = NtStatus::ACCESS_DENIED;
+                    break;
+                default:
+                    result.status = NtStatus::UNSUCCESSFUL;
+                    break;
+                }
+                return result;
+            }
+
+            h->fd = fd;
+            h->is_directory = true;
+            result.handle = h;
+            result.is_directory = true;
+
+            struct stat st{};
+            if (fstat(fd, &st) == 0) {
+                result.allocation_size = 0;
+                result.end_of_file = 0;
+                result.file_attributes = posix_to_file_attributes(static_cast<unsigned int>(st.st_mode));
+                result.creation_time = filetime_from_unix_time(st.st_ctime);
+                result.last_access_time = filetime_from_unix_time(st.st_atime);
+                result.last_write_time = filetime_from_unix_time(st.st_mtime);
+                result.change_time = result.creation_time;
+            }
+            result.create_action = existed_before ? FILE_OPENED : FILE_CREATED;
+            result.success = true;
+            result.status = NtStatus::SUCCESS;
+            return result;
+        }
+
         int flags = 0;
         if (desired_access & (GENERIC_WRITE | FILE_WRITE_DATA)) {
             if (desired_access & (GENERIC_READ | FILE_READ_DATA)) {
@@ -294,13 +392,6 @@ namespace yuan::net::smb
             break;
         default:
             break;
-        }
-
-        if (h->is_directory) {
-            delete h;
-            result.success = false;
-            result.status = NtStatus::NOT_SUPPORTED;
-            return result;
         }
 
         int fd = ::open(full_path.c_str(), flags, 0644);
@@ -338,7 +429,7 @@ namespace yuan::net::smb
             result.last_write_time = filetime_from_unix_time(st.st_mtime);
             result.change_time = result.creation_time;
         }
-        result.create_action = (create_disposition == FILE_CREATE) ? FILE_CREATED : FILE_OPENED;
+        result.create_action = existed_before ? FILE_OPENED : FILE_CREATED;
         result.success = true;
         result.status = NtStatus::SUCCESS;
         return result;
@@ -371,6 +462,10 @@ namespace yuan::net::smb
         auto *h = to_handle(handle);
         if (!h) {
             result.status = NtStatus::INVALID_HANDLE;
+            return result;
+        }
+        if (h->is_directory) {
+            result.status = NtStatus::INVALID_DEVICE_REQUEST;
             return result;
         }
 
@@ -419,6 +514,10 @@ namespace yuan::net::smb
         auto *h = to_handle(handle);
         if (!h) {
             result.status = NtStatus::INVALID_HANDLE;
+            return result;
+        }
+        if (h->is_directory) {
+            result.status = NtStatus::INVALID_DEVICE_REQUEST;
             return result;
         }
 
@@ -584,21 +683,37 @@ namespace yuan::net::smb
             return NtStatus::SUCCESS;
         }
         case FileInfoClass::FileDispositionInformation:
+            if (len >= 1 && data[0] != 0) {
+                return delete_file(handle);
+            }
             return NtStatus::SUCCESS;
         case FileInfoClass::FileBasicInformation:
             return NtStatus::SUCCESS;
-        case FileInfoClass::FileRenameInformation:
-            return NtStatus::SUCCESS;
+        case FileInfoClass::FileRenameInformation: {
+            if (len < 20) {
+                return NtStatus::INVALID_PARAMETER;
+            }
+            const bool replace = data[0] != 0;
+            const uint32_t name_len = Smb2Codec::read_le32(data + 16);
+            if (20u + name_len > len || (name_len % 2) != 0) {
+                return NtStatus::INVALID_PARAMETER;
+            }
+            std::u16string utf16_name;
+            utf16_name.resize(name_len / 2);
+            for (size_t i = 0; i < utf16_name.size(); ++i) {
+                utf16_name[i] = static_cast<char16_t>(Smb2Codec::read_le16(data + 20 + i * 2));
+            }
+            return rename(handle, Smb2Codec::utf16le_to_utf8(utf16_name), replace);
+        }
         default:
             return NtStatus::NOT_SUPPORTED;
         }
     }
 
     std::optional<std::vector<DirEntry> > LocalFileSystem::query_directory(void *handle, const std::string &pattern,
-                                                                           FileInfoClass info_class, bool restart)
+                                                                           FileInfoClass info_class, bool restart,
+                                                                           uint32_t max_entries)
     {
-        (void)info_class;
-        (void)restart;
         auto *h = to_handle(handle);
         if (!h) {
             return std::nullopt;
@@ -611,42 +726,61 @@ namespace yuan::net::smb
             return std::nullopt;
         }
 
-        std::vector<DirEntry> entries;
         const std::string pat = pattern.empty() ? "*" : pattern;
-        for (const auto &entry : fs::directory_iterator(dir_path, ec)) {
-            if (ec) {
-                break;
-            }
-            const auto name = entry.path().filename().string();
-            if (!wildcard_match(pat, name)) {
-                continue;
-            }
+        if (restart || !same_directory_query(*h, pat, info_class)) {
+            h->directory_pattern = pat;
+            h->directory_info_class = info_class;
+            h->directory_entries.clear();
+            h->directory_cursor = 0;
 
-            std::error_code st_ec;
-            auto status = entry.symlink_status(st_ec);
-            auto fsize = entry.is_regular_file(st_ec) ? fs::file_size(entry.path(), st_ec) : 0ULL;
+            for (const auto &entry : fs::directory_iterator(dir_path, ec)) {
+                if (ec) {
+                    break;
+                }
+                const auto name = entry.path().filename().string();
+                if (!wildcard_match(pat, name)) {
+                    continue;
+                }
 
-            DirEntry de;
-            de.file_name.reserve(name.size());
-            for (char c : name) {
-                de.file_name.push_back(static_cast<char16_t>(static_cast<unsigned char>(c)));
+                std::error_code st_ec;
+                auto status = entry.symlink_status(st_ec);
+                auto fsize = entry.is_regular_file(st_ec) ? fs::file_size(entry.path(), st_ec) : 0ULL;
+
+                DirEntry de;
+                de.file_name.reserve(name.size());
+                for (char c : name) {
+                    de.file_name.push_back(static_cast<char16_t>(static_cast<unsigned char>(c)));
+                }
+                de.end_of_file = fsize;
+                de.allocation_size = fsize;
+                de.file_attributes = entry.is_directory(st_ec) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+                de.file_id.persistent = static_cast<uint64_t>(std::hash<std::string>{}(entry.path().string()));
+                de.file_id.volatile_id = de.file_id.persistent;
+                if (status.type() == fs::file_type::symlink) {
+                    de.file_attributes |= FILE_ATTRIBUTE_REPARSE_POINT;
+                }
+
+                const uint64_t ft = filetime_now();
+                de.creation_time = ft;
+                de.last_access_time = ft;
+                de.last_write_time = ft;
+                de.change_time = ft;
+
+                h->directory_entries.push_back(std::move(de));
             }
-            de.end_of_file = fsize;
-            de.allocation_size = fsize;
-            de.file_attributes = entry.is_directory(st_ec) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
-            de.file_id.persistent = static_cast<uint64_t>(std::hash<std::string>{}(entry.path().string()));
-            de.file_id.volatile_id = de.file_id.persistent;
-            if (status.type() == fs::file_type::symlink) {
-                de.file_attributes |= FILE_ATTRIBUTE_REPARSE_POINT;
-            }
+        }
 
-            const uint64_t ft = filetime_now();
-            de.creation_time = ft;
-            de.last_access_time = ft;
-            de.last_write_time = ft;
-            de.change_time = ft;
+        if (h->directory_cursor >= h->directory_entries.size()) {
+            return std::nullopt;
+        }
 
-            entries.push_back(std::move(de));
+        const size_t limit = max_entries == 0
+            ? h->directory_entries.size() - h->directory_cursor
+            : std::min<size_t>(max_entries, h->directory_entries.size() - h->directory_cursor);
+        std::vector<DirEntry> entries;
+        entries.reserve(limit);
+        for (size_t i = 0; i < limit; ++i) {
+            entries.push_back(h->directory_entries[h->directory_cursor++]);
         }
 
         return entries;
