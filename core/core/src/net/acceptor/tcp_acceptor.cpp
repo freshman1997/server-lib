@@ -68,12 +68,7 @@ namespace yuan::net
 
     TcpAcceptor::~TcpAcceptor()
     {
-        if (handler_) {
-            channel_->disable_all();
-            handler_->close_channel(ptr_of(channel_));
-            channel_->clear_handler();
-        }
-
+        close();
         channel_.reset();
         self_handler_owner_.reset();
         socket_.reset();
@@ -103,10 +98,12 @@ namespace yuan::net
             if (handler_) {
                 handler_->close_channel(ptr_of(channel_));
                 channel_->clear_handler();
+                handler_ = nullptr;
             }
         }
         if (conn_handler_owner_) {
             conn_handler_owner_->on_close(std::shared_ptr<Connection>{});
+            conn_handler_owner_.reset();
         }
     }
 

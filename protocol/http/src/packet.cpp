@@ -8,10 +8,17 @@
 #include "ops/option.h"
 #include "packet_parser.h"
 #include "logger.h"
+
+#include <atomic>
+#include <chrono>
+#include <filesystem>
+
 namespace yuan::net::http
 {
     namespace
     {
+        std::atomic_uint64_t g_body_spool_counter{0};
+
         std::string normalize_header_key(std::string_view key)
         {
             std::string normalized;
@@ -20,6 +27,14 @@ namespace yuan::net::http
                 normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
             }
             return normalized;
+        }
+
+        std::filesystem::path make_body_spool_path()
+        {
+            const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+            const auto id = g_body_spool_counter.fetch_add(1, std::memory_order_relaxed);
+            return std::filesystem::temp_directory_path() /
+                   ("yuan_http_body_" + std::to_string(now) + "_" + std::to_string(id) + ".tmp");
         }
     }
 
@@ -66,7 +81,12 @@ namespace yuan::net::http
           pre_content_parser_(std::move(other.pre_content_parser_)),
           task_(std::move(other.task_)),
           chunked_checksum_(std::move(other.chunked_checksum_)),
-          original_file_name_(std::move(other.original_file_name_))
+          original_file_name_(std::move(other.original_file_name_)),
+          body_file_path_(std::move(other.body_file_path_)),
+          body_file_stream_(std::move(other.body_file_stream_)),
+          body_file_expected_(other.body_file_expected_),
+          body_file_received_(other.body_file_received_),
+          body_file_owned_(other.body_file_owned_)
     {
         other.context_ = nullptr;
         other.parser_.reset();
@@ -101,6 +121,11 @@ namespace yuan::net::http
             task_ = std::move(other.task_);
             chunked_checksum_ = std::move(other.chunked_checksum_);
             original_file_name_ = std::move(other.original_file_name_);
+            body_file_path_ = std::move(other.body_file_path_);
+            body_file_stream_ = std::move(other.body_file_stream_);
+            body_file_expected_ = other.body_file_expected_;
+            body_file_received_ = other.body_file_received_;
+            body_file_owned_ = other.body_file_owned_;
 
             other.context_ = nullptr;
             other.parser_.reset();
@@ -135,6 +160,18 @@ namespace yuan::net::http
         is_upload_file_ = false;
         task_.reset();
         original_file_name_.clear();
+        if (body_file_stream_) {
+            body_file_stream_->close();
+            body_file_stream_.reset();
+        }
+        if (body_file_owned_ && !body_file_path_.empty()) {
+            std::error_code ec;
+            std::filesystem::remove(body_file_path_, ec);
+        }
+        body_file_path_.clear();
+        body_file_expected_ = 0;
+        body_file_received_ = 0;
+        body_file_owned_ = false;
     }
 
     void HttpPacket::set_pre_content_parser(ContentParser * parser)
@@ -249,6 +286,12 @@ namespace yuan::net::http
 
     yuan::buffer::ByteBuffer HttpPacket::take_leftover_buffer()
     {
+        if (has_body_file() && body_file_spool_done()) {
+            auto leftover = input_cache_.copy_readable();
+            input_cache_.clear();
+            return leftover;
+        }
+
         if (body_length_ >= input_cache_.readable_bytes()) {
             input_cache_.clear();
             return {};
@@ -348,6 +391,10 @@ namespace yuan::net::http
     {
         if (!is_good_)
             return false;
+
+        if (has_body_file()) {
+            return true;
+        }
 
         const std::string *ctype = get_header(http_header_key::content_type);
         if (!ctype && !is_chunked())
@@ -518,6 +565,72 @@ namespace yuan::net::http
         auto body = std::move(buffer_);
         buffer_ = yuan::buffer::ByteBuffer{};
         return body;
+    }
+
+    void HttpPacket::set_body_file_path(std::filesystem::path path)
+    {
+        body_file_path_ = std::move(path);
+        body_file_owned_ = false;
+    }
+
+    const std::filesystem::path &HttpPacket::body_file_path() const
+    {
+        return body_file_path_;
+    }
+
+    bool HttpPacket::has_body_file() const
+    {
+        return !body_file_path_.empty();
+    }
+
+    bool HttpPacket::begin_body_file_spool(std::uint32_t expected_length)
+    {
+        if (expected_length == 0) {
+            return false;
+        }
+        if (body_file_stream_) {
+            return true;
+        }
+        body_file_path_ = make_body_spool_path();
+        body_file_owned_ = true;
+        body_file_expected_ = expected_length;
+        body_file_received_ = 0;
+        body_file_stream_ = std::make_unique<std::ofstream>(body_file_path_, std::ios::binary | std::ios::trunc);
+        if (!body_file_stream_->good()) {
+            body_file_stream_.reset();
+            body_file_path_.clear();
+            body_file_expected_ = 0;
+            return false;
+        }
+        return true;
+    }
+
+    bool HttpPacket::append_body_file_bytes(const char *data, std::size_t size)
+    {
+        if (!body_file_stream_ || !data || size == 0) {
+            return size == 0;
+        }
+        body_file_stream_->write(data, static_cast<std::streamsize>(size));
+        if (!body_file_stream_->good()) {
+            return false;
+        }
+        body_file_received_ += static_cast<std::uint32_t>(size);
+        if (body_file_received_ >= body_file_expected_) {
+            body_file_stream_->flush();
+            body_file_stream_->close();
+            body_file_stream_.reset();
+        }
+        return true;
+    }
+
+    bool HttpPacket::body_file_spool_done() const
+    {
+        return body_file_expected_ > 0 && body_file_received_ >= body_file_expected_;
+    }
+
+    std::size_t HttpPacket::body_file_received() const
+    {
+        return body_file_received_;
     }
 
     void HttpPacket::pack_and_send(Connection * conn)

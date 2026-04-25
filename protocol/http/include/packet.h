@@ -12,6 +12,8 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
+#include <filesystem>
+#include <fstream>
 
 namespace yuan::net
 {
@@ -167,6 +169,14 @@ namespace yuan::net::http
         const char *body_buffer_end() const;
         ::yuan::buffer::ByteBuffer take_body_output_buffer();
 
+        void set_body_file_path(std::filesystem::path path);
+        const std::filesystem::path &body_file_path() const;
+        bool has_body_file() const;
+        bool begin_body_file_spool(std::uint32_t expected_length);
+        bool append_body_file_bytes(const char *data, std::size_t size);
+        bool body_file_spool_done() const;
+        std::size_t body_file_received() const;
+
         void pack_and_send(Connection *conn);
 
         bool is_chunked() const;
@@ -297,6 +307,11 @@ namespace yuan::net::http
         std::shared_ptr<HttpTask> task_;
         std::string chunked_checksum_;
         std::string original_file_name_;
+        std::filesystem::path body_file_path_;
+        std::unique_ptr<std::ofstream> body_file_stream_;
+        std::uint32_t body_file_expected_ = 0;
+        std::uint32_t body_file_received_ = 0;
+        bool body_file_owned_ = false;
     };
 }
 #endif

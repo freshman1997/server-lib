@@ -6,11 +6,26 @@
 #include "header_key.h"
 #include "request.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cstdlib>
 
 namespace yuan::net::http
 {
+    namespace
+    {
+        constexpr uint32_t kBodyFileSpoolThreshold = 64u * 1024u;
+
+        bool should_spool_request_body(HttpPacket *packet, uint32_t length)
+        {
+            if (!packet || packet->get_packet_type() != PacketType::request || length <= kBodyFileSpoolThreshold) {
+                return false;
+            }
+            auto *req = static_cast<HttpRequest *>(packet);
+            return req->get_method() == HttpMethod::put_;
+        }
+    }
+
     uint32_t HttpPacketParser::get_body_length()
     {
         const std::string *length = packet_->get_header(http_header_key::content_length);
@@ -233,6 +248,28 @@ namespace yuan::net::http
             if (length > 0) {
                 if (packet_->get_body_length() == 0) {
                     packet_->set_body_length(length);
+                }
+
+                if (should_spool_request_body(packet_, length)) {
+                    if (!packet_->begin_body_file_spool(length)) {
+                        body_state = BodyState::too_long;
+                        return -2;
+                    }
+                    const auto remaining = length - static_cast<uint32_t>(packet_->body_file_received());
+                    const auto to_write = (std::min)(remaining, static_cast<uint32_t>(buff.readable_bytes()));
+                    if (to_write > 0) {
+                        if (!packet_->append_body_file_bytes(buff.read_ptr(), to_write)) {
+                            body_state = BodyState::too_long;
+                            return -2;
+                        }
+                        buff.consume(to_write);
+                    }
+                    if (packet_->body_file_spool_done()) {
+                        body_state = BodyState::fully;
+                        return 1;
+                    }
+                    body_state = BodyState::partial;
+                    return 0;
                 }
 
                 int res = parse_body(buff, length);

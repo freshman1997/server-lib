@@ -451,6 +451,26 @@ namespace yuan::net::http
                 req->set_method(HttpMethod::head_);
             } else if (method == "PATCH") {
                 req->set_method(HttpMethod::patch_);
+            } else if (method == "PROPFIND") {
+                req->set_method(HttpMethod::propfind_);
+            } else if (method == "PROPPATCH") {
+                req->set_method(HttpMethod::proppatch_);
+            } else if (method == "MKCOL") {
+                req->set_method(HttpMethod::mkcol_);
+            } else if (method == "COPY") {
+                req->set_method(HttpMethod::copy_);
+            } else if (method == "MOVE") {
+                req->set_method(HttpMethod::move_);
+            } else if (method == "LOCK") {
+                req->set_method(HttpMethod::lock_);
+            } else if (method == "UNLOCK") {
+                req->set_method(HttpMethod::unlock_);
+            } else if (method == "REPORT") {
+                req->set_method(HttpMethod::report_);
+            } else if (method == "ACL") {
+                req->set_method(HttpMethod::acl_);
+            } else if (method == "SEARCH") {
+                req->set_method(HttpMethod::search_);
             } else {
                 req->set_method(HttpMethod::get_);
             }
@@ -656,6 +676,7 @@ namespace yuan::net::http
 
     HttpServer::~HttpServer()
     {
+        stop();
         sessions_.clear();
     }
 
@@ -1153,6 +1174,7 @@ namespace yuan::net::http
         if (thread_pool_) {
             thread_pool_->shutdown();
         }
+        listener_.close();
         if (owned_runtime_) {
             owned_runtime_->stop();
         }

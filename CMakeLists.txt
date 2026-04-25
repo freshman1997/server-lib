@@ -62,7 +62,7 @@ set(ZLIB_INSTALL OFF CACHE BOOL "Disable zlib install" FORCE)
 add_subdirectory(third_party/zlib)
 
 if (YUAN_FORCE_STATIC_LINK AND MINGW)
-    add_link_options(-static-libgcc -static-libstdc++)
+    string(APPEND CMAKE_EXE_LINKER_FLAGS " -static -static-libgcc -static-libstdc++")
 endif()
 
 add_subdirectory(core/base)
@@ -88,13 +88,19 @@ add_subdirectory(protocol/socks5)
 add_subdirectory(protocol/mqtt)
 add_subdirectory(protocol/smb)
 add_subdirectory(protocol/shadowsocks)
+add_subdirectory(protocol/webdav)
 
 if (YUAN_ENABLE_SSH)
     add_subdirectory(protocol/ssh)
 endif()
 
+if (YUAN_BUILD_LIBS)
+    add_subdirectory(libs)
+endif()
+
 if (YUAN_BUILD_SERVERS OR YUAN_BUILD_TESTS OR YUAN_BUILD_EXAMPLE)
     add_subdirectory(server/proxy)
+    add_subdirectory(server/nas)
     add_subdirectory(server/services)
 endif()
 
@@ -118,10 +124,6 @@ if (YUAN_ENABLE_PLUGIN_SYSTEM)
         set(BUILD_SHARED_LIBS ${YUAN_BUILD_SHARED_LIBS_SAVED} CACHE BOOL "Build shared libraries" FORCE)
         unset(YUAN_BUILD_SHARED_LIBS_SAVED)
     endif()
-endif()
-
-if (YUAN_BUILD_LIBS)
-    add_subdirectory(libs)
 endif()
 
 if (YUAN_BUILD_EXAMPLE)

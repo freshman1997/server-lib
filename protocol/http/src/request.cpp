@@ -18,6 +18,16 @@ namespace yuan::net::http
         "COMMENT",
         "TRACE",
         "PATCH",
+        "PROPFIND",
+        "PROPPATCH",
+        "MKCOL",
+        "COPY",
+        "MOVE",
+        "LOCK",
+        "UNLOCK",
+        "REPORT",
+        "ACL",
+        "SEARCH",
         nullptr  // sentinel
     };
 
@@ -31,6 +41,16 @@ namespace yuan::net::http
         "COMMENT",
         "TRACE",
         "PATCH",
+        "PROPFIND",
+        "PROPPATCH",
+        "MKCOL",
+        "COPY",
+        "MOVE",
+        "LOCK",
+        "UNLOCK",
+        "REPORT",
+        "ACL",
+        "SEARCH",
         ""
     };
 

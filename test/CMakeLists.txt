@@ -5,6 +5,7 @@ enable_testing()
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_subdirectory(core)
+add_subdirectory(nas)
 add_subdirectory(network)
 add_subdirectory(plugin)
 add_subdirectory(protocol)

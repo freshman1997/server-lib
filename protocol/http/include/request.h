@@ -21,6 +21,16 @@ namespace yuan::net::http
         comment_,
         trace_,
         patch_,
+        propfind_,
+        proppatch_,
+        mkcol_,
+        copy_,
+        move_,
+        lock_,
+        unlock_,
+        report_,
+        acl_,
+        search_,
     };
 
     class HttpRequest : public HttpPacket
@@ -79,6 +89,16 @@ namespace yuan::net::http
         bool is_options() const { return method_ == HttpMethod::options_; }
         bool is_head() const { return method_ == HttpMethod::head_; }
         bool is_patch() const { return method_ == HttpMethod::patch_; }
+        bool is_propfind() const { return method_ == HttpMethod::propfind_; }
+        bool is_proppatch() const { return method_ == HttpMethod::proppatch_; }
+        bool is_mkcol() const { return method_ == HttpMethod::mkcol_; }
+        bool is_copy() const { return method_ == HttpMethod::copy_; }
+        bool is_move() const { return method_ == HttpMethod::move_; }
+        bool is_lock() const { return method_ == HttpMethod::lock_; }
+        bool is_unlock() const { return method_ == HttpMethod::unlock_; }
+        bool is_report() const { return method_ == HttpMethod::report_; }
+        bool is_acl() const { return method_ == HttpMethod::acl_; }
+        bool is_search() const { return method_ == HttpMethod::search_; }
 
     private:
         HttpMethod method_;

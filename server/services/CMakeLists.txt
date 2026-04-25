@@ -11,6 +11,9 @@ endif()
 if (NOT TARGET SmbProto)
     list(FILTER SERVER_SERVICES_SRC EXCLUDE REGEX "smb_service\\.cpp$")
 endif()
+if (NOT TARGET NasCore)
+    list(FILTER SERVER_SERVICES_SRC EXCLUDE REGEX "nas_service\\.cpp$")
+endif()
 
 add_library(ServerServices ${SERVER_SERVICES_SRC})
 target_compile_features(ServerServices PUBLIC cxx_std_20)
@@ -22,6 +25,10 @@ endif()
 
 if (TARGET SmbProto)
     target_link_libraries(ServerServices PUBLIC SmbProto)
+endif()
+
+if (TARGET NasCore)
+    target_link_libraries(ServerServices PUBLIC NasCore)
 endif()
 
 target_include_directories(ServerServices PUBLIC

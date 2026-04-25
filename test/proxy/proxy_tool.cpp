@@ -127,10 +127,10 @@ namespace
     HttpProxySettings load_http_proxy_settings()
     {
         HttpProxySettings settings;
-        settings.max_active_sessions = std::max(1, read_env_int("YUAN_PROXY_MAX_ACTIVE", settings.max_active_sessions));
-        settings.header_timeout_ms = std::max(1000, read_env_int("YUAN_PROXY_HEADER_TIMEOUT_MS", settings.header_timeout_ms));
-        settings.idle_timeout_ms = std::max(1000, read_env_int("YUAN_PROXY_IDLE_TIMEOUT_MS", settings.idle_timeout_ms));
-        settings.connect_timeout_ms = std::max(1000, read_env_int("YUAN_PROXY_CONNECT_TIMEOUT_MS", settings.connect_timeout_ms));
+        settings.max_active_sessions = std::max<int>(1, read_env_int("YUAN_PROXY_MAX_ACTIVE", settings.max_active_sessions));
+        settings.header_timeout_ms = std::max<int>(1000, read_env_int("YUAN_PROXY_HEADER_TIMEOUT_MS", settings.header_timeout_ms));
+        settings.idle_timeout_ms = std::max<int>(1000, read_env_int("YUAN_PROXY_IDLE_TIMEOUT_MS", settings.idle_timeout_ms));
+        settings.connect_timeout_ms = std::max<int>(1000, read_env_int("YUAN_PROXY_CONNECT_TIMEOUT_MS", settings.connect_timeout_ms));
         settings.auth_user = read_env_string("YUAN_PROXY_BASIC_USER");
         settings.auth_password = read_env_string("YUAN_PROXY_BASIC_PASS");
         settings.require_basic_auth = !settings.auth_user.empty();

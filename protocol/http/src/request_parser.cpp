@@ -4,6 +4,9 @@
 #include "request_parser.h"
 #include "url.h"
 
+#include <cctype>
+#include <string>
+
 namespace yuan::net::http
 {
     bool HttpRequestParser::parse_method(::yuan::buffer::ByteBuffer & buff)
@@ -18,124 +21,45 @@ namespace yuan::net::http
         }
 
         header_state = HeaderState::metohd;
-        char ch = std::tolower(buff.read_i8());
         std::string method;
-        method.push_back(ch);
-        switch (ch) {
-        case 'g': {
-            for (int i = 0; i < 2 && buff.readable_bytes(); ++i) {
-                method.push_back(std::tolower(buff.read_i8()));
-            }
-
-            if (method != "get") {
-                return false;
-            }
-
-            req->method_ = HttpMethod::get_;
-            break;
-        }
-        case 'p': {
-            for (int i = 0; i < 2 && buff.readable_bytes(); ++i) {
-                method.push_back(std::tolower(buff.read_i8()));
-            }
-
-            if (method == "put") {
-                req->method_ = HttpMethod::put_;
+        bool saw_space = false;
+        while (buff.readable_bytes()) {
+            char ch = buff.read_i8();
+            if (ch == ' ') {
+                saw_space = true;
                 break;
             }
-
-            if (buff.readable_bytes() == 0)
-                return false;
-            method.push_back(std::tolower(buff.read_i8()));
-            if (method == "post") {
-                req->method_ = HttpMethod::post_;
-                break;
-            }
-
-            if (buff.readable_bytes() == 0)
-                return false;
-            method.push_back(std::tolower(buff.read_i8()));
-            if (method != "patch") {
+            method.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
+            if (method.size() > 16) {
                 return false;
             }
-
-            req->method_ = HttpMethod::patch_;
-            break;
-        }
-        case 'd': {
-            for (int i = 0; i < 6 && buff.readable_bytes(); ++i) {
-                method.push_back(std::tolower(buff.read_i8()));
-            }
-
-            if (method != "delete") {
-                return false;
-            }
-
-            req->method_ = HttpMethod::delete_;
-            break;
-        }
-        case 'o': {
-            for (int i = 0; i < 6 && buff.readable_bytes(); ++i) {
-                method.push_back(std::tolower(buff.read_i8()));
-            }
-
-            if (method != "options") {
-                return false;
-            }
-
-            req->method_ = HttpMethod::options_;
-            break;
-        }
-        case 'h': {
-            for (int i = 0; i < 4 && buff.readable_bytes(); ++i) {
-                method.push_back(std::tolower(buff.read_i8()));
-            }
-
-            if (method != "head") {
-                return false;
-            }
-
-            req->method_ = HttpMethod::head_;
-            break;
-        }
-        case 'c': {
-            for (int i = 0; i < 7 && buff.readable_bytes(); ++i) {
-                method.push_back(std::tolower(buff.read_i8()));
-            }
-
-            if (method != "comment") {
-                return false;
-            }
-
-            req->method_ = HttpMethod::comment_;
-            break;
-        }
-        case 't': {
-            for (int i = 0; i < 5 && buff.readable_bytes(); ++i) {
-                method.push_back(std::tolower(buff.read_i8()));
-            }
-
-            if (method != "trace") {
-                return false;
-            }
-
-            req->method_ = HttpMethod::trace_;
-            break;
         }
 
-        default:
-            break;
-        }
-
-        if (req->method_ == HttpMethod::invalid_) {
+        if (method.empty() || !saw_space) {
             return false;
         }
 
-        if (buff.readable_bytes() == 0 || buff.read_i8() != ' ') {
-            return false;
-        }
+        if (method == "GET") req->method_ = HttpMethod::get_;
+        else if (method == "POST") req->method_ = HttpMethod::post_;
+        else if (method == "PUT") req->method_ = HttpMethod::put_;
+        else if (method == "DELETE") req->method_ = HttpMethod::delete_;
+        else if (method == "OPTIONS") req->method_ = HttpMethod::options_;
+        else if (method == "HEAD") req->method_ = HttpMethod::head_;
+        else if (method == "COMMENT") req->method_ = HttpMethod::comment_;
+        else if (method == "TRACE") req->method_ = HttpMethod::trace_;
+        else if (method == "PATCH") req->method_ = HttpMethod::patch_;
+        else if (method == "PROPFIND") req->method_ = HttpMethod::propfind_;
+        else if (method == "PROPPATCH") req->method_ = HttpMethod::proppatch_;
+        else if (method == "MKCOL") req->method_ = HttpMethod::mkcol_;
+        else if (method == "COPY") req->method_ = HttpMethod::copy_;
+        else if (method == "MOVE") req->method_ = HttpMethod::move_;
+        else if (method == "LOCK") req->method_ = HttpMethod::lock_;
+        else if (method == "UNLOCK") req->method_ = HttpMethod::unlock_;
+        else if (method == "REPORT") req->method_ = HttpMethod::report_;
+        else if (method == "ACL") req->method_ = HttpMethod::acl_;
+        else if (method == "SEARCH") req->method_ = HttpMethod::search_;
 
-        return true;
+        return req->method_ != HttpMethod::invalid_;
     }
 
     bool HttpRequestParser::parse_url(::yuan::buffer::ByteBuffer & buff)
