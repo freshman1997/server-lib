@@ -14,10 +14,17 @@ endif()
 if (NOT TARGET NasCore)
     list(FILTER SERVER_SERVICES_SRC EXCLUDE REGEX "nas_service\\.cpp$")
 endif()
+if (NOT TARGET SshProto)
+    list(FILTER SERVER_SERVICES_SRC EXCLUDE REGEX "ssh_service\\.cpp$")
+endif()
 
 add_library(ServerServices ${SERVER_SERVICES_SRC})
 target_compile_features(ServerServices PUBLIC cxx_std_20)
-target_link_libraries(ServerServices PUBLIC ServerProxy DnsProto HttpProto WebSocketProto BitTorrentProto Socks5Proto MqttProto SshProto)
+target_link_libraries(ServerServices PUBLIC ServerProxy DnsProto HttpProto WebSocketProto BitTorrentProto Socks5Proto MqttProto)
+
+if (TARGET SshProto)
+    target_link_libraries(ServerServices PUBLIC SshProto)
+endif()
 
 if (TARGET FtpProto)
     target_link_libraries(ServerServices PUBLIC FtpProto)
