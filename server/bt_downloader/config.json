@@ -1,0 +1,19 @@
+{
+  "app_name": "bt_downloader",
+  "admin_port": 18080,
+  "torrent_file": "",
+  "save_path": ".",
+  "enable_keep_alive": true,
+  "enable_cors": true,
+  "bt": {
+    "max_peers": 50,
+    "listen_port": 6881,
+    "listen_port_end": 6999,
+    "download_limit_kbps": 0,
+    "upload_limit_kbps": 0,
+    "max_concurrent_downloads": 3,
+    "enable_dht": true,
+    "enable_pex": true,
+    "enable_upnp": true
+  }
+}

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Yuan Admin Dashboard</title>
+  <link rel="stylesheet" href="/admin/assets/dashboard.css">
+</head>
+<body>
+  <header>
+    <h1>Yuan 管理后台</h1>
+    <p>服务监控 / BT 下载状态 / 在线控制</p>
+  </header>
+
+  <main>
+    <div id="errorBanner" class="error-banner" style="display:none"></div>
+
+    <section class="card">
+      <h2>系统总览</h2>
+      <div id="overview"></div>
+    </section>
+
+    <section class="card">
+      <h2>BitTorrent 监控</h2>
+      <div id="bt"></div>
+    </section>
+
+    <section class="card">
+      <h2>BitTorrent 控制</h2>
+      <div class="row">
+        <button id="btStart" type="button">启动下载</button>
+        <button id="btStop" class="warn" type="button">停止全部下载</button>
+      </div>
+      <div class="input-group">
+        <label>保存路径（所有方式共用）</label>
+        <div class="row">
+          <input id="savePath" type="text" placeholder="下载保存路径（可选，默认当前目录）" style="flex:1" />
+        </div>
+      </div>
+      <div class="input-group">
+        <label>方式一：上传 .torrent 文件</label>
+        <div class="row">
+          <label class="inline-file" for="torrentFile">选择文件</label>
+          <input id="torrentFile" type="file" accept=".torrent" />
+          <span id="torrentFileName" class="file-name"></span>
+          <button id="btUpload" type="button">上传并开始</button>
+        </div>
+        <div id="dropZone" class="drop-zone">拖拽 .torrent 文件到此处</div>
+      </div>
+      <div class="input-group">
+        <label>方式二：服务器本地 torrent 路径</label>
+        <div class="row">
+          <input id="torrentPath" type="text" placeholder="/path/to/file.torrent" />
+          <button id="btLoad" type="button">加载并开始</button>
+        </div>
+      </div>
+      <div class="input-group">
+        <label>方式三：Magnet 链接</label>
+        <div class="row">
+          <input id="magnetUri" type="text" placeholder="magnet:?xt=urn:btih:..." style="flex:1" />
+          <button id="btMagnet" type="button">Magnet 下载</button>
+        </div>
+      </div>
+      <div class="input-group">
+        <label>连接设置</label>
+        <div class="row">
+          <input id="maxPeers" type="number" min="1" placeholder="最大 peer 数" />
+          <input id="listenPort" type="number" min="1" max="65535" placeholder="监听端口起始" />
+          <input id="listenPortEnd" type="number" min="1" max="65535" placeholder="监听端口终止" />
+          <input id="downloadLimit" type="number" min="0" placeholder="下载限速 KB/s" />
+          <input id="uploadLimit" type="number" min="0" placeholder="上传限速 KB/s" />
+          <input id="maxConcurrent" type="number" min="1" max="100" placeholder="最大并发下载数" />
+        </div>
+        <div class="row">
+          <label class="toggle-label"><input id="enableDht" type="checkbox" checked> DHT</label>
+          <label class="toggle-label"><input id="enablePex" type="checkbox" checked> PEX</label>
+          <label class="toggle-label"><input id="enableUpnp" type="checkbox" checked> UPnP/NAT-PMP</label>
+          <button id="btApplySettings" type="button">应用设置</button>
+          <label class="inline-file" for="btImportConfigFile">导入配置</label>
+          <input id="btImportConfigFile" type="file" accept="application/json,.json" />
+          <button id="btImportConfigApply" type="button">应用导入</button>
+          <button id="btExportConfig" type="button">导出配置</button>
+        </div>
+      </div>
+      <div id="controlMsg" class="k"></div>
+    </section>
+
+    <section class="card" style="grid-column:1/-1">
+      <h2>多任务列表</h2>
+      <div class="row">
+        <input id="taskStartId" type="number" min="1" placeholder="任务 ID" />
+        <button id="taskStartBtn" type="button">按 ID 启动</button>
+        <input id="taskStopId" type="number" min="1" placeholder="任务 ID" />
+        <button id="taskStopBtn" class="warn" type="button">按 ID 停止</button>
+        <input id="taskRemoveId" type="number" min="1" placeholder="任务 ID" />
+        <button id="taskRemoveBtn" class="warn" type="button">按 ID 删除</button>
+        <button id="taskRefreshBtn" type="button">刷新任务列表</button>
+      </div>
+      <div id="taskList" class="task-table-wrap">loading...</div>
+    </section>
+
+    <section class="card" style="grid-column:1/-1">
+      <h2>事件计数与服务状态</h2>
+      <pre id="raw">loading...</pre>
+    </section>
+
+    <section class="card" style="grid-column:1/-1">
+      <h2>任务历史</h2>
+      <div class="row">
+        <input id="historyPage" type="number" min="1" value="1" placeholder="页码" />
+        <input id="historyPageSize" type="number" min="1" max="100" value="20" placeholder="每页" />
+        <button id="historyLoad" type="button">加载历史</button>
+      </div>
+      <pre id="taskHistory">loading...</pre>
+    </section>
+  </main>
+
+  <div id="detailModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="detailTitle">任务详情</h3>
+        <button id="detailClose" type="button">&times;</button>
+      </div>
+      <div id="detailBody" class="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="/admin/assets/dashboard.js"></script>
+</body>
+</html>
