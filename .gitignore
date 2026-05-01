@@ -21,3 +21,5 @@ GTAGS
 *.dll
 logs
 test_http_static
+*.gz
+*.log

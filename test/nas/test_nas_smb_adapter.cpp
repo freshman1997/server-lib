@@ -102,6 +102,14 @@ int main()
     namespace nas = yuan::server::nas;
     namespace smb = yuan::net::smb;
 
+    constexpr uint32_t desired_file_read_data = 0x00000001u;
+    constexpr uint32_t desired_file_write_data = 0x00000002u;
+    constexpr uint32_t disposition_file_open = 0x00000001u;
+    constexpr uint32_t disposition_file_open_if = 0x00000003u;
+    constexpr uint32_t fsctl_validate_negotiate_info = 0x00140204u;
+    constexpr uint32_t fsctl_set_reparse_point = 0x000900A4u;
+    constexpr uint32_t fsctl_unknown = 0x00ABCDEFu;
+
     const auto root = (std::filesystem::temp_directory_path() / "yuan_nas_smb_adapter_test").string();
     std::filesystem::create_directories(root);
 
@@ -135,6 +143,13 @@ int main()
     hashed.enabled = true;
     metadata->upsert_user(hashed);
 
+    nas::NasUser nt_hash_user;
+    nt_hash_user.id = "nthash-id";
+    nt_hash_user.username = "nthash";
+    nt_hash_user.password_hash = nas::NasAuthService::nt_hash_for_config("nthash-secret");
+    nt_hash_user.enabled = true;
+    metadata->upsert_user(nt_hash_user);
+
     auto share = make_share(root);
     metadata->upsert_share(share);
 
@@ -151,6 +166,11 @@ int main()
     check(reader_password && *reader_password == "reader-secret", "plain NAS password should be available for NTLMv2 proof");
     check(!handler.on_password_lookup(&reader_session, "hashed", "WORKGROUP"),
           "non-plain NAS password hash should not be exposed for SMB NTLM proof");
+    auto reader_nt_hash = handler.on_nt_hash_lookup(&reader_session, "nthash", "WORKGROUP");
+    check(reader_nt_hash && *reader_nt_hash == nt_hash_user.password_hash,
+          "NT hash NAS password should be available for SMB NTLM proof without exposing plain password");
+    check(!handler.on_nt_hash_lookup(&reader_session, "reader", "WORKGROUP"),
+          "plain NAS password should not require NT hash lookup path");
 
     smb::SmbShareConfig smb_share_config;
     smb_share_config.name = "docs";
@@ -164,13 +184,13 @@ int main()
     check(handler.on_tree_connect(&reader_session, "\\\\localhost\\docs"), "reader should connect to readable share");
 
     smb::CreateParams read_open;
-    read_open.desired_access = smb::FILE_READ_DATA;
-    read_open.create_disposition = smb::FILE_OPEN;
+    read_open.desired_access = desired_file_read_data;
+    read_open.create_disposition = disposition_file_open;
     check(handler.on_create(&reader_session, tree_id, "hello.txt", read_open), "reader should open for read");
 
     smb::CreateParams write_open;
-    write_open.desired_access = smb::FILE_WRITE_DATA;
-    write_open.create_disposition = smb::FILE_OPEN_IF;
+    write_open.desired_access = desired_file_write_data;
+    write_open.create_disposition = disposition_file_open_if;
     check(!handler.on_create(&reader_session, tree_id, "hello.txt", write_open), "reader should not open for write");
 
     smb::SmbSession writer_session(2, nullptr);
@@ -188,9 +208,59 @@ int main()
     smb_share.add_open_file(file_id, open_file);
     check(handler.on_write(&writer_session, file_id, 0, 4), "writer should write open file");
     check(handler.on_read(&writer_session, file_id, 0, 4), "writer should read open file");
+    check(handler.on_rename(&writer_session, file_id, "renamed.txt"), "writer should rename open file");
+    check(handler.on_delete(&writer_session, file_id), "writer should delete open file");
+    check(handler.on_lock(&writer_session, file_id), "writer should lock open file");
+    check(handler.on_ioctl(&writer_session, file_id, fsctl_validate_negotiate_info),
+          "writer should issue read-like ioctl");
+    check(handler.on_ioctl(&writer_session, file_id, fsctl_set_reparse_point),
+          "writer should issue write-like ioctl");
+    check(!handler.on_ioctl(&writer_session, file_id, fsctl_unknown),
+          "unknown ioctl should be denied by default");
+
+    check(!handler.on_rename(&reader_session, file_id, "reader-renamed.txt"),
+          "reader should not rename open file");
+    check(!handler.on_delete(&reader_session, file_id),
+          "reader should not delete open file");
+    check(!handler.on_lock(&reader_session, file_id),
+          "reader should not lock open file");
+    check(handler.on_ioctl(&reader_session, file_id, fsctl_validate_negotiate_info),
+          "reader should issue read-like ioctl");
+    check(!handler.on_ioctl(&reader_session, file_id, fsctl_set_reparse_point),
+          "reader should not issue write-like ioctl");
+    check(!handler.on_ioctl(&reader_session, file_id, fsctl_unknown),
+          "reader should not issue unknown ioctl");
+
+    handler.set_ioctl_permission(fsctl_validate_negotiate_info, nas::NasPermission::write);
+    check(!handler.on_ioctl(&reader_session, file_id, fsctl_validate_negotiate_info),
+          "reader should be denied when ioctl policy requires write");
+    check(handler.on_ioctl(&writer_session, file_id, fsctl_validate_negotiate_info),
+          "writer should pass when ioctl policy requires write");
+
+    handler.set_ioctl_permission(fsctl_unknown, nas::NasPermission::read);
+    check(handler.on_ioctl(&reader_session, file_id, fsctl_unknown),
+          "reader should pass when unknown ioctl is explicitly mapped to read");
+
+    handler.set_ioctl_permission(fsctl_set_reparse_point, std::nullopt);
+    check(!handler.on_ioctl(&writer_session, file_id, fsctl_set_reparse_point),
+          "writer should be denied when write-like ioctl is explicitly disabled");
+
+    handler.reset_ioctl_permissions();
+    check(handler.on_ioctl(&reader_session, file_id, fsctl_validate_negotiate_info),
+          "reader should regain default read-like ioctl permission after reset");
+    check(!handler.on_ioctl(&reader_session, file_id, fsctl_unknown),
+          "reader should lose unknown ioctl mapping after reset");
 
     handler.on_logoff(&writer_session);
     check(!handler.on_write(&writer_session, file_id, 0, 4), "logged-off writer should lose SMB NAS permissions");
+    check(!handler.on_rename(&writer_session, file_id, "after-logoff.txt"),
+          "logged-off writer should lose SMB rename permission");
+    check(!handler.on_delete(&writer_session, file_id),
+          "logged-off writer should lose SMB delete permission");
+    check(!handler.on_lock(&writer_session, file_id),
+          "logged-off writer should lose SMB lock permission");
+    check(!handler.on_ioctl(&writer_session, file_id, fsctl_validate_negotiate_info),
+          "logged-off writer should lose SMB ioctl permission");
 
     std::filesystem::remove_all(root);
     std::cout << "NAS SMB adapter tests passed" << std::endl;

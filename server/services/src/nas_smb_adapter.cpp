@@ -1,6 +1,9 @@
 #include "nas_smb_adapter.h"
 
+#include "nas/nas_auth_service.h"
+
 #include <algorithm>
+#include <cctype>
 #include <mutex>
 #include <string_view>
 
@@ -23,30 +26,92 @@ namespace yuan::server
             return password_hash.substr(prefix.size());
         }
 
-        yuan::server::nas::NasPermission permission_for_create(const yuan::net::smb::CreateParams &params)
+        std::optional<std::string> nt_hash_from_hash(const std::string &password_hash)
         {
-            using yuan::net::smb::DELETE;
-            using yuan::net::smb::FILE_APPEND_DATA;
-            using yuan::net::smb::FILE_CREATE;
-            using yuan::net::smb::FILE_DELETE_ON_CLOSE;
-            using yuan::net::smb::FILE_OPEN_IF;
-            using yuan::net::smb::FILE_OVERWRITE;
-            using yuan::net::smb::FILE_OVERWRITE_IF;
-            using yuan::net::smb::FILE_WRITE_ATTRIBUTES;
-            using yuan::net::smb::FILE_WRITE_DATA;
-            using yuan::net::smb::GENERIC_WRITE;
+            constexpr std::string_view nthash_prefix = "nthash:";
+            constexpr std::string_view ntlm_prefix = "ntlm:";
+
+            std::string_view value(password_hash);
+            if (value.rfind(nthash_prefix, 0) == 0) {
+                value.remove_prefix(nthash_prefix.size());
+            } else if (value.rfind(ntlm_prefix, 0) == 0) {
+                value.remove_prefix(ntlm_prefix.size());
+            } else {
+                return std::nullopt;
+            }
+
+            if (value.size() != 32) {
+                return std::nullopt;
+            }
+            for (char ch : value) {
+                if (!std::isxdigit(static_cast<unsigned char>(ch))) {
+                    return std::nullopt;
+                }
+            }
+            return std::string("nthash:") + std::string(value);
+        }
+
+        std::optional<yuan::server::nas::NasPermission> permission_for_ioctl(uint32_t ctl_code)
+        {
             using yuan::server::nas::NasPermission;
 
+            struct IoctlPermissionRule
+            {
+                uint32_t ctl_code;
+                NasPermission required;
+            };
+
+            static constexpr IoctlPermissionRule rules[] = {
+                { 0x00140204u, NasPermission::read },
+                { 0x001401FCu, NasPermission::read },
+                { 0x001401D4u, NasPermission::read },
+                { 0x00060194u, NasPermission::read },
+                { 0x000601B4u, NasPermission::read },
+                { 0x000900A8u, NasPermission::read },
+                { 0x00144064u, NasPermission::read },
+                { 0x00140078u, NasPermission::read },
+                { 0x000900A4u, NasPermission::write },
+                { 0x000900ACu, NasPermission::write },
+                { 0x001440F2u, NasPermission::write },
+                { 0x001480F2u, NasPermission::write },
+                { 0x0011C017u, NasPermission::write },
+            };
+
+            for (const auto &rule : rules) {
+                if (rule.ctl_code == ctl_code) {
+                    return rule.required;
+                }
+            }
+
+            return std::nullopt;
+        }
+
+        yuan::server::nas::NasPermission permission_for_create(const yuan::net::smb::CreateParams &params)
+        {
+            using yuan::server::nas::NasPermission;
+
+            constexpr uint32_t desired_generic_write = 0x40000000u;
+            constexpr uint32_t desired_file_write_data = 0x00000002u;
+            constexpr uint32_t desired_file_append_data = 0x00000004u;
+            constexpr uint32_t desired_file_write_attributes = 0x00000100u;
+            constexpr uint32_t desired_delete = 0x00010000u;
+            constexpr uint32_t create_file_create = 0x00000002u;
+            constexpr uint32_t create_file_open_if = 0x00000003u;
+            constexpr uint32_t create_file_overwrite = 0x00000004u;
+            constexpr uint32_t create_file_overwrite_if = 0x00000005u;
+            constexpr uint32_t option_file_delete_on_close = 0x00001000u;
+
             NasPermission required = NasPermission::read;
-            if ((params.desired_access & (GENERIC_WRITE | FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES)) != 0 ||
-                params.create_disposition == FILE_CREATE ||
-                params.create_disposition == FILE_OPEN_IF ||
-                params.create_disposition == FILE_OVERWRITE ||
-                params.create_disposition == FILE_OVERWRITE_IF) {
+            if ((params.desired_access & (desired_generic_write | desired_file_write_data |
+                                          desired_file_append_data | desired_file_write_attributes)) != 0 ||
+                params.create_disposition == create_file_create ||
+                params.create_disposition == create_file_open_if ||
+                params.create_disposition == create_file_overwrite ||
+                params.create_disposition == create_file_overwrite_if) {
                 required = required | NasPermission::write;
             }
-            if ((params.desired_access & DELETE) != 0 ||
-                (params.create_options & FILE_DELETE_ON_CLOSE) != 0) {
+            if ((params.desired_access & desired_delete) != 0 ||
+                (params.create_options & option_file_delete_on_close) != 0) {
                 required = required | NasPermission::remove;
             }
             return required;
@@ -97,6 +162,7 @@ namespace yuan::server
     NasSmbHandler::NasSmbHandler(std::shared_ptr<yuan::server::nas::NasMetadataStore> metadata)
         : metadata_(std::move(metadata))
     {
+        reset_ioctl_permissions();
     }
 
     bool NasSmbHandler::on_authenticate(yuan::net::smb::SmbSession *session,
@@ -132,6 +198,22 @@ namespace yuan::server
             return std::nullopt;
         }
         return plain_password_from_hash(nas_user->password_hash);
+    }
+
+    std::optional<std::string> NasSmbHandler::on_nt_hash_lookup(yuan::net::smb::SmbSession *session,
+                                                                const std::string &user,
+                                                                const std::string &domain)
+    {
+        (void)session;
+        (void)domain;
+        if (!metadata_ || !metadata_->available()) {
+            return std::nullopt;
+        }
+        auto nas_user = metadata_->find_user_by_name(user);
+        if (!nas_user || !nas_user->enabled) {
+            return std::nullopt;
+        }
+        return nt_hash_from_hash(nas_user->password_hash);
     }
 
     bool NasSmbHandler::on_tree_connect(yuan::net::smb::SmbSession *session, const std::string &path)
@@ -210,6 +292,82 @@ namespace yuan::server
     {
         auto share = share_for_file(session, file_id);
         return share && allowed(session, *share, yuan::server::nas::NasPermission::write);
+    }
+
+    bool NasSmbHandler::on_rename(yuan::net::smb::SmbSession *session,
+                                  const yuan::net::smb::FileId &file_id,
+                                  const std::string &new_path)
+    {
+        (void)new_path;
+        auto share = share_for_file(session, file_id);
+        return share && allowed(session, *share, yuan::server::nas::NasPermission::write);
+    }
+
+    bool NasSmbHandler::on_delete(yuan::net::smb::SmbSession *session,
+                                  const yuan::net::smb::FileId &file_id)
+    {
+        auto share = share_for_file(session, file_id);
+        return share && allowed(session, *share, yuan::server::nas::NasPermission::remove);
+    }
+
+    bool NasSmbHandler::on_lock(yuan::net::smb::SmbSession *session,
+                                const yuan::net::smb::FileId &file_id)
+    {
+        auto share = share_for_file(session, file_id);
+        return share && allowed(session, *share, yuan::server::nas::NasPermission::write);
+    }
+
+    bool NasSmbHandler::on_ioctl(yuan::net::smb::SmbSession *session,
+                                 const yuan::net::smb::FileId &file_id,
+                                 uint32_t ctl_code)
+    {
+        auto share = share_for_file(session, file_id);
+        if (!share) {
+            return false;
+        }
+        std::optional<yuan::server::nas::NasPermission> required;
+        bool has_override = false;
+        {
+            std::lock_guard<std::mutex> lock(ioctl_permissions_mutex_);
+            auto it = ioctl_permissions_.find(ctl_code);
+            if (it != ioctl_permissions_.end()) {
+                has_override = true;
+                required = it->second;
+            }
+        }
+        if (!has_override) {
+            required = permission_for_ioctl(ctl_code);
+        }
+        if (!required.has_value()) {
+            return false;
+        }
+        return allowed(session, *share, *required);
+    }
+
+    void NasSmbHandler::set_ioctl_permission(uint32_t ctl_code,
+                                             std::optional<yuan::server::nas::NasPermission> required)
+    {
+        std::lock_guard<std::mutex> lock(ioctl_permissions_mutex_);
+        ioctl_permissions_[ctl_code] = std::move(required);
+    }
+
+    void NasSmbHandler::reset_ioctl_permissions()
+    {
+        std::lock_guard<std::mutex> lock(ioctl_permissions_mutex_);
+        ioctl_permissions_.clear();
+        ioctl_permissions_[0x00140204u] = yuan::server::nas::NasPermission::read;
+        ioctl_permissions_[0x001401FCu] = yuan::server::nas::NasPermission::read;
+        ioctl_permissions_[0x001401D4u] = yuan::server::nas::NasPermission::read;
+        ioctl_permissions_[0x00060194u] = yuan::server::nas::NasPermission::read;
+        ioctl_permissions_[0x000601B4u] = yuan::server::nas::NasPermission::read;
+        ioctl_permissions_[0x000900A8u] = yuan::server::nas::NasPermission::read;
+        ioctl_permissions_[0x00144064u] = yuan::server::nas::NasPermission::read;
+        ioctl_permissions_[0x00140078u] = yuan::server::nas::NasPermission::read;
+        ioctl_permissions_[0x000900A4u] = yuan::server::nas::NasPermission::write;
+        ioctl_permissions_[0x000900ACu] = yuan::server::nas::NasPermission::write;
+        ioctl_permissions_[0x001440F2u] = yuan::server::nas::NasPermission::write;
+        ioctl_permissions_[0x001480F2u] = yuan::server::nas::NasPermission::write;
+        ioctl_permissions_[0x0011C017u] = yuan::server::nas::NasPermission::write;
     }
 
     std::optional<yuan::server::nas::NasUser> NasSmbHandler::user_for_session(const yuan::net::smb::SmbSession *session) const

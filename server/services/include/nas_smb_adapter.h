@@ -1,8 +1,8 @@
 #ifndef __SERVER_NAS_SMB_ADAPTER_H__
 #define __SERVER_NAS_SMB_ADAPTER_H__
 
-#include "nas/nas.h"
 #include "smb.h"
+#include "nas/nas.h"
 
 #include <memory>
 #include <mutex>
@@ -32,7 +32,10 @@ namespace yuan::server
                              const std::string &domain) override;
         std::optional<std::string> on_password_lookup(yuan::net::smb::SmbSession *session,
                                                       const std::string &user,
-                                                      const std::string &domain) override;
+                                                      const std::string &domain);
+        std::optional<std::string> on_nt_hash_lookup(yuan::net::smb::SmbSession *session,
+                                                     const std::string &user,
+                                                     const std::string &domain);
         bool on_tree_connect(yuan::net::smb::SmbSession *session, const std::string &path) override;
         void on_logoff(yuan::net::smb::SmbSession *session) override;
         void on_session_closed(yuan::net::smb::SmbSession *session) override;
@@ -55,6 +58,20 @@ namespace yuan::server
                            const yuan::net::smb::FileId &file_id) override;
         bool on_set_info(yuan::net::smb::SmbSession *session,
                          const yuan::net::smb::FileId &file_id) override;
+        bool on_rename(yuan::net::smb::SmbSession *session,
+                       const yuan::net::smb::FileId &file_id,
+                       const std::string &new_path) override;
+        bool on_delete(yuan::net::smb::SmbSession *session,
+                       const yuan::net::smb::FileId &file_id) override;
+        bool on_lock(yuan::net::smb::SmbSession *session,
+                     const yuan::net::smb::FileId &file_id) override;
+        bool on_ioctl(yuan::net::smb::SmbSession *session,
+                      const yuan::net::smb::FileId &file_id,
+                      uint32_t ctl_code) override;
+
+        void set_ioctl_permission(uint32_t ctl_code,
+                                  std::optional<yuan::server::nas::NasPermission> required);
+        void reset_ioctl_permissions();
 
     private:
         std::optional<yuan::server::nas::NasUser> user_for_session(const yuan::net::smb::SmbSession *session) const;
@@ -67,6 +84,8 @@ namespace yuan::server
 
         std::shared_ptr<yuan::server::nas::NasMetadataStore> metadata_;
         yuan::server::nas::NasPermissionService permissions_;
+        std::unordered_map<uint32_t, std::optional<yuan::server::nas::NasPermission>> ioctl_permissions_;
+        mutable std::mutex ioctl_permissions_mutex_;
         mutable std::mutex session_users_mutex_;
         std::unordered_map<uint64_t, yuan::server::nas::NasUser> session_users_;
     };

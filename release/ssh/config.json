@@ -1,0 +1,14 @@
+{
+  "port": 2222,
+  "app_name": "release-ssh-server",
+  "host_key_path": "release/ssh/hostkey/ssh_host_ed25519_key",
+  "banner": "Welcome to Yuan SSH release server",
+  "software_version": "YuanSSH_Release_1.0",
+  "sftp_root_dir": ".",
+  "username": "yuan",
+  "password": "yuan",
+  "enable_publickey_auth": true,
+  "enable_password_auth": true,
+  "enable_sftp": true,
+  "enable_port_forwarding": true
+}
