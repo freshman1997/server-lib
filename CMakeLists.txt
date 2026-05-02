@@ -104,6 +104,8 @@ if (YUAN_ENABLE_SSH)
     add_subdirectory(protocol/ssh)
 endif()
 
+add_subdirectory(release)
+
 if (YUAN_BUILD_LIBS)
     add_subdirectory(libs)
 endif()

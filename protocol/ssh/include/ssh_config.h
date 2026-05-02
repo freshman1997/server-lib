@@ -30,9 +30,6 @@ namespace yuan::net::ssh
             "diffie-hellman-group18-sha512"
         };
         std::vector<std::string> cipher_algorithms = {
-            "chacha20-poly1305@openssh.com",
-            "aes256-gcm@openssh.com",
-            "aes128-gcm@openssh.com",
             "aes256-ctr",
             "aes192-ctr",
             "aes128-ctr"

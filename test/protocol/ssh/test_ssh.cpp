@@ -798,7 +798,7 @@ bool test_build_kex_init_uses_filtered_host_key_algorithms_in_config_order()
     return true;
 }
 
-bool test_process_kex_init_negotiates_config_preference_and_hash()
+bool test_process_kex_init_negotiates_client_preference_and_hash()
 {
     SshAlgorithmRegistry registry;
     registry.register_kex("curve25519-sha256", []() { return std::make_unique<FakeKexAlgorithm>(); });
@@ -832,14 +832,14 @@ bool test_process_kex_init_negotiates_config_preference_and_hash()
 
     auto negotiated = transport.process_kex_init(peer, config);
     TEST_ASSERT(negotiated.has_value(), "kex negotiation should succeed");
-    TEST_ASSERT(negotiated->kex_name == "curve25519-sha256",
-                "kex negotiation should prefer server config order over peer order");
-    TEST_ASSERT(negotiated->host_key_name == "ssh-ed25519",
-                "host key negotiation should prefer server config order");
-    TEST_ASSERT(negotiated->client_to_server_cipher_name == "aes128-ctr",
-                "cipher negotiation should prefer server config order");
-    TEST_ASSERT(negotiated->kex_hash_name == "sha256",
-                "curve25519 negotiation should select sha256 hash");
+    TEST_ASSERT(negotiated->kex_name == "diffie-hellman-group18-sha512",
+                "kex negotiation should prefer client order");
+    TEST_ASSERT(negotiated->host_key_name == "rsa-sha2-256",
+                "host key negotiation should prefer client order");
+    TEST_ASSERT(negotiated->client_to_server_cipher_name == "aes256-ctr",
+                "cipher negotiation should prefer client order");
+    TEST_ASSERT(negotiated->kex_hash_name == "sha512",
+                "group18 negotiation should select sha512 hash");
 
     config.kex_algorithms = { "diffie-hellman-group18-sha512" };
     auto negotiated_sha512 = transport.process_kex_init(peer, config);
@@ -871,7 +871,7 @@ bool test_first_kex_packet_follows_ignores_only_wrong_guess()
     config.compression_algorithms = { "none" };
 
     SshKexInitMessage wrong_guess = {};
-    wrong_guess.kex_algorithms = "diffie-hellman-group18-sha512,curve25519-sha256";
+    wrong_guess.kex_algorithms = "diffie-hellman-group-exchange-sha256,curve25519-sha256";
     wrong_guess.server_host_key_algorithms = "rsa-sha2-256,ssh-ed25519";
     wrong_guess.encryption_algorithms_client_to_server = "aes128-ctr";
     wrong_guess.encryption_algorithms_server_to_client = "aes128-ctr";
@@ -1415,7 +1415,7 @@ int main()
     RUN_TEST(test_publickey_rsa_fallback_verifies_signature);
     RUN_TEST(test_publickey_ecdsa_fallback_verifies_signature);
     RUN_TEST(test_build_kex_init_uses_filtered_host_key_algorithms_in_config_order);
-    RUN_TEST(test_process_kex_init_negotiates_config_preference_and_hash);
+    RUN_TEST(test_process_kex_init_negotiates_client_preference_and_hash);
     RUN_TEST(test_first_kex_packet_follows_ignores_only_wrong_guess);
     RUN_TEST(test_process_newkeys_activates_encryption_after_kex);
     RUN_TEST(test_process_kex_init_message_uses_client_then_server_kex_payloads);

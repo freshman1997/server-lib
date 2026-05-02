@@ -4,8 +4,8 @@ This directory contains release-oriented runnable targets for SSH server and CLI
 
 ## Binaries
 
-- `release_ssh_server`: SSH server entry with config/env support
-- `release_ssh_cli`: minimal connectivity/version-exchange client
+- `release_ssh_server`: SSH server entry with config, env, and CLI option support
+- `release_ssh_cli`: OpenSSH-shaped client CLI for probe and password-auth exec
 
 Default build output:
 
@@ -26,6 +26,7 @@ Key fields:
 - `enable_publickey_auth`
 - `enable_password_auth`
 - `enable_sftp`
+- `enable_port_forwarding`
 
 Environment overrides (subset):
 
@@ -37,19 +38,44 @@ Environment overrides (subset):
 - `YUAN_SSH_ENABLE_PUBLICKEY_AUTH`
 - `YUAN_SSH_ENABLE_PASSWORD_AUTH`
 - `YUAN_SSH_AUTHORIZED_KEYS`
+- `YUAN_SSH_ENABLE_SFTP`
+- `YUAN_SSH_ENABLE_PORT_FORWARD`
+
+Server options:
+
+```bash
+build/release/ssh/release_ssh_server --config release/ssh/config.json --port 2222
+build/release/ssh/release_ssh_server -f release/ssh/config.json --password-auth yes --sftp yes
+```
 
 ## Quick Run
 
 Start server:
 
 ```bash
-build/release/ssh/release_ssh_server
+build/release/ssh/release_ssh_server --config release/ssh/config.json
 ```
 
-Connect with system ssh client:
+Or use the release helper scripts after building:
 
 ```bash
-ssh -p 2222 <user>@127.0.0.1
+build/release/ssh/start.sh
+build/release/ssh/stop.sh
+```
+
+Probe with bundled CLI:
+
+```bash
+build/release/ssh/release_ssh_cli --probe -p 2222 127.0.0.1
+```
+
+The bundled CLI intentionally accepts OpenSSH-shaped syntax:
+
+```bash
+release_ssh_cli [options] [user@]host [command]
+release_ssh_cli --probe -p 2222 yuan@127.0.0.1
+release_ssh_cli -p 2222 --password yuan yuan@127.0.0.1 "whoami"
+release_ssh_cli -o Port=2222 -o User=yuan --probe 127.0.0.1
 ```
 
 ## Health Check
@@ -108,12 +134,19 @@ Musl output directory:
 
 ## Current CLI Scope
 
-`release_ssh_cli` currently verifies transport reachability and SSH version exchange only.
+`release_ssh_cli` currently supports:
 
-It does **not** implement:
-
+- TCP connect and SSH version probe via `--probe`
 - key exchange negotiation
-- user authentication
-- encrypted channel/session interaction
+- password authentication
+- non-interactive `exec` command channels
+- OpenSSH-shaped options: `-p`, `-l`, `-i`, `-o`, `-F`, `-q`, `-v`, `-V`
+
+It does **not** yet implement:
+
+- interactive shell mode when no command is provided
+- publickey authentication from `-i`
+- known_hosts verification
+- local config-file parsing from `-F`
 
 For interactive shell/session validation, use OpenSSH client (`ssh`).

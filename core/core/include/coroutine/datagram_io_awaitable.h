@@ -3,6 +3,7 @@
 
 #include <coroutine>
 #include <memory>
+#include <vector>
 
 #include "coroutine/io_result.h"
 #include "coroutine/runtime_view.h"
@@ -75,10 +76,21 @@ namespace yuan::coroutine
             }
 
             handle_ = handle;
-            proxy_ = std::make_shared<ProxyHandler>(*this, connection,
-                                                    connection->get_connection_handler(),
-                                                    connection->get_connection_handler_owner());
-            connection->set_connection_handler(proxy_);
+            register_waiter(connection, net::ConnectionEvent::readable, [this](const std::shared_ptr<net::Connection> &) {
+                if (!completed_) {
+                    complete(IoStatus::success);
+                }
+            });
+            register_waiter(connection, net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
+                if (!completed_) {
+                    complete(IoStatus::connection_error);
+                }
+            });
+            register_waiter(connection, net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
+                if (!completed_) {
+                    complete(IoStatus::connection_closed);
+                }
+            });
 
             if (timeout_ms_ > 0 && runtime_.timer_manager()) {
                 timeout_timer_ = timer::TimerUtil::build_timeout_timer(
@@ -199,6 +211,41 @@ namespace yuan::coroutine
         void restore_handler_if_needed() noexcept
         {
             auto *connection = connection_ref_.get();
+            cancel_waiters(connection);
+            if (handler_restored_) {
+                return;
+            }
+            handler_restored_ = true;
+            if (!proxy_ || !connection) {
+                return;
+            }
+            if (connection->get_connection_handler_owner() == proxy_) {
+                connection->set_connection_handler(proxy_->next_owner_);
+            }
+        }
+
+        void register_waiter(net::Connection *connection, net::ConnectionEvent event, net::Connection::EventWaiter waiter)
+        {
+            if (connection) {
+                waiter_ids_.push_back(connection->add_event_waiter(event, std::move(waiter)));
+            }
+        }
+
+        void cancel_waiters(net::Connection *connection) noexcept
+        {
+            if (!connection || waiter_ids_.empty()) {
+                waiter_ids_.clear();
+                return;
+            }
+            for (const auto id : waiter_ids_) {
+                connection->remove_event_waiter(id);
+            }
+            waiter_ids_.clear();
+        }
+
+        void restore_handler_if_needed_old() noexcept
+        {
+            auto *connection = connection_ref_.get();
             if (handler_restored_ || !proxy_ || !connection) {
                 return;
             }
@@ -216,6 +263,7 @@ namespace yuan::coroutine
         std::coroutine_handle<> handle_{};
         std::shared_ptr<ProxyHandler> proxy_;
         ReadResult result_{};
+        std::vector<uint64_t> waiter_ids_;
         bool completed_ = false;
         bool timed_out_ = false;
         bool handler_restored_ = false;
@@ -249,4 +297,3 @@ namespace yuan::coroutine
 } // namespace yuan::coroutine
 
 #endif
-

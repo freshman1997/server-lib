@@ -209,6 +209,8 @@ namespace yuan::net::ssh
             ctx.write_and_flush(version_buf);
         }
 
+        ByteBuffer recv_buf;
+
         // 2. Read client version
         {
             std::cout << "ssh waiting for client version" << std::endl;
@@ -236,6 +238,9 @@ namespace yuan::net::ssh
 
             session->transport().set_client_version(version_info->raw_line);
             data.consume(*version_end);
+            if (data.readable_bytes() > 0) {
+                recv_buf.append(data);
+            }
             session->set_state(SshSession::State::version_exchanged);
         }
 
@@ -249,8 +254,6 @@ namespace yuan::net::ssh
         }
 
         // 4. Main packet processing loop
-        ByteBuffer recv_buf;
-
         auto flush_outgoing = [&]()->coroutine::Task<void>
         {
             auto buffers = session->drain_outgoing();

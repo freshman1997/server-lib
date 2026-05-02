@@ -63,7 +63,7 @@ namespace
     {
         int port = 2222;
         std::string app_name = "release-ssh-server";
-        std::string host_key_path = "release/ssh/hostkey/ssh_host_ed25519_key";
+        std::string host_key_path = "hostkey/ssh_host_ed25519_key";
         std::string banner = "Welcome to Yuan SSH release server";
         std::string sftp_root_dir = ".";
         std::string software_version = "YuanSSH_Release_1.0";
@@ -74,6 +74,62 @@ namespace
         bool enable_sftp = true;
         bool enable_port_forwarding = true;
     };
+
+    void print_usage(const char *program)
+    {
+        std::cout
+            << "release_ssh_server\n"
+            << "usage:\n"
+            << "  " << program << " [--config <file>] [options]\n"
+            << "  " << program << " <config.json>\n\n"
+            << "options:\n"
+            << "  -f, --config <file>          Read server config JSON\n"
+            << "  -p, --port <port>           Listen port\n"
+            << "      --host-key <file>       Host key path\n"
+            << "      --user <name>           Static password-auth username\n"
+            << "      --password <password>   Static password-auth password\n"
+            << "      --banner <text>         Login banner\n"
+            << "      --sftp-root <dir>       SFTP root directory\n"
+            << "      --password-auth <bool>  Enable password auth\n"
+            << "      --publickey-auth <bool> Enable publickey auth\n"
+            << "      --sftp <bool>           Enable SFTP subsystem\n"
+            << "      --port-forward <bool>   Enable port forwarding\n"
+            << "      --version               Print version\n"
+            << "  -h, --help                  Show this help\n\n"
+            << "env overrides:\n"
+            << "  YUAN_SSH_CONFIG, YUAN_SSH_PORT, YUAN_SSH_HOST_KEY, YUAN_SSH_USER,\n"
+            << "  YUAN_SSH_PASSWORD, YUAN_SSH_BANNER, YUAN_SSH_SFTP_ROOT,\n"
+            << "  YUAN_SSH_ENABLE_PUBLICKEY_AUTH, YUAN_SSH_ENABLE_PASSWORD_AUTH,\n"
+            << "  YUAN_SSH_ENABLE_SFTP, YUAN_SSH_ENABLE_PORT_FORWARD\n";
+    }
+
+    bool parse_bool_value(const std::string &raw, bool &out)
+    {
+        if (raw == "1" || raw == "true" || raw == "yes" || raw == "on") {
+            out = true;
+            return true;
+        }
+        if (raw == "0" || raw == "false" || raw == "no" || raw == "off") {
+            out = false;
+            return true;
+        }
+        return false;
+    }
+
+    bool parse_int_value(const std::string &raw, int &out)
+    {
+        try {
+            size_t pos = 0;
+            const int value = std::stoi(raw, &pos);
+            if (pos != raw.size()) {
+                return false;
+            }
+            out = value;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
 
     bool load_config_file(const std::filesystem::path &path, ServerConfig &config, std::string &error)
     {
@@ -131,12 +187,8 @@ namespace
         return true;
     }
 
-    std::filesystem::path resolve_config_path(int argc, char **argv)
+    std::filesystem::path default_config_path()
     {
-        if (argc >= 2 && argv[1] && *argv[1] != '\0') {
-            return std::filesystem::path(argv[1]);
-        }
-
         const auto env_path = read_env_string("YUAN_SSH_CONFIG", "");
         if (!env_path.empty()) {
             return std::filesystem::path(env_path);
@@ -148,6 +200,153 @@ namespace
         }
 
         return std::filesystem::path("config.json");
+    }
+
+    struct ServerCliArgs
+    {
+        std::filesystem::path config_path;
+        ServerConfig overrides;
+        bool has_port = false;
+        bool has_host_key = false;
+        bool has_user = false;
+        bool has_password = false;
+        bool has_banner = false;
+        bool has_sftp_root = false;
+        bool has_password_auth = false;
+        bool has_publickey_auth = false;
+        bool has_sftp = false;
+        bool has_port_forward = false;
+        bool help = false;
+        bool version = false;
+    };
+
+    bool parse_cli_args(int argc, char **argv, ServerCliArgs &args)
+    {
+        args.config_path = default_config_path();
+
+        bool positional_config_seen = false;
+        for (int i = 1; i < argc; ++i) {
+            const std::string opt = argv[i];
+            auto need_value = [&](const std::string &name) -> std::string {
+                if (i + 1 >= argc) {
+                    std::cerr << "missing value for " << name << '\n';
+                    return {};
+                }
+                return argv[++i];
+            };
+
+            if (opt == "-h" || opt == "--help") {
+                args.help = true;
+                return true;
+            }
+            if (opt == "--version") {
+                args.version = true;
+                return true;
+            }
+            if (opt == "-f" || opt == "--config") {
+                const auto value = need_value(opt);
+                if (value.empty()) {
+                    return false;
+                }
+                args.config_path = value;
+            } else if (opt == "-p" || opt == "--port") {
+                const auto value = need_value(opt);
+                if (value.empty() || !parse_int_value(value, args.overrides.port)) {
+                    std::cerr << "invalid port: " << value << '\n';
+                    return false;
+                }
+                args.has_port = true;
+            } else if (opt == "--host-key") {
+                args.overrides.host_key_path = need_value(opt);
+                args.has_host_key = !args.overrides.host_key_path.empty();
+                if (!args.has_host_key) {
+                    return false;
+                }
+            } else if (opt == "--user") {
+                args.overrides.username = need_value(opt);
+                args.has_user = true;
+            } else if (opt == "--password") {
+                args.overrides.password = need_value(opt);
+                args.has_password = true;
+            } else if (opt == "--banner") {
+                args.overrides.banner = need_value(opt);
+                args.has_banner = true;
+            } else if (opt == "--sftp-root") {
+                args.overrides.sftp_root_dir = need_value(opt);
+                args.has_sftp_root = !args.overrides.sftp_root_dir.empty();
+                if (!args.has_sftp_root) {
+                    return false;
+                }
+            } else if (opt == "--password-auth" || opt == "--publickey-auth" ||
+                       opt == "--sftp" || opt == "--port-forward") {
+                const auto value = need_value(opt);
+                bool parsed = false;
+                bool enabled = false;
+                parsed = parse_bool_value(value, enabled);
+                if (!parsed) {
+                    std::cerr << "invalid boolean for " << opt << ": " << value << '\n';
+                    return false;
+                }
+                if (opt == "--password-auth") {
+                    args.overrides.enable_password_auth = enabled;
+                    args.has_password_auth = true;
+                } else if (opt == "--publickey-auth") {
+                    args.overrides.enable_publickey_auth = enabled;
+                    args.has_publickey_auth = true;
+                } else if (opt == "--sftp") {
+                    args.overrides.enable_sftp = enabled;
+                    args.has_sftp = true;
+                } else {
+                    args.overrides.enable_port_forwarding = enabled;
+                    args.has_port_forward = true;
+                }
+            } else if (!opt.empty() && opt[0] == '-') {
+                std::cerr << "unknown option: " << opt << '\n';
+                return false;
+            } else if (!positional_config_seen) {
+                args.config_path = opt;
+                positional_config_seen = true;
+            } else {
+                std::cerr << "unexpected positional argument: " << opt << '\n';
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    void apply_cli_overrides(const ServerCliArgs &args, ServerConfig &config)
+    {
+        if (args.has_port) {
+            config.port = args.overrides.port;
+        }
+        if (args.has_host_key) {
+            config.host_key_path = args.overrides.host_key_path;
+        }
+        if (args.has_user) {
+            config.username = args.overrides.username;
+        }
+        if (args.has_password) {
+            config.password = args.overrides.password;
+        }
+        if (args.has_banner) {
+            config.banner = args.overrides.banner;
+        }
+        if (args.has_sftp_root) {
+            config.sftp_root_dir = args.overrides.sftp_root_dir;
+        }
+        if (args.has_password_auth) {
+            config.enable_password_auth = args.overrides.enable_password_auth;
+        }
+        if (args.has_publickey_auth) {
+            config.enable_publickey_auth = args.overrides.enable_publickey_auth;
+        }
+        if (args.has_sftp) {
+            config.enable_sftp = args.overrides.enable_sftp;
+        }
+        if (args.has_port_forward) {
+            config.enable_port_forwarding = args.overrides.enable_port_forwarding;
+        }
     }
 
     std::filesystem::path resolve_path_with_base(const std::string &raw_path,
@@ -237,8 +436,22 @@ int main(int argc, char **argv)
     std::signal(SIGPIPE, SIG_IGN);
 #endif
 
+    ServerCliArgs cli_args;
+    if (!parse_cli_args(argc, argv, cli_args)) {
+        print_usage(argv[0]);
+        return 2;
+    }
+    if (cli_args.help) {
+        print_usage(argv[0]);
+        return 0;
+    }
+    if (cli_args.version) {
+        std::cout << "release_ssh_server " << ServerConfig{}.software_version << '\n';
+        return 0;
+    }
+
     ServerConfig config;
-    const auto config_path = resolve_config_path(argc, argv);
+    const auto config_path = cli_args.config_path;
     if (std::filesystem::exists(config_path)) {
         std::string error;
         if (!load_config_file(config_path, config, error)) {
@@ -246,9 +459,10 @@ int main(int argc, char **argv)
             return 1;
         }
     }
+    apply_cli_overrides(cli_args, config);
 
     std::filesystem::path config_base_dir;
-    if (!config_path.empty()) {
+    if (!config_path.empty() && std::filesystem::exists(config_path)) {
         config_base_dir = config_path.parent_path();
     }
 
@@ -265,6 +479,10 @@ int main(int argc, char **argv)
 
     if (config.username.empty() && config.enable_password_auth) {
         std::cerr << "username cannot be empty\n";
+        return 1;
+    }
+    if (config.port <= 0 || config.port > 65535) {
+        std::cerr << "port out of range: " << config.port << '\n';
         return 1;
     }
     if (!config.enable_publickey_auth && !config.enable_password_auth) {
@@ -303,7 +521,6 @@ int main(int argc, char **argv)
     ssh_config.software_version = config.software_version;
     ssh_config.enable_sftp = config.enable_sftp;
     ssh_config.enable_port_forwarding = config.enable_port_forwarding;
-    ssh_config.enable_builtin_terminal_handler = true;
     ssh_config.idle_timeout_ms = 1000;
     ssh_config.max_sessions = 1024;
     ssh_config.max_channels_per_session = 64;

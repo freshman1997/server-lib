@@ -9,9 +9,12 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string_view>
+#include <unordered_map>
 
 namespace yuan::buffer
 {
@@ -40,6 +43,15 @@ namespace yuan::net
         closed
     };
 
+    enum class ConnectionEvent {
+        connected,
+        readable,
+        writable,
+        closed,
+        error,
+        input_shutdown,
+    };
+
     static constexpr size_t DEFAULT_INPUT_BUFFER_SIZE = 256 * 1024;
     static constexpr size_t DEFAULT_MAX_PACKET_SIZE = 1024 * 1024 * 5;
 
@@ -48,6 +60,8 @@ namespace yuan::net
     class Connection : public SelectHandler, public std::enable_shared_from_this<Connection>
     {
     public:
+        using EventWaiter = std::function<void(const std::shared_ptr<Connection> &)>;
+
         Connection()
             : max_packet_size_(DEFAULT_MAX_PACKET_SIZE),
               input_buffer_(DEFAULT_INPUT_BUFFER_SIZE)
@@ -119,6 +133,28 @@ namespace yuan::net
         virtual void set_ssl_handshake_callback(SslHandshakeCallback callback)
         {
             (void)callback;
+        }
+
+        uint64_t add_event_waiter(ConnectionEvent event, EventWaiter waiter)
+        {
+            if (!waiter) {
+                return 0;
+            }
+
+            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            const auto id = next_waiter_id_++;
+            waiters_[id] = WaiterEntry{ event, std::move(waiter) };
+            return id;
+        }
+
+        void remove_event_waiter(uint64_t id)
+        {
+            if (id == 0) {
+                return;
+            }
+
+            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            waiters_.erase(id);
         }
 
         ::yuan::buffer::ByteBuffer get_input_byte_buffer() const
@@ -225,9 +261,48 @@ namespace yuan::net
             input_buffer_ = std::move(buffer);
             max_packet_size_ = std::max<size_t>(max_packet_size_, input_buffer_.capacity());
         }
+
+        void notify_event_waiters(ConnectionEvent event)
+        {
+            std::unordered_map<uint64_t, EventWaiter> callbacks;
+            {
+                std::lock_guard<std::mutex> lock(waiter_mutex_);
+                for (auto it = waiters_.begin(); it != waiters_.end();) {
+                    if (it->second.event == event) {
+                        callbacks.emplace(it->first, std::move(it->second.callback));
+                        it = waiters_.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+
+            if (callbacks.empty()) {
+                return;
+            }
+
+            auto self = shared_from_this();
+            for (auto &entry : callbacks) {
+                if (entry.second) {
+                    entry.second(self);
+                }
+            }
+        }
+
         size_t max_packet_size_;
         ::yuan::buffer::ByteBuffer input_buffer_;
         ::yuan::buffer::BufferChain output_buffer_;
+
+    private:
+        struct WaiterEntry
+        {
+            ConnectionEvent event;
+            EventWaiter callback;
+        };
+
+        std::mutex waiter_mutex_;
+        uint64_t next_waiter_id_ = 1;
+        std::unordered_map<uint64_t, WaiterEntry> waiters_;
     };
 
     using ConnectionPtr = std::shared_ptr<Connection>;

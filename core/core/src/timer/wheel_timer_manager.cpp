@@ -56,7 +56,9 @@ namespace yuan::timer
 
     Timer *WheelTimerManager::schedule(uint32_t timeout, uint32_t interval, TimerTask * task, int32_t period)
     {
-        WheelTimer *timer = new WheelTimer(timeout, interval, task, period);
+        auto owned_timer = std::make_unique<WheelTimer>(timeout, interval, task, period);
+        WheelTimer *timer = &*owned_timer;
+        timers_.push_back(std::move(owned_timer));
         place_timer(timer);
         return timer;
     }
@@ -113,8 +115,6 @@ namespace yuan::timer
                         timer->trigger();
                         if (timer->ready()) {
                             place_timer(timer);
-                        } else {
-                            delete timer;
                         }
                     } else {
                         place_timer(timer);

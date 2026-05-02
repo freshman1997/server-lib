@@ -1,0 +1,23 @@
+{
+  "listen_host": "0.0.0.0",
+  "listen_port": 9096,
+  "peer_host": "192.168.1.10",
+  "peer_port": 9095,
+  "token": "change-me",
+  "conflict_strategy": "keep_both",
+  "scan_interval_ms": 1000,
+  "include_extensions": [],
+  "include_patterns": [],
+  "exclude_patterns": [
+    "**/.git/**",
+    "**/node_modules/**",
+    "*.tmp",
+    "*.log"
+  ],
+  "paths": [
+    {
+      "local": "C:/work/to-sync",
+      "remote_prefix": "work"
+    }
+  ]
+}

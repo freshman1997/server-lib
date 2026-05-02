@@ -13,7 +13,9 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -64,12 +66,21 @@ namespace
 
     struct CliArgs
     {
-        std::string host = "127.0.0.1";
-        int port = 2222;
+        std::string host;
+        int port = 22;
         int timeout_ms = 5000;
         std::string user;
         std::string password;
         std::string command;
+        std::string config_file;
+        std::vector<std::string> identity_files;
+        std::map<std::string, std::string> options;
+        bool batch_mode = false;
+        bool quiet = false;
+        int verbose = 0;
+        bool help = false;
+        bool version = false;
+        bool probe = false;
     };
 
     int read_env_int(const char *name, int default_value)
@@ -94,24 +105,96 @@ namespace
     void print_usage(const char *program)
     {
         std::cout
-            << "release_ssh_cli (phase-1 exec)\n"
+            << "release_ssh_cli\n"
             << "usage:\n"
-            << "  " << program << " --host <host> --port <port> --user <user> --password <password> --command <cmd>\n"
-            << "  " << program << " [host] [port] [timeout_ms] --user <user> --password <password> --command <cmd>\n\n"
+            << "  " << program << " [options] [user@]host [command]\n"
+            << "  " << program << " --probe -p 2222 yuan@127.0.0.1\n\n"
             << "options:\n"
-            << "  --host <host>\n"
-            << "  --port <port>\n"
-            << "  --timeout-ms <ms>\n"
-            << "  --user <user>\n"
-            << "  --password <password>\n"
-            << "  --command <cmd>\n"
-            << "  -h, --help\n\n"
+            << "  -p <port>                 Port to connect to\n"
+            << "  -l <login_name>           Login username\n"
+            << "  -i <identity_file>        Record identity file option (publickey auth is not wired yet)\n"
+            << "  -o <key=value>            OpenSSH-style option override\n"
+            << "  -F <config_file>          Record config file option\n"
+            << "  -q                        Quiet mode\n"
+            << "  -v                        Verbose mode, repeatable\n"
+            << "  -V, --version             Print version\n"
+            << "  -h, --help                Show this help\n"
+            << "      --host <host>         Explicit host, for script compatibility\n"
+            << "      --port <port>         Explicit port, for script compatibility\n"
+            << "      --user <user>         Explicit user, for script compatibility\n"
+            << "      --password <password> Password auth secret (or YUAN_SSH_PASSWORD)\n"
+            << "      --command <cmd>       Command to execute\n"
+            << "      --timeout-ms <ms>     Socket receive timeout\n"
+            << "      --probe               Only verify TCP + SSH version exchange\n\n"
             << "env defaults:\n"
             << "  YUAN_SSH_HOST\n"
             << "  YUAN_SSH_PORT\n"
             << "  YUAN_SSH_TIMEOUT_MS\n"
             << "  YUAN_SSH_USER\n"
-            << "  YUAN_SSH_PASSWORD\n";
+            << "  YUAN_SSH_PASSWORD\n"
+            << "  YUAN_SSH_COMMAND\n";
+    }
+
+    bool parse_int_value(const std::string &raw, int &out)
+    {
+        try {
+            size_t pos = 0;
+            const int value = std::stoi(raw, &pos);
+            if (pos != raw.size()) {
+                return false;
+            }
+            out = value;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    std::string join_args(int argc, char **argv, int start)
+    {
+        std::ostringstream out;
+        for (int i = start; i < argc; ++i) {
+            if (i > start) {
+                out << ' ';
+            }
+            out << argv[i];
+        }
+        return out.str();
+    }
+
+    void apply_option(CliArgs &args, const std::string &raw)
+    {
+        const auto eq = raw.find('=');
+        const std::string key = eq == std::string::npos ? raw : raw.substr(0, eq);
+        const std::string value = eq == std::string::npos ? "yes" : raw.substr(eq + 1);
+        args.options[key] = value;
+
+        if (key == "Port") {
+            int port = 0;
+            if (parse_int_value(value, port)) {
+                args.port = port;
+            }
+        } else if (key == "User") {
+            args.user = value;
+        } else if (key == "BatchMode") {
+            args.batch_mode = (value == "yes" || value == "true" || value == "1");
+        } else if (key == "ConnectTimeout") {
+            int seconds = 0;
+            if (parse_int_value(value, seconds) && seconds > 0) {
+                args.timeout_ms = seconds * 1000;
+            }
+        }
+    }
+
+    void parse_destination(const std::string &destination, CliArgs &args)
+    {
+        const auto at = destination.find('@');
+        if (at != std::string::npos) {
+            args.user = destination.substr(0, at);
+            args.host = destination.substr(at + 1);
+        } else {
+            args.host = destination;
+        }
     }
 
     bool parse_args(int argc, char **argv, CliArgs &args)
@@ -121,33 +204,46 @@ namespace
         args.timeout_ms = read_env_int("YUAN_SSH_TIMEOUT_MS", args.timeout_ms);
         args.user = read_env_string("YUAN_SSH_USER", args.user);
         args.password = read_env_string("YUAN_SSH_PASSWORD", args.password);
+        args.command = read_env_string("YUAN_SSH_COMMAND", args.command);
 
         int idx = 1;
-        if (idx < argc && argv[idx][0] != '-') {
-            args.host = argv[idx++];
-        }
-        if (idx < argc && argv[idx][0] != '-') {
-            try {
-                args.port = std::stoi(argv[idx++]);
-            } catch (...) {
-                std::cerr << "invalid port\n";
-                return false;
-            }
-        }
-        if (idx < argc && argv[idx][0] != '-') {
-            try {
-                args.timeout_ms = std::stoi(argv[idx++]);
-            } catch (...) {
-                std::cerr << "invalid timeout_ms\n";
-                return false;
-            }
-        }
-
         while (idx < argc) {
             const std::string opt = argv[idx++];
             if (opt == "-h" || opt == "--help") {
-                print_usage(argv[0]);
-                return false;
+                args.help = true;
+                return true;
+            }
+            if (opt == "-V" || opt == "--version") {
+                args.version = true;
+                return true;
+            }
+            if (opt == "-q") {
+                args.quiet = true;
+                continue;
+            }
+            if (opt == "-v") {
+                ++args.verbose;
+                continue;
+            }
+            if (opt == "--probe") {
+                args.probe = true;
+                continue;
+            }
+            if (opt == "--") {
+                if (idx < argc && args.host.empty()) {
+                    parse_destination(argv[idx++], args);
+                }
+                if (idx < argc) {
+                    args.command = join_args(argc, argv, idx);
+                }
+                break;
+            }
+            if (!opt.empty() && opt[0] != '-') {
+                parse_destination(opt, args);
+                if (idx < argc) {
+                    args.command = join_args(argc, argv, idx);
+                }
+                break;
             }
 
             if (idx >= argc) {
@@ -158,26 +254,28 @@ namespace
 
             if (opt == "--host") {
                 args.host = value;
-            } else if (opt == "--port") {
-                try {
-                    args.port = std::stoi(value);
-                } catch (...) {
-                    std::cerr << "invalid --port\n";
+            } else if (opt == "-p" || opt == "--port") {
+                if (!parse_int_value(value, args.port)) {
+                    std::cerr << "invalid port: " << value << '\n';
                     return false;
                 }
             } else if (opt == "--timeout-ms") {
-                try {
-                    args.timeout_ms = std::stoi(value);
-                } catch (...) {
-                    std::cerr << "invalid --timeout-ms\n";
+                if (!parse_int_value(value, args.timeout_ms)) {
+                    std::cerr << "invalid timeout: " << value << '\n';
                     return false;
                 }
-            } else if (opt == "--user") {
+            } else if (opt == "-l" || opt == "--user") {
                 args.user = value;
             } else if (opt == "--password") {
                 args.password = value;
             } else if (opt == "--command") {
                 args.command = value;
+            } else if (opt == "-i") {
+                args.identity_files.push_back(value);
+            } else if (opt == "-o") {
+                apply_option(args, value);
+            } else if (opt == "-F") {
+                args.config_file = value;
             } else {
                 std::cerr << "unknown option: " << opt << '\n';
                 return false;
@@ -191,16 +289,19 @@ namespace
         if (args.timeout_ms < 100) {
             args.timeout_ms = 100;
         }
+        if (args.probe) {
+            return true;
+        }
         if (args.user.empty()) {
             std::cerr << "--user is required\n";
             return false;
         }
         if (args.password.empty()) {
-            std::cerr << "--password is required\n";
+            std::cerr << "--password or YUAN_SSH_PASSWORD is required for password auth\n";
             return false;
         }
         if (args.command.empty()) {
-            std::cerr << "--command is required\n";
+            std::cerr << "interactive shell is not implemented in release_ssh_cli yet; pass a command\n";
             return false;
         }
 
@@ -313,6 +414,32 @@ namespace
             }
         }
         return false;
+    }
+
+    bool run_version_probe(SocketHandle fd, const CliArgs &args)
+    {
+        const std::string client_version = "SSH-2.0-YuanReleaseCliProbe_0.1\r\n";
+        if (!send_all(fd,
+                      reinterpret_cast<const uint8_t *>(client_version.data()),
+                      client_version.size())) {
+            std::cerr << "failed to send client version\n";
+            return false;
+        }
+
+        std::string server_version_line;
+        if (!recv_line(fd, server_version_line)) {
+            std::cerr << "failed to read server version\n";
+            return false;
+        }
+        auto server_info = yuan::net::ssh::SshVersionExchange::parse_version_line(server_version_line);
+        if (!server_info || !yuan::net::ssh::SshVersionExchange::is_valid_protocol_version(server_info->protocol_version)) {
+            std::cerr << "invalid server version line\n";
+            return false;
+        }
+        if (!args.quiet) {
+            std::cout << server_info->raw_line << '\n';
+        }
+        return true;
     }
 
     bool read_packet(SocketHandle fd,
@@ -433,6 +560,12 @@ namespace
         SshTransport transport(&registry, &crypto, false);
         transport.set_we_are_server(false);
 
+        auto debug = [&](const std::string &message) {
+            if (args.verbose > 0) {
+                std::cerr << "debug: " << message << '\n';
+            }
+        };
+
         const std::string client_version = "SSH-2.0-YuanReleaseCliExec_0.1\r\n";
         if (!send_all(fd,
                       reinterpret_cast<const uint8_t *>(client_version.data()),
@@ -455,6 +588,7 @@ namespace
 
         transport.set_client_version(client_version.substr(0, client_version.size() - 2));
         transport.set_server_version(server_info->raw_line);
+        debug("version exchange complete: " + server_info->raw_line);
 
         SshServerConfig client_cfg;
         client_cfg.kex_algorithms = {
@@ -482,6 +616,7 @@ namespace
             std::cerr << "failed to send kexinit\n";
             return false;
         }
+        debug("sent KEXINIT");
 
         yuan::buffer::ByteBuffer recv_buf;
         bool got_peer_kexinit = false;
@@ -500,6 +635,7 @@ namespace
             }
 
             const auto msg_type = static_cast<SshMessageType>(payload[0]);
+            debug("kex packet type " + std::to_string(static_cast<int>(payload[0])));
             if (msg_type == SshMessageType::SSH_MSG_KEXINIT) {
                 auto kex_init = SshMessageCodec::decode_kex_init(payload.data(), payload.size());
                 if (!kex_init) {
@@ -535,6 +671,7 @@ namespace
                     return false;
                 }
                 sent_kex_init = true;
+                debug("sent ECDH init");
             } else if (msg_type == SshMessageType::SSH_MSG_KEX_ECDH_REPLY ||
                        msg_type == SshMessageType::SSH_MSG_KEXDH_REPLY) {
                 if (!sent_kex_init) {
@@ -559,6 +696,7 @@ namespace
                     return false;
                 }
                 sent_newkeys = true;
+                debug("sent NEWKEYS");
             } else if (msg_type == SshMessageType::SSH_MSG_NEWKEYS) {
                 if (!sent_newkeys) {
                     std::cerr << "received NEWKEYS before sending NEWKEYS\n";
@@ -569,6 +707,7 @@ namespace
                     return false;
                 }
                 got_newkeys = true;
+                debug("received NEWKEYS and activated keys");
             }
         }
 
@@ -578,6 +717,7 @@ namespace
             std::cerr << "failed to send service request\n";
             return false;
         }
+        debug("sent service request");
 
         bool service_accepted = false;
         bool auth_ok = false;
@@ -599,6 +739,7 @@ namespace
             }
 
             const auto type = static_cast<SshMessageType>(payload[0]);
+            debug("packet type " + std::to_string(static_cast<int>(payload[0])));
             if (type == SshMessageType::SSH_MSG_SERVICE_ACCEPT) {
                 service_accepted = true;
 
@@ -611,6 +752,7 @@ namespace
                     std::cerr << "failed to send userauth request\n";
                     return false;
                 }
+                debug("sent password auth request");
             } else if (type == SshMessageType::SSH_MSG_USERAUTH_SUCCESS) {
                 auth_ok = true;
 
@@ -623,6 +765,7 @@ namespace
                     std::cerr << "failed to open channel\n";
                     return false;
                 }
+                debug("sent channel open");
             } else if (type == SshMessageType::SSH_MSG_USERAUTH_FAILURE) {
                 auto fail = SshMessageCodec::decode_userauth_failure(payload.data(), payload.size());
                 std::cerr << "authentication failed";
@@ -650,6 +793,7 @@ namespace
                     return false;
                 }
                 exec_sent = true;
+                debug("sent exec request");
             } else if (type == SshMessageType::SSH_MSG_CHANNEL_DATA) {
                 auto data_msg = SshMessageCodec::decode_channel_data(payload.data(), payload.size());
                 if (data_msg && !data_msg->data.empty()) {
@@ -718,10 +862,25 @@ int main(int argc, char **argv)
 
     CliArgs args;
     if (!parse_args(argc, argv, args)) {
+        print_usage(argv[0]);
 #ifdef _WIN32
         WSACleanup();
 #endif
         return 2;
+    }
+    if (args.help) {
+        print_usage(argv[0]);
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return 0;
+    }
+    if (args.version) {
+        std::cout << "release_ssh_cli 1.0\n";
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return 0;
     }
 
     SocketGuard sock;
@@ -734,7 +893,7 @@ int main(int argc, char **argv)
     }
     (void)set_recv_timeout(sock.fd, args.timeout_ms);
 
-    const bool ok = run_exec_phase1(sock.fd, args);
+    const bool ok = args.probe ? run_version_probe(sock.fd, args) : run_exec_phase1(sock.fd, args);
 
 #ifdef _WIN32
     WSACleanup();

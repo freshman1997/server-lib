@@ -55,10 +55,16 @@ namespace yuan::net::ssh
 
         bool start_kex(const std::vector<uint8_t> &peer_public);
 
+        std::optional<std::vector<uint8_t> > generate_kex_public_key();
+
         std::optional<SshKexEcdhReplyMessage> process_kex_init_message(
             const std::vector<uint8_t> &client_public,
             const std::string &client_version,
             const std::string &server_version);
+
+        bool process_kex_reply_message(const SshKexEcdhReplyMessage &reply,
+                                       const std::string &client_version,
+                                       const std::string &server_version);
 
         bool process_newkeys();
 

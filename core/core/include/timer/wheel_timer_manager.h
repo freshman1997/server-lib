@@ -36,6 +36,7 @@ namespace yuan::timer
         uint32_t count_;
         std::unique_ptr<WheelTimerItem> helper_item_;
         std::vector<std::unique_ptr<Wheel> > wheels_;
+        std::vector<std::unique_ptr<WheelTimer> > timers_;
     };
 }
 

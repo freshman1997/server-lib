@@ -3,6 +3,7 @@
 
 #include <coroutine>
 #include <memory>
+#include <vector>
 
 #include "coroutine/runtime.h"
 #include "event/event_loop.h"
@@ -51,10 +52,13 @@ namespace yuan::coroutine
             auto *connection = connection_ref_.get();
 
             handle_ = handle;
-            proxy_ = std::make_shared<ProxyHandler>(*this, connection,
-                                                    connection->get_connection_handler(),
-                                                    connection->get_connection_handler_owner());
-            connection->set_connection_handler(proxy_);
+            register_waiter(connection, to_connection_event(event_kind_), false);
+            if (event_kind_ != ConnectionEventKind::closed) {
+                register_waiter(connection, net::ConnectionEvent::closed, true);
+            }
+            if (event_kind_ != ConnectionEventKind::error) {
+                register_waiter(connection, net::ConnectionEvent::error, true);
+            }
             return true;
         }
 
@@ -149,14 +153,68 @@ namespace yuan::coroutine
         void restore_handler_if_needed() noexcept
         {
             auto *connection = connection_ref_.get();
-            if (handler_restored_ || !proxy_ || !connection) {
+            cancel_waiters(connection);
+            if (handler_restored_) {
+                return;
+            }
+            handler_restored_ = true;
+
+            if (proxy_ && connection && connection->get_connection_handler_owner() == proxy_) {
+                connection->set_connection_handler(proxy_->next_owner_);
+            }
+        }
+
+        static net::ConnectionEvent to_connection_event(ConnectionEventKind event_kind) noexcept
+        {
+            switch (event_kind) {
+            case ConnectionEventKind::connected:
+                return net::ConnectionEvent::connected;
+            case ConnectionEventKind::readable:
+                return net::ConnectionEvent::readable;
+            case ConnectionEventKind::writable:
+                return net::ConnectionEvent::writable;
+            case ConnectionEventKind::closed:
+                return net::ConnectionEvent::closed;
+            case ConnectionEventKind::error:
+                return net::ConnectionEvent::error;
+            }
+            return net::ConnectionEvent::closed;
+        }
+
+        void register_waiter(net::Connection *connection, net::ConnectionEvent event, bool force_restore)
+        {
+            if (!connection) {
                 return;
             }
 
-            if (connection->get_connection_handler_owner() == proxy_) {
-                connection->set_connection_handler(proxy_->next_owner_);
+            waiter_ids_.push_back(connection->add_event_waiter(event, [this, force_restore](const std::shared_ptr<net::Connection> &) {
+                if (force_restore) {
+                    restore_handler_if_needed();
+                }
+
+                if (!completed_) {
+                    completed_ = true;
+                    exit_reason_ = force_restore
+                                       ? net::EventLoopExitReason::quit_requested
+                                       : net::EventLoopExitReason::coroutine_resume_requested;
+
+                    if (runtime_.event_loop() && handle_) {
+                        runtime_.event_loop()->post_coroutine(handle_);
+                    }
+                }
+            }));
+        }
+
+        void cancel_waiters(net::Connection *connection) noexcept
+        {
+            if (!connection || waiter_ids_.empty()) {
+                waiter_ids_.clear();
+                return;
             }
-            handler_restored_ = true;
+            for (const auto id : waiter_ids_) {
+                connection->remove_event_waiter(id);
+            }
+            waiter_ids_.clear();
         }
 
         RuntimeView runtime_{};
@@ -167,6 +225,7 @@ namespace yuan::coroutine
         net::EventLoopExitReason exit_reason_ = net::EventLoopExitReason::quit_requested;
         std::coroutine_handle<> handle_{};
         std::shared_ptr<ProxyHandler> proxy_;
+        std::vector<uint64_t> waiter_ids_;
     };
 
     inline ConnectionEventAwaiter wait_for_connection_event(

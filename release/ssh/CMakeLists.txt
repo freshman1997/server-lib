@@ -37,5 +37,19 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/config.json"
             "${RELEASE_SSH_OUTPUT_DIR}/config.json"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${RELEASE_SSH_OUTPUT_DIR}/hostkey"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/hostkey/ssh_host_ed25519_key"
+            "${RELEASE_SSH_OUTPUT_DIR}/hostkey/ssh_host_ed25519_key"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/health_check.sh"
+            "${RELEASE_SSH_OUTPUT_DIR}/health_check.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/start.sh"
+            "${RELEASE_SSH_OUTPUT_DIR}/start.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/stop.sh"
+            "${RELEASE_SSH_OUTPUT_DIR}/stop.sh"
     COMMENT "Copy release ssh default config"
 )

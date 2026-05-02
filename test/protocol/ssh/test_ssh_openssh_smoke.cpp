@@ -43,10 +43,6 @@ namespace
 
 int main()
 {
-#ifndef _WIN32
-    std::cout << "OpenSSH smoke test is currently intended for Windows." << std::endl;
-    return 0;
-#else
     if (!command_exists("ssh-keygen") || !command_exists("sftp")) {
         std::cout << "OpenSSH client tools are unavailable; skipping smoke test." << std::endl;
         return 0;
@@ -90,8 +86,13 @@ int main()
     }
     std::cout << "host key ready" << std::endl;
 
+#ifdef _WIN32
     const std::string keygen_cmd =
         "cmd /c ssh-keygen -q -t ed25519 -N \"\" -f " + user_key.string() + " >nul 2>nul";
+#else
+    const std::string keygen_cmd =
+        "ssh-keygen -q -t ed25519 -N '' -f '" + user_key.string() + "' >/dev/null 2>&1";
+#endif
     if (run_command(keygen_cmd) != 0) {
         std::cerr << "failed to generate client key via ssh-keygen" << std::endl;
         return 1;
@@ -127,6 +128,7 @@ int main()
 
             std::this_thread::sleep_for(std::chrono::milliseconds(750));
 
+#ifdef _WIN32
             const std::string sftp_cmd =
                 "cmd /c sftp -vvv -b " + batch_file.string() +
                 " -oStrictHostKeyChecking=no -oUserKnownHostsFile=" + known_hosts.string() +
@@ -134,6 +136,15 @@ int main()
                 " -i " + user_key.string() +
                 " -P " + std::to_string(port) +
                 " demo@127.0.0.1";
+#else
+            const std::string sftp_cmd =
+                "sftp -vvv -b '" + batch_file.string() + "'" +
+                " -oStrictHostKeyChecking=no -oUserKnownHostsFile='" + known_hosts.string() + "'" +
+                " -oPreferredAuthentications=publickey -oPubkeyAuthentication=yes -oBatchMode=yes" +
+                " -i '" + user_key.string() + "'" +
+                " -P " + std::to_string(port) +
+                " demo@127.0.0.1";
+#endif
 
             std::cout << "launching sftp" << std::endl;
             const int sftp_status = run_command(sftp_cmd);
@@ -172,5 +183,4 @@ int main()
 
     std::cout << "OpenSSH SFTP smoke test passed." << std::endl;
     return 0;
-#endif
 }

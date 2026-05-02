@@ -249,9 +249,10 @@ namespace yuan::net
 #else
                 if (EAGAIN != errno && EWOULDBLOCK != errno && EINTR != errno) {
 #endif
-                    if (connectionHandlerOwner_) {
-                        connectionHandlerOwner_->on_error(shared_from_this());
-                    }
+                if (connectionHandlerOwner_) {
+                    notify_event_waiters(ConnectionEvent::error);
+                    connectionHandlerOwner_->on_error(shared_from_this());
+                }
                     close();
                     return;
                 }
@@ -358,10 +359,12 @@ namespace yuan::net
         if (state_ == ConnectionState::connecting && handler) {
             if (!is_connect_completed(channel_->get_fd())) {
                 handler->on_error(shared_from_this());
+                notify_event_waiters(ConnectionEvent::error);
                 close();
                 return;
             }
             state_ = ConnectionState::connected;
+            notify_event_waiters(ConnectionEvent::connected);
             handler->on_connected(shared_from_this());
         }
 
@@ -437,6 +440,7 @@ namespace yuan::net
                         const int err = WSAGetLastError();
                         if (err != WSAEINTR && err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
                             LOG_ERROR("read error: {}", err);
+                            notify_event_waiters(ConnectionEvent::error);
                             if (handler) {
                                 handler->on_error(shared_from_this());
                             }
@@ -452,6 +456,7 @@ namespace yuan::net
                     } else if (bytes == -1) {
                         if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
                             LOG_ERROR("read error: {}", errno);
+                            notify_event_waiters(ConnectionEvent::error);
                             if (handler) {
                                 handler->on_error(shared_from_this());
                             }
@@ -471,8 +476,11 @@ namespace yuan::net
                 }
             } while (bytes > 0 && input_buffer_.writable_bytes() == 0);
 
-            if (read && state_ == ConnectionState::connected && handler) {
-                handler->on_read(shared_from_this());
+            if (read && state_ == ConnectionState::connected) {
+                notify_event_waiters(ConnectionEvent::readable);
+                if (handler) {
+                    handler->on_read(shared_from_this());
+                }
             }
 
             if (close_flag) {
@@ -482,6 +490,7 @@ namespace yuan::net
                 if (eventHandler_) {
                     eventHandler_->update_channel(ptr_of(channel_));
                 }
+                notify_event_waiters(ConnectionEvent::input_shutdown);
                 if (handler) {
                     handler->on_input_shutdown(shared_from_this());
                 }
@@ -526,6 +535,7 @@ namespace yuan::net
                     } else if (bytes == -1) {
                         if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
                             LOG_ERROR("ssl read error: {}", errno);
+                            notify_event_waiters(ConnectionEvent::error);
                             if (handler) {
                                 handler->on_error(shared_from_this());
                             }
@@ -544,8 +554,11 @@ namespace yuan::net
                 }
             } while (bytes > 0 && input_buffer_.writable_bytes() == 0);
 
-            if (read && state_ == ConnectionState::connected && handler) {
-                handler->on_read(shared_from_this());
+            if (read && state_ == ConnectionState::connected) {
+                notify_event_waiters(ConnectionEvent::readable);
+                if (handler) {
+                    handler->on_read(shared_from_this());
+                }
             }
 
             if (close_flag) {
@@ -555,6 +568,7 @@ namespace yuan::net
                 if (eventHandler_) {
                     eventHandler_->update_channel(ptr_of(channel_));
                 }
+                notify_event_waiters(ConnectionEvent::input_shutdown);
                 if (handler) {
                     handler->on_input_shutdown(shared_from_this());
                 }
@@ -577,10 +591,12 @@ namespace yuan::net
         if (state_ == ConnectionState::connecting && handler) {
             if (!is_connect_completed(channel_->get_fd())) {
                 handler->on_error(shared_from_this());
+                notify_event_waiters(ConnectionEvent::error);
                 close();
                 return;
             }
             state_ = ConnectionState::connected;
+            notify_event_waiters(ConnectionEvent::connected);
             handler->on_connected(shared_from_this());
         }
 
@@ -617,13 +633,21 @@ namespace yuan::net
             }
         }
 
-        if ((state_ == ConnectionState::connected || state_ == ConnectionState::closing) && handler) {
-            handler->on_write(shared_from_this());
+        if (state_ == ConnectionState::connected || state_ == ConnectionState::closing) {
+            if (handler) {
+                handler->on_write(shared_from_this());
+            }
             if (state_ == ConnectionState::closing) {
-                do_close();
+                flush();
+                if (output_readable_bytes() == 0) {
+                    do_close();
+                }
                 return;
             }
             flush();
+            if (output_readable_bytes() == 0) {
+                notify_event_waiters(ConnectionEvent::writable);
+            }
         }
     }
 
@@ -664,9 +688,12 @@ namespace yuan::net
         [[maybe_unused]] auto handler_owner = std::move(connectionHandlerOwner_);
         auto *handler = ptr_of(handler_owner);
 
-        if (handler && !close_notified_) {
+        if (!close_notified_) {
             close_notified_ = true;
-            handler->on_close(shared_from_this());
+            notify_event_waiters(ConnectionEvent::closed);
+            if (handler) {
+                handler->on_close(shared_from_this());
+            }
         }
 
         if (eventHandler_ && channel_) {

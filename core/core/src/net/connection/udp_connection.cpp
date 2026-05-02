@@ -115,6 +115,7 @@ namespace yuan::net
         if (adapter_) {
             if (!proc_one_buffer(buffer)) {
                 if (connectionHandlerOwner_) {
+                    notify_event_waiters(ConnectionEvent::error);
                     connectionHandlerOwner_->on_error(shared_from_this());
                 }
                 abort();
@@ -139,6 +140,7 @@ namespace yuan::net
         if (adapter_) {
             if (!proc_one_buffer(buffer)) {
                 if (connectionHandlerOwner_) {
+                    notify_event_waiters(ConnectionEvent::error);
                     connectionHandlerOwner_->on_error(shared_from_this());
                 }
                 abort();
@@ -279,8 +281,10 @@ namespace yuan::net
         }
         if (ok) {
             active_ = true;
+            notify_event_waiters(ConnectionEvent::readable);
             handler->on_read(shared_from_this());
         } else {
+            notify_event_waiters(ConnectionEvent::error);
             abort();
         }
     }
@@ -296,6 +300,9 @@ namespace yuan::net
         auto *front = output_buffer_.front();
         if (front && !front->empty()) {
             flush();
+        }
+        if (!front || front->empty()) {
+            notify_event_waiters(ConnectionEvent::writable);
         }
     }
 
@@ -323,6 +330,7 @@ namespace yuan::net
         auto *handler = ptr_of(handler_owner);
         if (handler && !close_notified_) {
             close_notified_ = true;
+            notify_event_waiters(ConnectionEvent::closed);
             handler->on_close(self);
         }
         if (instance_ && !instance_->is_closing()) {
@@ -351,6 +359,7 @@ namespace yuan::net
             [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
             auto *handler = ptr_of(handler_owner);
             if (handler) {
+                notify_event_waiters(ConnectionEvent::connected);
                 handler->on_connected(shared_from_this());
             }
             if (instance_ && instance_->get_timer_manager()) {
@@ -420,6 +429,7 @@ namespace yuan::net
                 [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
                 auto *handler = ptr_of(handler_owner);
                 if (handler) {
+                    notify_event_waiters(ConnectionEvent::error);
                     handler->on_error(shared_from_this());
                 }
                 abort();

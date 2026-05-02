@@ -8,6 +8,7 @@
 #include "net/async/async_datagram_client.h"
 #include "net/async/async_listener_host.h"
 #include "net/async/async_request_client.h"
+#include "net/connection/connection_handle.h"
 #include "net/handler/connection_handler.h"
 #include "net/runtime/network_runtime.h"
 #include "net/socket/inet_address.h"
@@ -139,6 +140,12 @@ namespace
         void set_event_handler(yuan::net::EventHandler *eventHandler) override
         {
             event_handler_ = eventHandler;
+        }
+
+        void inject_input(std::string_view text)
+        {
+            input_buffer_.append(text);
+            notify_event_waiters(yuan::net::ConnectionEvent::readable);
         }
 
     private:
@@ -461,6 +468,30 @@ namespace
         ctx.install_default_handler();
         check(conn->get_connection_handler() != existing_handler.get(),
               "install_default_handler should explicitly replace the handler");
+
+        auto test_async_read_keeps_handler = [&](yuan::coroutine::RuntimeView view)->yuan::coroutine::Task<int>
+        {
+            auto read_conn = std::make_shared<ImmediateFlushConnection>();
+            auto handler = std::make_shared<TrackingHandler>();
+            read_conn->set_connection_handler(handler);
+            yuan::net::ConnectionHandle handle(read_conn);
+
+            view.schedule(10, [read_conn]() {
+                read_conn->inject_input("ready");
+            });
+
+            auto result = co_await view.read(handle, 100);
+            check(result.status == yuan::coroutine::IoStatus::success,
+                  "async read via waiter should succeed");
+            check(buffer_to_string(result.data) == "ready",
+                  "async read via waiter should return injected input");
+            check(read_conn->get_connection_handler() == handler.get(),
+                  "async read should not replace existing connection handler");
+            co_return 0;
+        };
+
+        const int read_result = yuan::coroutine::sync_wait(rv, test_async_read_keeps_handler(rv));
+        check(read_result == 0, "async read handler preservation test should return 0");
     }
 
     void test_async_client_session_connect_read_write()
@@ -756,18 +787,19 @@ namespace
         auto test_fn = [&](yuan::coroutine::RuntimeView view)->yuan::coroutine::Task<int>
         {
             co_await view.schedule();
+            yuan::net::ConnectionHandle conn_handle(conn);
 
             yuan::buffer::ByteBuffer write_buf;
             write_buf.append("ping", 4);
 
-            auto write_result = co_await view.write(conn.get(), write_buf, 100);
+            auto write_result = co_await view.write(conn_handle, write_buf, 100);
             check(write_result.status == yuan::coroutine::IoStatus::success,
                   "async_write should complete even if flush finishes synchronously");
             check(conn->output_readable_bytes() == 0,
                   "synchronous flush should drain output buffer");
 
             conn->append_output("pong", 4);
-            auto flush_result = co_await view.flush(conn.get(), 100);
+            auto flush_result = co_await view.flush(conn_handle, 100);
             check(flush_result.status == yuan::coroutine::IoStatus::success,
                   "async_flush should complete even if no on_write callback fires");
             check(conn->output_readable_bytes() == 0,

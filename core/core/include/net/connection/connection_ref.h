@@ -14,8 +14,8 @@ namespace yuan::net
         ConnectionRef() = default;
 
         explicit ConnectionRef(Connection *connection) noexcept
-            : connection_(connection)
         {
+            reset(connection);
         }
 
         explicit ConnectionRef(std::shared_ptr<Connection> connection) noexcept
@@ -52,6 +52,21 @@ namespace yuan::net
         explicit operator bool() const noexcept
         {
             return connection_ != nullptr;
+        }
+
+        void reset(Connection *connection = nullptr) noexcept
+        {
+            owner_.reset();
+            connection_ = connection;
+            if (!connection_) {
+                return;
+            }
+
+            try {
+                owner_ = connection_->shared_from_this();
+                connection_ = owner_.get();
+            } catch (const std::bad_weak_ptr &) {
+            }
         }
 
     private:

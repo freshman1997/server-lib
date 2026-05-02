@@ -53,7 +53,7 @@ namespace yuan::net::ssh
             const std::vector<uint8_t> &server_public,
             const std::vector<uint8_t> &shared_secret) override
         {
-            return SshKeyDerivation::compute_exchange_hash_sha256(
+            return SshKeyDerivation::compute_ecdh_exchange_hash_sha256(
                 client_version, server_version,
                 client_kex_init, server_kex_init,
                 host_key, client_public, server_public,

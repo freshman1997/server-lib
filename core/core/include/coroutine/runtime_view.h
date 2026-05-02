@@ -21,6 +21,7 @@ namespace yuan::net
 {
     class Channel;
     class Connection;
+    class ConnectionHandle;
     class ConnectionHandler;
 }
 
@@ -85,22 +86,31 @@ namespace yuan::coroutine
 
         AsyncReadAwaiter read(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncReadAwaiter read(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
+        AsyncReadAwaiter read(const net::ConnectionHandle &conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncReadAwaiter read(net::Connection *conn, uint32_t timeout_ms,
                               bool forward_terminal_events_after_completion) const noexcept;
         AsyncReadAwaiter read(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms,
+                              bool forward_terminal_events_after_completion) const noexcept;
+        AsyncReadAwaiter read(const net::ConnectionHandle &conn, uint32_t timeout_ms,
                               bool forward_terminal_events_after_completion) const noexcept;
         AsyncWriteAwaiter write(net::Connection *conn, const ::yuan::buffer::ByteBuffer &buf,
                                 uint32_t timeout_ms = 0) const noexcept;
         AsyncWriteAwaiter write(const std::shared_ptr<net::Connection> &conn, const ::yuan::buffer::ByteBuffer &buf,
                                 uint32_t timeout_ms = 0) const noexcept;
+        AsyncWriteAwaiter write(const net::ConnectionHandle &conn, const ::yuan::buffer::ByteBuffer &buf,
+                                uint32_t timeout_ms = 0) const noexcept;
         AsyncFlushAwaiter flush(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncFlushAwaiter flush(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
+        AsyncFlushAwaiter flush(const net::ConnectionHandle &conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncCloseAwaiter close(net::Connection *conn) const noexcept;
         AsyncCloseAwaiter close(const std::shared_ptr<net::Connection> &conn) const noexcept;
+        AsyncCloseAwaiter close(const net::ConnectionHandle &conn) const noexcept;
         AsyncSslHandshakeAwaiter ssl_handshake(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncSslHandshakeAwaiter ssl_handshake(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
+        AsyncSslHandshakeAwaiter ssl_handshake(const net::ConnectionHandle &conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncReceiveFromAwaiter receive_from(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncReceiveFromAwaiter receive_from(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
+        AsyncReceiveFromAwaiter receive_from(const net::ConnectionHandle &conn, uint32_t timeout_ms = 0) const noexcept;
 
         timer::Timer *schedule(uint32_t delay_ms, std::function<void()> callback) const
         {

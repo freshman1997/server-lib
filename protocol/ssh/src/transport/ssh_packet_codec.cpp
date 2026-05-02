@@ -6,7 +6,7 @@ namespace yuan::net::ssh
 {
     size_t SshPacketCodec::calculate_padding(size_t payload_len, size_t block_size)
     {
-        size_t unpadded = 1 + payload_len;
+        size_t unpadded = 4 + 1 + payload_len;
         size_t pad = block_size - (unpadded % block_size);
         if (pad < kMinPadding)
             pad += block_size;

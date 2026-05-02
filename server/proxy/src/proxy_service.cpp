@@ -9,7 +9,7 @@
 #include "net/async/async_connection_context.h"
 #include "net/async/async_listener_host.h"
 #include "net/connection/connection.h"
-#include "net/connection/connection_ref.h"
+#include "net/connection/connection_handle.h"
 #include "net/auth_rate_limiter.h"
 #include "net/ip_policy.h"
 #include "net/runtime/network_runtime.h"
@@ -413,8 +413,8 @@ namespace
     struct RelaySharedState
     {
         yuan::coroutine::RuntimeView runtime;
-        yuan::net::ConnectionRef client_connection;
-        yuan::net::ConnectionRef upstream_connection;
+        yuan::net::ConnectionHandle client_connection;
+        yuan::net::ConnectionHandle upstream_connection;
         std::string client_addr;
         std::string upstream_addr;
         std::string method;
@@ -657,17 +657,17 @@ namespace
         } };
 
         auto &runtime = state->runtime;
-        auto &src_ref = client_to_upstream ? state->client_connection : state->upstream_connection;
-        auto &dst_ref = client_to_upstream ? state->upstream_connection : state->client_connection;
-        if (!src_ref || !dst_ref) {
+        auto &src_handle = client_to_upstream ? state->client_connection : state->upstream_connection;
+        auto &dst_handle = client_to_upstream ? state->upstream_connection : state->client_connection;
+        if (!src_handle || !dst_handle) {
             co_return;
         }
-        yuan::net::Connection *src = src_ref.get();
-        yuan::net::Connection *dst = dst_ref.get();
+        yuan::net::Connection *src = src_handle.get();
+        yuan::net::Connection *dst = dst_handle.get();
         const bool plain_http_downstream = !client_to_upstream && state->method != "CONNECT";
 
         while (!state->closed.load(std::memory_order_acquire) && src->is_connected() && dst->is_connected()) {
-            auto read_result = co_await runtime.read(src, idle_timeout_ms);
+            auto read_result = co_await runtime.read(src_handle, idle_timeout_ms);
             const bool peer_input_shutdown =
                 read_result.status == yuan::coroutine::IoStatus::connection_closed &&
                 src && src->input_shutdown();
@@ -1162,8 +1162,8 @@ namespace
 
         auto relay_state = std::make_shared<RelaySharedState>();
         relay_state->runtime = runtime;
-        relay_state->client_connection = yuan::net::ConnectionRef(ctx.connection());
-        relay_state->upstream_connection = yuan::net::ConnectionRef(connect_result.connection);
+        relay_state->client_connection = yuan::net::ConnectionHandle(ctx.connection());
+        relay_state->upstream_connection = yuan::net::ConnectionHandle(connect_result.connection);
         relay_state->client_addr = peer_text;
         relay_state->upstream_addr = upstream_peer_text;
         relay_state->method = method;
@@ -1313,8 +1313,8 @@ namespace yuan::server
         struct SessionContext
         {
             uint64_t session_id = 0;
-            yuan::net::ConnectionRef client_connection;
-            yuan::net::ConnectionRef upstream_connection;
+            yuan::net::ConnectionHandle client_connection;
+            yuan::net::ConnectionHandle upstream_connection;
             std::shared_ptr<RelaySharedState> relay_state;
             std::string client_addr;
             std::string client_ip;
@@ -1804,7 +1804,7 @@ namespace yuan::server
                 accepted_sessions_.fetch_add(1, std::memory_order_relaxed);
                 auto session = std::make_shared<ProxyServiceData::SessionContext>();
                 session->session_id = session_id;
-                session->client_connection = yuan::net::ConnectionRef(conn);
+                session->client_connection = yuan::net::ConnectionHandle(conn);
                 session->client_addr = client_addr;
                 session->client_ip = client_ip;
                 {
@@ -1839,7 +1839,7 @@ namespace yuan::server
                         publish_state_transition(session, next_state, reason);
                     },
                     [session](const std::shared_ptr<yuan::net::Connection> &upstream) {
-                        session->upstream_connection = yuan::net::ConnectionRef(upstream);
+                        session->upstream_connection = yuan::net::ConnectionHandle(upstream);
                         if (upstream) {
                             std::lock_guard<std::mutex> lock(session->mutex);
                             session->upstream_addr = format_remote_address(upstream->get_remote_address());

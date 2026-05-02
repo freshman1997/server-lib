@@ -12,6 +12,14 @@ namespace yuan::net::ssh
     class SshSession;
     class SshChannel;
 
+    struct SshCommandExitInfo
+    {
+        uint32_t exit_status = 0;
+        std::string signal_name;
+        std::string error_message;
+        std::string language_tag;
+    };
+
     class SshHandler
     {
     public:
@@ -153,6 +161,19 @@ namespace yuan::net::ssh
                                       SshChannel *channel)
         {
             return false;
+        }
+
+        virtual bool enable_builtin_exec_bridge() const
+        {
+            return false;
+        }
+
+        virtual SshCommandExitInfo on_command_exit(SshSession *session,
+                                                   SshChannel *channel)
+        {
+            (void)session;
+            (void)channel;
+            return {};
         }
     };
 

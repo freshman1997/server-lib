@@ -26,6 +26,7 @@ namespace yuan::server::nas
         NasAuthResult authenticate_basic_header(std::string_view authorization_header) const;
 
         static std::string hash_password_for_config(std::string_view password, std::string_view salt);
+        static std::string nt_hash_for_config(std::string_view password);
         static bool verify_password(std::string_view stored_hash, std::string_view password);
         static std::optional<std::pair<std::string, std::string>> parse_basic_header(std::string_view authorization_header);
 

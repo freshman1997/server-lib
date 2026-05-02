@@ -2,6 +2,7 @@
 #define __NET_SSH_CONNECTION_SSH_CHANNEL_H__
 
 #include "protocol/ssh_constants.h"
+#include "connection/ssh_terminal_session.h"
 #include "ssh_channel_handler.h"
 #include <atomic>
 #include <cstdint>
@@ -98,6 +99,18 @@ namespace yuan::net::ssh
         bool has_pending_data() const;
         std::vector<uint8_t> dequeue_pending(uint32_t max_bytes);
 
+        SshTerminalSessionState &terminal_session_state()
+        {
+            return terminal_session_state_;
+        }
+
+        const SshTerminalSessionState &terminal_session_state() const
+        {
+            return terminal_session_state_;
+        }
+
+        bool mark_termination_notified();
+
     private:
         uint32_t local_id_;
         uint32_t remote_id_ = 0;
@@ -113,6 +126,9 @@ namespace yuan::net::ssh
 
         std::deque<std::vector<uint8_t> > pending_data_;
         uint32_t pending_total_ = 0;
+
+        SshTerminalSessionState terminal_session_state_;
+        bool termination_notified_ = false;
     };
 }
 

@@ -76,4 +76,13 @@ namespace yuan::net::ssh
         pending_total_ -= max_bytes;
         return result;
     }
+
+    bool SshChannel::mark_termination_notified()
+    {
+        if (termination_notified_) {
+            return false;
+        }
+        termination_notified_ = true;
+        return true;
+    }
 }

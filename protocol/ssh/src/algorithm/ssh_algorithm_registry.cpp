@@ -160,10 +160,10 @@ namespace yuan::net::ssh
                 peer_algos.push_back(token);
         }
 
-        for (const auto &pref : our_prefs) {
-            for (const auto &peer : peer_algos) {
+        for (const auto &peer : peer_algos) {
+            for (const auto &pref : our_prefs) {
                 if (pref == peer)
-                    return pref;
+                    return peer;
             }
         }
 
