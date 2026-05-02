@@ -21,6 +21,7 @@ namespace yuan::net::smb
                              uint8_t *out, size_t &out_len) = 0;
         virtual std::vector<uint8_t> sha512(const uint8_t *data, size_t len) = 0;
         virtual std::vector<uint8_t> hmac_sha256(const std::vector<uint8_t> &key, const uint8_t *data, size_t len) = 0;
+        virtual std::vector<uint8_t> hmac_sha512(const std::vector<uint8_t> &key, const uint8_t *data, size_t len) = 0;
     };
 }
 #endif

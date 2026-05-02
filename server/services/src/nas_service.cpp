@@ -1,5 +1,8 @@
 #include "nas_service.h"
 
+#include "nas_smb_adapter.h"
+#include "smb_service.h"
+
 #include "request.h"
 #include "response.h"
 
@@ -324,6 +327,12 @@ namespace yuan::server
             return false;
         }
 
+        if (!init_smb_service()) {
+            http_->stop();
+            http_.reset();
+            return false;
+        }
+
         mount_result_ = yuan::server::nas::mount_nas_webdav(http_->server(), config_.nas, config_.metadata);
         install_health_endpoint();
         install_admin_endpoints();
@@ -392,7 +401,73 @@ namespace yuan::server
         body["configured_share_count"] = config_.nas.shares.size();
         body["redis_enabled"] = config_.nas.redis.enabled;
         body["audit_file_enabled"] = config_.nas.audit.file_enabled;
+        body["smb_enabled"] = config_.smb.enabled;
+        body["smb_started"] = smb_ != nullptr;
+        body["smb_port"] = config_.smb.port;
+        body["smb_require_signing"] = config_.smb.require_signing;
         return body;
+    }
+
+    yuan::net::smb::SmbServerConfig NasService::build_smb_server_config() const
+    {
+        yuan::net::smb::SmbServerConfig base;
+        base.port = static_cast<uint16_t>(std::max(1, config_.smb.port));
+        base.server_name = config_.smb.server_name;
+        base.domain_name = config_.smb.domain_name;
+        base.require_signing = config_.smb.require_signing;
+        base.enable_encryption = config_.smb.enable_encryption;
+        return make_smb_config_from_nas(config_.nas, config_.metadata, std::move(base));
+    }
+
+    bool NasService::init_smb_service()
+    {
+        stop_smb_service();
+        if (!config_.smb.enabled) {
+            return true;
+        }
+
+        auto smb_cfg = build_smb_server_config();
+        smb_ = std::make_unique<SmbService>(config_.smb.port, smb_cfg);
+        smb_handler_ = std::make_unique<NasSmbHandler>(config_.metadata);
+        smb_->set_handler(smb_handler_.get());
+        if (has_runtime_context_) {
+            smb_->set_runtime_context(runtime_context_);
+        }
+        if (!smb_->init()) {
+            smb_.reset();
+            smb_handler_.reset();
+            return false;
+        }
+        return true;
+    }
+
+    void NasService::stop_smb_service()
+    {
+        if (smb_) {
+            smb_->stop();
+            smb_.reset();
+        }
+        smb_handler_.reset();
+    }
+
+    void NasService::refresh_smb_shares()
+    {
+        if (!smb_) {
+            return;
+        }
+
+        auto cfg = build_smb_server_config();
+        auto &mgr = smb_->server().share_manager();
+        for (auto *share : mgr.list_shares()) {
+            if (share && share->type() == yuan::net::smb::ShareType::DISK && share->name() != "IPC$") {
+                mgr.remove_share(share->name());
+            }
+        }
+        for (const auto &share_cfg : cfg.shares) {
+            if (share_cfg.name != "IPC$") {
+                mgr.add_share(share_cfg);
+            }
+        }
     }
 
     void NasService::record_audit(std::string actor,
@@ -544,6 +619,7 @@ namespace yuan::server
                     mount_result_.share_manager->replace(effective_shares());
                     mount_result_.share_count = mount_result_.share_manager->shares().size();
                 }
+                refresh_smb_shares();
                 record_audit(actor, "share.upsert", share.name, share.root_path);
                 nlohmann::json out;
                 out["ok"] = true;
@@ -865,10 +941,14 @@ namespace yuan::server
             http_->start();
             started_ = true;
         }
+        if (smb_) {
+            smb_->start();
+        }
     }
 
     void NasService::stop()
     {
+        stop_smb_service();
         if (http_) {
             http_->stop();
             http_.reset();
@@ -885,6 +965,9 @@ namespace yuan::server
         has_runtime_context_ = true;
         if (http_) {
             http_->set_runtime_context(context);
+        }
+        if (smb_) {
+            smb_->set_runtime_context(context);
         }
     }
 
@@ -910,9 +993,28 @@ namespace yuan::server
             mount_result_.share_manager->replace(effective_shares());
             mount_result_.share_count = mount_result_.share_manager->shares().size();
         }
+        refresh_smb_shares();
         if (!initialized_) {
             return init();
         }
+
+        if (config_.smb.enabled != previous.smb.enabled ||
+            config_.smb.port != previous.smb.port ||
+            config_.smb.require_signing != previous.smb.require_signing ||
+            config_.smb.enable_encryption != previous.smb.enable_encryption ||
+            config_.smb.server_name != previous.smb.server_name ||
+            config_.smb.domain_name != previous.smb.domain_name) {
+            const bool was_started = started_;
+            stop_smb_service();
+            if (!init_smb_service()) {
+                config_ = std::move(previous);
+                return false;
+            }
+            if (was_started && smb_) {
+                smb_->start();
+            }
+        }
+
         record_audit("system", "service.reload", config_.nas.webdav_mount,
                      std::to_string(config_.nas.shares.size()) + " configured shares");
         return true;
@@ -1025,6 +1127,19 @@ namespace yuan::server
                         config.bootstrap_users.push_back(std::move(user));
                     }
                 }
+            }
+        }
+
+        if (j.contains("smb")) {
+            const auto &smb = j.at("smb");
+            config.smb.enabled = json_bool(smb, "enabled", config.smb.enabled);
+            config.smb.port = json_int(smb, "port", config.smb.port);
+            config.smb.require_signing = json_bool(smb, "require_signing", config.smb.require_signing);
+            config.smb.enable_encryption = json_bool(smb, "enable_encryption", config.smb.enable_encryption);
+            config.smb.server_name = json_string(smb, "server_name", config.smb.server_name);
+            config.smb.domain_name = json_string(smb, "domain_name", config.smb.domain_name);
+            if (config.smb.port <= 0) {
+                config.smb.port = 445;
             }
         }
 

@@ -180,66 +180,67 @@ namespace yuan::net::bit_torrent
         int reuse = 1;
         setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
 
-        if (!send_ssdp_discover(sock)) {
+        constexpr int ssdp_max_retries = 3;
+        for (int attempt = 0; attempt < ssdp_max_retries && running_.load(); ++attempt) {
+            if (attempt > 0)
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+            if (!send_ssdp_discover(sock)) {
+                _close(sock);
 #ifdef _WIN32
-            closesocket(sock);
-            WSACleanup();
-#else
-            close(sock);
+                WSACleanup();
 #endif
-            return;
-        }
-
-        // Receive SSDP responses
-        char buf[2048];
-        std::string location;
-
-        while (running_.load()) {
-            struct sockaddr_in from;
-            int fromlen = sizeof(from);
-            //int n = recvfrom(sock, buf, sizeof(buf) - 1, 0,
-            //                 (struct sockaddr *)&from, &fromlen);
-
-            int n = -1;
-#ifdef __linux__
-            n = ::recvfrom(sock, buf, sizeof(buf) - 1, MSG_DONTWAIT, (struct sockaddr *)&from, (socklen_t *)&fromlen);
-#elif defined _WIN32
-            n = recvfrom(sock, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&from, &fromlen);
-#elif defined __APPLE__
-            n = ::recvfrom(sock, buf, sizeof(buf) - 1, MSG_DONTWAIT, (struct sockaddr *)&from, &fromlen);
-#endif
-
-            if (n <= 0)
-                break;
-
-            buf[n] = '\0';
-            std::string response(buf, n);
-
-            // Check if this is a root device or WANIP/WANPPP service
-            if (response.find("upnp:rootdevice") == std::string::npos &&
-                response.find("urn:schemas-upnp-org:service:WANIPConnection") == std::string::npos &&
-                response.find("urn:schemas-upnp-org:service:WANPPPConnection") == std::string::npos) {
-                continue;
+                return;
             }
 
-            // Extract LOCATION header
-            size_t loc_pos = response.find("LOCATION:");
-            if (loc_pos == std::string::npos)
-                loc_pos = response.find("location:");
-            if (loc_pos != std::string::npos) {
-                size_t start = loc_pos + 9;
-                while (start < response.size() && (response[start] == ' ' || response[start] == '\t'))
-                    start++;
-                size_t end = response.find("\r\n", start);
-                if (end == std::string::npos)
-                    end = response.find('\n', start);
-                if (end != std::string::npos) {
-                    location = response.substr(start, end - start);
-                    parse_ssdp_response(location);
-                    if (!igd_control_url_.empty())
-                        break;
+            char buf[2048];
+            std::string location;
+
+            while (running_.load()) {
+                struct sockaddr_in from;
+#ifdef _WIN32
+                int fromlen = sizeof(from);
+                int n = recvfrom(sock, buf, sizeof(buf) - 1, 0,
+                                 (struct sockaddr *)&from, &fromlen);
+#else
+                socklen_t fromlen = sizeof(from);
+                int n = recvfrom(sock, buf, sizeof(buf) - 1, 0,
+                                 (struct sockaddr *)&from, &fromlen);
+#endif
+
+                if (n <= 0)
+                    break;
+
+                buf[n] = '\0';
+                std::string response(buf, n);
+
+                if (response.find("upnp:rootdevice") == std::string::npos &&
+                    response.find("urn:schemas-upnp-org:service:WANIPConnection") == std::string::npos &&
+                    response.find("urn:schemas-upnp-org:service:WANPPPConnection") == std::string::npos) {
+                    continue;
+                }
+
+                size_t loc_pos = response.find("LOCATION:");
+                if (loc_pos == std::string::npos)
+                    loc_pos = response.find("location:");
+                if (loc_pos != std::string::npos) {
+                    size_t start = loc_pos + 9;
+                    while (start < response.size() && (response[start] == ' ' || response[start] == '\t'))
+                        start++;
+                    size_t end = response.find("\r\n", start);
+                    if (end == std::string::npos)
+                        end = response.find('\n', start);
+                    if (end != std::string::npos) {
+                        location = response.substr(start, end - start);
+                        parse_ssdp_response(location);
+                        if (!igd_control_url_.empty())
+                            break;
+                    }
                 }
             }
+
+            if (!igd_control_url_.empty())
+                break;
         }
 
         _close(sock);
@@ -259,7 +260,10 @@ namespace yuan::net::bit_torrent
 
     void UpnpManager::parse_ssdp_response(const std::string & location)
     {
-        // Fetch the IGD description XML
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            igd_description_url_ = location;
+        }
         if (!fetch_igd_description(location))
             return;
     }
@@ -390,9 +394,28 @@ namespace yuan::net::bit_torrent
 
         std::string control_url = service_block.substr(ctrl_start, ctrl_end - ctrl_start);
 
-        // Extract the base URL from the location for resolving relative URLs
-        // For now, assume the controlURL is absolute (most IGDs provide this)
-        igd_control_url_ = control_url;
+        if (control_url.find("http://") == 0 || control_url.find("https://") == 0) {
+            igd_control_url_ = control_url;
+        } else {
+            std::lock_guard<std::mutex> lock(mutex_);
+            const std::string &base = igd_description_url_;
+            if (base.substr(0, 7) == "http://") {
+                std::string rest = base.substr(7);
+                size_t slash = rest.find('/');
+                std::string origin = (slash != std::string::npos) ? base.substr(0, 7 + slash) : base;
+                if (control_url[0] == '/') {
+                    igd_control_url_ = origin + control_url;
+                } else {
+                    std::string base_path = (slash != std::string::npos) ? rest.substr(0, slash) : "";
+                    size_t last_slash = base_path.rfind('/');
+                    std::string dir = (last_slash != std::string::npos) ? base_path.substr(0, last_slash + 1) : "/";
+                    igd_control_url_ = origin + dir + control_url;
+                }
+            } else {
+                igd_control_url_ = control_url;
+            }
+        }
+
         igd_service_type_ = target;
 
         return true;
@@ -477,6 +500,11 @@ namespace yuan::net::bit_torrent
 
     bool UpnpManager::soap_add_port_mapping()
     {
+        return soap_add_port_mapping(internal_port_);
+    }
+
+    bool UpnpManager::soap_add_port_mapping(uint16_t port)
+    {
         std::lock_guard<std::mutex> lock(mutex_);
         if (igd_control_url_.empty())
             return false;
@@ -485,10 +513,10 @@ namespace yuan::net::bit_torrent
         if (local_ip.empty())
             return false;
 
-        std::string ext_port = std::to_string(internal_port_);
-        std::string int_port = std::to_string(internal_port_);
+        std::string ext_port = std::to_string(port);
+        std::string int_port = std::to_string(port);
         std::string protocol = "TCP";
-        std::string desc = "BitTorrent";
+        std::string desc = "BitTorrent-" + std::to_string(port);
 
         std::string body =
             "<?xml version=\"1.0\"?>\r\n"
@@ -519,8 +547,10 @@ namespace yuan::net::bit_torrent
         std::string response = http_request(igd_control_url_, action, body);
 
         if (!response.empty() && response.find("200 OK") != std::string::npos) {
-            mapped_ = true;
-            mapped_port_ = internal_port_;
+            if (port == internal_port_) {
+                mapped_ = true;
+                mapped_port_ = port;
+            }
             return true;
         }
 
@@ -616,46 +646,56 @@ namespace yuan::net::bit_torrent
         gateway.sin_port = htons(5351);
         inet_pton(AF_INET, gateway_ip_.c_str(), &gateway.sin_addr);
 
-        // NAT-PMP external address request: version(1) opcode(0)
         uint8_t request[2] = { 0, 0 };
 
-        if (sendto(sock, (const char *)request, 2, 0,
-                   (struct sockaddr *)&gateway, sizeof(gateway)) < 0) {
-            _close(sock);
-            return false;
-        }
+        int n = -1;
+        uint8_t response[16];
+        constexpr int max_retries = 9;
+        int timeout_ms = 250;
+
+        for (int attempt = 0; attempt < max_retries && running_.load(); ++attempt) {
+            if (sendto(sock, (const char *)request, 2, 0,
+                       (struct sockaddr *)&gateway, sizeof(gateway)) < 0) {
+                _close(sock);
+                return false;
+            }
 
 #ifdef _WIN32
-        DWORD timeout = 3000;
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+            DWORD timeout = static_cast<DWORD>(timeout_ms);
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
 #else
-        struct timeval tv;
-        tv.tv_sec = 3;
-        tv.tv_usec = 0;
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            struct timeval tv;
+            tv.tv_sec = timeout_ms / 1000;
+            tv.tv_usec = (timeout_ms % 1000) * 1000;
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
 
-        uint8_t response[16];
-        struct sockaddr_in from;
-        int fromlen = sizeof(from);
-        int n = -1;
-#ifdef __linux__
-        n = ::recvfrom(sock, (char *)response, sizeof(response) - 1, MSG_DONTWAIT, (struct sockaddr *)&from, (socklen_t *)&fromlen);
-#elif defined _WIN32
-        n = recvfrom(sock, (char *)response, sizeof(response), 0,
-                     (struct sockaddr *)&from, &fromlen);
-#elif defined __APPLE__
-        n = ::recvfrom(sock, (char *)response, sizeof(response) - 1, MSG_DONTWAIT, (struct sockaddr *)&from, &fromlen);
+            struct sockaddr_in from;
+#ifdef _WIN32
+            int fromlen = sizeof(from);
+            n = recvfrom(sock, (char *)response, sizeof(response), 0,
+                         (struct sockaddr *)&from, &fromlen);
+#else
+            socklen_t fromlen = sizeof(from);
+            n = recvfrom(sock, (char *)response, sizeof(response), 0,
+                         (struct sockaddr *)&from, &fromlen);
 #endif
+
+            if (n > 0)
+                break;
+
+            timeout_ms *= 2;
+            if (timeout_ms > 64000)
+                timeout_ms = 64000;
+        }
 
         _close(sock);
 
         if (n < 12)
             return false;
         if (response[0] != 0 || response[1] != 128)
-            return false; // version=0, opcode=128(=response)
+            return false;
 
-        // Response: version(1) opcode(1) result(2) epoch(4) external_ip(4)
         uint32_t ext_ip = (response[8] << 24) | (response[9] << 16) | (response[10] << 8) | response[11];
 
         char ip_str[INET_ADDRSTRLEN];
@@ -679,20 +719,14 @@ namespace yuan::net::bit_torrent
         gateway.sin_port = htons(5351);
         inet_pton(AF_INET, gateway_ip_.c_str(), &gateway.sin_addr);
 
-        std::string local_ip = get_local_ip();
-        uint32_t int_ip = 0;
-        inet_pton(AF_INET, local_ip.c_str(), &int_ip);
-
-        // NAT-PMP port mapping request:
-        // version(1) opcode(1) reserved(2) internal_port(2) external_port(2) lifetime(4)
         uint8_t request[12];
-        request[0] = 0; // version
-        request[1] = 1; // opcode: TCP
-        request[2] = 0; // reserved
-        request[3] = 0; // reserved
+        request[0] = 0;
+        request[1] = 1;
+        request[2] = 0;
+        request[3] = 0;
         request[4] = (internal_port_ >> 8) & 0xFF;
         request[5] = internal_port_ & 0xFF;
-        request[6] = 0; // suggested external port (0 = let router choose)
+        request[6] = 0;
         request[7] = 0;
         uint32_t lifetime = 3600;
         request[8] = (lifetime >> 24) & 0xFF;
@@ -700,47 +734,58 @@ namespace yuan::net::bit_torrent
         request[10] = (lifetime >> 8) & 0xFF;
         request[11] = lifetime & 0xFF;
 
-        if (sendto(sock, (const char *)request, 12, 0,
-                   (struct sockaddr *)&gateway, sizeof(gateway)) < 0) {
-            _close(sock);
-            return false;
-        }
+        int n = -1;
+        uint8_t response[16];
+        constexpr int max_retries = 9;
+        int timeout_ms = 250;
+
+        for (int attempt = 0; attempt < max_retries && running_.load(); ++attempt) {
+            if (sendto(sock, (const char *)request, 12, 0,
+                       (struct sockaddr *)&gateway, sizeof(gateway)) < 0) {
+                _close(sock);
+                return false;
+            }
 
 #ifdef _WIN32
-        DWORD timeout = 3000;
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+            DWORD timeout = static_cast<DWORD>(timeout_ms);
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
 #else
-        struct timeval tv;
-        tv.tv_sec = 3;
-        tv.tv_usec = 0;
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            struct timeval tv;
+            tv.tv_sec = timeout_ms / 1000;
+            tv.tv_usec = (timeout_ms % 1000) * 1000;
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
 
-        uint8_t response[16];
-        struct sockaddr_in from;
-        int fromlen = sizeof(from);
-        int n = -1;
-#ifdef __linux__
-        n = ::recvfrom(sock, (char *)response, sizeof(response) - 1, MSG_DONTWAIT, (struct sockaddr *)&from, (socklen_t *)&fromlen);
-#elif defined _WIN32
-        n = recvfrom(sock, (char *)response, sizeof(response), 0,
-                     (struct sockaddr *)&from, &fromlen);
-#elif defined __APPLE__
-        n = ::recvfrom(sock, (char *)response, sizeof(response) - 1, MSG_DONTWAIT, (struct sockaddr *)&from, &fromlen);
+            struct sockaddr_in from;
+#ifdef _WIN32
+            int fromlen = sizeof(from);
+            n = recvfrom(sock, (char *)response, sizeof(response), 0,
+                         (struct sockaddr *)&from, &fromlen);
+#else
+            socklen_t fromlen = sizeof(from);
+            n = recvfrom(sock, (char *)response, sizeof(response), 0,
+                         (struct sockaddr *)&from, &fromlen);
 #endif
+
+            if (n > 0)
+                break;
+
+            timeout_ms *= 2;
+            if (timeout_ms > 64000)
+                timeout_ms = 64000;
+        }
+
         _close(sock);
 
         if (n < 16)
             return false;
         if (response[0] != 0 || response[1] != 129)
-            return false; // version=0, opcode=129
+            return false;
 
-        // Result code: 0 = success
         uint16_t result = (response[2] << 8) | response[3];
         if (result != 0)
             return false;
 
-        // Extract mapped external port
         uint16_t ext_port = (response[8] << 8) | response[9];
         uint32_t lifetime_resp = (response[12] << 24) | (response[13] << 16) | (response[14] << 8) | response[15];
 
@@ -837,6 +882,46 @@ namespace yuan::net::bit_torrent
         fclose(f);
         return "";
 #endif
+    }
+
+    bool UpnpManager::add_port_mapping(uint16_t internal_port)
+    {
+        if (nat_pmp_available_) {
+            auto saved = internal_port_;
+            internal_port_ = internal_port;
+            bool ok = nat_pmp_map_port();
+            internal_port_ = saved;
+            return ok;
+        }
+        return soap_add_port_mapping(internal_port);
+    }
+
+    bool UpnpManager::remove_port_mapping(uint16_t external_port)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (igd_control_url_.empty())
+            return false;
+
+        std::string ext_port = std::to_string(external_port);
+
+        std::string body =
+            "<?xml version=\"1.0\"?>\r\n"
+            "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
+            "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n"
+            "  <s:Body>\r\n"
+            "    <u:DeletePortMapping xmlns:u=\"" +
+            igd_service_type_ + "\">\r\n"
+                                "      <NewRemoteHost></NewRemoteHost>\r\n"
+                                "      <NewExternalPort>" +
+            ext_port + "</NewExternalPort>\r\n"
+                       "      <NewProtocol>TCP</NewProtocol>\r\n"
+                       "    </u:DeletePortMapping>\r\n"
+                       "  </s:Body>\r\n"
+                       "</s:Envelope>\r\n";
+
+        std::string action = igd_service_type_ + "#DeletePortMapping";
+        http_request(igd_control_url_, action, body);
+        return true;
     }
 
     void UpnpManager::renewal_loop()

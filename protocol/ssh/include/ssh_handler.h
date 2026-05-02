@@ -14,10 +14,12 @@ namespace yuan::net::ssh
 
     struct SshCommandExitInfo
     {
+        bool use_signal = false;
         uint32_t exit_status = 0;
         std::string signal_name;
+        bool core_dumped = false;
         std::string error_message;
-        std::string language_tag;
+        std::string language_tag = "en";
     };
 
     class SshHandler
@@ -163,17 +165,17 @@ namespace yuan::net::ssh
             return false;
         }
 
-        virtual bool enable_builtin_exec_bridge() const
-        {
-            return false;
-        }
-
         virtual SshCommandExitInfo on_command_exit(SshSession *session,
                                                    SshChannel *channel)
         {
             (void)session;
             (void)channel;
             return {};
+        }
+
+        virtual bool enable_builtin_exec_bridge() const
+        {
+            return false;
         }
     };
 

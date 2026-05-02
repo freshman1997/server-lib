@@ -28,6 +28,8 @@ namespace yuan::net::bit_torrent
         PieceRequestHandler piece_request_handler_;
         PieceServedHandler piece_served_handler_;
         std::function<void(PeerConnection *)> peer_ready_handler_;
+        std::function<void(PeerConnection *)> peer_unchoke_handler_;
+        std::function<void(PeerConnection *, uint32_t, uint32_t, uint32_t)> peer_reject_handler_;
         std::function<void(const std::vector<PieceBlockRequest> &)> peer_lost_handler_;
     };
 
@@ -65,6 +67,14 @@ namespace yuan::net::bit_torrent
         {
             peer_ready_handler_ = std::move(handler);
         }
+        void set_peer_unchoke_handler(PeerReadyHandler handler)
+        {
+            peer_unchoke_handler_ = std::move(handler);
+        }
+        void set_peer_reject_handler(std::function<void(PeerConnection *, uint32_t, uint32_t, uint32_t)> handler)
+        {
+            peer_reject_handler_ = std::move(handler);
+        }
         void set_peer_lost_handler(PeerLostHandler handler)
         {
             peer_lost_handler_ = std::move(handler);
@@ -100,6 +110,8 @@ namespace yuan::net::bit_torrent
         PieceRequestHandler piece_request_handler_;
         PieceServedHandler piece_served_handler_;
         PeerReadyHandler peer_ready_handler_;
+        PeerReadyHandler peer_unchoke_handler_;
+        std::function<void(PeerConnection *, uint32_t, uint32_t, uint32_t)> peer_reject_handler_;
         PeerLostHandler peer_lost_handler_;
 
         mutable std::mutex peers_mutex_;

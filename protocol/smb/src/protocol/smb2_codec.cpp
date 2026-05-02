@@ -194,7 +194,9 @@ namespace yuan::net::smb
         write_le16(buf, resp.structure_size);
         write_le16(buf, resp.security_mode);
         write_le16(buf, resp.dialect_revision);
-        write_le16(buf, resp.reserved);
+        write_le16(buf, resp.dialect_revision >= static_cast<uint16_t>(DialectRevision::SMB_3_1_1)
+                               ? resp.negotiate_context_count
+                               : resp.reserved);
         buf.append(resp.server_guid, 16);
         write_le32(buf, resp.capabilities);
         write_le32(buf, resp.max_transact_size);
@@ -203,7 +205,7 @@ namespace yuan::net::smb
         write_le64(buf, resp.system_time);
         write_le64(buf, resp.server_start_time);
 
-        uint16_t sec_offset = SMB2_HEADER_SIZE + 64 + 8;
+        uint16_t sec_offset = SMB2_HEADER_SIZE + 64;
         write_le16(buf, sec_offset);
         write_le16(buf, static_cast<uint16_t>(resp.security_buffer.size()));
 
@@ -211,12 +213,8 @@ namespace yuan::net::smb
             uint32_t ctx_offset = sec_offset + static_cast<uint32_t>(resp.security_buffer.size());
             ctx_offset = (ctx_offset + 7) & ~7u;
             write_le32(buf, ctx_offset);
-            write_le16(buf, static_cast<uint16_t>(resp.negotiate_context.size() > 0 ? 1 : 0));
-            write_le16(buf, resp.reserved2);
         } else {
             write_le32(buf, 0);
-            write_le16(buf, 0);
-            write_le16(buf, 0);
         }
 
         buf.append(resp.security_buffer.data(), resp.security_buffer.size());
@@ -262,6 +260,7 @@ namespace yuan::net::smb
         ByteBuffer buf(256);
 
         auto hdr = make_response_header(header, static_cast<uint16_t>(Smb2Command::SESSION_SETUP));
+        hdr.status = header.status;
         hdr.session_id = header.session_id;
         buf.append(encode_header(hdr));
 
@@ -427,6 +426,9 @@ namespace yuan::net::smb
 
         if (!resp.create_contexts.empty()) {
             buf.append(resp.create_contexts.data(), resp.create_contexts.size());
+        } else {
+            uint8_t pad = 0;
+            buf.append(&pad, 1);
         }
 
         return buf;
@@ -664,12 +666,10 @@ namespace yuan::net::smb
 
     ByteBuffer Smb2Codec::encode_set_info_response(const Smb2Header & header, const Smb2SetInfoResponse & resp)
     {
-        ByteBuffer buf(SMB2_HEADER_SIZE + 9);
+        ByteBuffer buf(SMB2_HEADER_SIZE + 2);
         auto hdr = make_response_header(header, static_cast<uint16_t>(Smb2Command::SET_INFO));
         buf.append(encode_header(hdr));
         write_le16(buf, resp.structure_size);
-        write_le16(buf, resp.output_buffer_offset);
-        write_le32(buf, resp.output_buffer_length);
         return buf;
     }
 

@@ -7,60 +7,65 @@
 #include "ssh_config.h"
 #include "ssh_session.h"
 #include <algorithm>
-#include <array>
-#include <cstdio>
-#include <sys/wait.h>
 
 namespace yuan::net::ssh
 {
     namespace
     {
+        struct DirectTcpipOpenData
+        {
+            std::string target_host;
+            uint16_t target_port = 0;
+            std::string originator_host;
+            uint16_t originator_port = 0;
+        };
+
         template <typename T>
         T *ptr_of(std::unique_ptr<T> &owner)
         {
             return &*owner;
         }
 
-        struct CommandResult
+        std::optional<DirectTcpipOpenData> decode_direct_tcpip_open_data(const SshChannelOpenMessage &msg)
         {
-            std::vector<uint8_t> output;
-            uint32_t exit_status = 255;
-        };
-
-        CommandResult run_command_capture(const std::string &command)
-        {
-            CommandResult result;
-            if (command.empty()) {
-                return result;
+            size_t offset = 0;
+            auto target_host = SshMessageCodec::read_string(msg.type_specific_data.data(),
+                                                            msg.type_specific_data.size(), offset);
+            if (!target_host) {
+                return std::nullopt;
             }
 
-            std::string shell_command = command + " 2>&1";
-            FILE *pipe = popen(shell_command.c_str(), "r");
-            if (!pipe) {
-                static constexpr char kError[] = "failed to start command\n";
-                result.output.assign(kError, kError + sizeof(kError) - 1);
-                return result;
+            if (offset + 4 > msg.type_specific_data.size()) {
+                return std::nullopt;
+            }
+            uint32_t target_port = SshMessageCodec::read_uint32(msg.type_specific_data.data(),
+                                                                msg.type_specific_data.size(), offset);
+
+            auto originator_host = SshMessageCodec::read_string(msg.type_specific_data.data(),
+                                                                msg.type_specific_data.size(), offset);
+            if (!originator_host) {
+                return std::nullopt;
             }
 
-            std::array<uint8_t, 4096> buffer{};
-            while (true) {
-                const size_t n = std::fread(buffer.data(), 1, buffer.size(), pipe);
-                if (n > 0) {
-                    result.output.insert(result.output.end(), buffer.begin(), buffer.begin() + n);
-                }
-                if (n < buffer.size()) {
-                    if (std::feof(pipe) || std::ferror(pipe)) {
-                        break;
-                    }
-                }
+            if (offset + 4 > msg.type_specific_data.size()) {
+                return std::nullopt;
+            }
+            uint32_t originator_port = SshMessageCodec::read_uint32(msg.type_specific_data.data(),
+                                                                    msg.type_specific_data.size(), offset);
+
+            if (offset != msg.type_specific_data.size()) {
+                return std::nullopt;
             }
 
-            const int rc = pclose(pipe);
-            if (WIFEXITED(rc)) {
-                result.exit_status = static_cast<uint32_t>(WEXITSTATUS(rc));
-            } else if (WIFSIGNALED(rc)) {
-                result.exit_status = 128u + static_cast<uint32_t>(WTERMSIG(rc));
+            if (target_port == 0 || target_port > 65535 || originator_port > 65535) {
+                return std::nullopt;
             }
+
+            DirectTcpipOpenData result;
+            result.target_host = std::move(*target_host);
+            result.target_port = static_cast<uint16_t>(target_port);
+            result.originator_host = std::move(*originator_host);
+            result.originator_port = static_cast<uint16_t>(originator_port);
             return result;
         }
     }
@@ -176,28 +181,22 @@ namespace yuan::net::ssh
         if (msg.channel_type == SSH_CHANNEL_SESSION) {
             // session channel authorization is handled by the configured/default handler
         } else if (msg.channel_type == SSH_CHANNEL_DIRECT_TCPIP) {
-            size_t offset = 0;
-            auto host = SshMessageCodec::read_string(msg.type_specific_data.data(),
-                                                     msg.type_specific_data.size(), offset);
-            uint32_t port = 0;
-            if (offset + 4 <= msg.type_specific_data.size()) {
-                port = SshMessageCodec::read_uint32(msg.type_specific_data.data(),
-                                                    msg.type_specific_data.size(), offset);
-            }
-            if (!host || port == 0) {
+            auto open_data = decode_direct_tcpip_open_data(msg);
+            if (!open_data) {
                 return build_channel_open_failure(msg.sender_channel,
                                                   SshChannelOpenFailureReason::SSH_OPEN_CONNECT_FAILED,
                                                   "Invalid direct-tcpip parameters");
             }
 
-            if (!effective_handler->on_direct_tcpip(session_, ptr_of(channel), *host, static_cast<uint16_t>(port))) {
+            if (!effective_handler->on_direct_tcpip(session_, ptr_of(channel),
+                                                    open_data->target_host, open_data->target_port)) {
                 return build_channel_open_failure(msg.sender_channel,
                                                   SshChannelOpenFailureReason::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED,
                                                   "Direct TCP/IP forwarding denied");
             }
 
             auto direct_handler = std::make_unique<SshDirectTcpipHandler>(
-                session_, *host, static_cast<uint16_t>(port));
+                session_, open_data->target_host, open_data->target_port);
             channel->set_handler(std::move(direct_handler));
         } else if (msg.channel_type == SSH_CHANNEL_FORWARDED_TCPIP) {
             // server-initiated, should not be received
@@ -336,10 +335,6 @@ namespace yuan::net::ssh
             channel->handler()->on_eof(channel);
         }
 
-        if (session_) {
-            session_->enqueue_outgoing(build_channel_close(channel->remote_id()));
-        }
-
         return build_channel_eof(channel->remote_id());
     }
 
@@ -352,6 +347,7 @@ namespace yuan::net::ssh
         }
 
         auto local_id = channel->local_id();
+        auto remote_id = channel->remote_id();
         channel->set_state(SshChannel::State::closed);
 
         if (channel->handler()) {
@@ -362,7 +358,7 @@ namespace yuan::net::ssh
 
         remove_channel(local_id);
 
-        return build_channel_close(channel->remote_id());
+        return build_channel_close(remote_id);
     }
 
     ByteBuffer SshConnectionManager::handle_channel_request(const SshChannelRequestMessage & msg, SshHandler * handler)
@@ -376,25 +372,43 @@ namespace yuan::net::ssh
             return ByteBuffer();
         }
 
+        if (channel->state() != SshChannel::State::open) {
+            if (msg.want_reply) {
+                return build_channel_failure(channel->remote_id());
+            }
+            return ByteBuffer();
+        }
+
         bool success = false;
+        bool handled_by_channel_handler = false;
 
         if (channel->handler()) {
             success = channel->handler()->on_request(channel, msg.request_type, msg.request_specific_data);
+            handled_by_channel_handler = success;
         }
 
-        if (msg.request_type == "exec") {
+        if (!handled_by_channel_handler && msg.request_type == "exec") {
+                if (!channel->mark_command_started()) {
+                    success = false;
+                } else {
                 SshExecRequestData exec_data;
                 size_t offset = 0;
                 auto cmd = SshMessageCodec::read_string(msg.request_specific_data.data(),
                                                         msg.request_specific_data.size(), offset);
                 if (cmd) {
                     exec_data.command = std::move(*cmd);
-                    auto &terminal_state = channel->terminal_session_state();
-                    terminal_state.exec_requested = true;
-                    terminal_state.exec_command = exec_data.command;
                     success = effective_handler->on_exec_request(session_, channel, exec_data.command);
+                    if (success) {
+                        auto &terminal_state = channel->terminal_session_state();
+                        terminal_state.exec_requested = true;
+                        terminal_state.exec_command = exec_data.command;
+                    }
+                }
                 }
         } else if (msg.request_type == "subsystem") {
+                if (!channel->mark_command_started()) {
+                    success = false;
+                } else {
                 SshSubsystemRequestData sub_data;
                 size_t offset = 0;
                 auto name = SshMessageCodec::read_string(msg.request_specific_data.data(),
@@ -415,7 +429,13 @@ namespace yuan::net::ssh
                         }
                     }
                 }
+                }
         } else if (msg.request_type == "pty-req") {
+                if (channel->command_started()) {
+                    success = false;
+                } else if (!channel->mark_pty_requested()) {
+                    success = false;
+                } else {
                 SshPtyRequestData pty_data;
                 size_t offset = 0;
                 auto term = SshMessageCodec::read_string(msg.request_specific_data.data(),
@@ -433,27 +453,37 @@ namespace yuan::net::ssh
                     pty_data.terminal_height_pixels = SshMessageCodec::read_uint32(msg.request_specific_data.data(),
                                                                                    msg.request_specific_data.size(), offset);
                 }
-                auto modes = SshMessageCodec::read_raw(msg.request_specific_data.data(),
-                                                       msg.request_specific_data.size(), offset, msg.request_specific_data.size() - offset);
+                auto modes = SshMessageCodec::read_string(msg.request_specific_data.data(),
+                                                          msg.request_specific_data.size(), offset);
                 if (modes) {
-                    pty_data.terminal_modes = std::move(*modes);
+                    pty_data.terminal_modes.assign(modes->begin(), modes->end());
                 }
-                auto &terminal_state = channel->terminal_session_state();
-                terminal_state.has_pty_request = true;
-                terminal_state.spec.term_env = pty_data.term_env;
-                terminal_state.spec.width = pty_data.terminal_width;
-                terminal_state.spec.height = pty_data.terminal_height;
-                terminal_state.spec.pixel_width = pty_data.terminal_width_pixels;
-                terminal_state.spec.pixel_height = pty_data.terminal_height_pixels;
-                terminal_state.spec.terminal_modes = pty_data.terminal_modes;
                 success = effective_handler->on_pty_request(session_, channel,
                                                             pty_data.term_env, pty_data.terminal_width, pty_data.terminal_height,
                                                             pty_data.terminal_width_pixels, pty_data.terminal_height_pixels,
                                                             pty_data.terminal_modes);
+                auto &terminal_state = channel->terminal_session_state();
+                terminal_state.has_pty_request = success;
+                if (success) {
+                    terminal_state.spec.term_env = pty_data.term_env;
+                    terminal_state.spec.width = pty_data.terminal_width;
+                    terminal_state.spec.height = pty_data.terminal_height;
+                    terminal_state.spec.pixel_width = pty_data.terminal_width_pixels;
+                    terminal_state.spec.pixel_height = pty_data.terminal_height_pixels;
+                    terminal_state.spec.terminal_modes = pty_data.terminal_modes;
+                }
+                }
         } else if (msg.request_type == "shell") {
-                channel->terminal_session_state().interactive_shell_requested = true;
+                if (!channel->mark_command_started()) {
+                    success = false;
+                } else {
                 success = effective_handler->on_shell_request(session_, channel);
+                channel->terminal_session_state().interactive_shell_requested = success;
+                }
         } else if (msg.request_type == "env") {
+                if (channel->command_started()) {
+                    success = false;
+                } else {
                 SshEnvRequestData env_data;
                 size_t offset = 0;
                 auto var_name = SshMessageCodec::read_string(msg.request_specific_data.data(),
@@ -466,6 +496,7 @@ namespace yuan::net::ssh
                     success = effective_handler->on_env_request(session_, channel,
                                                                 env_data.variable_name, env_data.variable_value);
                 }
+                }
         } else if (msg.request_type == "window-change") {
                 SshWindowChangeData wc_data;
                 size_t offset = 0;
@@ -477,11 +508,12 @@ namespace yuan::net::ssh
                     wc_data.terminal_width_pixels = SshMessageCodec::read_uint32(msg.request_specific_data.data(),
                                                                                  msg.request_specific_data.size(), offset);
                     wc_data.terminal_height_pixels = SshMessageCodec::read_uint32(msg.request_specific_data.data(),
-                                                                                  msg.request_specific_data.size(), offset);
+                                                                                   msg.request_specific_data.size(), offset);
                 }
                 effective_handler->on_window_change(session_, channel,
                                                     wc_data.terminal_width, wc_data.terminal_height,
                                                     wc_data.terminal_width_pixels, wc_data.terminal_height_pixels);
+                success = true;
         } else if (msg.request_type == "signal") {
                 SshSignalData sig_data;
                 size_t offset = 0;
@@ -490,6 +522,7 @@ namespace yuan::net::ssh
                 if (sig_name) {
                     sig_data.signal_name = std::move(*sig_name);
                     effective_handler->on_signal(session_, channel, sig_data.signal_name);
+                    success = true;
                 }
         } else if (msg.request_type == "x11-req") {
                 success = effective_handler->on_x11_forward(session_, channel, "", "", 0);
@@ -501,18 +534,6 @@ namespace yuan::net::ssh
         }
 
         if (msg.want_reply) {
-            if (success && msg.request_type == "exec" &&
-                effective_handler->enable_builtin_exec_bridge() && session_) {
-                session_->enqueue_outgoing(build_channel_success(channel->remote_id()));
-                auto result = run_command_capture(channel->terminal_session_state().exec_command);
-                if (!result.output.empty()) {
-                    session_->enqueue_outgoing(build_channel_data(channel->remote_id(), result.output));
-                }
-                session_->enqueue_outgoing(build_channel_exit_status(channel->remote_id(), result.exit_status));
-                session_->enqueue_outgoing(build_channel_eof(channel->remote_id()));
-                session_->enqueue_outgoing(build_channel_close(channel->remote_id()));
-                return ByteBuffer();
-            }
             return success ? build_channel_success(channel->remote_id())
                            : build_channel_failure(channel->remote_id());
         }
@@ -636,45 +657,6 @@ namespace yuan::net::ssh
         return SshMessageCodec::encode_channel_close(msg);
     }
 
-    ByteBuffer SshConnectionManager::build_channel_exit_status(uint32_t recipient, uint32_t exit_status) const
-    {
-        SshChannelRequestMessage msg;
-        msg.recipient_channel = recipient;
-        msg.request_type = "exit-status";
-        msg.want_reply = false;
-
-        ByteBuffer data(4);
-        SshMessageCodec::write_uint32(data, exit_status);
-        auto span = data.readable_span();
-        msg.request_specific_data.assign(reinterpret_cast<const uint8_t *>(span.data()),
-                                         reinterpret_cast<const uint8_t *>(span.data()) + span.size());
-
-        return SshMessageCodec::encode_channel_request(msg);
-    }
-
-    ByteBuffer SshConnectionManager::build_channel_exit_signal(uint32_t recipient,
-                                                               const std::string & signal_name,
-                                                               bool core_dumped,
-                                                               const std::string & error_message,
-                                                               const std::string & language_tag) const
-    {
-        SshChannelRequestMessage msg;
-        msg.recipient_channel = recipient;
-        msg.request_type = "exit-signal";
-        msg.want_reply = false;
-
-        ByteBuffer data(64 + signal_name.size() + error_message.size() + language_tag.size());
-        SshMessageCodec::write_string(data, signal_name);
-        SshMessageCodec::write_boolean(data, core_dumped);
-        SshMessageCodec::write_string(data, error_message);
-        SshMessageCodec::write_string(data, language_tag);
-        auto span = data.readable_span();
-        msg.request_specific_data.assign(reinterpret_cast<const uint8_t *>(span.data()),
-                                         reinterpret_cast<const uint8_t *>(span.data()) + span.size());
-
-        return SshMessageCodec::encode_channel_request(msg);
-    }
-
     ByteBuffer SshConnectionManager::build_window_adjust(uint32_t recipient, uint32_t bytes) const
     {
         SshChannelWindowAdjustMessage msg;
@@ -695,6 +677,35 @@ namespace yuan::net::ssh
         SshChannelFailureMessage msg;
         msg.recipient_channel = recipient;
         return SshMessageCodec::encode_channel_failure(msg);
+    }
+
+    ByteBuffer SshConnectionManager::build_channel_exit_status(uint32_t recipient, uint32_t exit_status) const
+    {
+        ByteBuffer buf;
+        buf.append_u8(static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_REQUEST));
+        SshMessageCodec::write_uint32(buf, recipient);
+        SshMessageCodec::write_string(buf, "exit-status");
+        SshMessageCodec::write_boolean(buf, false);
+        SshMessageCodec::write_uint32(buf, exit_status);
+        return buf;
+    }
+
+    ByteBuffer SshConnectionManager::build_channel_exit_signal(uint32_t recipient,
+                                                               const std::string &signal_name,
+                                                               bool core_dumped,
+                                                               const std::string &error_message,
+                                                               const std::string &language_tag) const
+    {
+        ByteBuffer buf;
+        buf.append_u8(static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_REQUEST));
+        SshMessageCodec::write_uint32(buf, recipient);
+        SshMessageCodec::write_string(buf, "exit-signal");
+        SshMessageCodec::write_boolean(buf, false);
+        SshMessageCodec::write_string(buf, signal_name);
+        SshMessageCodec::write_boolean(buf, core_dumped);
+        SshMessageCodec::write_string(buf, error_message);
+        SshMessageCodec::write_string(buf, language_tag);
+        return buf;
     }
 
     ByteBuffer SshConnectionManager::build_request_success(const std::vector<uint8_t> & data) const

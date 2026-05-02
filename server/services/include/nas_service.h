@@ -3,6 +3,7 @@
 
 #include "http_service.h"
 #include "nas/nas.h"
+#include "smb.h"
 
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -15,12 +16,26 @@ namespace yuan::server
 {
     struct NasServiceConfig
     {
+        struct SmbConfig
+        {
+            bool enabled = false;
+            int port = 445;
+            bool require_signing = false;
+            bool enable_encryption = false;
+            std::string server_name = "YUAN-NAS";
+            std::string domain_name = "WORKGROUP";
+        };
+
         int port = 8080;
         yuan::net::http::HttpServerConfig http;
         yuan::server::nas::NasConfig nas;
+        SmbConfig smb;
         std::shared_ptr<yuan::server::nas::NasMetadataStore> metadata;
         std::vector<yuan::server::nas::NasUser> bootstrap_users;
     };
+
+    class SmbService;
+    class NasSmbHandler;
 
     class NasService : public yuan::app::Service, public yuan::app::RuntimeContextAwareService
     {
@@ -43,6 +58,10 @@ namespace yuan::server
     private:
         bool prepare_metadata();
         bool apply_bootstrap_data();
+        yuan::net::smb::SmbServerConfig build_smb_server_config() const;
+        bool init_smb_service();
+        void stop_smb_service();
+        void refresh_smb_shares();
         std::vector<yuan::server::nas::NasShare> effective_shares() const;
         nlohmann::json health_status_json() const;
         void record_audit(std::string actor,
@@ -57,6 +76,8 @@ namespace yuan::server
 
         NasServiceConfig config_;
         std::unique_ptr<HttpService> http_;
+        std::unique_ptr<SmbService> smb_;
+        std::unique_ptr<NasSmbHandler> smb_handler_;
         yuan::server::nas::NasWebDavMountResult mount_result_;
         yuan::app::RuntimeContext runtime_context_;
         bool has_runtime_context_ = false;

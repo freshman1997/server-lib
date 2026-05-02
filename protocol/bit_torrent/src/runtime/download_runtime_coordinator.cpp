@@ -99,7 +99,7 @@ namespace yuan::net::bit_torrent
     void DownloadRuntimeCoordinator::ensure_sessions()
     {
         if (!tracker_session_) {
-            tracker_session_ = std::make_unique<TrackerSession>();
+            tracker_session_ = std::make_shared<TrackerSession>();
         }
 
         if (!peer_session_) {
@@ -115,12 +115,14 @@ namespace yuan::net::bit_torrent
         peer_config.meta_ = config_.meta_;
         peer_config.peer_id_ = config_.peer_id_;
         peer_config.pieces_have_ = config_.pieces_have_;
-        peer_config.max_peers_ = config_.max_peers_;
+        peer_config.max_peers_ = config_.nat_config_.max_active_connections;
         peer_config.allow_loopback_peers_ = config_.nat_config_.allow_loopback_peers;
         peer_config.piece_data_handler_ = config_.piece_data_handler_;
         peer_config.piece_request_handler_ = config_.piece_request_handler_;
         peer_config.piece_served_handler_ = config_.piece_served_handler_;
         peer_config.peer_ready_handler_ = config_.peer_ready_handler_;
+        peer_config.peer_unchoke_handler_ = config_.peer_unchoke_handler_;
+        peer_config.peer_reject_handler_ = config_.peer_reject_handler_;
         peer_config.peer_lost_handler_ = config_.peer_lost_handler_;
         peer_session_->configure(std::move(peer_config));
     }
@@ -144,6 +146,11 @@ namespace yuan::net::bit_torrent
 
     void DownloadRuntimeCoordinator::start_nat_runtime()
     {
+        const auto &cfg = config_.nat_config_;
+        if (!cfg.enable_upnp && !cfg.enable_nat_pmp && !cfg.enable_dht) {
+            return;
+        }
+
         nat_manager_ = std::make_unique<NatManager>();
         config_.nat_config_.listen_port = *config_.listen_port_;
         nat_manager_->start(config_.nat_config_, *config_.meta_, *config_.peer_id_,

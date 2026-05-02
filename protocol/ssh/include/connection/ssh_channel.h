@@ -99,17 +99,30 @@ namespace yuan::net::ssh
         bool has_pending_data() const;
         std::vector<uint8_t> dequeue_pending(uint32_t max_bytes);
 
+        bool command_started() const
+        {
+            return command_started_;
+        }
+        bool pty_requested() const
+        {
+            return pty_requested_;
+        }
+        bool termination_notified() const
+        {
+            return termination_notified_;
+        }
+        bool mark_command_started();
+        bool mark_pty_requested();
+        bool mark_termination_notified();
+
         SshTerminalSessionState &terminal_session_state()
         {
             return terminal_session_state_;
         }
-
         const SshTerminalSessionState &terminal_session_state() const
         {
             return terminal_session_state_;
         }
-
-        bool mark_termination_notified();
 
     private:
         uint32_t local_id_;
@@ -127,8 +140,10 @@ namespace yuan::net::ssh
         std::deque<std::vector<uint8_t> > pending_data_;
         uint32_t pending_total_ = 0;
 
-        SshTerminalSessionState terminal_session_state_;
+        bool command_started_ = false;
+        bool pty_requested_ = false;
         bool termination_notified_ = false;
+        SshTerminalSessionState terminal_session_state_;
     };
 }
 

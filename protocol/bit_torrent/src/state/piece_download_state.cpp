@@ -121,10 +121,43 @@ namespace yuan::net::bit_torrent
         }
     }
 
+    std::vector<PieceBlockRequest> PieceDownloadState::timeout_inflight_requests(uint64_t now_ms, uint64_t timeout_ms)
+    {
+        std::vector<PieceBlockRequest> timed_out;
+        for (size_t i = 0; i < inflight_requests_.size(); ++i) {
+            if (pieces_have_[i]) {
+                continue;
+            }
+            auto &requests = inflight_requests_[i];
+            auto it = requests.begin();
+            while (it != requests.end()) {
+                if (it->submit_time_ms_ != 0 && now_ms >= it->submit_time_ms_ &&
+                    now_ms - it->submit_time_ms_ > timeout_ms) {
+                    PieceBlockRequest req = *it;
+                    req.submit_time_ms_ = 0;
+                    auto &queue = retry_requests_[req.piece_index_];
+                    const auto duplicate = std::find_if(queue.begin(), queue.end(),
+                        [&req](const PieceBlockRequest &item) {
+                            return item.offset_ == req.offset_ && item.length_ == req.length_;
+                        });
+                    if (duplicate == queue.end()) {
+                        queue.push_front(req);
+                    }
+                    timed_out.push_back(*it);
+                    it = requests.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        return timed_out;
+    }
+
     bool PieceDownloadState::select_next_request(const std::vector<bool> & peer_pieces,
                                                  const std::vector<uint32_t> * piece_availability,
                                                  uint32_t default_request_size,
                                                  size_t max_active_pieces,
+                                                 uint64_t now_ms,
                                                  PieceBlockRequest & request)
     {
         const size_t count = std::min(peer_pieces.size(), pieces_have_.size());
@@ -162,7 +195,7 @@ namespace yuan::net::bit_torrent
         sort_candidates(active_candidates);
         sort_candidates(inactive_candidates);
 
-        if (try_select_request_from_candidates(active_candidates, default_request_size, request)) {
+        if (try_select_request_from_candidates(active_candidates, default_request_size, now_ms, request)) {
             return true;
         }
 
@@ -174,7 +207,30 @@ namespace yuan::net::bit_torrent
             return false;
         }
 
-        return try_select_request_from_candidates(inactive_candidates, default_request_size, request);
+        return try_select_request_from_candidates(inactive_candidates, default_request_size, now_ms, request);
+    }
+
+    bool PieceDownloadState::select_endgame_request(const std::vector<bool> & peer_pieces,
+                                                    uint64_t now_ms,
+                                                    PieceBlockRequest & request)
+    {
+        if (!is_endgame()) {
+            return false;
+        }
+
+        const size_t count = std::min(peer_pieces.size(), pieces_have_.size());
+        for (size_t i = 0; i < count; ++i) {
+            if (pieces_have_[i] || !peer_pieces[i]) {
+                continue;
+            }
+            if (inflight_requests_[i].empty()) {
+                continue;
+            }
+            request = inflight_requests_[i].front();
+            request.submit_time_ms_ = now_ms;
+            return true;
+        }
+        return false;
     }
 
     size_t PieceDownloadState::active_piece_count() const
@@ -184,10 +240,9 @@ namespace yuan::net::bit_torrent
 
     bool PieceDownloadState::try_select_request_from_candidates(const std::vector<size_t> & candidates,
                                                                 uint32_t default_request_size,
+                                                                uint64_t now_ms,
                                                                 PieceBlockRequest & request)
     {
-        const bool endgame = is_endgame();
-
         for (const auto i : candidates) {
             const auto piece_index = static_cast<uint32_t>(i);
             const uint32_t piece_size = expected_piece_size(piece_index);
@@ -201,8 +256,9 @@ namespace yuan::net::bit_torrent
                 request = retry_queue.front();
                 retry_queue.pop_front();
                 if (request.offset_ < piece_size &&
-                    (endgame || !is_inflight(piece_index, request.offset_, request.length_))) {
+                    !is_inflight(piece_index, request.offset_, request.length_)) {
                     request.length_ = std::min(request.length_, piece_size - request.offset_);
+                    request.submit_time_ms_ = now_ms;
                     inflight_requests_[i].push_back(request);
                     return true;
                 }
@@ -212,21 +268,18 @@ namespace yuan::net::bit_torrent
             while (next_offset < piece_size) {
                 const uint32_t remaining = piece_size - next_offset;
                 const uint32_t request_length = std::min(default_request_size, remaining);
-                if (endgame || !is_inflight(piece_index, next_offset, request_length)) {
+                if (!is_inflight(piece_index, next_offset, request_length)) {
                     request.piece_index_ = piece_index;
                     request.offset_ = next_offset;
                     request.length_ = request_length;
-                    if (!endgame) {
-                        next_request_offsets_[i] = next_offset + request.length_;
-                    }
+                    request.submit_time_ms_ = now_ms;
+                    next_request_offsets_[i] = next_offset + request.length_;
                     inflight_requests_[i].push_back(request);
                     return true;
                 }
                 next_offset += request_length;
             }
-            if (!endgame) {
-                next_request_offsets_[i] = next_offset;
-            }
+            next_request_offsets_[i] = next_offset;
         }
 
         return false;

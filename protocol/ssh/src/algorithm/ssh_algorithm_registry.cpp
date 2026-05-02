@@ -161,8 +161,8 @@ namespace yuan::net::ssh
         }
 
         for (const auto &peer : peer_algos) {
-            for (const auto &pref : our_prefs) {
-                if (pref == peer)
+            for (const auto &ours : our_prefs) {
+                if (peer == ours)
                     return peer;
             }
         }

@@ -23,6 +23,7 @@ namespace yuan::net::smb
                      uint8_t *out, size_t &out_len) override;
         std::vector<uint8_t> sha512(const uint8_t *data, size_t len) override;
         std::vector<uint8_t> hmac_sha256(const std::vector<uint8_t> &key, const uint8_t *data, size_t len) override;
+        std::vector<uint8_t> hmac_sha512(const std::vector<uint8_t> &key, const uint8_t *data, size_t len) override;
 
     private:
         std::vector<uint8_t> aes128_cmac(const std::vector<uint8_t> &key, const uint8_t *data, size_t len);

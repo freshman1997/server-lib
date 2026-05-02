@@ -29,6 +29,7 @@
 #include "connection/ssh_port_forwarding.h"
 #include "connection/ssh_global_request.h"
 #include "connection/ssh_direct_tcpip_handler.h"
+#include "connection/ssh_pty_process.h"
 #include "sftp/ssh_sftp_codec.h"
 #include "sftp/ssh_file_system.h"
 #include "sftp/ssh_sftp_subsystem.h"

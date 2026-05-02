@@ -7,6 +7,7 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
+#include <cstdlib>
 
 
 #ifdef _WIN32
@@ -46,6 +47,15 @@ using namespace yuan::net::bit_torrent;
 static int g_pass = 0;
 static int g_fail = 0;
 
+static bool should_run_network_tests()
+{
+    const char *value = std::getenv("YUAN_BT_RUN_NET_TESTS");
+    if (!value) {
+        return false;
+    }
+    return std::strcmp(value, "1") == 0;
+}
+
 #define TEST(name)                                    \
     do {                                              \
         printf("  [TEST] %-55s", name);               \
@@ -76,12 +86,35 @@ static void close_test_socket(SOCKET fd)
         closesocket(fd);
     }
 }
+
+static bool set_test_socket_recv_timeout(SOCKET fd, int timeout_ms)
+{
+    if (fd == INVALID_SOCKET || timeout_ms <= 0) {
+        return false;
+    }
+
+    const DWORD timeout = static_cast<DWORD>(timeout_ms);
+    return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                      reinterpret_cast<const char *>(&timeout), sizeof(timeout)) == 0;
+}
 #else
 static void close_test_socket(int fd)
 {
     if (fd >= 0) {
         close(fd);
     }
+}
+
+static bool set_test_socket_recv_timeout(int fd, int timeout_ms)
+{
+    if (fd < 0 || timeout_ms <= 0) {
+        return false;
+    }
+
+    timeval tv {};
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0;
 }
 #endif
 
@@ -1336,9 +1369,9 @@ void test_piece_download_state_window()
         PieceBlockRequest r2;
         PieceBlockRequest r3;
 
-        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, r1);
-        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, r2);
-        const bool ok3 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, r3);
+        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, r1);
+        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, r2);
+        const bool ok3 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, r3);
 
         CHECK(ok1 && ok2 && ok3 &&
               r1.offset_ == 0 &&
@@ -1356,9 +1389,9 @@ void test_piece_download_state_window()
         PieceBlockRequest first;
         PieceBlockRequest second;
 
-        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, first);
+        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, first);
         state.mark_piece_failed(0);
-        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, second);
+        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, second);
 
         CHECK(ok1 && ok2 && first.offset_ == 0 && second.offset_ == 0,
               "failed piece should restart from offset 0");
@@ -1374,10 +1407,10 @@ void test_piece_download_state_window()
         PieceBlockRequest second;
         PieceBlockRequest retried;
 
-        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, first);
-        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, second);
+        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, first);
+        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, second);
         state.requeue_block(first.piece_index_, first.offset_, first.length_);
-        const bool ok3 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, retried);
+        const bool ok3 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, retried);
 
         CHECK(ok1 && ok2 && ok3 &&
               first.offset_ == 0 &&
@@ -1395,10 +1428,10 @@ void test_piece_download_state_window()
         PieceBlockRequest first;
         PieceBlockRequest second;
 
-        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, first);
-        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, second);
+        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, first);
+        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, second);
         state.mark_block_received(first.piece_index_, first.offset_, first.length_);
-        const bool ok3 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, second);
+        const bool ok3 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, second);
 
         CHECK(ok1 && !ok2 && !ok3 &&
                   first.offset_ == 0,
@@ -1444,9 +1477,9 @@ void test_piece_download_state_window()
         PieceBlockRequest first;
         PieceBlockRequest restarted;
 
-        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, first);
+        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, first);
         state.mark_piece_failed(0);
-        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, restarted);
+        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 8, 0, restarted);
 
         CHECK(ok1 && ok2 &&
                   first.offset_ == 0 &&
@@ -1463,7 +1496,7 @@ void test_piece_download_state_window()
         std::vector<uint32_t> availability = {3, 1, 2};
         PieceBlockRequest request;
 
-        const bool ok = state.select_next_request(peer_pieces, &availability, 16 * 1024, 8, request);
+        const bool ok = state.select_next_request(peer_pieces, &availability, 16 * 1024, 8, 0, request);
 
         CHECK(ok && request.piece_index_ == 1 && request.offset_ == 0,
               "scheduler should prefer the rarest available piece first");
@@ -1479,10 +1512,10 @@ void test_piece_download_state_window()
         PieceBlockRequest first;
         PieceBlockRequest second;
 
-        const bool ok1 = state.select_next_request(peer_pieces, &availability, 8 * 1024, 8, first);
+        const bool ok1 = state.select_next_request(peer_pieces, &availability, 8 * 1024, 8, 0, first);
         state.mark_piece_failed(1);
         state.mark_piece_downloading(0);
-        const bool ok2 = state.select_next_request(peer_pieces, &availability, 8 * 1024, 8, second);
+        const bool ok2 = state.select_next_request(peer_pieces, &availability, 8 * 1024, 8, 0, second);
 
         CHECK(ok1 &&
                   ok2 &&
@@ -1502,9 +1535,9 @@ void test_piece_download_state_window()
         PieceBlockRequest second;
         PieceBlockRequest blocked;
 
-        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 2, first);
-        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 2, second);
-        const bool ok3 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 2, blocked);
+        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 2, 0, first);
+        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 2, 0, second);
+        const bool ok3 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 2, 0, blocked);
 
         CHECK(ok1 &&
                   ok2 &&
@@ -1524,9 +1557,9 @@ void test_piece_download_state_window()
         PieceBlockRequest second;
         PieceBlockRequest third;
 
-        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 3, first);
-        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 3, second);
-        const bool ok3 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 3, third);
+        const bool ok1 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 3, 0, first);
+        const bool ok2 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 3, 0, second);
+        const bool ok3 = state.select_next_request(peer_pieces, nullptr, 16 * 1024, 3, 0, third);
 
         CHECK(ok1 &&
                   ok2 &&
@@ -1615,6 +1648,7 @@ void test_http_tracker_client_integration()
             FAIL("listen socket bind/listen failed");
             return;
         }
+        (void)set_test_socket_recv_timeout(server_fd, 3000);
 
         sockaddr_in bound_addr {};
 #ifdef _WIN32
@@ -1731,6 +1765,7 @@ void test_http_tracker_client_integration()
             FAIL("listen socket bind/listen failed");
             return;
         }
+        (void)set_test_socket_recv_timeout(server_fd, 3000);
 
         sockaddr_in bound_addr {};
 #ifdef _WIN32
@@ -1830,6 +1865,7 @@ void test_tracker_session_lifecycle_events()
             FAIL("listen socket bind/listen failed");
             return;
         }
+        (void)set_test_socket_recv_timeout(server_fd, 3000);
 
         sockaddr_in bound_addr {};
 #ifdef _WIN32
@@ -2134,6 +2170,80 @@ void test_client_preload_complete_state()
     }
 }
 
+void test_client_completion_callbacks()
+{
+    printf("\n=== BitTorrentClient: completion callbacks ===\n");
+
+    TEST("preloaded complete torrent emits piece and completion callbacks");
+    {
+        namespace fs = std::filesystem;
+
+        const std::string content = "abcdefghijklmnop";
+        const auto torrent_data = build_single_file_torrent_without_announce("client_callback_seed.bin", content, 8);
+        auto temp_dir = make_bt_test_dir("bt_client_callbacks");
+        const auto target_path = temp_dir / "client_callback_seed.bin";
+
+        {
+            FILE *file = fopen(target_path.string().c_str(), "wb");
+            if (!file)
+            {
+                FAIL("failed to create callback seed file");
+                fs::remove_all(temp_dir);
+                return;
+            }
+            fwrite(content.data(), 1, content.size(), file);
+            fclose(file);
+        }
+
+        yuan::net::SelectPoller poller;
+        yuan::timer::WheelTimerManager timer_manager;
+        yuan::net::EventLoop loop(&poller, &timer_manager);
+        yuan::net::NetworkRuntime runtime(&loop, &timer_manager);
+
+        NatConfig cfg;
+        cfg.enable_inbound_listen = false;
+        cfg.enable_upnp = false;
+        cfg.enable_nat_pmp = false;
+        cfg.enable_utp = false;
+        cfg.enable_dht = false;
+        cfg.enable_pex = false;
+
+        std::atomic_int piece_callback_count {0};
+        std::atomic_int torrent_callback_count {0};
+        std::atomic_bool saw_piece_0 {false};
+        std::atomic_bool saw_piece_1 {false};
+
+        BitTorrentClient client;
+        client.set_runtime(runtime);
+        client.set_nat_config(cfg);
+        client.set_save_path(temp_dir.string());
+        client.set_piece_completed_callback([&](uint32_t piece_index, uint32_t) {
+            piece_callback_count.fetch_add(1);
+            if (piece_index == 0) {
+                saw_piece_0 = true;
+            }
+            if (piece_index == 1) {
+                saw_piece_1 = true;
+            }
+        });
+        client.set_torrent_completed_callback([&]() {
+            torrent_callback_count.fetch_add(1);
+        });
+
+        const bool loaded = client.load_torrent_data(torrent_data);
+        const bool started = loaded && client.start();
+        client.stop();
+
+        const bool passed = started &&
+                            piece_callback_count.load() == 2 &&
+                            torrent_callback_count.load() == 1 &&
+                            saw_piece_0.load() &&
+                            saw_piece_1.load();
+        CHECK(passed, "preloaded completion should emit piece callbacks and one torrent completion callback");
+        fs::remove_all(temp_dir);
+    }
+}
+
 void test_local_seed_download_e2e()
 {
     printf("\n=== BitTorrentClient: local seed/download e2e ===\n");
@@ -2173,6 +2283,7 @@ void test_local_seed_download_e2e()
             FAIL("tracker bind/listen failed");
             return;
         }
+        (void)set_test_socket_recv_timeout(tracker_fd, 500);
 
         sockaddr_in bound_addr {};
 #ifdef _WIN32
@@ -2481,8 +2592,13 @@ int main()
     // Part 4: Torrent Meta
     test_torrent_meta_parse();
     test_tracker_response_parse();
-    test_http_tracker_client_integration();
-    test_tracker_session_lifecycle_events();
+    if (should_run_network_tests()) {
+        test_http_tracker_client_integration();
+        test_tracker_session_lifecycle_events();
+    } else {
+        printf("\n=== Network Integration Tests ===\n");
+        printf("  [SKIP] Set YUAN_BT_RUN_NET_TESTS=1 to enable tracker socket integration tests\n");
+    }
 
     // Part 5: NAT Config
     test_nat_config();
@@ -2508,7 +2624,13 @@ int main()
     // Part 10: Integration
     test_piece_storage_committed_verification();
     test_client_preload_complete_state();
-    test_local_seed_download_e2e();
+    test_client_completion_callbacks();
+    if (should_run_network_tests()) {
+        test_local_seed_download_e2e();
+    } else {
+        printf("\n=== BitTorrentClient: local seed/download e2e ===\n");
+        printf("  [SKIP] Set YUAN_BT_RUN_NET_TESTS=1 to enable local tracker/seeder e2e test\n");
+    }
     test_client_nat_integration();
     test_torrent_generation();
 

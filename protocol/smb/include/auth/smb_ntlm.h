@@ -57,6 +57,7 @@ namespace yuan::net::smb
 
         void set_credentials_db(std::function<bool(const std::string &, const std::string &, const std::string &)> validator);
         void set_password_lookup(std::function<std::optional<std::string>(const std::string &, const std::string &)> lookup);
+        void set_nt_hash_lookup(std::function<std::optional<std::string>(const std::string &, const std::string &)> lookup);
 
         static std::optional<NtlmType1Message> parse_type1(const uint8_t *data, size_t len);
         static std::optional<NtlmType3Message> parse_type3(const uint8_t *data, size_t len);
@@ -94,6 +95,7 @@ namespace yuan::net::smb
         uint32_t negotiate_flags_ = 0;
         std::function<bool(const std::string &, const std::string &, const std::string &)> credential_validator_;
         std::function<std::optional<std::string>(const std::string &, const std::string &)> password_lookup_;
+        std::function<std::optional<std::string>(const std::string &, const std::string &)> nt_hash_lookup_;
     };
 }
 #endif

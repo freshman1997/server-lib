@@ -4,6 +4,8 @@
 #include "nat/utp_connection.h"
 #include "nat/dht_node.h"
 #include "nat/pex_manager.h"
+#include "nat/metadata_manager.h"
+#include "structure/bencoding.h"
 #include "peer_wire/peer_wire_message.h"
 #include "peer_wire/peer_connection.h"
 #include "timer/timer.h"
@@ -32,6 +34,10 @@ namespace yuan::net::bit_torrent
             return;
 
         config_ = config;
+        if (meta.info.private_) {
+            config_.enable_dht = false;
+            config_.enable_pex = false;
+        }
         runtime_ = runtime;
         info_hash_ = meta.info_hash_;
         peer_id_ = peer_id;
@@ -41,6 +47,9 @@ namespace yuan::net::bit_torrent
         if (config_.enable_inbound_listen) {
             peer_listener_ = std::make_unique<PeerListener>();
             peer_listener_->start(config, meta, peer_id, pieces_have, runtime);
+            int32_t max_pending = config.max_active_connections / 2;
+            if (max_pending < 10) max_pending = 10;
+            peer_listener_->set_max_pending(max_pending);
             peer_listener_->set_new_peer_callback([this](std::shared_ptr<PeerConnection> peer) {
             on_new_tcp_peer(std::move(peer));
             });
@@ -69,8 +78,14 @@ namespace yuan::net::bit_torrent
         if (config_.enable_dht) {
             dht_node_ = std::make_unique<DhtNode>();
             if (dht_node_->start(config, runtime, external_ip_)) {
+                if (!dht_cache_path_.empty()) {
+                    dht_node_->load_routing_table(dht_cache_path_);
+                }
                 int32_t announce_port = peer_listener_ ? peer_listener_->get_actual_port() : config_.listen_port;
                 dht_node_->announce(info_hash_, static_cast<uint16_t>(announce_port));
+                dht_node_->set_peer_callback([this](const std::vector<PeerAddress> &peers) {
+                    on_dht_peers(peers);
+                });
             } else {
                 dht_node_.reset();
             }
@@ -89,6 +104,9 @@ namespace yuan::net::bit_torrent
             }
             });
         }
+
+        metadata_manager_ = std::make_unique<MetadataManager>();
+        metadata_manager_->init(info_hash_);
     }
 
     void NatManager::stop()
@@ -110,11 +128,17 @@ namespace yuan::net::bit_torrent
             utp_manager_.reset();
         }
         if (dht_node_) {
+            if (!dht_cache_path_.empty()) {
+                dht_node_->save_routing_table(dht_cache_path_);
+            }
             dht_node_->stop();
             dht_node_.reset();
         }
         if (pex_manager_) {
             pex_manager_.reset();
+        }
+        if (metadata_manager_) {
+            metadata_manager_.reset();
         }
         utp_peers_.clear();
 
@@ -126,17 +150,78 @@ namespace yuan::net::bit_torrent
     {
         if (pex_manager_) {
             pex_manager_->add_peer(peer->get_peer_ip(), peer->get_peer_port());
+        }
 
-            if (peer->get_peer_state().supports_extensions) {
-                auto ext_hs = pex_manager_->build_ext_handshake();
-                peer->send_extended(0, ext_hs.data(), ext_hs.size());
+        if (peer->get_peer_state().supports_extensions) {
+            std::vector<uint8_t> ext_hs;
+            if (pex_manager_ && metadata_manager_) {
+                auto pex_hs = pex_manager_->build_ext_handshake();
+                auto meta_hs = metadata_manager_->build_ext_handshake();
 
-                peer->set_extended_message_handler(
-                    [this, key](PeerConnection *, uint8_t ext_id,
-                                const uint8_t *payload, size_t len) {
-                        pex_manager_->on_extended_message(key, ext_id, payload, len);
-                    });
+                std::string combined;
+                combined += "d1:md";
+
+                std::string pex_str(reinterpret_cast<const char *>(pex_hs.data()), pex_hs.size());
+                auto pex_parsed = BencodingDataConverter::parse(pex_str);
+                if (pex_parsed && pex_parsed->type_ == DataType::dictionary_) {
+                    auto *pex_dict = static_cast<DicttionaryData *>(pex_parsed);
+                    if (auto *m = pex_dict->get_val("m"); m && m->type_ == DataType::dictionary_) {
+                        auto *m_dict = static_cast<DicttionaryData *>(m);
+                        for (const auto &kv : m_dict->get_items()) {
+                            if (kv.second->type_ == DataType::integer_) {
+                                combined += std::to_string(kv.first.size()) + ":" + kv.first;
+                                combined += "i" + std::to_string(static_cast<IntegerData *>(kv.second)->get_data()) + "e";
+                            }
+                        }
+                    }
+                }
+                delete pex_parsed;
+
+                std::string meta_str(reinterpret_cast<const char *>(meta_hs.data()), meta_hs.size());
+                auto meta_parsed = BencodingDataConverter::parse(meta_str);
+                if (meta_parsed && meta_parsed->type_ == DataType::dictionary_) {
+                    auto *meta_dict = static_cast<DicttionaryData *>(meta_parsed);
+                    if (auto *m = meta_dict->get_val("m"); m && m->type_ == DataType::dictionary_) {
+                        auto *m_dict = static_cast<DicttionaryData *>(m);
+                        for (const auto &kv : m_dict->get_items()) {
+                            if (kv.second->type_ == DataType::integer_) {
+                                combined += std::to_string(kv.first.size()) + ":" + kv.first;
+                                combined += "i" + std::to_string(static_cast<IntegerData *>(kv.second)->get_data()) + "e";
+                            }
+                        }
+                    }
+                    if (auto *v = meta_dict->get_val("metadata_size"); v && v->type_ == DataType::integer_) {
+                        combined += "13:metadata_size";
+                        combined += "i" + std::to_string(static_cast<IntegerData *>(v)->get_data()) + "e";
+                    }
+                }
+                delete meta_parsed;
+
+                combined += "e1:v6:YZ00014:reqqi50e";
+                ext_hs.assign(combined.begin(), combined.end());
+            } else if (pex_manager_) {
+                ext_hs = pex_manager_->build_ext_handshake();
+            } else if (metadata_manager_) {
+                ext_hs = metadata_manager_->build_ext_handshake();
             }
+
+            if (!ext_hs.empty()) {
+                peer->send_extended(0, ext_hs.data(), ext_hs.size());
+            }
+
+            peer->set_extended_message_handler(
+                [this, key](PeerConnection *p, uint8_t ext_id,
+                            const uint8_t *payload, size_t len) {
+                    if (pex_manager_) {
+                        pex_manager_->on_extended_message(key, ext_id, payload, len);
+                    }
+                    if (metadata_manager_) {
+                        metadata_manager_->on_extended_message(p, key, ext_id, payload, len);
+                        if (!metadata_manager_->has_metadata()) {
+                            metadata_manager_->request_metadata_from_peer(p, key);
+                        }
+                    }
+                });
         }
     }
 

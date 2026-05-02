@@ -19,6 +19,8 @@ namespace yuan::net::bit_torrent
         piece_request_handler_ = std::move(config.piece_request_handler_);
         piece_served_handler_ = std::move(config.piece_served_handler_);
         peer_ready_handler_ = std::move(config.peer_ready_handler_);
+        peer_unchoke_handler_ = std::move(config.peer_unchoke_handler_);
+        peer_reject_handler_ = std::move(config.peer_reject_handler_);
         peer_lost_handler_ = std::move(config.peer_lost_handler_);
     }
 
@@ -73,6 +75,16 @@ namespace yuan::net::bit_torrent
         peer->set_piece_served_handler(piece_served_handler_);
         peer->set_on_state_change([this](PeerConnection *p) {
         on_peer_state_changed(p);
+        });
+        peer->set_on_unchoke([this](PeerConnection *p) {
+        if (peer_unchoke_handler_) {
+            peer_unchoke_handler_(p);
+        }
+        });
+        peer->set_reject_request_handler([this](PeerConnection *p, uint32_t piece, uint32_t offset, uint32_t length) {
+        if (peer_reject_handler_) {
+            peer_reject_handler_(p, piece, offset, length);
+        }
         });
     }
 
@@ -173,6 +185,9 @@ namespace yuan::net::bit_torrent
     void PeerSession::on_inbound_peer(std::shared_ptr<PeerConnection> peer)
     {
         if (!peer || !meta_ || !peer_id_ || !pieces_have_) {
+            if (peer) {
+                peer->disconnect();
+            }
             return;
         }
 
@@ -181,6 +196,7 @@ namespace yuan::net::bit_torrent
         {
             std::lock_guard<std::mutex> lock(peers_mutex_);
             if (static_cast<int32_t>(peers_.size()) >= max_peers_ || peers_.count(key)) {
+                peer->disconnect();
                 return;
             }
 

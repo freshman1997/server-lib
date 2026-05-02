@@ -32,10 +32,10 @@ namespace yuan::server
                              const std::string &domain) override;
         std::optional<std::string> on_password_lookup(yuan::net::smb::SmbSession *session,
                                                       const std::string &user,
-                                                      const std::string &domain);
+                                                      const std::string &domain) override;
         std::optional<std::string> on_nt_hash_lookup(yuan::net::smb::SmbSession *session,
                                                      const std::string &user,
-                                                     const std::string &domain);
+                                                     const std::string &domain) override;
         bool on_tree_connect(yuan::net::smb::SmbSession *session, const std::string &path) override;
         void on_logoff(yuan::net::smb::SmbSession *session) override;
         void on_session_closed(yuan::net::smb::SmbSession *session) override;

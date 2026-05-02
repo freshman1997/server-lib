@@ -63,15 +63,15 @@ namespace yuan::net::ssh
                                                const std::vector<uint8_t> &data) const;
         ByteBuffer build_channel_eof(uint32_t recipient) const;
         ByteBuffer build_channel_close(uint32_t recipient) const;
+        ByteBuffer build_window_adjust(uint32_t recipient, uint32_t bytes) const;
+        ByteBuffer build_channel_success(uint32_t recipient) const;
+        ByteBuffer build_channel_failure(uint32_t recipient) const;
         ByteBuffer build_channel_exit_status(uint32_t recipient, uint32_t exit_status) const;
         ByteBuffer build_channel_exit_signal(uint32_t recipient,
                                              const std::string &signal_name,
                                              bool core_dumped,
                                              const std::string &error_message,
                                              const std::string &language_tag) const;
-        ByteBuffer build_window_adjust(uint32_t recipient, uint32_t bytes) const;
-        ByteBuffer build_channel_success(uint32_t recipient) const;
-        ByteBuffer build_channel_failure(uint32_t recipient) const;
 
         ByteBuffer build_request_success(const std::vector<uint8_t> &data = {}) const;
         ByteBuffer build_request_failure() const;

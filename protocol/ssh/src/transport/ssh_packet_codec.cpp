@@ -6,6 +6,10 @@ namespace yuan::net::ssh
 {
     size_t SshPacketCodec::calculate_padding(size_t payload_len, size_t block_size)
     {
+        // RFC 4253: packet_length field is NOT encrypted-block aligned part,
+        // alignment applies to: padding_length(1) + payload + random_padding.
+        // Since final on-wire encrypted bytes include packet_length(4),
+        // choose padding so that (4 + 1 + payload + padding) is block-aligned.
         size_t unpadded = 4 + 1 + payload_len;
         size_t pad = block_size - (unpadded % block_size);
         if (pad < kMinPadding)

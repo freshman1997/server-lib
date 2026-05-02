@@ -78,8 +78,8 @@ static std::vector<uint8_t> build_test_type3(const std::string &user,
     test_write_le32(msg, 8, NTLMSSP_MESSAGE_TYPE_AUTHENTICATE);
     append_security_buffer(msg, 12, {});
     append_security_buffer(msg, 20, nt_response);
-    append_security_buffer(msg, 28, utf16_bytes(user));
-    append_security_buffer(msg, 36, utf16_bytes(domain));
+    append_security_buffer(msg, 28, utf16_bytes(domain));
+    append_security_buffer(msg, 36, utf16_bytes(user));
     append_security_buffer(msg, 44, utf16_bytes(workstation));
     append_security_buffer(msg, 52, {});
     test_write_le32(msg, 60, NTLMSSP_NEGOTIATE_UNICODE | NTLMSSP_NEGOTIATE_NTLM |
@@ -731,6 +731,52 @@ bool test_ntlmv2_password_proof_auth()
     return true;
 }
 
+bool test_ntlmv2_nt_hash_proof_auth()
+{
+    SmbNtlmAuth ntlm("TESTSERVER", "DOMAIN");
+    ntlm.set_nt_hash_lookup([](const std::string &user, const std::string &domain)->std::optional<std::string> {
+        if (user != "alice" || domain != "DOMAIN") {
+            return std::nullopt;
+        }
+        return std::string("nthash:878d8014606cda29677a44efa1353fc7");
+    });
+    ntlm.set_credentials_db([](const std::string &user, const std::string &domain, const std::string &password)->bool {
+        return user == "alice" && domain == "DOMAIN" && password.empty();
+    });
+
+    const std::vector<uint8_t> type1 = {
+        'N', 'T', 'L', 'M', 'S', 'S', 'P', '\0',
+        0x01, 0x00, 0x00, 0x00,
+        static_cast<uint8_t>(NTLMSSP_NEGOTIATE_UNICODE & 0xFF),
+        static_cast<uint8_t>((NTLMSSP_NEGOTIATE_NTLM >> 8) & 0xFF),
+        static_cast<uint8_t>((NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY >> 16) & 0xFF),
+        0x00
+    };
+    auto type2 = ntlm.process_inbound_token(type1);
+    TEST_ASSERT(type2.size() >= 48, "NT hash auth should issue Type2 challenge");
+
+    std::array<uint8_t, 8> challenge{};
+    std::memcpy(challenge.data(), type2.data() + 24, challenge.size());
+    const uint16_t target_info_len = static_cast<uint16_t>(type2[40] | (type2[41] << 8));
+    const uint32_t target_info_offset = static_cast<uint32_t>(type2[44]) |
+                                        (static_cast<uint32_t>(type2[45]) << 8) |
+                                        (static_cast<uint32_t>(type2[46]) << 16) |
+                                        (static_cast<uint32_t>(type2[47]) << 24);
+    TEST_ASSERT(target_info_offset + target_info_len <= type2.size(), "Type2 target info should be in range");
+
+    std::vector<uint8_t> blob(type2.begin() + target_info_offset,
+                              type2.begin() + target_info_offset + target_info_len);
+    auto response = SmbNtlmAuth::ntlmv2_response("nthash-secret", "alice", "DOMAIN", challenge, blob);
+    auto type3 = build_test_type3("alice", "DOMAIN", "WORKSTATION", response);
+    auto final = ntlm.process_inbound_token(type3);
+    TEST_ASSERT(final.empty(), "NT hash auth should not need outbound token after Type3");
+    TEST_ASSERT(ntlm.is_complete(), "NT hash auth should complete after Type3");
+    TEST_ASSERT(ntlm.result().success, "NT hash auth should accept valid NTLMv2 proof");
+    TEST_ASSERT(!ntlm.result().session_key.empty(), "NT hash auth should derive a session key");
+
+    return true;
+}
+
 bool test_spnego_auth()
 {
     SmbSpnegoAuth spnego("MYSERVER", "WORKGROUP");
@@ -739,6 +785,144 @@ bool test_spnego_auth()
 
     auto initial = spnego.process_inbound_token({});
     TEST_ASSERT(!initial.empty(), "Should produce initial SPNEGO token");
+
+    const uint8_t expected[] = {
+        0x60, 0x1A,
+        0x06, 0x06, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x02,
+        0x30, 0x10,
+        0xA0, 0x0E,
+        0x30, 0x0C,
+        0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82,
+        0x37, 0x02, 0x02, 0x0A
+    };
+    TEST_ASSERT(initial.size() == sizeof(expected),
+                "Initial SPNEGO token size mismatch");
+    TEST_ASSERT(std::memcmp(initial.data(), expected, sizeof(expected)) == 0,
+                "Initial SPNEGO token bytes must match expected NegTokenInit");
+
+    return true;
+}
+
+bool test_spnego_auth_accepts_oid_only_init()
+{
+    SmbSpnegoAuth spnego("MYSERVER", "WORKGROUP");
+
+    const std::vector<uint8_t> token = {
+        0xA0, 0x16,
+        0x30, 0x14,
+        0xA0, 0x0E,
+        0x30, 0x0C,
+        0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82,
+        0x37, 0x02, 0x02, 0x0A,
+        0xA2, 0x02, 0x04, 0x00
+    };
+
+    auto response = spnego.process_inbound_token(token);
+    TEST_ASSERT(!response.empty(), "SPNEGO should accept Samba OID-only init token");
+    TEST_ASSERT(spnego.state() == AuthState::challenge_sent,
+                "OID-only init should advance auth state to challenge_sent");
+
+    TEST_ASSERT(response[0] == 0xA1,
+                "Response to client NegTokenInit must be NegTokenResp (tag 0xA1)");
+    TEST_ASSERT(response.size() >= 4,
+                "NegTokenResp must have at least tag, length, inner seq");
+
+    bool found_neg_result = false;
+    for (size_t i = 0; i + 5 <= response.size(); ++i) {
+        if (response[i] == 0xA0 && response[i + 2] == 0x0A &&
+            response[i + 3] == 0x01) {
+            TEST_ASSERT(response[i + 4] == 0x01,
+                        "negResult must be accept-incomplete (1) during challenge");
+            found_neg_result = true;
+            break;
+        }
+    }
+    TEST_ASSERT(found_neg_result,
+                "NegTokenResp must contain negResult with ENUMERATED tag (0x0A) and value accept-incomplete");
+
+    const uint8_t ntlmssp_sig[] = { 'N', 'T', 'L', 'M', 'S', 'S', 'P', '\0' };
+    bool found_ntlmssp = false;
+    for (size_t i = 0; i + 8 <= response.size(); ++i) {
+        if (std::memcmp(response.data() + i, ntlmssp_sig, 8) == 0) {
+            found_ntlmssp = true;
+            uint8_t msg_type = response[i + 8] | (response[i + 9] << 8);
+            TEST_ASSERT(msg_type == 0x0002,
+                        "NegTokenResp mechToken must contain NTLM Type 2 (Challenge)");
+            break;
+        }
+    }
+    TEST_ASSERT(found_ntlmssp,
+                "NegTokenResp must contain NTLMSSP challenge blob");
+
+    return true;
+}
+
+bool test_spnego_auth_extracts_mechtoken_from_der_init()
+{
+    SmbSpnegoAuth spnego("MYSERVER", "WORKGROUP");
+
+    const std::vector<uint8_t> token = {
+        0x60, 0x30,
+        0x06, 0x06, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x02,
+        0xA0, 0x26,
+        0x30, 0x24,
+        0xA0, 0x0E,
+        0x30, 0x0C,
+        0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82,
+        0x37, 0x02, 0x02, 0x0A,
+        0xA2, 0x12,
+        0x04, 0x10,
+        'N', 'T', 'L', 'M', 'S', 'S', 'P', '\0',
+        0x01, 0x00, 0x00, 0x00,
+        0x07, 0x82, 0x08, 0xA0
+    };
+
+    const uint8_t expected_mechtoken[] = {
+        'N', 'T', 'L', 'M', 'S', 'S', 'P', '\0',
+        0x01, 0x00, 0x00, 0x00,
+        0x07, 0x82, 0x08, 0xA0
+    };
+
+    auto extracted = spnego.extract_mech_token_for_test(token);
+    TEST_ASSERT(extracted.size() == sizeof(expected_mechtoken),
+                "DER NegTokenInit mechToken size mismatch");
+    TEST_ASSERT(std::memcmp(extracted.data(), expected_mechtoken, sizeof(expected_mechtoken)) == 0,
+                "DER NegTokenInit mechToken bytes must match expected NTLM NEGOTIATE");
+
+    auto response = spnego.process_inbound_token(token);
+    TEST_ASSERT(!response.empty(), "DER NegTokenInit with mechToken should produce a challenge response");
+    TEST_ASSERT(spnego.state() == AuthState::challenge_sent,
+                "DER NegTokenInit should drive NTLM challenge generation");
+
+    TEST_ASSERT(response[0] == 0xA1,
+                "Response must be NegTokenResp (tag 0xA1)");
+
+    bool found_neg_result = false;
+    for (size_t i = 0; i + 5 <= response.size(); ++i) {
+        if (response[i] == 0xA0 && response[i + 2] == 0x0A &&
+            response[i + 3] == 0x01) {
+            TEST_ASSERT(response[i + 4] == 0x01,
+                        "negResult must be accept-incomplete (1) during challenge");
+            found_neg_result = true;
+            break;
+        }
+    }
+    TEST_ASSERT(found_neg_result,
+                "NegTokenResp must contain negResult with ENUMERATED tag (0x0A)");
+
+    const uint8_t ntlmssp_sig[] = { 'N', 'T', 'L', 'M', 'S', 'S', 'P', '\0' };
+    bool found_challenge = false;
+    for (size_t i = 0; i + 10 <= response.size(); ++i) {
+        if (std::memcmp(response.data() + i, ntlmssp_sig, 8) == 0) {
+            uint8_t msg_type = response[i + 8] | (response[i + 9] << 8);
+            TEST_ASSERT(msg_type == 0x0002,
+                        "Response must contain NTLM Type 2 (Challenge)");
+            found_challenge = true;
+            break;
+        }
+    }
+    TEST_ASSERT(found_challenge,
+                "NegTokenResp must contain NTLMSSP challenge blob");
 
     return true;
 }
@@ -847,6 +1031,12 @@ bool test_key_derivation()
     auto signing_key_30 = SmbKeyDerivation::derive_signing_key(
         session_key, DialectRevision::SMB_3_0, {});
     TEST_ASSERT(!signing_key_30.empty(), "Should derive SMB3.0 signing key");
+
+    std::vector<uint8_t> fake_preauth_hash(64, 0xA5);
+    auto signing_key_30_with_preauth = SmbKeyDerivation::derive_signing_key(
+        session_key, DialectRevision::SMB_3_0, fake_preauth_hash);
+    TEST_ASSERT(signing_key_30_with_preauth == signing_key_30,
+                "SMB3.0 signing key derivation should ignore preauth hash and use SmbSign context");
 
     auto signing_key_21 = SmbKeyDerivation::derive_signing_key(
         session_key, DialectRevision::SMB_2_1, {});
@@ -1001,9 +1191,10 @@ bool test_local_file_system_set_info_rename_delete()
     auto delete_status = fs.set_info(open_result.handle, FileInfoClass::FileDispositionInformation,
                                      delete_info, sizeof(delete_info));
     TEST_ASSERT(delete_status == NtStatus::SUCCESS, "Delete via FileDispositionInformation should succeed");
-    TEST_ASSERT(!std::filesystem::exists(test_dir + "/new.txt"), "Deleted file should be gone");
+    TEST_ASSERT(std::filesystem::exists(test_dir + "/new.txt"), "Delete-on-close should defer removal until close");
 
     fs.close(open_result.handle);
+    TEST_ASSERT(!std::filesystem::exists(test_dir + "/new.txt"), "Deleted file should be gone after close");
     std::filesystem::remove_all(test_dir);
     return true;
 }
@@ -1190,6 +1381,79 @@ bool test_dispatcher_negotiate_conservative_capabilities()
     return true;
 }
 
+bool test_negotiate_response_layout_for_smb311()
+{
+    Smb2Header hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
+    hdr.protocol_id = SMB2_PROTOCOL_ID;
+    hdr.command = static_cast<uint16_t>(Smb2Command::NEGOTIATE);
+    hdr.message_id = 7;
+
+    Smb2NegotiateResponse resp;
+    resp.dialect_revision = static_cast<uint16_t>(DialectRevision::SMB_3_1_1);
+    resp.security_mode = static_cast<uint16_t>(SecurityMode::NEGOTIATE_SIGNING_ENABLED);
+    resp.capabilities = SMB2_GLOBAL_CAP_LARGE_MTU;
+    resp.max_transact_size = 65536;
+    resp.max_read_size = 65536;
+    resp.max_write_size = 65536;
+    resp.system_time = 1;
+    resp.server_start_time = 1;
+    resp.security_buffer = {0x60, 0x03, 0x06, 0x01};
+
+    ByteBuffer preauth_buf(64);
+    Smb2Codec::write_le16(preauth_buf, 1);
+    Smb2Codec::write_le16(preauth_buf, 32);
+    Smb2Codec::write_le16(preauth_buf, static_cast<uint16_t>(SMB2_PREAUTH_INTEGRITY_CAP_SHA_512));
+    for (int i = 0; i < 32; ++i) {
+        preauth_buf.append_u8(static_cast<uint8_t>(i + 1));
+    }
+    NegotiateContext preauth;
+    preauth.context_type = 0x0001;
+    auto preauth_span = preauth_buf.readable_span();
+    preauth.data.assign(reinterpret_cast<const uint8_t *>(preauth_span.data()),
+                        reinterpret_cast<const uint8_t *>(preauth_span.data()) + preauth_span.size());
+
+    ByteBuffer encryption_buf(16);
+    Smb2Codec::write_le16(encryption_buf, 2);
+    Smb2Codec::write_le16(encryption_buf, static_cast<uint16_t>(EncryptionAlgorithm::AES_128_GCM));
+    Smb2Codec::write_le16(encryption_buf, static_cast<uint16_t>(EncryptionAlgorithm::AES_128_CCM));
+    NegotiateContext encryption;
+    encryption.context_type = 0x0002;
+    auto encryption_span = encryption_buf.readable_span();
+    encryption.data.assign(reinterpret_cast<const uint8_t *>(encryption_span.data()),
+                           reinterpret_cast<const uint8_t *>(encryption_span.data()) + encryption_span.size());
+
+    auto ctx_buf = Smb2Codec::encode_negotiate_contexts({preauth, encryption});
+    auto ctx_span = ctx_buf.readable_span();
+    resp.negotiate_context.assign(reinterpret_cast<const uint8_t *>(ctx_span.data()),
+                                  reinterpret_cast<const uint8_t *>(ctx_span.data()) + ctx_span.size());
+    resp.negotiate_context_count = 2;
+
+    auto encoded = Smb2Codec::encode_negotiate_response(hdr, resp);
+    auto span = encoded.readable_span();
+    const auto *raw = reinterpret_cast<const uint8_t *>(span.data());
+
+    TEST_ASSERT(span.size() >= SMB2_HEADER_SIZE + 64, "SMB3.1.1 negotiate response should include fixed body");
+    TEST_ASSERT(Smb2Codec::read_le16(raw + SMB2_HEADER_SIZE + 4) ==
+                    static_cast<uint16_t>(DialectRevision::SMB_3_1_1),
+                "Dialect should be encoded at negotiate response offset 4");
+    TEST_ASSERT(Smb2Codec::read_le16(raw + SMB2_HEADER_SIZE + 6) == 2,
+                "Negotiate context count should occupy SMB3.1.1 reserved field");
+    TEST_ASSERT(Smb2Codec::read_le16(raw + SMB2_HEADER_SIZE + 56) == SMB2_HEADER_SIZE + 64,
+                "Security buffer offset should point immediately after fixed body");
+    TEST_ASSERT(Smb2Codec::read_le16(raw + SMB2_HEADER_SIZE + 58) == resp.security_buffer.size(),
+                "Security buffer length should match encoded token size");
+
+    const uint32_t ctx_offset = Smb2Codec::read_le32(raw + SMB2_HEADER_SIZE + 60);
+    const uint32_t expected_ctx_offset = (SMB2_HEADER_SIZE + 64 + resp.security_buffer.size() + 7u) & ~7u;
+    TEST_ASSERT(ctx_offset == expected_ctx_offset,
+                "Negotiate context offset should be aligned after security buffer");
+    TEST_ASSERT(ctx_offset + resp.negotiate_context.size() <= span.size(),
+                "Negotiate contexts should fit within encoded response");
+
+    return true;
+}
+
 bool test_dispatcher_query_filesystem_info()
 {
     std::string test_dir = "/tmp/smb_fs_info_test_" + std::to_string(std::hash<std::thread::id> {}(std::this_thread::get_id()));
@@ -1227,7 +1491,7 @@ bool test_dispatcher_query_filesystem_info()
     TEST_ASSERT(open_result.success, "Open share root for filesystem info should succeed");
 
     FileId fid = session->allocate_file_id();
-    OpenFile of;
+    yuan::net::smb::OpenFile of;
     of.file_id = fid;
     of.path = test_dir;
     of.is_directory = true;
@@ -1403,6 +1667,75 @@ bool test_dispatcher_ioctl_query_network_interface_info()
     return true;
 }
 
+bool test_dispatcher_ioctl_permission_denied()
+{
+    class DenyIoctlHandler final : public SmbHandler
+    {
+    public:
+        bool called = false;
+        uint32_t last_ctl_code = 0;
+
+        bool on_ioctl(SmbSession *, const FileId &, uint32_t ctl_code) override
+        {
+            called = true;
+            last_ctl_code = ctl_code;
+            return false;
+        }
+    };
+
+    SmbServerConfig config;
+    SmbShareManager share_mgr;
+    SmbLockManager lock_mgr;
+    SmbPipeManager pipe_mgr;
+    SmbDfsResolver dfs;
+    SmbChangeNotifier cn;
+    DenyIoctlHandler handler;
+    SmbDispatcher disp(config, share_mgr, lock_mgr, pipe_mgr, dfs, cn, &handler);
+
+    SmbSessionManager session_mgr;
+    SmbSession *session = session_mgr.create_session(nullptr);
+
+    Smb2Header hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
+    hdr.protocol_id = SMB2_PROTOCOL_ID;
+    hdr.command = static_cast<uint16_t>(Smb2Command::IOCTL);
+    hdr.session_id = session->session_id();
+    hdr.credit_request = 1;
+
+    ByteBuffer req_buf = Smb2Codec::encode_header(hdr);
+    Smb2Codec::write_le16(req_buf, 57);
+    Smb2Codec::write_le16(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, FSCTL_QUERY_NETWORK_INTERFACE_INFO);
+    Smb2Codec::write_le64(req_buf, 0);
+    Smb2Codec::write_le64(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 1024);
+    Smb2Codec::write_le32(req_buf, 1);
+    Smb2Codec::write_le32(req_buf, 0);
+    req_buf.append_u8(0);
+
+    auto span = req_buf.readable_span();
+    auto resp = disp.dispatch(*session, hdr,
+                              reinterpret_cast<const uint8_t *>(span.data()),
+                              span.size());
+    auto resp_span = resp.readable_span();
+    const auto *raw = reinterpret_cast<const uint8_t *>(resp_span.data());
+    auto resp_hdr = Smb2Codec::decode_header(raw, resp_span.size());
+    TEST_ASSERT(resp_hdr.has_value(), "Should decode denied ioctl response");
+    TEST_ASSERT(resp_hdr->status == static_cast<uint32_t>(NtStatus::ACCESS_DENIED),
+                "Denied ioctl should map to ACCESS_DENIED");
+    TEST_ASSERT(handler.called, "Denied ioctl should invoke handler hook");
+    TEST_ASSERT(handler.last_ctl_code == FSCTL_QUERY_NETWORK_INTERFACE_INFO,
+                "Denied ioctl should forward ctl code to handler");
+
+    session_mgr.remove_session(session->session_id());
+    return true;
+}
+
 bool test_dispatcher_change_notify_completes_empty()
 {
     SmbServerConfig config;
@@ -1452,6 +1785,161 @@ bool test_dispatcher_change_notify_completes_empty()
                 "Change notify fallback should return empty buffer");
 
     session_mgr.remove_session(session->session_id());
+    return true;
+}
+
+bool test_dispatcher_set_info_permission_hooks()
+{
+    class RecordingHandler final : public SmbHandler
+    {
+    public:
+        bool allow_rename = false;
+        bool allow_delete = false;
+        bool rename_called = false;
+        bool delete_called = false;
+        std::string last_rename_path;
+
+        bool on_set_info(SmbSession *, const FileId &) override
+        {
+            return true;
+        }
+
+        bool on_rename(SmbSession *, const FileId &, const std::string &new_path) override
+        {
+            rename_called = true;
+            last_rename_path = new_path;
+            return allow_rename;
+        }
+
+        bool on_delete(SmbSession *, const FileId &) override
+        {
+            delete_called = true;
+            return allow_delete;
+        }
+    };
+
+    std::string test_dir = "/tmp/smb_dispatcher_set_info_perm_" + std::to_string(std::hash<std::thread::id> {}(std::this_thread::get_id()));
+    std::filesystem::create_directories(test_dir);
+    {
+        std::ofstream ofs(test_dir + "/old.txt");
+        ofs << "dispatcher set info" << std::endl;
+    }
+
+    SmbServerConfig config;
+    SmbShareManager share_mgr;
+    SmbShareConfig share_cfg;
+    share_cfg.name = "public";
+    share_cfg.type = ShareType::DISK;
+    share_cfg.path = test_dir;
+    share_mgr.add_share(share_cfg);
+
+    LocalFileSystem fs(test_dir);
+    SmbShare *share = share_mgr.find_share("public");
+    TEST_ASSERT(share != nullptr, "SetInfo permission share should exist");
+    share->set_file_system(&fs);
+
+    SmbLockManager lock_mgr;
+    SmbPipeManager pipe_mgr;
+    SmbDfsResolver dfs;
+    SmbChangeNotifier cn;
+    RecordingHandler handler;
+    SmbDispatcher disp(config, share_mgr, lock_mgr, pipe_mgr, dfs, cn, &handler);
+
+    SmbSessionManager session_mgr;
+    SmbSession *session = session_mgr.create_session(nullptr);
+    session->set_state(SmbSession::State::active);
+
+    TreeConnection tree;
+    tree.share_name = "public";
+    tree.share = share;
+    const uint32_t tree_id = session->add_tree_connection(std::move(tree));
+
+    auto open_result = fs.open("old.txt", FILE_GENERIC_READ | FILE_GENERIC_WRITE, FILE_OPEN, 0);
+    TEST_ASSERT(open_result.success, "Open file for dispatcher set_info permission should succeed");
+
+    FileId fid = session->allocate_file_id();
+    yuan::net::smb::OpenFile of;
+    of.file_id = fid;
+    of.path = test_dir + "/old.txt";
+    of.is_directory = false;
+    of.file_handle = open_result.handle;
+    of.tree_id = tree_id;
+    share->add_open_file(fid, std::move(of));
+
+    Smb2Header hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
+    hdr.protocol_id = SMB2_PROTOCOL_ID;
+    hdr.command = static_cast<uint16_t>(Smb2Command::SET_INFO);
+    hdr.tree_id = tree_id;
+    hdr.session_id = session->session_id();
+    hdr.credit_request = 1;
+
+    auto new_name = Smb2Codec::utf8_to_utf16le("new.txt");
+    std::vector<uint8_t> rename_info(20 + new_name.size() * 2, 0);
+    rename_info[0] = 1;
+    uint32_t name_len = static_cast<uint32_t>(new_name.size() * 2);
+    std::memcpy(rename_info.data() + 16, &name_len, sizeof(name_len));
+    for (size_t i = 0; i < new_name.size(); ++i) {
+        rename_info[20 + i * 2] = static_cast<uint8_t>(new_name[i] & 0xFF);
+        rename_info[21 + i * 2] = static_cast<uint8_t>((new_name[i] >> 8) & 0xFF);
+    }
+
+    ByteBuffer rename_req = Smb2Codec::encode_header(hdr);
+    Smb2Codec::write_le16(rename_req, 33);
+    rename_req.append_u8(SMB2_0_INFO_FILE);
+    rename_req.append_u8(static_cast<uint8_t>(FileInfoClass::FileRenameInformation));
+    Smb2Codec::write_le32(rename_req, static_cast<uint32_t>(rename_info.size()));
+    Smb2Codec::write_le16(rename_req, SMB2_HEADER_SIZE + 32);
+    Smb2Codec::write_le16(rename_req, 0);
+    Smb2Codec::write_le32(rename_req, 0);
+    Smb2Codec::write_le64(rename_req, fid.persistent);
+    Smb2Codec::write_le64(rename_req, fid.volatile_id);
+    rename_req.append(rename_info.data(), rename_info.size());
+
+    auto rename_span = rename_req.readable_span();
+    auto rename_resp = disp.dispatch(*session, hdr,
+                                     reinterpret_cast<const uint8_t *>(rename_span.data()),
+                                     rename_span.size());
+    auto rename_resp_span = rename_resp.readable_span();
+    auto rename_resp_hdr = Smb2Codec::decode_header(
+        reinterpret_cast<const uint8_t *>(rename_resp_span.data()), rename_resp_span.size());
+    TEST_ASSERT(rename_resp_hdr.has_value(), "Should decode denied rename set_info response");
+    TEST_ASSERT(rename_resp_hdr->status == static_cast<uint32_t>(NtStatus::ACCESS_DENIED),
+                "Denied rename should map to ACCESS_DENIED");
+    TEST_ASSERT(handler.rename_called, "Denied rename should trigger handler on_rename hook");
+    TEST_ASSERT(handler.last_rename_path == "new.txt", "Rename hook should receive target path");
+    TEST_ASSERT(std::filesystem::exists(test_dir + "/old.txt"), "Denied rename should not mutate file");
+
+    uint8_t delete_info[1] = { 1 };
+    ByteBuffer delete_req = Smb2Codec::encode_header(hdr);
+    Smb2Codec::write_le16(delete_req, 33);
+    delete_req.append_u8(SMB2_0_INFO_FILE);
+    delete_req.append_u8(static_cast<uint8_t>(FileInfoClass::FileDispositionInformation));
+    Smb2Codec::write_le32(delete_req, sizeof(delete_info));
+    Smb2Codec::write_le16(delete_req, SMB2_HEADER_SIZE + 32);
+    Smb2Codec::write_le16(delete_req, 0);
+    Smb2Codec::write_le32(delete_req, 0);
+    Smb2Codec::write_le64(delete_req, fid.persistent);
+    Smb2Codec::write_le64(delete_req, fid.volatile_id);
+    delete_req.append(delete_info, sizeof(delete_info));
+
+    auto delete_span = delete_req.readable_span();
+    auto delete_resp = disp.dispatch(*session, hdr,
+                                     reinterpret_cast<const uint8_t *>(delete_span.data()),
+                                     delete_span.size());
+    auto delete_resp_span = delete_resp.readable_span();
+    auto delete_resp_hdr = Smb2Codec::decode_header(
+        reinterpret_cast<const uint8_t *>(delete_resp_span.data()), delete_resp_span.size());
+    TEST_ASSERT(delete_resp_hdr.has_value(), "Should decode denied delete set_info response");
+    TEST_ASSERT(delete_resp_hdr->status == static_cast<uint32_t>(NtStatus::ACCESS_DENIED),
+                "Denied delete should map to ACCESS_DENIED");
+    TEST_ASSERT(handler.delete_called, "Denied delete should trigger handler on_delete hook");
+    TEST_ASSERT(std::filesystem::exists(test_dir + "/old.txt"), "Denied delete should not remove file");
+
+    share->remove_open_file(fid);
+    fs.close(open_result.handle);
+    session_mgr.remove_session(session->session_id());
+    std::filesystem::remove_all(test_dir);
     return true;
 }
 
@@ -1546,6 +2034,42 @@ bool test_make_response_header()
     return true;
 }
 
+bool test_session_setup_response_layout()
+{
+    Smb2Header hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
+    hdr.protocol_id = SMB2_PROTOCOL_ID;
+    hdr.command = static_cast<uint16_t>(Smb2Command::SESSION_SETUP);
+    hdr.session_id = 0x1122334455667788ULL;
+
+    Smb2SessionSetupResponse resp;
+    resp.session_flags = 0;
+    resp.security_buffer = {0x60, 0x03, 0x06, 0x01};
+
+    auto encoded = Smb2Codec::encode_session_setup_response(hdr, resp);
+    auto span = encoded.readable_span();
+    const auto *raw = reinterpret_cast<const uint8_t *>(span.data());
+
+    TEST_ASSERT(Smb2Codec::read_le16(raw + SMB2_HEADER_SIZE) == 9,
+                "Session setup structure size should be 9");
+    TEST_ASSERT(Smb2Codec::read_le16(raw + SMB2_HEADER_SIZE + 2) == 0,
+                "Session flags should be 0");
+    TEST_ASSERT(Smb2Codec::read_le16(raw + SMB2_HEADER_SIZE + 4) == SMB2_HEADER_SIZE + 8,
+                "Session setup security buffer offset should follow fixed body");
+    TEST_ASSERT(Smb2Codec::read_le16(raw + SMB2_HEADER_SIZE + 6) == resp.security_buffer.size(),
+                "Session setup security buffer length should match");
+
+    size_t sec_offset = SMB2_HEADER_SIZE + 8;
+    TEST_ASSERT(std::memcmp(raw + sec_offset, resp.security_buffer.data(), resp.security_buffer.size()) == 0,
+                "Security buffer bytes must start immediately after fixed body with no padding");
+
+    size_t expected_total = SMB2_HEADER_SIZE + 8 + resp.security_buffer.size();
+    TEST_ASSERT(span.size() == expected_total,
+                "Total response size should be header + fixed body (8) + security buffer, no padding");
+
+    return true;
+}
+
 int main()
 {
     
@@ -1561,6 +2085,7 @@ int main()
     RUN_TEST(test_filetime_now);
     RUN_TEST(test_error_response);
     RUN_TEST(test_make_response_header);
+    RUN_TEST(test_session_setup_response_layout);
     RUN_TEST(test_transform_header_encode_decode);
 
     std::cout << "\n--- NetBIOS ---" << std::endl;
@@ -1601,7 +2126,10 @@ int main()
     std::cout << "\n--- Authentication ---" << std::endl;
     RUN_TEST(test_ntlm_auth);
     RUN_TEST(test_ntlmv2_password_proof_auth);
+    RUN_TEST(test_ntlmv2_nt_hash_proof_auth);
     RUN_TEST(test_spnego_auth);
+    RUN_TEST(test_spnego_auth_accepts_oid_only_init);
+    RUN_TEST(test_spnego_auth_extracts_mechtoken_from_der_init);
 
     std::cout << "\n--- Crypto ---" << std::endl;
     RUN_TEST(test_crypto_openssl_sha512);
@@ -1626,10 +2154,13 @@ int main()
     std::cout << "\n--- Dispatcher ---" << std::endl;
     RUN_TEST(test_dispatcher_negotiate);
     RUN_TEST(test_dispatcher_negotiate_conservative_capabilities);
+    RUN_TEST(test_negotiate_response_layout_for_smb311);
     RUN_TEST(test_dispatcher_query_filesystem_info);
     RUN_TEST(test_dispatcher_ioctl_validate_negotiate_info);
     RUN_TEST(test_dispatcher_ioctl_query_network_interface_info);
+    RUN_TEST(test_dispatcher_ioctl_permission_denied);
     RUN_TEST(test_dispatcher_change_notify_completes_empty);
+    RUN_TEST(test_dispatcher_set_info_permission_hooks);
     RUN_TEST(test_dispatcher_echo);
 
     std::cout << "\n=== Results: " << g_tests_passed << "/" << g_tests_run

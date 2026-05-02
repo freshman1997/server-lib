@@ -9,10 +9,171 @@
 #include "openssl/rsa.h"
 #include "openssl/x509.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
 namespace yuan::net::ssh
 {
     namespace
     {
+        std::string trim_copy(const std::string &value)
+        {
+            size_t begin = 0;
+            while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+                ++begin;
+            }
+
+            size_t end = value.size();
+            while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+                --end;
+            }
+            return value.substr(begin, end - begin);
+        }
+
+        std::vector<std::string> split_ws(const std::string &line)
+        {
+            std::vector<std::string> parts;
+            std::istringstream iss(line);
+            std::string token;
+            while (iss >> token) {
+                parts.push_back(std::move(token));
+            }
+            return parts;
+        }
+
+        bool is_key_type_token(const std::string &token)
+        {
+            return token.rfind("ssh-", 0) == 0 ||
+                   token.rfind("ecdsa-sha2-", 0) == 0 ||
+                   token.rfind("sk-", 0) == 0;
+        }
+
+        std::vector<uint8_t> decode_base64(const std::string &input)
+        {
+            if (input.empty()) {
+                return {};
+            }
+
+            std::string normalized;
+            normalized.reserve(input.size() + 3);
+            for (char ch : input) {
+                if (std::isspace(static_cast<unsigned char>(ch)) == 0) {
+                    normalized.push_back(ch);
+                }
+            }
+
+            if (normalized.empty()) {
+                return {};
+            }
+
+            const size_t remainder = normalized.size() % 4;
+            if (remainder != 0) {
+                normalized.append(4 - remainder, '=');
+            }
+
+            std::vector<uint8_t> output((normalized.size() / 4) * 3, 0);
+            const int decoded_len = EVP_DecodeBlock(
+                output.data(),
+                reinterpret_cast<const unsigned char *>(normalized.data()),
+                static_cast<int>(normalized.size()));
+            if (decoded_len < 0) {
+                return {};
+            }
+
+            int padding = 0;
+            if (!normalized.empty() && normalized.back() == '=') {
+                ++padding;
+            }
+            if (normalized.size() >= 2 && normalized[normalized.size() - 2] == '=') {
+                ++padding;
+            }
+
+            output.resize(static_cast<size_t>(decoded_len - padding));
+            return output;
+        }
+
+        std::filesystem::path resolve_authorized_keys_path()
+        {
+            const char *override_path = std::getenv("YUAN_SSH_AUTHORIZED_KEYS");
+            if (override_path && *override_path != '\0') {
+                return std::filesystem::path(override_path);
+            }
+
+            const char *home = std::getenv("HOME");
+            if (home && *home != '\0') {
+                return std::filesystem::path(home) / ".ssh" / "authorized_keys";
+            }
+
+            return std::filesystem::path(".ssh/authorized_keys");
+        }
+
+        bool algorithm_matches_authorized_type(const std::string &auth_type,
+                                               const std::string &algorithm)
+        {
+            if (auth_type == algorithm) {
+                return true;
+            }
+
+            if (auth_type == "ssh-rsa" &&
+                (algorithm == "ssh-rsa" || algorithm == "rsa-sha2-256" || algorithm == "rsa-sha2-512")) {
+                return true;
+            }
+
+            return false;
+        }
+
+        bool key_is_authorized(const std::string &algorithm,
+                               const std::vector<uint8_t> &public_key_blob)
+        {
+            const auto authorized_keys_path = resolve_authorized_keys_path();
+            std::ifstream in(authorized_keys_path);
+            if (!in.good()) {
+                return false;
+            }
+
+            std::string line;
+            while (std::getline(in, line)) {
+                const std::string trimmed = trim_copy(line);
+                if (trimmed.empty() || trimmed[0] == '#') {
+                    continue;
+                }
+
+                const auto parts = split_ws(trimmed);
+                if (parts.size() < 2) {
+                    continue;
+                }
+
+                size_t key_type_index = 0;
+                if (!is_key_type_token(parts[0])) {
+                    if (parts.size() < 3 || !is_key_type_token(parts[1])) {
+                        continue;
+                    }
+                    key_type_index = 1;
+                }
+
+                const std::string &auth_type = parts[key_type_index];
+                const std::string &auth_key_b64 = parts[key_type_index + 1];
+                if (!algorithm_matches_authorized_type(auth_type, algorithm)) {
+                    continue;
+                }
+
+                const auto decoded = decode_base64(auth_key_b64);
+                if (decoded.empty()) {
+                    continue;
+                }
+
+                if (decoded == public_key_blob) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         std::vector<uint8_t> encode_public_key_der(EVP_PKEY * pkey)
         {
             if (!pkey) {
@@ -162,6 +323,16 @@ namespace yuan::net::ssh
                                                  const std::string & username,
                                                  const SshAuthCredentials & credentials)
     {
+        (void)username;
+
+        if (credentials.public_key_blob.empty()) {
+            return SshAuthResult::FAILURE;
+        }
+
+        if (!key_is_authorized(credentials.public_key_algorithm, credentials.public_key_blob)) {
+            return SshAuthResult::FAILURE;
+        }
+
         if (!credentials.has_signature)
             return SshAuthResult::NEED_MORE;
 

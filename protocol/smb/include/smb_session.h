@@ -197,6 +197,15 @@ namespace yuan::net::smb
             return server_security_mode_;
         }
 
+        void set_signing_algorithm(uint16_t algo)
+        {
+            signing_algorithm_ = algo;
+        }
+        uint16_t signing_algorithm() const
+        {
+            return signing_algorithm_;
+        }
+
         void set_crypto(std::shared_ptr<SmbCrypto> crypto)
         {
             crypto_ = crypto;
@@ -226,6 +235,7 @@ namespace yuan::net::smb
         std::string domain_name_;
         uint32_t server_capabilities_ = 0;
         uint16_t server_security_mode_ = 0;
+        uint16_t signing_algorithm_ = 0;
         std::shared_ptr<SmbCrypto> crypto_;
         mutable std::mutex trees_mutex_;
         std::unordered_map<uint32_t, TreeConnection> trees_;

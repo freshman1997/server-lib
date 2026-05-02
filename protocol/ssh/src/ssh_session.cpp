@@ -19,12 +19,14 @@ namespace yuan::net::ssh
         : session_id_(session_id), server_(server),
           transport_(nullptr, nullptr, true),
           authenticator_(),
-          conn_mgr_(this)
+          conn_mgr_(this),
+          terminal_bridge_(std::make_unique<SshTerminalBridge>(this, &conn_mgr_))
     {
     }
 
     SshSession::~SshSession()
     {
+        shutdown_all_pty_processes();
         conn_mgr_.close_all_channels();
     }
 
@@ -53,6 +55,52 @@ namespace yuan::net::ssh
         auto buffers = conn_mgr_.drain_channel_pending_data();
         for (auto &buf : buffers) {
             enqueue_outgoing(std::move(buf));
+        }
+    }
+
+    void SshSession::register_pty_process(uint32_t channel_remote_id, std::unique_ptr<SshPtyProcess> process)
+    {
+        if (terminal_bridge_) {
+            terminal_bridge_->register_pty_process(channel_remote_id, std::move(process));
+        }
+    }
+
+    bool SshSession::has_pty_process(uint32_t channel_remote_id) const
+    {
+        return terminal_bridge_ && terminal_bridge_->has_pty_process(channel_remote_id);
+    }
+
+    bool SshSession::has_any_pty_processes() const
+    {
+        return terminal_bridge_ && terminal_bridge_->has_any_pty_processes();
+    }
+
+    int SshSession::first_pty_master_fd() const
+    {
+        return terminal_bridge_ ? terminal_bridge_->first_pty_master_fd() : -1;
+    }
+
+    bool SshSession::pump_pty_once(uint32_t channel_remote_id, SshHandler * handler)
+    {
+        return terminal_bridge_ && terminal_bridge_->pump_pty_once(channel_remote_id, handler);
+    }
+
+    bool SshSession::pump_all_pty_once(SshHandler * handler)
+    {
+        return terminal_bridge_ && terminal_bridge_->pump_all_pty_once(handler);
+    }
+
+    void SshSession::shutdown_pty_for_channel(uint32_t channel_remote_id)
+    {
+        if (terminal_bridge_) {
+            terminal_bridge_->shutdown_pty_for_channel(channel_remote_id);
+        }
+    }
+
+    void SshSession::shutdown_all_pty_processes()
+    {
+        if (terminal_bridge_) {
+            terminal_bridge_->shutdown_all_pty_processes();
         }
     }
 
@@ -199,6 +247,9 @@ namespace yuan::net::ssh
             auto msg = SshMessageCodec::decode_channel_data(payload.data(), payload.size());
             if (msg) {
                 resp = conn_mgr_.handle_channel_data(*msg, handler);
+                if (terminal_bridge_) {
+                    terminal_bridge_->handle_channel_data(*msg, handler);
+                }
             }
             break;
         }
@@ -226,6 +277,22 @@ namespace yuan::net::ssh
         case SshMessageType::SSH_MSG_CHANNEL_CLOSE: {
             auto msg = SshMessageCodec::decode_channel_close(payload.data(), payload.size());
             if (msg) {
+                auto *channel = conn_mgr_.find_channel_by_remote(msg->recipient_channel);
+                if (channel && channel->command_started() && channel->mark_termination_notified()) {
+                    auto *effective_handler = handler ? handler : &SshHandler::default_handler();
+                    auto exit_info = effective_handler->on_command_exit(this, channel);
+                    if (exit_info.use_signal) {
+                        enqueue_outgoing(conn_mgr_.build_channel_exit_signal(channel->remote_id(),
+                                                                             exit_info.signal_name,
+                                                                             exit_info.core_dumped,
+                                                                             exit_info.error_message,
+                                                                             exit_info.language_tag));
+                    } else {
+                        enqueue_outgoing(conn_mgr_.build_channel_exit_status(channel->remote_id(),
+                                                                             exit_info.exit_status));
+                    }
+                }
+                shutdown_pty_for_channel(msg->recipient_channel);
                 resp = conn_mgr_.handle_channel_close(*msg, handler);
             }
             break;
@@ -234,6 +301,9 @@ namespace yuan::net::ssh
             auto msg = SshMessageCodec::decode_channel_request(payload.data(), payload.size());
             if (msg) {
                 resp = conn_mgr_.handle_channel_request(*msg, handler);
+                if (terminal_bridge_) {
+                    terminal_bridge_->handle_channel_request(*msg, resp, handler);
+                }
             }
             break;
         }

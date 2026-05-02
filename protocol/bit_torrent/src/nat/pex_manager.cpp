@@ -269,68 +269,83 @@ bool PexManager::parse_ext_handshake(const std::string &peer_key,
     return state.supports_extensions;
 }
 
-bool PexManager::parse_pex_message(const std::string &peer_key,
-                                    const uint8_t *data, size_t len)
-{
-    // Parse bencoded dict with "added" and optionally "dropped" compact peer lists
-    std::string str(reinterpret_cast<const char *>(data), len);
-    auto *parsed = BencodingDataConverter::parse(str);
-    if (!parsed || parsed->type_ != DataType::dictionary_)
+    static constexpr size_t PEX_MAX_PEERS_PER_MESSAGE = 50;
+    static constexpr size_t PEX_MAX_PAYLOAD_SIZE = 4096;
+
+    bool PexManager::parse_pex_message(const std::string &peer_key,
+                                     const uint8_t *data, size_t len)
     {
-        delete parsed;
-        return false;
-    }
+        if (len > PEX_MAX_PAYLOAD_SIZE) {
+            return false;
+        }
 
-    auto *dict = static_cast<DicttionaryData *>(parsed);
-
-    // Process "added" peers
-    auto *added = dict->get_val("added");
-    if (added && added->type_ == DataType::string_)
-    {
-        const std::string &added_str = static_cast<StringData *>(added)->get_data();
-        auto peers = parse_compact_peers(
-            reinterpret_cast<const uint8_t *>(added_str.data()), added_str.size());
-
-        // Add discovered peers (if not already known)
-        std::vector<PexPeerInfo> new_peers;
-        for (const auto &p : peers)
+        std::string str(reinterpret_cast<const char *>(data), len);
+        auto *parsed = BencodingDataConverter::parse(str);
+        if (!parsed || parsed->type_ != DataType::dictionary_)
         {
-            std::string key = p.ip + ":" + std::to_string(p.port);
-            if (known_peers_.find(key) == known_peers_.end())
+            delete parsed;
+            return false;
+        }
+
+        auto *dict = static_cast<DicttionaryData *>(parsed);
+
+        auto *added = dict->get_val("added");
+        if (added && added->type_ == DataType::string_)
+        {
+            const std::string &added_str = static_cast<StringData *>(added)->get_data();
+            size_t peer_count = added_str.size() / 6;
+            if (peer_count > PEX_MAX_PEERS_PER_MESSAGE) {
+                delete parsed;
+                return false;
+            }
+
+            auto peers = parse_compact_peers(
+                reinterpret_cast<const uint8_t *>(added_str.data()), added_str.size());
+
+            std::vector<PexPeerInfo> new_peers;
+            for (const auto &p : peers)
             {
-                if (known_peers_.size() < config_.pex_max_peers)
+                std::string key = p.ip + ":" + std::to_string(p.port);
+                if (known_peers_.find(key) == known_peers_.end())
                 {
-                    known_peers_[key] = p;
-                    added_since_last_flush_.push_back(p);
-                    new_peers.push_back(p);
+                    if (known_peers_.size() < config_.pex_max_peers)
+                    {
+                        known_peers_[key] = p;
+                        added_since_last_flush_.push_back(p);
+                        new_peers.push_back(p);
+                    }
                 }
+            }
+
+            if (new_peer_cb_ && !new_peers.empty())
+            {
+                new_peer_cb_(new_peers);
             }
         }
 
-        if (new_peer_cb_ && !new_peers.empty())
+        auto *dropped = dict->get_val("dropped");
+        if (dropped && dropped->type_ == DataType::string_)
         {
-            new_peer_cb_(new_peers);
+            const std::string &dropped_str = static_cast<StringData *>(dropped)->get_data();
+            size_t drop_count = dropped_str.size() / 6;
+            if (drop_count > PEX_MAX_PEERS_PER_MESSAGE) {
+                delete parsed;
+                return false;
+            }
+
+            auto peers = parse_compact_peers(
+                reinterpret_cast<const uint8_t *>(dropped_str.data()), dropped_str.size());
+
+            for (const auto &p : peers)
+            {
+                std::string key = p.ip + ":" + std::to_string(p.port);
+                known_peers_.erase(key);
+            }
         }
+
+        delete parsed;
+        return true;
     }
-
-    // Process "dropped" peers
-    auto *dropped = dict->get_val("dropped");
-    if (dropped && dropped->type_ == DataType::string_)
-    {
-        const std::string &dropped_str = static_cast<StringData *>(dropped)->get_data();
-        auto peers = parse_compact_peers(
-            reinterpret_cast<const uint8_t *>(dropped_str.data()), dropped_str.size());
-
-        for (const auto &p : peers)
-        {
-            std::string key = p.ip + ":" + std::to_string(p.port);
-            known_peers_.erase(key);
-        }
-    }
-
-    delete parsed;
-    return true;
-}
 
 std::vector<PexPeerInfo> PexManager::parse_compact_peers(const uint8_t *data, size_t len)
 {

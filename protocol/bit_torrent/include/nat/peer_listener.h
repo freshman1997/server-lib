@@ -57,6 +57,11 @@ namespace yuan::net::bit_torrent
             new_peer_cb_ = std::move(cb);
         }
 
+        void set_max_pending(int32_t max_pending)
+        {
+            max_pending_ = max_pending;
+        }
+
         // ConnectionHandler interface
         void on_connected(const std::shared_ptr<net::Connection> &conn) override;
         void on_error(const std::shared_ptr<net::Connection> &conn) override;
@@ -83,7 +88,8 @@ namespace yuan::net::bit_torrent
 
         NewPeerCallback new_peer_cb_;
 
-        // Pending inbound connections being handshaked
+        int32_t max_pending_ = 50;
+
         struct PendingInbound
         {
             std::shared_ptr<net::Connection> conn;

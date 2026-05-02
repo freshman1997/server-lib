@@ -4,23 +4,39 @@
 
 namespace yuan::net::smb
 {
+    namespace
+    {
+        std::vector<uint8_t> smb30_signing_context()
+        {
+            static constexpr uint8_t kContext[] = { 'S', 'm', 'b', 'S', 'i', 'g', 'n', '\0' };
+            return std::vector<uint8_t>(kContext, kContext + sizeof(kContext));
+        }
+    }
+
     static std::vector<uint8_t> hmac_sha256_internal(const std::vector<uint8_t> & key, const uint8_t * data, size_t len)
     {
         SmbCryptoOpenSSL crypto;
         return crypto.hmac_sha256(key, data, len);
     }
 
+    static std::vector<uint8_t> hmac_sha512_internal(const std::vector<uint8_t> & key, const uint8_t * data, size_t len)
+    {
+        SmbCryptoOpenSSL crypto;
+        return crypto.hmac_sha512(key, data, len);
+    }
+
     std::vector<uint8_t> SmbKeyDerivation::sp800_108(const std::vector<uint8_t> & key,
-                                                     const std::string & label,
-                                                     const std::vector<uint8_t> & context)
+                                                      const std::string & label,
+                                                      const std::vector<uint8_t> & context)
     {
         std::vector<uint8_t> input;
         uint8_t counter[4] = { 0x00, 0x00, 0x00, 0x01 };
         input.insert(input.end(), counter, counter + 4);
         input.insert(input.end(), label.begin(), label.end());
         input.push_back(0x00);
+        input.push_back(0x00);
         input.insert(input.end(), context.begin(), context.end());
-        uint8_t length[4] = { 0x00, 0x00, 0x01, 0x00 };
+        uint8_t length[4] = { 0x00, 0x00, 0x00, 0x80 };
         input.insert(input.end(), length, length + 4);
 
         auto result = hmac_sha256_internal(key, input.data(), input.size());
@@ -29,19 +45,10 @@ namespace yuan::net::smb
     }
 
     std::vector<uint8_t> SmbKeyDerivation::kdf_sha512(const std::vector<uint8_t> & key,
-                                                      const std::string & label,
-                                                      const std::vector<uint8_t> & context)
+                                                       const std::string & label,
+                                                       const std::vector<uint8_t> & context)
     {
-        std::vector<uint8_t> input;
-        input.insert(input.end(), label.begin(), label.end());
-        input.insert(input.end(), context.begin(), context.end());
-
-        SmbCryptoOpenSSL crypto;
-        auto hash = crypto.sha512(input.data(), input.size());
-
-        std::vector<uint8_t> result(16);
-        std::memcpy(result.data(), hash.data(), 16);
-        return result;
+        return sp800_108(key, label, context);
     }
 
     std::vector<uint8_t> SmbKeyDerivation::compute_preauth_hash(const std::vector<uint8_t> & current_hash,
@@ -68,7 +75,7 @@ namespace yuan::net::smb
         }
 
         if (dialect == DialectRevision::SMB_3_0 || dialect == DialectRevision::SMB_3_0_2) {
-            return sp800_108(session_key, "SmbSign", preauth_hash);
+            return sp800_108(session_key, "SMB2AESCMAC", smb30_signing_context());
         }
 
         if (dialect == DialectRevision::SMB_3_1_1) {

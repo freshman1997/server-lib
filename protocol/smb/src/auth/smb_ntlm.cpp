@@ -3,6 +3,7 @@
 #include "openssl/hmac.h"
 #include "openssl/md4.h"
 #include "openssl/rand.h"
+#include <cstdio>
 #include <cstring>
 #include <algorithm>
 #include <array>
@@ -29,6 +30,27 @@ namespace yuan::net::smb
         p[1] = static_cast<uint8_t>(v >> 8);
         p[2] = static_cast<uint8_t>(v >> 16);
         p[3] = static_cast<uint8_t>(v >> 24);
+    }
+
+    static std::vector<uint8_t> rc4_decrypt(const std::vector<uint8_t> &key, const std::vector<uint8_t> &data)
+    {
+        if (key.empty() || data.empty()) return {};
+        uint8_t S[256];
+        for (int i = 0; i < 256; ++i) S[i] = static_cast<uint8_t>(i);
+        int j = 0;
+        for (int i = 0; i < 256; ++i) {
+            j = (j + S[i] + key[i % key.size()]) & 0xFF;
+            std::swap(S[i], S[j]);
+        }
+        std::vector<uint8_t> out(data.size());
+        int i2 = 0, j2 = 0;
+        for (size_t n = 0; n < data.size(); ++n) {
+            i2 = (i2 + 1) & 0xFF;
+            j2 = (j2 + S[i2]) & 0xFF;
+            std::swap(S[i2], S[j2]);
+            out[n] = data[n] ^ S[(S[i2] + S[j2]) & 0xFF];
+        }
+        return out;
     }
 
     static bool constant_time_equal(const std::vector<uint8_t> &lhs, const std::vector<uint8_t> &rhs)
@@ -200,6 +222,11 @@ namespace yuan::net::smb
         password_lookup_ = std::move(lookup);
     }
 
+    void SmbNtlmAuth::set_nt_hash_lookup(std::function<std::optional<std::string>(const std::string &, const std::string &)> lookup)
+    {
+        nt_hash_lookup_ = std::move(lookup);
+    }
+
     std::array<uint8_t, 8> SmbNtlmAuth::generate_server_challenge()
     {
         std::array<uint8_t, 8> challenge{};
@@ -235,6 +262,103 @@ namespace yuan::net::smb
     {
         auto utf16 = to_utf16le(password);
         return md4(utf16);
+    }
+
+    static std::optional<std::vector<uint8_t> > decode_hex_bytes(std::string_view text)
+    {
+        if ((text.size() % 2) != 0) {
+            return std::nullopt;
+        }
+        auto hex_value = [](char ch)->int {
+            if (ch >= '0' && ch <= '9') {
+                return ch - '0';
+            }
+            if (ch >= 'a' && ch <= 'f') {
+                return 10 + (ch - 'a');
+            }
+            if (ch >= 'A' && ch <= 'F') {
+                return 10 + (ch - 'A');
+            }
+            return -1;
+        };
+
+        std::vector<uint8_t> out;
+        out.reserve(text.size() / 2);
+        for (size_t i = 0; i < text.size(); i += 2) {
+            const int hi = hex_value(text[i]);
+            const int lo = hex_value(text[i + 1]);
+            if (hi < 0 || lo < 0) {
+                return std::nullopt;
+            }
+            out.push_back(static_cast<uint8_t>((hi << 4) | lo));
+        }
+        return out;
+    }
+
+    static std::optional<std::vector<uint8_t> > nt_hash_bytes_from_string(const std::string & text)
+    {
+        std::string_view value(text);
+        constexpr std::string_view nthash_prefix = "nthash:";
+        constexpr std::string_view ntlm_prefix = "ntlm:";
+        if (value.rfind(nthash_prefix, 0) == 0) {
+            value.remove_prefix(nthash_prefix.size());
+        } else if (value.rfind(ntlm_prefix, 0) == 0) {
+            value.remove_prefix(ntlm_prefix.size());
+        }
+
+        auto bytes = decode_hex_bytes(value);
+        if (!bytes || bytes->size() != 16) {
+            return std::nullopt;
+        }
+        return bytes;
+    }
+
+    static std::vector<uint8_t> ntlmowfv2_from_hash(const std::vector<uint8_t> & nt_hash,
+                                                    const std::string & username,
+                                                    const std::string & domain)
+    {
+        std::string upper_user = username;
+        std::transform(upper_user.begin(), upper_user.end(), upper_user.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        std::string upper_domain = domain;
+        std::transform(upper_domain.begin(), upper_domain.end(), upper_domain.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        auto identity = to_utf16le(upper_user + upper_domain);
+        return SmbNtlmAuth::hmac_md5(nt_hash, identity);
+    }
+
+    static bool verify_ntlmv2_response_with_hash(const std::vector<uint8_t> & nt_hash,
+                                                 const std::string & username,
+                                                 const std::string & domain,
+                                                 const std::array<uint8_t, 8> & server_challenge,
+                                                 const std::vector<uint8_t> & ntlm_response)
+    {
+        if (ntlm_response.size() < 16) {
+            return false;
+        }
+        const auto ntlmv2_hash = ntlmowfv2_from_hash(nt_hash, username, domain);
+        std::vector<uint8_t> blob(ntlm_response.begin() + 16, ntlm_response.end());
+        std::vector<uint8_t> temp(server_challenge.begin(), server_challenge.end());
+        temp.insert(temp.end(), blob.begin(), blob.end());
+        auto nt_proof = SmbNtlmAuth::hmac_md5(ntlmv2_hash, temp);
+        std::vector<uint8_t> expected;
+        expected.reserve(nt_proof.size() + blob.size());
+        expected.insert(expected.end(), nt_proof.begin(), nt_proof.end());
+        expected.insert(expected.end(), blob.begin(), blob.end());
+        return constant_time_equal(expected, ntlm_response);
+    }
+
+    static std::vector<uint8_t> session_base_key_from_hash(const std::vector<uint8_t> & nt_hash,
+                                                           const std::string & username,
+                                                           const std::string & domain,
+                                                           const std::vector<uint8_t> & ntlm_response)
+    {
+        if (ntlm_response.size() < 16) {
+            return {};
+        }
+        auto ntlmv2_hash = ntlmowfv2_from_hash(nt_hash, username, domain);
+        std::vector<uint8_t> nt_proof(ntlm_response.begin(), ntlm_response.begin() + 16);
+        return SmbNtlmAuth::hmac_md5(ntlmv2_hash, nt_proof);
     }
 
     std::vector<uint8_t> SmbNtlmAuth::ntlmowfv2(const std::string & password, const std::string & username, const std::string & domain)
@@ -352,16 +476,16 @@ namespace yuan::net::smb
             msg.ntlm_response.assign(data + nt_offset, data + nt_offset + nt_len);
         }
 
-        uint16_t name_len = read_u16_le(data + 28);
-        uint32_t name_offset = read_u32_le(data + 32);
-        if (name_offset + name_len <= len) {
-            msg.user_name = from_utf16le(data + name_offset, name_len);
-        }
-
-        uint16_t dom_len = read_u16_le(data + 36);
-        uint32_t dom_offset = read_u32_le(data + 40);
+        uint16_t dom_len = read_u16_le(data + 28);
+        uint32_t dom_offset = read_u32_le(data + 32);
         if (dom_offset + dom_len <= len) {
             msg.domain_name = from_utf16le(data + dom_offset, dom_len);
+        }
+
+        uint16_t name_len = read_u16_le(data + 36);
+        uint32_t name_offset = read_u32_le(data + 40);
+        if (name_offset + name_len <= len) {
+            msg.user_name = from_utf16le(data + name_offset, name_len);
         }
 
         uint16_t ws_len = read_u16_le(data + 44);
@@ -428,6 +552,7 @@ namespace yuan::net::smb
             }
 
             negotiate_flags_ &= msg->flags;
+            negotiate_flags_ |= NTLMSSP_NEGOTIATE_TARGET_INFO | NTLMSSP_TARGET_TYPE_SERVER | NTLMSSP_REQUEST_TARGET;
             server_challenge_ = generate_server_challenge();
 
             std::vector<uint8_t> target_info;
@@ -461,6 +586,7 @@ namespace yuan::net::smb
 
             bool valid = false;
             std::optional<std::string> password;
+            std::optional<std::vector<uint8_t> > nt_hash;
             if (password_lookup_) {
                 password = password_lookup_(msg->user_name, msg->domain_name);
                 if (password) {
@@ -471,29 +597,52 @@ namespace yuan::net::smb
                     }
                 }
             }
+            if (!valid && nt_hash_lookup_) {
+                auto encoded_hash = nt_hash_lookup_(msg->user_name, msg->domain_name);
+                if (encoded_hash) {
+                    nt_hash = nt_hash_bytes_from_string(*encoded_hash);
+                    if (nt_hash) {
+                        valid = verify_ntlmv2_response_with_hash(*nt_hash, msg->user_name, msg->domain_name,
+                                                                 server_challenge_, msg->ntlm_response);
+                        if (valid && credential_validator_) {
+                            valid = credential_validator_(msg->user_name, msg->domain_name, "");
+                        }
+                    }
+                }
+            }
             if (!valid && !password && credential_validator_) {
                 valid = credential_validator_(msg->user_name, msg->domain_name, "");
             }
 
-            if (valid) {
-                state_ = AuthState::authenticated;
-                result_.success = true;
-                result_.user_name = msg->user_name;
-                result_.domain_name = msg->domain_name;
+             if (valid) {
+                 state_ = AuthState::authenticated;
+                 result_.success = true;
+                 result_.user_name = msg->user_name;
+                 result_.domain_name = msg->domain_name;
 
-                if (password) {
-                    result_.session_key = session_base_key(*password, msg->user_name,
+                 std::vector<uint8_t> base_key;
+                 if (password) {
+                     base_key = session_base_key(*password, msg->user_name,
+                                                 msg->domain_name, msg->ntlm_response);
+                 } else if (nt_hash) {
+                     base_key = session_base_key_from_hash(*nt_hash, msg->user_name,
                                                            msg->domain_name, msg->ntlm_response);
-                }
-            } else {
-                state_ = AuthState::failed;
-                result_.success = false;
-            }
+                 }
 
-            return {};
-        }
+                 if ((msg->flags & NTLMSSP_NEGOTIATE_KEY_EXCH) && !msg->encrypted_session_key.empty() && !base_key.empty()) {
+                     result_.session_key = rc4_decrypt(base_key, msg->encrypted_session_key);
+                 } else {
+                     result_.session_key = std::move(base_key);
+                 }
+             } else {
+                 state_ = AuthState::failed;
+                 result_.success = false;
+             }
 
-        state_ = AuthState::failed;
-        return {};
-    }
-}
+             return {};
+         }
+
+         state_ = AuthState::failed;
+         return {};
+     }
+ }

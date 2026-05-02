@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <chrono>
 
 namespace yuan::net::bit_torrent
 {
@@ -66,7 +67,7 @@ namespace yuan::net::bit_torrent
           total_pieces_(0),
           default_request_size_(16 * 1024),
           pending_request_count_(0),
-          request_window_size_(4)
+          request_window_size_(64)
     {
     }
 
@@ -394,8 +395,8 @@ namespace yuan::net::bit_torrent
                 break;
             case PeerMessageId::unchoke:
                 peer_state_.peer_choking = false;
-                if (on_state_change_) {
-                    on_state_change_(this);
+                if (on_unchoke_) {
+                    on_unchoke_(this);
                 }
                 break;
             case PeerMessageId::interested:
@@ -407,16 +408,10 @@ namespace yuan::net::bit_torrent
             case PeerMessageId::have: {
                 uint32_t piece = msg.have_piece_index();
                 peer_state_.set_have_piece(piece, total_pieces_);
-                if (on_state_change_) {
-                    on_state_change_(this);
-                }
                 break;
             }
             case PeerMessageId::bitfield:
                 peer_state_.set_bitfield(msg.payload_, total_pieces_);
-                if (on_state_change_) {
-                    on_state_change_(this);
-                }
                 break;
             case PeerMessageId::piece:
                 pending_requests_.erase(
@@ -431,6 +426,7 @@ namespace yuan::net::bit_torrent
                 if (pending_request_count_ > 0) {
                     --pending_request_count_;
                 }
+                record_piece_received(msg.piece_block_size());
                 if (piece_data_handler_) {
                     piece_data_handler_(
                         this,
@@ -448,6 +444,7 @@ namespace yuan::net::bit_torrent
                     const auto length = msg.request_length();
                     if (piece_request_handler_(piece, offset, length, block) && !block.empty()) {
                         send_piece(piece, offset, block.data(), static_cast<uint32_t>(block.size()));
+                        record_piece_sent(static_cast<uint32_t>(block.size()));
                         if (piece_served_handler_) {
                             piece_served_handler_(piece, offset, static_cast<uint32_t>(block.size()));
                         }
@@ -485,9 +482,6 @@ namespace yuan::net::bit_torrent
                 break;
             case PeerMessageId::have_all:
                 peer_state_.set_have_all(total_pieces_);
-                if (on_state_change_) {
-                    on_state_change_(this);
-                }
                 break;
             case PeerMessageId::have_none:
                 peer_state_.set_have_none(total_pieces_);
@@ -625,7 +619,7 @@ namespace yuan::net::bit_torrent
             return;
         auto msg = PeerMessage::request(piece_index, offset, length).serialize();
         send_raw(msg);
-        pending_requests_.push_back(PieceBlockRequest{ piece_index, offset, length });
+        pending_requests_.push_back(PieceBlockRequest{ piece_index, offset, length, 0 });
         ++pending_request_count_;
     }
 
@@ -725,6 +719,46 @@ namespace yuan::net::bit_torrent
         auto pending = std::move(pending_requests_);
         pending_requests_.clear();
         return pending;
+    }
+
+    bool PeerConnection::is_snubbed() const
+    {
+        if (peer_state_.peer_choking || !peer_state_.am_interested)
+            return false;
+        if (last_piece_time_ms_ == 0)
+            return false;
+        auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+        return (now - last_piece_time_ms_) > SNUB_THRESHOLD_MS;
+    }
+
+    void PeerConnection::record_piece_received(uint32_t length)
+    {
+        rate_downloaded_bytes_ += length;
+        last_piece_time_ms_ = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
+    void PeerConnection::record_piece_sent(uint32_t length)
+    {
+        rate_uploaded_bytes_ += length;
+    }
+
+    void PeerConnection::update_rates(uint64_t now_ms)
+    {
+        if (rate_last_update_ms_ == 0) {
+            rate_last_update_ms_ = now_ms;
+            return;
+        }
+        uint64_t elapsed = now_ms > rate_last_update_ms_ ? (now_ms - rate_last_update_ms_) : 0;
+        if (elapsed < 1000)
+            return;
+        double elapsed_sec = static_cast<double>(elapsed) / 1000.0;
+        download_rate_ = static_cast<double>(rate_downloaded_bytes_) / elapsed_sec;
+        upload_rate_ = static_cast<double>(rate_uploaded_bytes_) / elapsed_sec;
+        rate_downloaded_bytes_ = 0;
+        rate_uploaded_bytes_ = 0;
+        rate_last_update_ms_ = now_ms;
     }
 
 } // namespace yuan::net::bit_torrent

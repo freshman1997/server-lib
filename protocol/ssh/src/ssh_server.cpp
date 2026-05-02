@@ -11,6 +11,7 @@
 #include "transport/ssh_version_exchange.h"
 #include "transport/ssh_packet_codec.h"
 
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <iostream>
@@ -96,6 +97,26 @@ namespace yuan::net::ssh
     bool SshServer::init(int port, NetworkRuntime & runtime)
     {
         config_.port = static_cast<uint16_t>(port);
+
+        if (config_.enable_openssh_compat_profile) {
+            config_.enable_builtin_terminal_handler = true;
+            // Prefer conservative, widely interoperable algorithms in compat mode.
+            // This avoids experimental AEAD/chacha paths until full interop hardening.
+            config_.cipher_algorithms = {
+                "aes256-ctr",
+                "aes192-ctr",
+                "aes128-ctr"
+            };
+            config_.mac_algorithms = {
+                "hmac-sha2-256",
+                "hmac-sha2-512",
+                "hmac-sha1"
+            };
+            config_.compression_algorithms = {
+                "none"
+            };
+        }
+
         init_default_algorithms();
 
         bool loaded_host_key = false;
@@ -174,17 +195,27 @@ namespace yuan::net::ssh
 
     coroutine::Task<void> SshServer::handle_connection(AsyncConnectionContext ctx)
     {
-        std::cout << "ssh handle_connection entered" << std::endl;
+        std::cerr << "[ssh] incoming connection, active_sessions=" << session_mgr_.session_count() << '\n';
         auto *effective_handler = handler_ ? handler_ : &SshHandler::default_handler();
+        if (!handler_ && config_.enable_builtin_terminal_handler) {
+            effective_handler = &builtin_terminal_handler_;
+        }
 
         if (session_mgr_.session_limit_reached(config_.max_sessions)) {
+            std::cerr << "[ssh] session limit reached: " << session_mgr_.session_count()
+                      << "/" << config_.max_sessions << '\n';
+            ctx.close();
             co_return;
         }
 
         auto *session = session_mgr_.create_session(this);
         if (!session) {
+            std::cerr << "[ssh] create_session failed\n";
+            ctx.close();
             co_return;
         }
+        std::cerr << "[ssh] session created id=" << session->session_id()
+                  << " active_sessions=" << session_mgr_.session_count() << '\n';
 
         session->transport() = SshTransport(&algo_registry_, ptr_of(crypto_), true);
 
@@ -200,23 +231,35 @@ namespace yuan::net::ssh
 
         init_auth_methods(session);
 
+        ByteBuffer recv_buf;
+
         // 1. Send server version
         auto server_version = session->transport().build_version_string(config_.software_version);
         session->transport().set_server_version(server_version.substr(0, server_version.size() - 2));
         {
             ByteBuffer version_buf{std::string_view(server_version)};
-            std::cout << "ssh sending version: " << server_version << std::endl;
-            ctx.write_and_flush(version_buf);
+            auto w = co_await ctx.write_async(version_buf, config_.idle_timeout_ms);
+            if (w.status != coroutine::IoStatus::success) {
+                std::cerr << "[ssh] write server version failed, session=" << session->session_id() << '\n';
+                ctx.close();
+                session_mgr_.remove_session(session->session_id());
+                co_return;
+            }
+            auto f = co_await ctx.flush_async(config_.idle_timeout_ms);
+            if (f.status != coroutine::IoStatus::success) {
+                std::cerr << "[ssh] flush server version failed, session=" << session->session_id() << '\n';
+                ctx.close();
+                session_mgr_.remove_session(session->session_id());
+                co_return;
+            }
         }
-
-        ByteBuffer recv_buf;
 
         // 2. Read client version
         {
-            std::cout << "ssh waiting for client version" << std::endl;
             auto read_result = co_await ctx.read_async(config_.idle_timeout_ms);
             if (read_result.status != coroutine::IoStatus::success) {
-                std::cout << "ssh client version read failed: " << static_cast<int>(read_result.status) << std::endl;
+                std::cerr << "[ssh] read client version failed, session=" << session->session_id() << '\n';
+                ctx.close();
                 session_mgr_.remove_session(session->session_id());
                 co_return;
             }
@@ -225,6 +268,8 @@ namespace yuan::net::ssh
             auto version_end = SshVersionExchange::find_version_line_end(
                 reinterpret_cast<const uint8_t *>(data.read_ptr()), data.readable_bytes());
             if (!version_end) {
+                std::cerr << "[ssh] client version line incomplete, session=" << session->session_id() << '\n';
+                ctx.close();
                 session_mgr_.remove_session(session->session_id());
                 co_return;
             }
@@ -232,6 +277,8 @@ namespace yuan::net::ssh
             std::string version_line(data.read_ptr(), *version_end - 2);
             auto version_info = SshVersionExchange::parse_version_line(version_line);
             if (!version_info || !SshVersionExchange::is_valid_protocol_version(version_info->protocol_version)) {
+                std::cerr << "[ssh] invalid client version, session=" << session->session_id() << '\n';
+                ctx.close();
                 session_mgr_.remove_session(session->session_id());
                 co_return;
             }
@@ -254,6 +301,7 @@ namespace yuan::net::ssh
         }
 
         // 4. Main packet processing loop
+
         auto flush_outgoing = [&]()->coroutine::Task<void>
         {
             auto buffers = session->drain_outgoing();
@@ -277,11 +325,24 @@ namespace yuan::net::ssh
 
         while (session->state() != SshSession::State::disconnected && running_.load(std::memory_order_relaxed)) {
             if (recv_buf.readable_bytes() == 0) {
-                auto read_result = co_await ctx.read_async(config_.idle_timeout_ms);
-                if (read_result.status != coroutine::IoStatus::success) {
+                uint32_t read_timeout_ms = config_.idle_timeout_ms;
+                if (session->has_any_pty_processes()) {
+                    if (read_timeout_ms == 0 || read_timeout_ms > 2) {
+                        read_timeout_ms = 2;
+                    }
+                }
+
+                auto read_result = co_await ctx.read_async(read_timeout_ms);
+                if (read_result.status == coroutine::IoStatus::success) {
+                    recv_buf.append(read_result.data);
+                } else if (read_result.status == coroutine::IoStatus::timed_out) {
+                    if (session->pump_all_pty_once(effective_handler)) {
+                        co_await flush_outgoing();
+                    }
+                    continue;
+                } else {
                     break;
                 }
-                recv_buf.append(read_result.data);
             }
 
             while (recv_buf.readable_bytes() > 0) {
@@ -293,11 +354,23 @@ namespace yuan::net::ssh
                     goto session_end;
                 }
                 if (!parse.complete) {
-                    auto read_result = co_await ctx.read_async(config_.idle_timeout_ms);
-                    if (read_result.status != coroutine::IoStatus::success) {
+                    uint32_t read_timeout_ms = config_.idle_timeout_ms;
+                    if (session->has_any_pty_processes()) {
+                        if (read_timeout_ms == 0 || read_timeout_ms > 2) {
+                            read_timeout_ms = 2;
+                        }
+                    }
+
+                    auto read_result = co_await ctx.read_async(read_timeout_ms);
+                    if (read_result.status == coroutine::IoStatus::success) {
+                        recv_buf.append(read_result.data);
+                    } else if (read_result.status == coroutine::IoStatus::timed_out) {
+                        if (session->pump_all_pty_once(effective_handler)) {
+                            co_await flush_outgoing();
+                        }
+                    } else {
                         goto session_end;
                     }
-                    recv_buf.append(read_result.data);
                     continue;
                 }
 
@@ -341,6 +414,16 @@ namespace yuan::net::ssh
                         if (!negotiated) {
                             goto session_end;
                         }
+
+                        const auto &kex_list = kex_init->kex_algorithms;
+                        const bool peer_supports_strict =
+                            (kex_list.find("kex-strict-c-v00@openssh.com") != std::string::npos);
+                        const bool server_supports_strict = std::find(
+                            config_.kex_algorithms.begin(),
+                            config_.kex_algorithms.end(),
+                            "kex-strict-s-v00@openssh.com") != config_.kex_algorithms.end();
+                        session->set_kex_strict_mode(peer_supports_strict && server_supports_strict);
+
                         auto *host_key_algorithm = host_key_provider_.find_algorithm(negotiated->host_key_name);
                         if (!host_key_algorithm) {
                             goto session_end;
@@ -361,13 +444,19 @@ namespace yuan::net::ssh
                 // Handle DH/ECDH init when in kex_init
                 if (session->state() == SshSession::State::kex_init &&
                     (msg_type == SshMessageType::SSH_MSG_KEX_ECDH_INIT ||
-                     msg_type == SshMessageType::SSH_MSG_KEXDH_INIT)) {
+                     msg_type == SshMessageType::SSH_MSG_KEXDH_INIT ||
+                     static_cast<uint8_t>((*payload)[0]) == 30)) {
+                    // libstdc++ treats enum values with duplicated underlying value
+                    // as the first declared enumerator during comparisons.
+                    // Here we must branch by raw packet type byte to correctly handle
+                    // ECDH (30) vs DH (30 legacy alias) init payload formats.
+                    const uint8_t msg_type_raw = (*payload)[0];
                     if (session->transport().consume_pending_kex_guess()) {
                         continue;
                     }
 
                     std::optional<std::vector<uint8_t>> client_public;
-                    if (msg_type == SshMessageType::SSH_MSG_KEX_ECDH_INIT) {
+                    if (msg_type_raw == 30) {
                         auto ecdh_init = SshMessageCodec::decode_kex_ecdh_init(payload->data(), payload->size());
                         if (ecdh_init) {
                             client_public = std::move(ecdh_init->client_public_key);
@@ -393,13 +482,20 @@ namespace yuan::net::ssh
                             // New keys are activated when client's NEWKEYS is received,
                             // ensuring old keys are used for receiving until then.
                             session->set_state(SshSession::State::newkeys);
+                        } else {
+                            goto session_end;
                         }
+                    } else {
+                        goto session_end;
                     }
                     continue;
                 }
 
                 // Handle NEWKEYS from client — activate new keys
                 if (msg_type == SshMessageType::SSH_MSG_NEWKEYS) {
+                    if (session->kex_strict_mode()) {
+                        session->transport().reset_packet_sequences();
+                    }
                     session->transport().process_newkeys();
 
                     if (session->pre_rekey_state() != SshSession::State::connected &&
@@ -455,12 +551,21 @@ namespace yuan::net::ssh
 
                 co_await flush_outgoing();
             }
+
+            if (session->has_any_pty_processes()) {
+                if (session->pump_all_pty_once(effective_handler)) {
+                    co_await flush_outgoing();
+                }
+            }
         }
 
     session_end:
+        ctx.close();
         effective_handler->on_session_closed(session);
         session->set_state(SshSession::State::disconnected);
         session_mgr_.remove_session(session->session_id());
+        std::cerr << "[ssh] session removed id=" << session->session_id()
+                  << " active_sessions=" << session_mgr_.session_count() << '\n';
     }
 
     void SshServer::init_default_algorithms()

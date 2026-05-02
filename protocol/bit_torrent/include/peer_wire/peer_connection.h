@@ -198,6 +198,10 @@ namespace yuan::net::bit_torrent
         {
             on_state_change_ = std::move(handler);
         }
+        void set_on_unchoke(PeerConnectionHandler handler)
+        {
+            on_unchoke_ = std::move(handler);
+        }
         void set_extended_message_handler(ExtendedMessageHandler handler)
         {
             extended_message_handler_ = std::move(handler);
@@ -239,7 +243,19 @@ namespace yuan::net::bit_torrent
         {
             return request_window_size_;
         }
+        void set_request_window_size(uint32_t size)
+        {
+            request_window_size_ = size;
+        }
         std::vector<PieceBlockRequest> take_pending_requests();
+
+        double download_rate() const { return download_rate_; }
+        double upload_rate() const { return upload_rate_; }
+        uint64_t last_piece_time_ms() const { return last_piece_time_ms_; }
+        bool is_snubbed() const;
+        void record_piece_received(uint32_t length);
+        void record_piece_sent(uint32_t length);
+        void update_rates(uint64_t now_ms);
 
     private:
         void schedule_connect_cleanup();
@@ -272,6 +288,7 @@ namespace yuan::net::bit_torrent
         PieceRequestHandler piece_request_handler_;
         PieceServedHandler piece_served_handler_;
         PeerConnectionHandler on_state_change_;
+        PeerConnectionHandler on_unchoke_;
         ExtendedMessageHandler extended_message_handler_;
         SuggestPieceHandler suggest_piece_handler_;
         AllowedFastHandler allowed_fast_handler_;
@@ -283,7 +300,15 @@ namespace yuan::net::bit_torrent
         int32_t total_pieces_;
         uint32_t default_request_size_;
         uint32_t pending_request_count_ = 0;
-        uint32_t request_window_size_ = 4;
+        uint32_t request_window_size_ = 64;
+
+        double download_rate_ = 0.0;
+        double upload_rate_ = 0.0;
+        uint64_t last_piece_time_ms_ = 0;
+        uint64_t rate_last_update_ms_ = 0;
+        uint64_t rate_downloaded_bytes_ = 0;
+        uint64_t rate_uploaded_bytes_ = 0;
+        static constexpr uint64_t SNUB_THRESHOLD_MS = 60000;
     };
 
 } // namespace yuan::net::bit_torrent

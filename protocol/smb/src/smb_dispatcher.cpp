@@ -1,4 +1,5 @@
 #include "smb_dispatcher.h"
+#include "crypto/smb_crypto_openssl.h"
 #include <cstring>
 #include <random>
 #include <algorithm>
@@ -57,6 +58,9 @@ namespace yuan::net::smb
                 break;
             case FileInfoClass::FileIdFullDirectoryInformation:
                 Smb2Codec::write_le32(buf, 0);
+                for (size_t i = 0; i < 4; ++i) {
+                    buf.append_u8(0);
+                }
                 Smb2Codec::write_le64(buf, entry.file_id.persistent);
                 break;
             case FileInfoClass::FileIdBothDirectoryInformation:
@@ -66,6 +70,8 @@ namespace yuan::net::smb
                 for (size_t i = 0; i < 24; ++i) {
                     buf.append_u8(0);
                 }
+                buf.append_u8(0);
+                buf.append_u8(0);
                 Smb2Codec::write_le64(buf, entry.file_id.persistent);
                 break;
             case FileInfoClass::FileDirectoryInformation:
@@ -215,6 +221,24 @@ namespace yuan::net::smb
 
             return buffer_to_vector(buf);
         }
+
+        std::optional<std::string> parse_rename_target_from_set_info(const std::vector<uint8_t> &buffer)
+        {
+            if (buffer.size() < 20) {
+                return std::nullopt;
+            }
+            const uint32_t name_len = Smb2Codec::read_le32(buffer.data() + 16);
+            if ((name_len % 2) != 0 || 20u + name_len > buffer.size()) {
+                return std::nullopt;
+            }
+
+            std::u16string new_name;
+            new_name.resize(name_len / 2);
+            for (size_t i = 0; i < new_name.size(); ++i) {
+                new_name[i] = static_cast<char16_t>(Smb2Codec::read_le16(buffer.data() + 20 + i * 2));
+            }
+            return Smb2Codec::utf16le_to_utf8(new_name);
+        }
     }
 
     SmbDispatcher::SmbDispatcher(const SmbServerConfig & config,
@@ -322,114 +346,179 @@ namespace yuan::net::smb
         return responses;
     }
 
-    ByteBuffer SmbDispatcher::handle_negotiate(SmbSession & session, const Smb2Header & header,
-                                               const uint8_t * data, size_t len)
-    {
-        auto req = Smb2Codec::decode_negotiate_request(data, len);
-        if (!req)
-            return make_error(header, NtStatus::INVALID_PARAMETER);
+     ByteBuffer SmbDispatcher::handle_negotiate(SmbSession & session, const Smb2Header & header,
+                                                 const uint8_t * data, size_t len)
+     {
+         auto req = Smb2Codec::decode_negotiate_request(data, len);
+         if (!req)
+             return make_error(header, NtStatus::INVALID_PARAMETER);
 
-        DialectRevision dialect = select_dialect(req->dialects);
-        session.set_dialect(dialect);
-        session.set_state(SmbSession::State::negotiating);
+         DialectRevision dialect = select_dialect(req->dialects);
+         session.set_dialect(dialect);
+         session.set_state(SmbSession::State::negotiating);
 
-        uint32_t caps = compute_server_capabilities(dialect);
-        uint16_t sec_mode = compute_security_mode();
-        session.set_server_capabilities(caps);
-        session.set_server_security_mode(sec_mode);
+          if (dialect >= DialectRevision::SMB_3_1_1) {
+              session.set_preauth_hash(std::vector<uint8_t>(64, 0));
+              auto hash = SmbKeyDerivation::compute_preauth_hash(session.preauth_hash(), data, len);
+              session.set_preauth_hash(std::move(hash));
+          }
 
-        Smb2NegotiateResponse resp;
-        std::memcpy(resp.server_guid, server_guid_, 16);
-        resp.dialect_revision = static_cast<uint16_t>(dialect);
-        resp.security_mode = sec_mode;
-        resp.capabilities = caps;
-        resp.max_transact_size = config_.max_transact_size;
-        resp.max_read_size = config_.max_read_size;
-        resp.max_write_size = config_.max_write_size;
-        resp.system_time = Smb2Codec::filetime_now();
-        resp.server_start_time = resp.system_time;
+         uint32_t caps = compute_server_capabilities(dialect);
+         uint16_t sec_mode = compute_security_mode();
+         session.set_server_capabilities(caps);
+         session.set_server_security_mode(sec_mode);
 
-        SmbSpnegoAuth spnego(config_.server_name, config_.domain_name);
-        resp.security_buffer = spnego.process_inbound_token({});
+         Smb2NegotiateResponse resp;
+         std::memcpy(resp.server_guid, server_guid_, 16);
+         resp.dialect_revision = static_cast<uint16_t>(dialect);
+         resp.security_mode = sec_mode;
+         resp.capabilities = caps;
+         resp.max_transact_size = config_.max_transact_size;
+         resp.max_read_size = config_.max_read_size;
+         resp.max_write_size = config_.max_write_size;
+         resp.system_time = Smb2Codec::filetime_now();
+         resp.server_start_time = resp.system_time;
 
-        if (dialect >= DialectRevision::SMB_3_1_1 && crypto_) {
-            std::vector<NegotiateContext> ctxs;
+         if (dialect >= DialectRevision::SMB_3_1_1 && crypto_) {
+             std::vector<NegotiateContext> ctxs;
 
-            NegotiateContext preauth_ctx;
-            preauth_ctx.context_type = 0x0001;
-            preauth_ctx.data = { static_cast<uint8_t>(SMB2_PREAUTH_INTEGRITY_CAP_SHA_512 & 0xFF),
-                                 static_cast<uint8_t>((SMB2_PREAUTH_INTEGRITY_CAP_SHA_512 >> 8) & 0xFF) };
-            ctxs.push_back(preauth_ctx);
+              NegotiateContext preauth_ctx;
+              preauth_ctx.context_type = SMB2_NEGOTIATE_CTX_PREAUTH_INTEGRITY;
+             ByteBuffer preauth_buf(64);
+             Smb2Codec::write_le16(preauth_buf, 1);
+             Smb2Codec::write_le16(preauth_buf, 32);
+             Smb2Codec::write_le16(preauth_buf, static_cast<uint16_t>(SMB2_PREAUTH_INTEGRITY_CAP_SHA_512));
+             for (int i = 0; i < 32; ++i) {
+                 preauth_buf.append_u8(static_cast<uint8_t>(i + 1));
+             }
+             preauth_ctx.data = buffer_to_vector(preauth_buf);
+             ctxs.push_back(preauth_ctx);
 
-            NegotiateContext enc_ctx;
-            enc_ctx.context_type = 0x0002;
-            uint16_t enc_algos = static_cast<uint16_t>(EncryptionAlgorithm::AES_128_CCM) |
-                                 (static_cast<uint16_t>(EncryptionAlgorithm::AES_128_GCM) << 8);
-            enc_ctx.data = { static_cast<uint8_t>(enc_algos & 0xFF),
-                             static_cast<uint8_t>((enc_algos >> 8) & 0xFF) };
-            ctxs.push_back(enc_ctx);
+              if (config_.enable_encryption) {
+                  NegotiateContext enc_ctx;
+                  enc_ctx.context_type = SMB2_NEGOTIATE_CTX_ENCRYPTION;
+                  ByteBuffer enc_buf(16);
+                  Smb2Codec::write_le16(enc_buf, 2);
+                  Smb2Codec::write_le16(enc_buf, static_cast<uint16_t>(EncryptionAlgorithm::AES_128_GCM));
+                  Smb2Codec::write_le16(enc_buf, static_cast<uint16_t>(EncryptionAlgorithm::AES_128_CCM));
+                  enc_ctx.data = buffer_to_vector(enc_buf);
+                  ctxs.push_back(enc_ctx);
+              }
 
-            auto ctx_buf = Smb2Codec::encode_negotiate_contexts(ctxs);
-            auto ctx_span = ctx_buf.readable_span();
-            resp.negotiate_context.assign(
-                reinterpret_cast<const uint8_t *>(ctx_span.data()),
-                reinterpret_cast<const uint8_t *>(ctx_span.data()) + ctx_span.size());
-        }
+              NegotiateContext signing_ctx;
+              signing_ctx.context_type = SMB2_NEGOTIATE_CTX_SIGNING;
+              ByteBuffer signing_buf(8);
+              Smb2Codec::write_le16(signing_buf, 1);
+              Smb2Codec::write_le16(signing_buf, SMB2_SIGNING_AES128_CMAC);
+              signing_ctx.data = buffer_to_vector(signing_buf);
+              ctxs.push_back(signing_ctx);
 
-        return Smb2Codec::encode_negotiate_response(header, resp);
-    }
+              session.set_signing_algorithm(SMB2_SIGNING_AES128_CMAC);
 
-    ByteBuffer SmbDispatcher::handle_session_setup(SmbSession & session, const Smb2Header & header,
-                                                   const uint8_t * data, size_t len)
-    {
-        auto req = Smb2Codec::decode_session_setup_request(data, len);
-        if (!req)
-            return make_error(header, NtStatus::INVALID_PARAMETER);
+              auto ctx_buf = Smb2Codec::encode_negotiate_contexts(ctxs);
+             auto ctx_span = ctx_buf.readable_span();
+             resp.negotiate_context.assign(
+                 reinterpret_cast<const uint8_t *>(ctx_span.data()),
+                 reinterpret_cast<const uint8_t *>(ctx_span.data()) + ctx_span.size());
+             resp.negotiate_context_count = static_cast<uint16_t>(ctxs.size());
+         }
 
-        if (!session.auth()) {
-            auto auth = std::make_unique<SmbSpnegoAuth>(config_.server_name, config_.domain_name);
-            if (handler_) {
-                auth->set_credentials_db(
-                    [this, &session](const std::string & u, const std::string & d, const std::string & p)->bool {
-                        (void)p;
-                        return handler_->on_authenticate(&session, u, d);
-                    });
-                auth->set_password_lookup(
-                    [this, &session](const std::string & u, const std::string & d)->std::optional<std::string> {
-                        return handler_->on_password_lookup(&session, u, d);
-                    });
-            }
-            session.set_auth(std::move(auth));
-        }
+         auto resp_buf = Smb2Codec::encode_negotiate_response(header, resp);
 
-        auto outbound = session.auth()->process_inbound_token(req->security_buffer);
+          if (dialect >= DialectRevision::SMB_3_1_1) {
+              auto span = resp_buf.readable_span();
+              auto hash = SmbKeyDerivation::compute_preauth_hash(
+                  session.preauth_hash(),
+                  reinterpret_cast<const uint8_t *>(span.data()),
+                  span.size());
+              session.set_preauth_hash(std::move(hash));
+          }
 
-        Smb2SessionSetupResponse resp;
-        resp.security_buffer = std::move(outbound);
+         return resp_buf;
+     }
 
-        if (session.auth()->is_complete()) {
-            const auto &result = session.auth()->result();
-            if (result.success) {
-                resp.session_flags = 0;
-                session.set_state(SmbSession::State::authenticated);
-                session.set_user_name(result.user_name);
-                session.set_domain_name(result.domain_name);
-                derive_session_keys(session, result.session_key);
+      ByteBuffer SmbDispatcher::handle_session_setup(SmbSession & session, const Smb2Header & header,
+                                                      const uint8_t * data, size_t len)
+      {
+          auto req = Smb2Codec::decode_session_setup_request(data, len);
+         if (!req)
+             return make_error(header, NtStatus::INVALID_PARAMETER);
 
-                if (handler_) {
-                    handler_->on_session_opened(&session);
-                }
-            } else {
-                return make_error(header, NtStatus::LOGON_FAILURE);
-            }
-        } else {
-            auto err_hdr = header;
-            err_hdr.status = static_cast<uint32_t>(NtStatus::MORE_PROCESSING_REQUIRED);
-            return Smb2Codec::encode_session_setup_response(err_hdr, resp);
-        }
+          bool is_smb311 = session.dialect() >= DialectRevision::SMB_3_1_1;
 
-        return Smb2Codec::encode_session_setup_response(header, resp);
-    }
+           if (is_smb311) {
+               auto hash = SmbKeyDerivation::compute_preauth_hash(session.preauth_hash(), data, len);
+               session.set_preauth_hash(std::move(hash));
+           }
+
+         if (!session.auth()) {
+             auto auth = std::make_unique<SmbSpnegoAuth>(config_.server_name, config_.domain_name);
+             if (handler_) {
+                 auth->set_credentials_db(
+                     [this, &session](const std::string & u, const std::string & d, const std::string & p)->bool {
+                         (void)p;
+                         return handler_->on_authenticate(&session, u, d);
+                     });
+                 auth->set_password_lookup(
+                     [this, &session](const std::string & u, const std::string & d)->std::optional<std::string> {
+                         return handler_->on_password_lookup(&session, u, d);
+                     });
+                 auth->set_nt_hash_lookup(
+                     [this, &session](const std::string & u, const std::string & d)->std::optional<std::string> {
+                         return handler_->on_nt_hash_lookup(&session, u, d);
+                     });
+             }
+             session.set_auth(std::move(auth));
+         }
+
+         auto outbound = session.auth()->process_inbound_token(req->security_buffer);
+
+         Smb2SessionSetupResponse resp;
+         resp.security_buffer = std::move(outbound);
+
+         if (session.auth()->is_complete()) {
+             const auto &result = session.auth()->result();
+             if (result.success) {
+                 resp.session_flags = 0;
+                 session.set_state(SmbSession::State::authenticated);
+                 session.set_user_name(result.user_name);
+                 session.set_domain_name(result.domain_name);
+
+                 auto resp_hdr = header;
+                 resp_hdr.session_id = session.session_id();
+                 auto resp_buf = Smb2Codec::encode_session_setup_response(resp_hdr, resp);
+
+                 if (is_smb311) {
+                 }
+
+                  derive_session_keys(session, result.session_key);
+
+                 if (handler_) {
+                     handler_->on_session_opened(&session);
+                 }
+
+                 return resp_buf;
+             } else {
+                 return make_error(header, NtStatus::LOGON_FAILURE);
+             }
+         } else {
+             auto err_hdr = header;
+             err_hdr.status = static_cast<uint32_t>(NtStatus::MORE_PROCESSING_REQUIRED);
+             err_hdr.session_id = session.session_id();
+             auto resp_buf = Smb2Codec::encode_session_setup_response(err_hdr, resp);
+
+              if (is_smb311) {
+                  auto span = resp_buf.readable_span();
+                  auto hash = SmbKeyDerivation::compute_preauth_hash(
+                      session.preauth_hash(),
+                      reinterpret_cast<const uint8_t *>(span.data()),
+                      span.size());
+                  session.set_preauth_hash(std::move(hash));
+              }
+
+             return resp_buf;
+         }
+     }
 
     ByteBuffer SmbDispatcher::handle_logoff(SmbSession & session, const Smb2Header & header,
                                             const uint8_t * data, size_t len)
@@ -494,7 +583,7 @@ namespace yuan::net::smb
         resp.share_type = static_cast<uint8_t>(share->type());
         resp.share_flags = share->share_flags();
         resp.capabilities = share->capabilities();
-        resp.maximal_access = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE;
+        resp.maximal_access = SMB_FILE_GENERIC_READ | SMB_FILE_GENERIC_WRITE | SMB_FILE_GENERIC_EXECUTE;
 
         share->increment_uses();
         session.set_state(SmbSession::State::active);
@@ -552,7 +641,7 @@ namespace yuan::net::smb
             uint64_t pipe_handle = pipe_mgr_.open_pipe(file_path, session.session_id());
 
             Smb2CreateResponse resp;
-            resp.create_action = FILE_OPENED;
+            resp.create_action = SMB_FILE_OPENED;
             resp.oplock_level = SMB2_OPLOCK_LEVEL_NONE;
             resp.file_id = session.allocate_file_id();
 
@@ -579,8 +668,7 @@ namespace yuan::net::smb
             return make_error(header, NtStatus::ACCESS_DENIED);
         }
 
-        std::string full_path = tree->share->resolve_path(file_path);
-        auto open_result = fs->open(full_path, req->desired_access,
+        auto open_result = fs->open(file_path, req->desired_access,
                                     req->create_disposition, req->create_options);
         if (!open_result.success) {
             return make_error(header, open_result.status);
@@ -618,7 +706,7 @@ namespace yuan::net::smb
 
         OpenFile of;
         of.file_id = file_id;
-        of.path = full_path;
+        of.path = file_path;
         of.access_mask = req->desired_access;
         of.share_access = req->share_access;
         of.create_disposition = req->create_disposition;
@@ -802,7 +890,6 @@ namespace yuan::net::smb
         for (const auto &entry : *entries) {
             size_t entry_start = dir_buf.write_offset();
             append_directory_entry(dir_buf, entry, static_cast<FileInfoClass>(req->file_information_class));
-
             size_t pad = (4 - (dir_buf.write_offset() & 3)) & 3;
             for (size_t p = 0; p < pad; ++p)
                 dir_buf.append_u8(0);
@@ -901,6 +988,23 @@ namespace yuan::net::smb
 
         if (handler_ && !handler_->on_set_info(&session, req->file_id)) {
             return make_error(header, NtStatus::ACCESS_DENIED);
+        }
+
+        if (handler_ && req->info_type == SMB2_0_INFO_FILE) {
+            const auto info_class = static_cast<FileInfoClass>(req->file_info_class);
+            if (info_class == FileInfoClass::FileRenameInformation) {
+                auto new_path = parse_rename_target_from_set_info(req->buffer);
+                if (!new_path.has_value()) {
+                    return make_error(header, NtStatus::INVALID_PARAMETER);
+                }
+                if (!handler_->on_rename(&session, req->file_id, *new_path)) {
+                    return make_error(header, NtStatus::ACCESS_DENIED);
+                }
+            } else if (info_class == FileInfoClass::FileDispositionInformation) {
+                if (!req->buffer.empty() && req->buffer[0] != 0 && !handler_->on_delete(&session, req->file_id)) {
+                    return make_error(header, NtStatus::ACCESS_DENIED);
+                }
+            }
         }
 
         SmbFileSystem *fs = tree->share->file_system();

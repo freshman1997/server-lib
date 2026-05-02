@@ -102,6 +102,9 @@ namespace yuan::net::bit_torrent
         // Announce ourselves to the DHT network for a torrent
         void announce(const std::vector<uint8_t> &info_hash, uint16_t port);
 
+        // Announce and receive peers for a specific info_hash via callback
+        void announce(const std::vector<uint8_t> &info_hash, uint16_t port, PeerCallback cb);
+
         // Look up peers for a torrent
         void get_peers(const std::vector<uint8_t> &info_hash, PeerCallback cb);
 
@@ -114,6 +117,12 @@ namespace yuan::net::bit_torrent
             node_cb_ = std::move(cb);
         }
 
+        // Set callback for peers discovered via get_peers
+        void set_peer_callback(PeerCallback cb)
+        {
+            peer_callback_ = std::move(cb);
+        }
+
         // Called when a UDP packet is received on the DHT port
         void on_udp_data(const uint8_t *data, size_t len,
                          const std::string &remote_ip, uint16_t remote_port);
@@ -123,6 +132,9 @@ namespace yuan::net::bit_torrent
 
         // Get routing table size
         size_t routing_table_size() const;
+
+        bool save_routing_table(const std::string &path) const;
+        bool load_routing_table(const std::string &path);
 
         // ConnectionHandler interface (for datagram endpoint events)
         void on_connected(const std::shared_ptr<net::Connection> &conn) override;
@@ -156,7 +168,8 @@ namespace yuan::net::bit_torrent
                                        const DhtNodeId &id,
                                        const std::string &token,
                                        const std::vector<DhtCompactNode> &nodes,
-                                       const std::vector<PeerAddress> &peers);
+                                       const std::vector<PeerAddress> &peers,
+                                       const std::vector<uint8_t> &info_hash = {});
 
         // Request handling (when other nodes query us)
         void handle_ping_query(const std::string &ip, uint16_t port,
@@ -221,6 +234,7 @@ namespace yuan::net::bit_torrent
         {
             std::function<void()> callback;
             int64_t expire_time_ms;
+            std::vector<uint8_t> info_hash;
         };
         std::unordered_map<std::string, PendingQuery> pending_queries_;
         uint32_t next_transaction_id_ = 0;

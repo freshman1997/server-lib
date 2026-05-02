@@ -177,15 +177,6 @@ namespace yuan::net::ssh
 
     void SshSftpSubsystem::send_status(SshChannel * channel, uint32_t request_id, SftpStatus code, const std::string & msg)
     {
-        if (static_cast<uint32_t>(code) > static_cast<uint32_t>(SftpStatus::SSH_FX_OP_UNSUPPORTED)) {
-            if (code == SftpStatus::SSH_FX_NO_SUCH_PATH ||
-                code == SftpStatus::SSH_FX_INVALID_FILENAME ||
-                code == SftpStatus::SSH_FX_NOT_A_DIRECTORY) {
-                code = SftpStatus::SSH_FX_NO_SUCH_FILE;
-            } else {
-                code = SftpStatus::SSH_FX_FAILURE;
-            }
-        }
         auto buf = SshSftpCodec::encode_status(request_id, code, msg);
         send_data_on_channel(channel, buf);
     }

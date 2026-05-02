@@ -359,6 +359,15 @@ namespace yuan::net::bit_torrent
         return written == length;
     }
 
+    bool PieceStorage::discard_piece(int32_t piece_index)
+    {
+        close_piece_file(piece_index);
+        const std::string path = piece_file_path(piece_index);
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+        return !std::filesystem::exists(path);
+    }
+
     void PieceStorage::close_piece_file(int32_t piece_index)
     {
         auto it = piece_files_.find(piece_index);

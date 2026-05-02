@@ -124,57 +124,57 @@ namespace yuan::net::smb
         PRINT = 0x03
     };
 
-    constexpr uint32_t FILE_SUPERSEDE = 0x00000000;
-    constexpr uint32_t FILE_OPEN = 0x00000001;
-    constexpr uint32_t FILE_CREATE = 0x00000002;
-    constexpr uint32_t FILE_OPEN_IF = 0x00000003;
-    constexpr uint32_t FILE_OVERWRITE = 0x00000004;
-    constexpr uint32_t FILE_OVERWRITE_IF = 0x00000005;
+    constexpr uint32_t SMB_FILE_SUPERSEDE = 0x00000000;
+    constexpr uint32_t SMB_FILE_OPEN = 0x00000001;
+    constexpr uint32_t SMB_FILE_CREATE = 0x00000002;
+    constexpr uint32_t SMB_FILE_OPEN_IF = 0x00000003;
+    constexpr uint32_t SMB_FILE_OVERWRITE = 0x00000004;
+    constexpr uint32_t SMB_FILE_OVERWRITE_IF = 0x00000005;
 
-    constexpr uint32_t FILE_SUPERSEDED = 0x00000000;
-    constexpr uint32_t FILE_OPENED = 0x00000001;
-    constexpr uint32_t FILE_CREATED = 0x00000002;
-    constexpr uint32_t FILE_OVERWRITTEN = 0x00000003;
+    constexpr uint32_t SMB_FILE_SUPERSEDED = 0x00000000;
+    constexpr uint32_t SMB_FILE_OPENED = 0x00000001;
+    constexpr uint32_t SMB_FILE_CREATED = 0x00000002;
+    constexpr uint32_t SMB_FILE_OVERWRITTEN = 0x00000003;
 
-    constexpr uint32_t GENERIC_READ = 0x80000000;
-    constexpr uint32_t GENERIC_WRITE = 0x40000000;
+    constexpr uint32_t SMB_GENERIC_READ = 0x80000000;
+    constexpr uint32_t SMB_GENERIC_WRITE = 0x40000000;
 
-    constexpr uint32_t FILE_DIRECTORY_FILE = 0x00000001;
-    constexpr uint32_t FILE_NON_DIRECTORY_FILE = 0x00000040;
-    constexpr uint32_t FILE_WRITE_THROUGH = 0x00000002;
-    constexpr uint32_t FILE_SEQUENTIAL_ONLY = 0x00000004;
-    constexpr uint32_t FILE_RANDOM_ACCESS = 0x00000800;
-    constexpr uint32_t FILE_DELETE_ON_CLOSE = 0x00001000;
+    constexpr uint32_t SMB_FILE_DIRECTORY_FILE = 0x00000001;
+    constexpr uint32_t SMB_FILE_NON_DIRECTORY_FILE = 0x00000040;
+    constexpr uint32_t SMB_FILE_WRITE_THROUGH = 0x00000002;
+    constexpr uint32_t SMB_FILE_SEQUENTIAL_ONLY = 0x00000004;
+    constexpr uint32_t SMB_FILE_RANDOM_ACCESS = 0x00000800;
+    constexpr uint32_t SMB_FILE_DELETE_ON_CLOSE = 0x00001000;
 
-    constexpr uint32_t FILE_READ_DATA = 0x00000001;
-    constexpr uint32_t FILE_WRITE_DATA = 0x00000002;
-    constexpr uint32_t FILE_APPEND_DATA = 0x00000004;
-    constexpr uint32_t FILE_EXECUTE = 0x00000020;
-    constexpr uint32_t FILE_READ_ATTRIBUTES = 0x00000080;
-    constexpr uint32_t FILE_WRITE_ATTRIBUTES = 0x00000100;
-    constexpr uint32_t DELETE = 0x00010000;
-    constexpr uint32_t READ_CONTROL = 0x00020000;
-    constexpr uint32_t WRITE_DAC = 0x00040000;
-    constexpr uint32_t SYNCHRONIZE = 0x00100000;
-    constexpr uint32_t FILE_GENERIC_READ = 0x00120089;
-    constexpr uint32_t FILE_GENERIC_WRITE = 0x00120116;
-    constexpr uint32_t FILE_GENERIC_EXECUTE = 0x001200A0;
-    constexpr uint32_t FILE_ALL_ACCESS = 0x001F01FF;
-    constexpr uint32_t MAXIMUM_ALLOWED = 0x02000000;
+    constexpr uint32_t SMB_FILE_READ_DATA = 0x00000001;
+    constexpr uint32_t SMB_FILE_WRITE_DATA = 0x00000002;
+    constexpr uint32_t SMB_FILE_APPEND_DATA = 0x00000004;
+    constexpr uint32_t SMB_FILE_EXECUTE = 0x00000020;
+    constexpr uint32_t SMB_FILE_READ_ATTRIBUTES = 0x00000080;
+    constexpr uint32_t SMB_FILE_WRITE_ATTRIBUTES = 0x00000100;
+    constexpr uint32_t SMB_DELETE = 0x00010000;
+    constexpr uint32_t SMB_READ_CONTROL = 0x00020000;
+    constexpr uint32_t SMB_WRITE_DAC = 0x00040000;
+    constexpr uint32_t SMB_SYNCHRONIZE = 0x00100000;
+    constexpr uint32_t SMB_FILE_GENERIC_READ = 0x00120089;
+    constexpr uint32_t SMB_FILE_GENERIC_WRITE = 0x00120116;
+    constexpr uint32_t SMB_FILE_GENERIC_EXECUTE = 0x001200A0;
+    constexpr uint32_t SMB_FILE_ALL_ACCESS = 0x001F01FF;
+    constexpr uint32_t SMB_MAXIMUM_ALLOWED = 0x02000000;
 
-    constexpr uint32_t FILE_SHARE_READ = 0x00000001;
-    constexpr uint32_t FILE_SHARE_WRITE = 0x00000002;
-    constexpr uint32_t FILE_SHARE_DELETE = 0x00000004;
+    constexpr uint32_t SMB_FILE_SHARE_READ = 0x00000001;
+    constexpr uint32_t SMB_FILE_SHARE_WRITE = 0x00000002;
+    constexpr uint32_t SMB_FILE_SHARE_DELETE = 0x00000004;
 
-    constexpr uint32_t FILE_ATTRIBUTE_READONLY = 0x00000001;
-    constexpr uint32_t FILE_ATTRIBUTE_HIDDEN = 0x00000002;
-    constexpr uint32_t FILE_ATTRIBUTE_SYSTEM = 0x00000004;
-    constexpr uint32_t FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
-    constexpr uint32_t FILE_ATTRIBUTE_ARCHIVE = 0x00000020;
-    constexpr uint32_t FILE_ATTRIBUTE_NORMAL = 0x00000080;
-    constexpr uint32_t FILE_ATTRIBUTE_TEMPORARY = 0x00000100;
-    constexpr uint32_t FILE_ATTRIBUTE_SPARSE_FILE = 0x00000200;
-    constexpr uint32_t FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
+    constexpr uint32_t SMB_FILE_ATTRIBUTE_READONLY = 0x00000001;
+    constexpr uint32_t SMB_FILE_ATTRIBUTE_HIDDEN = 0x00000002;
+    constexpr uint32_t SMB_FILE_ATTRIBUTE_SYSTEM = 0x00000004;
+    constexpr uint32_t SMB_FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
+    constexpr uint32_t SMB_FILE_ATTRIBUTE_ARCHIVE = 0x00000020;
+    constexpr uint32_t SMB_FILE_ATTRIBUTE_NORMAL = 0x00000080;
+    constexpr uint32_t SMB_FILE_ATTRIBUTE_TEMPORARY = 0x00000100;
+    constexpr uint32_t SMB_FILE_ATTRIBUTE_SPARSE_FILE = 0x00000200;
+    constexpr uint32_t SMB_FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
 
     constexpr uint8_t SMB2_OPLOCK_LEVEL_NONE = 0x00;
     constexpr uint8_t SMB2_OPLOCK_LEVEL_II = 0x01;
@@ -193,16 +193,16 @@ namespace yuan::net::smb
     constexpr uint8_t SMB2_0_INFO_SECURITY = 0x03;
     constexpr uint8_t SMB2_0_INFO_QUOTA = 0x04;
 
-    constexpr uint32_t FILE_CASE_SENSITIVE_SEARCH = 0x00000001;
-    constexpr uint32_t FILE_CASE_PRESERVED_NAMES = 0x00000002;
-    constexpr uint32_t FILE_UNICODE_ON_DISK = 0x00000004;
-    constexpr uint32_t FILE_PERSISTENT_ACLS = 0x00000008;
-    constexpr uint32_t FILE_SUPPORTS_SPARSE_FILES = 0x00000040;
-    constexpr uint32_t FILE_SUPPORTS_REPARSE_POINTS = 0x00000080;
-    constexpr uint32_t FILE_SUPPORTS_EXTENDED_ATTRIBUTES = 0x00800000;
+    constexpr uint32_t SMB_FILE_CASE_SENSITIVE_SEARCH = 0x00000001;
+    constexpr uint32_t SMB_FILE_CASE_PRESERVED_NAMES = 0x00000002;
+    constexpr uint32_t SMB_FILE_UNICODE_ON_DISK = 0x00000004;
+    constexpr uint32_t SMB_FILE_PERSISTENT_ACLS = 0x00000008;
+    constexpr uint32_t SMB_FILE_SUPPORTS_SPARSE_FILES = 0x00000040;
+    constexpr uint32_t SMB_FILE_SUPPORTS_REPARSE_POINTS = 0x00000080;
+    constexpr uint32_t SMB_FILE_SUPPORTS_EXTENDED_ATTRIBUTES = 0x00800000;
 
-    constexpr uint32_t FILE_DEVICE_DISK = 0x00000007;
-    constexpr uint32_t FILE_DEVICE_NAMED_PIPE = 0x00000011;
+    constexpr uint32_t SMB_FILE_DEVICE_DISK = 0x00000007;
+    constexpr uint32_t SMB_FILE_DEVICE_NAMED_PIPE = 0x00000011;
     constexpr uint32_t FILE_DEVICE_SECURE_OPEN = 0x00000100;
 
     constexpr uint32_t SL_RESTART_SCAN = 0x00000001;
@@ -289,12 +289,21 @@ namespace yuan::net::smb
     constexpr uint32_t FSCTL_LMR_REQUEST_RESILIENCY = 0x001401D4;
     constexpr uint32_t FSCTL_QUERY_NETWORK_INTERFACE_INFO = 0x001401FC;
     constexpr uint32_t FSCTL_VALIDATE_NEGOTIATE_INFO = 0x00140204;
-    constexpr uint32_t FSCTL_SET_REPARSE_POINT = 0x000900A4;
-    constexpr uint32_t FSCTL_GET_REPARSE_POINT = 0x000900A8;
-    constexpr uint32_t FSCTL_DELETE_REPARSE_POINT = 0x000900AC;
+    constexpr uint32_t SMB_FSCTL_SET_REPARSE_POINT = 0x000900A4;
+    constexpr uint32_t SMB_FSCTL_GET_REPARSE_POINT = 0x000900A8;
+    constexpr uint32_t SMB_FSCTL_DELETE_REPARSE_POINT = 0x000900AC;
 
     constexpr uint32_t SMB2_NETWORK_INTERFACE_RSS_CAPABLE = 0x00000001;
     constexpr uint32_t SMB2_NETWORK_INTERFACE_RDMA_CAPABLE = 0x00000002;
+
+    constexpr uint16_t SMB2_SIGNING_HMAC_SHA256 = 0x0000;
+    constexpr uint16_t SMB2_SIGNING_AES128_CMAC = 0x0001;
+    constexpr uint16_t SMB2_SIGNING_AES128_GMAC = 0x0002;
+
+    constexpr uint16_t SMB2_NEGOTIATE_CTX_PREAUTH_INTEGRITY = 0x0001;
+    constexpr uint16_t SMB2_NEGOTIATE_CTX_ENCRYPTION = 0x0002;
+    constexpr uint16_t SMB2_NEGOTIATE_CTX_COMPRESSION = 0x0003;
+    constexpr uint16_t SMB2_NEGOTIATE_CTX_SIGNING = 0x0008;
 
     constexpr uint32_t NTLMSSP_NEGOTIATE_56 = 0x80000000;
     constexpr uint32_t NTLMSSP_NEGOTIATE_128 = 0x20000000;

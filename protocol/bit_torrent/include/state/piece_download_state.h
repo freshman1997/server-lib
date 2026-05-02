@@ -13,6 +13,7 @@ namespace yuan::net::bit_torrent
         uint32_t piece_index_ = 0;
         uint32_t offset_ = 0;
         uint32_t length_ = 0;
+        uint64_t submit_time_ms_ = 0;
     };
 
     class PieceDownloadState
@@ -37,11 +38,16 @@ namespace yuan::net::bit_torrent
         bool mark_piece_completed(uint32_t piece_index);
         void mark_piece_failed(uint32_t piece_index);
         void requeue_block(uint32_t piece_index, uint32_t offset, uint32_t length);
+        std::vector<PieceBlockRequest> timeout_inflight_requests(uint64_t now_ms, uint64_t timeout_ms);
         bool select_next_request(const std::vector<bool> &peer_pieces,
                                  const std::vector<uint32_t> *piece_availability,
                                  uint32_t default_request_size,
                                  size_t max_active_pieces,
+                                 uint64_t now_ms,
                                  PieceBlockRequest &request);
+        bool select_endgame_request(const std::vector<bool> &peer_pieces,
+                                    uint64_t now_ms,
+                                    PieceBlockRequest &request);
 
     private:
         bool in_range(uint32_t piece_index) const;
@@ -52,6 +58,7 @@ namespace yuan::net::bit_torrent
         size_t active_piece_count() const;
         bool try_select_request_from_candidates(const std::vector<size_t> &candidates,
                                                 uint32_t default_request_size,
+                                                uint64_t now_ms,
                                                 PieceBlockRequest &request);
 
     private:

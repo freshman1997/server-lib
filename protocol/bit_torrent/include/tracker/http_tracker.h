@@ -15,14 +15,15 @@ namespace yuan::net::bit_torrent
 
     struct TrackerResponse
     {
-        int32_t interval_ = 0; // seconds between requests
+        int32_t interval_ = 0;
         int32_t min_interval_ = 0;
         std::string tracker_id_;
-        int32_t complete_ = 0;   // seeders
-        int32_t incomplete_ = 0; // leechers
+        int32_t complete_ = 0;
+        int32_t incomplete_ = 0;
         std::vector<PeerAddress> peers_;
-
         std::string warning_message_;
+        std::string error_message_;
+        bool is_error = false;
     };
 
     struct ScrapeResponse

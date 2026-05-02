@@ -38,6 +38,7 @@ namespace yuan::net::smb
 #endif
             std::string path;
             bool is_directory = false;
+            bool delete_on_close = false;
             std::string directory_pattern;
             std::optional<FileInfoClass> directory_info_class;
             std::vector<DirEntry> directory_entries;
@@ -210,6 +211,7 @@ namespace yuan::net::smb
         auto *h = new LocalHandle();
         h->path = full_path;
         h->is_directory = (create_options & FILE_DIRECTORY_FILE) != 0;
+        h->delete_on_close = (create_options & FILE_DELETE_ON_CLOSE) != 0;
 
         namespace fs = std::filesystem;
         std::error_code ec;
@@ -223,19 +225,19 @@ namespace yuan::net::smb
 
 #ifdef _WIN32
         DWORD access = 0;
-        if (desired_access & (GENERIC_READ | FILE_READ_DATA)) {
-            access |= GENERIC_READ;
+        if (desired_access & (SMB_GENERIC_READ | SMB_FILE_READ_DATA)) {
+            access |= SMB_GENERIC_READ;
         }
         if (desired_access & (GENERIC_WRITE | FILE_WRITE_DATA)) {
             access |= GENERIC_WRITE;
         }
         if (access == 0) {
-            access = GENERIC_READ;
+            access = SMB_GENERIC_READ;
         }
 
         DWORD creation = OPEN_EXISTING;
         switch (create_disposition) {
-        case FILE_SUPERSEDE:
+        case SMB_FILE_SUPERSEDE:
         case FILE_OVERWRITE:
             creation = CREATE_ALWAYS;
             break;
@@ -245,10 +247,10 @@ namespace yuan::net::smb
         case FILE_CREATE:
             creation = CREATE_NEW;
             break;
-        case FILE_OPEN:
+        case SMB_FILE_OPEN:
             creation = OPEN_EXISTING;
             break;
-        case FILE_OPEN_IF:
+        case SMB_FILE_OPEN_IF:
             creation = OPEN_ALWAYS;
             break;
         default:
@@ -298,9 +300,9 @@ namespace yuan::net::smb
             result.last_access_time = filetime_to_nt(info.ftLastAccessTime);
             result.last_write_time = filetime_to_nt(info.ftLastWriteTime);
             result.change_time = result.last_write_time;
-            result.create_action = (create_disposition == FILE_CREATE) ? FILE_CREATED : FILE_OPENED;
+            result.create_action = (create_disposition == FILE_CREATE) ? SMB_FILE_CREATED : SMB_FILE_OPENED;
         } else {
-            result.create_action = FILE_OPENED;
+            result.create_action = SMB_FILE_OPENED;
         }
         result.success = true;
         result.status = NtStatus::SUCCESS;
@@ -308,7 +310,7 @@ namespace yuan::net::smb
 #else
         if (h->is_directory || is_existing_directory) {
             if (!existed_before) {
-                if (create_disposition == FILE_OPEN) {
+                if (create_disposition == SMB_FILE_OPEN) {
                     delete h;
                     result.status = NtStatus::OBJECT_NAME_NOT_FOUND;
                     return result;
@@ -359,7 +361,7 @@ namespace yuan::net::smb
                 result.last_write_time = filetime_from_unix_time(st.st_mtime);
                 result.change_time = result.creation_time;
             }
-            result.create_action = existed_before ? FILE_OPENED : FILE_CREATED;
+            result.create_action = existed_before ? SMB_FILE_OPENED : SMB_FILE_CREATED;
             result.success = true;
             result.status = NtStatus::SUCCESS;
             return result;
@@ -367,7 +369,7 @@ namespace yuan::net::smb
 
         int flags = 0;
         if (desired_access & (GENERIC_WRITE | FILE_WRITE_DATA)) {
-            if (desired_access & (GENERIC_READ | FILE_READ_DATA)) {
+            if (desired_access & (SMB_GENERIC_READ | SMB_FILE_READ_DATA)) {
                 flags |= O_RDWR;
             } else {
                 flags |= O_WRONLY;
@@ -377,7 +379,7 @@ namespace yuan::net::smb
         }
 
         switch (create_disposition) {
-        case FILE_SUPERSEDE:
+        case SMB_FILE_SUPERSEDE:
         case FILE_OVERWRITE:
         case FILE_OVERWRITE_IF:
             flags |= O_CREAT | O_TRUNC;
@@ -385,9 +387,9 @@ namespace yuan::net::smb
         case FILE_CREATE:
             flags |= O_CREAT | O_EXCL;
             break;
-        case FILE_OPEN:
+        case SMB_FILE_OPEN:
             break;
-        case FILE_OPEN_IF:
+        case SMB_FILE_OPEN_IF:
             flags |= O_CREAT;
             break;
         default:
@@ -429,7 +431,7 @@ namespace yuan::net::smb
             result.last_write_time = filetime_from_unix_time(st.st_mtime);
             result.change_time = result.creation_time;
         }
-        result.create_action = existed_before ? FILE_OPENED : FILE_CREATED;
+        result.create_action = existed_before ? SMB_FILE_OPENED : SMB_FILE_CREATED;
         result.success = true;
         result.status = NtStatus::SUCCESS;
         return result;
@@ -453,6 +455,17 @@ namespace yuan::net::smb
             h->fd = -1;
         }
 #endif
+
+        if (h->delete_on_close) {
+            std::error_code ec;
+            std::filesystem::path p(h->path);
+            if (h->is_directory || std::filesystem::is_directory(p, ec)) {
+                std::filesystem::remove_all(p, ec);
+            } else {
+                std::filesystem::remove(p, ec);
+            }
+        }
+
         delete h;
     }
 
@@ -630,7 +643,9 @@ namespace yuan::net::smb
             break;
         }
         case FileInfoClass::FileAllInformation: {
-            buf.resize(70);
+            // FILE_ALL_INFORMATION also includes position/mode/alignment/name metadata.
+            // Samba rejects the response if we only return the first 80 bytes.
+            buf.resize(100);
             std::memcpy(buf.data() + 0, &ct, 8);
             std::memcpy(buf.data() + 8, &at, 8);
             std::memcpy(buf.data() + 16, &wt, 8);
@@ -642,7 +657,20 @@ namespace yuan::net::smb
             std::memcpy(buf.data() + 56, &nl, 4);
             std::memcpy(buf.data() + 60, &del_pending, 1);
             std::memcpy(buf.data() + 61, &is_dir, 1);
-            std::memcpy(buf.data() + 62, &ino, 8);
+            std::memset(buf.data() + 62, 0, 2);
+            std::memcpy(buf.data() + 64, &ino, 8);
+            uint32_t ea_size = 0;
+            std::memcpy(buf.data() + 72, &ea_size, 4);
+            uint32_t access_flags = 0x00120089;
+            std::memcpy(buf.data() + 76, &access_flags, 4);
+            uint64_t current_offset = 0;
+            std::memcpy(buf.data() + 80, &current_offset, 8);
+            uint32_t mode = 0;
+            std::memcpy(buf.data() + 88, &mode, 4);
+            uint32_t alignment_requirement = 0;
+            std::memcpy(buf.data() + 92, &alignment_requirement, 4);
+            uint32_t file_name_length = 0;
+            std::memcpy(buf.data() + 96, &file_name_length, 4);
             break;
         }
         default:
@@ -683,8 +711,8 @@ namespace yuan::net::smb
             return NtStatus::SUCCESS;
         }
         case FileInfoClass::FileDispositionInformation:
-            if (len >= 1 && data[0] != 0) {
-                return delete_file(handle);
+            if (len >= 1) {
+                h->delete_on_close = data[0] != 0;
             }
             return NtStatus::SUCCESS;
         case FileInfoClass::FileBasicInformation:

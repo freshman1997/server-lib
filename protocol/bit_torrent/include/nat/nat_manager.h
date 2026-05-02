@@ -19,6 +19,7 @@
 #include "utp_connection.h"
 #include "dht_node.h"
 #include "pex_manager.h"
+#include "metadata_manager.h"
 #include "torrent_meta.h"
 #include "peer_wire/peer_connection.h"
 #include "net/runtime/network_runtime.h"
@@ -59,6 +60,9 @@ namespace yuan::net::bit_torrent
         // Called when our piece possession changes (for PEX/DHT announce)
         void on_pieces_changed(const std::vector<bool> &pieces_have);
 
+        // Called when DHT peers are discovered (from shared DHT node)
+        void on_dht_peers(const std::vector<PeerAddress> &peers);
+
         // Get effective external address (from UPnP or manual config)
         std::string get_external_ip() const;
         uint16_t get_external_port() const;
@@ -67,6 +71,11 @@ namespace yuan::net::bit_torrent
         PexManager *get_pex_manager()
         {
             return pex_manager_ ? &*pex_manager_ : nullptr;
+        }
+
+        MetadataManager *get_metadata_manager()
+        {
+            return metadata_manager_ ? &*metadata_manager_ : nullptr;
         }
 
         // Getters for individual subsystems
@@ -89,12 +98,15 @@ namespace yuan::net::bit_torrent
         {
             dht_peer_cb_ = std::move(cb);
         }
+        void set_dht_cache_path(const std::string &path)
+        {
+            dht_cache_path_ = path;
+        }
 
     private:
         void on_upnp_result(bool success, const std::string &ip, uint16_t port);
         void on_new_tcp_peer(std::shared_ptr<PeerConnection> peer);
         void on_new_utp_peer(UtpConnection *utp_conn);
-        void on_dht_peers(const std::vector<PeerAddress> &peers);
 
     private:
         NatConfig config_;
@@ -110,6 +122,7 @@ namespace yuan::net::bit_torrent
         std::unique_ptr<UtpManager> utp_manager_;
         std::unique_ptr<DhtNode> dht_node_;
         std::unique_ptr<PexManager> pex_manager_;
+        std::unique_ptr<MetadataManager> metadata_manager_;
         std::unordered_map<std::string, std::shared_ptr<PeerConnection> > utp_peers_;
 
         // External address (from UPnP or manual)
@@ -119,6 +132,7 @@ namespace yuan::net::bit_torrent
 
         PeerCallback peer_cb_;
         DhtPeerCallback dht_peer_cb_;
+        std::string dht_cache_path_;
 
         bool started_ = false;
     };

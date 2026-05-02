@@ -268,6 +268,7 @@ namespace yuan::net::bit_torrent
         if (!client_.connect(tracker_host, tracker_port, runtime)) {
             error_resp.is_error = true;
             error_resp.error_message_ = "failed to setup datagram session";
+            client_.close();
             co_return error_resp;
         }
 
@@ -277,7 +278,7 @@ namespace yuan::net::bit_torrent
         if (connect_send.status != coroutine::IoStatus::success) {
             error_resp.is_error = true;
             error_resp.error_message_ = "failed to send connect request";
-            disconnect();
+            client_.close();
             co_return error_resp;
         }
 
@@ -285,14 +286,14 @@ namespace yuan::net::bit_torrent
         if (connect_result.status != coroutine::IoStatus::success || connect_result.data.readable_bytes() == 0) {
             error_resp.is_error = true;
             error_resp.error_message_ = "connect request timed out";
-            disconnect();
+            client_.close();
             co_return error_resp;
         }
 
         if (!parse_connect_response(connect_result.data)) {
             error_resp.is_error = true;
             error_resp.error_message_ = "connect response parse failed";
-            disconnect();
+            client_.close();
             co_return error_resp;
         }
 
@@ -300,7 +301,7 @@ namespace yuan::net::bit_torrent
         if (announce_send.status != coroutine::IoStatus::success) {
             error_resp.is_error = true;
             error_resp.error_message_ = "failed to send announce request";
-            disconnect();
+            client_.close();
             co_return error_resp;
         }
 
@@ -308,12 +309,12 @@ namespace yuan::net::bit_torrent
         if (announce_result.status != coroutine::IoStatus::success || announce_result.data.readable_bytes() == 0) {
             error_resp.is_error = true;
             error_resp.error_message_ = "announce request timed out";
-            disconnect();
+            client_.close();
             co_return error_resp;
         }
 
         auto result = parse_response(announce_result.data);
-        disconnect();
+        client_.close();
         co_return result;
     }
 
@@ -375,6 +376,7 @@ namespace yuan::net::bit_torrent
         if (!client_.connect(tracker_host, tracker_port, runtime)) {
             error_resp.is_error = true;
             error_resp.error_message_ = "failed to setup datagram session";
+            client_.close();
             co_return error_resp;
         }
 
@@ -384,7 +386,7 @@ namespace yuan::net::bit_torrent
         if (connect_send.status != coroutine::IoStatus::success) {
             error_resp.is_error = true;
             error_resp.error_message_ = "failed to send connect request";
-            disconnect();
+            client_.close();
             co_return error_resp;
         }
 
@@ -392,14 +394,14 @@ namespace yuan::net::bit_torrent
         if (connect_result.status != coroutine::IoStatus::success || connect_result.data.readable_bytes() == 0) {
             error_resp.is_error = true;
             error_resp.error_message_ = "connect request timed out";
-            disconnect();
+            client_.close();
             co_return error_resp;
         }
 
         if (!parse_connect_response(connect_result.data)) {
             error_resp.is_error = true;
             error_resp.error_message_ = "connect response parse failed";
-            disconnect();
+            client_.close();
             co_return error_resp;
         }
 
@@ -407,7 +409,7 @@ namespace yuan::net::bit_torrent
         if (scrape_send.status != coroutine::IoStatus::success) {
             error_resp.is_error = true;
             error_resp.error_message_ = "failed to send scrape request";
-            disconnect();
+            client_.close();
             co_return error_resp;
         }
 
@@ -415,12 +417,12 @@ namespace yuan::net::bit_torrent
         if (scrape_result.status != coroutine::IoStatus::success || scrape_result.data.readable_bytes() == 0) {
             error_resp.is_error = true;
             error_resp.error_message_ = "scrape request timed out";
-            disconnect();
+            client_.close();
             co_return error_resp;
         }
 
         auto resp = parse_scrape_response(scrape_result.data);
-        disconnect();
+        client_.close();
         co_return resp;
     }
 

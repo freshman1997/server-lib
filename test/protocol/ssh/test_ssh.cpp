@@ -6,10 +6,12 @@
 #include "openssl/x509.h"
 
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace yuan::net::ssh;
@@ -798,7 +800,7 @@ bool test_build_kex_init_uses_filtered_host_key_algorithms_in_config_order()
     return true;
 }
 
-bool test_process_kex_init_negotiates_client_preference_and_hash()
+bool test_process_kex_init_negotiates_config_preference_and_hash()
 {
     SshAlgorithmRegistry registry;
     registry.register_kex("curve25519-sha256", []() { return std::make_unique<FakeKexAlgorithm>(); });
@@ -832,14 +834,14 @@ bool test_process_kex_init_negotiates_client_preference_and_hash()
 
     auto negotiated = transport.process_kex_init(peer, config);
     TEST_ASSERT(negotiated.has_value(), "kex negotiation should succeed");
-    TEST_ASSERT(negotiated->kex_name == "diffie-hellman-group18-sha512",
-                "kex negotiation should prefer client order");
-    TEST_ASSERT(negotiated->host_key_name == "rsa-sha2-256",
-                "host key negotiation should prefer client order");
-    TEST_ASSERT(negotiated->client_to_server_cipher_name == "aes256-ctr",
-                "cipher negotiation should prefer client order");
-    TEST_ASSERT(negotiated->kex_hash_name == "sha512",
-                "group18 negotiation should select sha512 hash");
+    TEST_ASSERT(negotiated->kex_name == "curve25519-sha256",
+                "kex negotiation should prefer server config order over peer order");
+    TEST_ASSERT(negotiated->host_key_name == "ssh-ed25519",
+                "host key negotiation should prefer server config order");
+    TEST_ASSERT(negotiated->client_to_server_cipher_name == "aes128-ctr",
+                "cipher negotiation should prefer server config order");
+    TEST_ASSERT(negotiated->kex_hash_name == "sha256",
+                "curve25519 negotiation should select sha256 hash");
 
     config.kex_algorithms = { "diffie-hellman-group18-sha512" };
     auto negotiated_sha512 = transport.process_kex_init(peer, config);
@@ -871,7 +873,7 @@ bool test_first_kex_packet_follows_ignores_only_wrong_guess()
     config.compression_algorithms = { "none" };
 
     SshKexInitMessage wrong_guess = {};
-    wrong_guess.kex_algorithms = "diffie-hellman-group-exchange-sha256,curve25519-sha256";
+    wrong_guess.kex_algorithms = "diffie-hellman-group18-sha512,curve25519-sha256";
     wrong_guess.server_host_key_algorithms = "rsa-sha2-256,ssh-ed25519";
     wrong_guess.encryption_algorithms_client_to_server = "aes128-ctr";
     wrong_guess.encryption_algorithms_server_to_client = "aes128-ctr";
@@ -1309,6 +1311,58 @@ bool test_local_file_system_absolute_symlink_targets_stay_logical()
     return true;
 }
 
+bool test_local_file_system_realpath_and_readlink_edge_inputs()
+{
+#if YUAN_ENABLE_SSH_SFTP
+    const auto root = make_temp_ssh_dir();
+    std::error_code cleanup_ec;
+
+    {
+        SshLocalFileSystem fs(root.string());
+        auto mkdir_result = fs.mkdir("/subdir", {});
+        TEST_ASSERT(mkdir_result.success, "local fs should create subdir for edge input test");
+
+        const uint32_t open_flags =
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_READ) |
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_WRITE) |
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_CREAT) |
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_TRUNC);
+        auto open_result = fs.open("/subdir/target.txt", open_flags, {});
+        TEST_ASSERT(open_result.success, "local fs should create target file for edge input test");
+        auto close_result = fs.close(open_result.handle);
+        TEST_ASSERT(close_result.success, "local fs should close target file for edge input test");
+
+        auto realpath_root = fs.realpath("/");
+        TEST_ASSERT(realpath_root.success, "realpath should resolve root path");
+        TEST_ASSERT(realpath_root.path == "/", "realpath root should stay logical root");
+
+        auto realpath_mixed = fs.realpath("//subdir///target.txt");
+        TEST_ASSERT(realpath_mixed.success, "realpath should normalize repeated separators");
+        TEST_ASSERT(realpath_mixed.path == "/subdir/target.txt",
+                    "realpath should normalize repeated separators into canonical logical path");
+
+        auto realpath_parent = fs.realpath("/subdir/../target.txt");
+        TEST_ASSERT(realpath_parent.status == SftpStatus::SSH_FX_NO_SUCH_PATH,
+                    "realpath should reject parent traversal segments in client input");
+
+        auto symlink_result = fs.symlink("/rel_link.txt", "subdir/target.txt");
+        if (symlink_result.success) {
+            auto readlink_result = fs.readlink("/rel_link.txt");
+            TEST_ASSERT(readlink_result.success, "readlink should succeed for relative symlink target");
+            TEST_ASSERT(readlink_result.link_target == "/subdir/target.txt",
+                        "readlink should expose normalized logical path for in-root relative target");
+        } else {
+            TEST_ASSERT(symlink_result.status == SftpStatus::SSH_FX_PERMISSION_DENIED ||
+                            symlink_result.status == SftpStatus::SSH_FX_OP_UNSUPPORTED,
+                        "symlink failure should be explicit when platform or permissions do not allow it");
+        }
+    }
+
+    std::filesystem::remove_all(root, cleanup_ec);
+#endif
+    return true;
+}
+
 bool test_try_parse_marks_invalid_for_encrypted_bytes_before_newkeys()
 {
     SshAlgorithmRegistry registry;
@@ -1402,6 +1456,1783 @@ bool test_packet_codec_aead_roundtrip_and_tag_failure()
     return true;
 }
 
+bool test_channel_request_rejects_second_exec_and_second_shell()
+{
+    SshConnectionManager mgr(nullptr);
+    auto * channel = mgr.create_channel(SSH_CHANNEL_SESSION, 21, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+
+    SshChannelRequestMessage exec_msg;
+    exec_msg.recipient_channel = 21;
+    exec_msg.request_type = "exec";
+    exec_msg.want_reply = true;
+    exec_msg.request_specific_data = encode_string_payload("echo first");
+
+    auto first = mgr.handle_channel_request(exec_msg, nullptr);
+    auto first_span = first.readable_span();
+    TEST_ASSERT(!first_span.empty(), "first exec should respond");
+    TEST_ASSERT(first_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "default handler should reject exec");
+
+    auto second = mgr.handle_channel_request(exec_msg, nullptr);
+    auto second_span = second.readable_span();
+    TEST_ASSERT(!second_span.empty(), "second exec should respond");
+    TEST_ASSERT(second_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "second exec request must be rejected");
+
+    SshChannelRequestMessage shell_msg;
+    shell_msg.recipient_channel = 21;
+    shell_msg.request_type = "shell";
+    shell_msg.want_reply = true;
+
+    auto shell_reply = mgr.handle_channel_request(shell_msg, nullptr);
+    auto shell_span = shell_reply.readable_span();
+    TEST_ASSERT(!shell_span.empty(), "shell should respond");
+    TEST_ASSERT(shell_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "shell must be rejected after a previous command request");
+    return true;
+}
+
+bool test_channel_request_rejects_second_pty_and_parses_modes_as_string()
+{
+    class RecordingPtyHandler final : public SshHandler
+    {
+    public:
+        bool on_channel_open(SshSession * session,
+                             const std::string & channel_type,
+                             SshChannel * channel) override
+        {
+            (void)session;
+            (void)channel;
+            return channel_type == SSH_CHANNEL_SESSION;
+        }
+
+        bool on_pty_request(SshSession * session,
+                            SshChannel * channel,
+                            const std::string & term,
+                            uint32_t width, uint32_t height,
+                            uint32_t pixel_width, uint32_t pixel_height,
+                            const std::vector<uint8_t> & modes) override
+        {
+            (void)session;
+            (void)channel;
+            last_term = term;
+            last_width = width;
+            last_height = height;
+            last_pixel_width = pixel_width;
+            last_pixel_height = pixel_height;
+            last_modes = modes;
+            calls++;
+            return true;
+        }
+
+        int calls = 0;
+        std::string last_term;
+        uint32_t last_width = 0;
+        uint32_t last_height = 0;
+        uint32_t last_pixel_width = 0;
+        uint32_t last_pixel_height = 0;
+        std::vector<uint8_t> last_modes;
+    };
+
+    SshConnectionManager mgr(nullptr);
+    auto * channel = mgr.create_channel(SSH_CHANNEL_SESSION, 22, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm-256color");
+    SshMessageCodec::write_uint32(pty_payload, 120);
+    SshMessageCodec::write_uint32(pty_payload, 40);
+    SshMessageCodec::write_uint32(pty_payload, 1000);
+    SshMessageCodec::write_uint32(pty_payload, 800);
+    SshMessageCodec::write_string(pty_payload, std::string("\x01\x00\x00\x00\x00\x00", 6));
+
+    auto pty_span = pty_payload.readable_span();
+    SshChannelRequestMessage pty_msg;
+    pty_msg.recipient_channel = 22;
+    pty_msg.request_type = "pty-req";
+    pty_msg.want_reply = true;
+    pty_msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_span.data()) + pty_span.size());
+
+    RecordingPtyHandler handler;
+    auto first = mgr.handle_channel_request(pty_msg, &handler);
+    auto first_span = first.readable_span();
+    TEST_ASSERT(!first_span.empty(), "first pty should respond");
+    TEST_ASSERT(first_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS),
+                "first pty should be accepted");
+    TEST_ASSERT(handler.calls == 1, "pty callback should be called once");
+    TEST_ASSERT(handler.last_term == "xterm-256color", "pty term should decode correctly");
+    TEST_ASSERT(handler.last_width == 120 && handler.last_height == 40,
+                "pty dimensions should decode correctly");
+    TEST_ASSERT(handler.last_pixel_width == 1000 && handler.last_pixel_height == 800,
+                "pty pixel dimensions should decode correctly");
+    TEST_ASSERT(handler.last_modes.size() == 6,
+                "terminal modes should preserve exact length from SSH string payload");
+
+    auto second = mgr.handle_channel_request(pty_msg, &handler);
+    auto second_span = second.readable_span();
+    TEST_ASSERT(!second_span.empty(), "second pty should respond");
+    TEST_ASSERT(second_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "second pty request must be rejected");
+    TEST_ASSERT(handler.calls == 1, "rejected second pty should not invoke callback again");
+    return true;
+}
+
+bool test_window_change_and_signal_always_reply_success_when_want_reply()
+{
+    SshConnectionManager mgr(nullptr);
+    auto * channel = mgr.create_channel(SSH_CHANNEL_SESSION, 23, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+
+    yuan::buffer::ByteBuffer wc_payload;
+    SshMessageCodec::write_uint32(wc_payload, 90);
+    SshMessageCodec::write_uint32(wc_payload, 30);
+    SshMessageCodec::write_uint32(wc_payload, 900);
+    SshMessageCodec::write_uint32(wc_payload, 700);
+
+    auto wc_span = wc_payload.readable_span();
+    SshChannelRequestMessage wc_msg;
+    wc_msg.recipient_channel = 23;
+    wc_msg.request_type = "window-change";
+    wc_msg.want_reply = true;
+    wc_msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(wc_span.data()),
+        reinterpret_cast<const uint8_t *>(wc_span.data()) + wc_span.size());
+
+    auto wc_reply = mgr.handle_channel_request(wc_msg, nullptr);
+    auto wc_reply_span = wc_reply.readable_span();
+    TEST_ASSERT(!wc_reply_span.empty(), "window-change should respond when want_reply=true");
+    TEST_ASSERT(wc_reply_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS),
+                "window-change should return success when parsed");
+
+    SshChannelRequestMessage sig_msg;
+    sig_msg.recipient_channel = 23;
+    sig_msg.request_type = "signal";
+    sig_msg.want_reply = true;
+    sig_msg.request_specific_data = encode_string_payload("TERM");
+
+    auto sig_reply = mgr.handle_channel_request(sig_msg, nullptr);
+    auto sig_span = sig_reply.readable_span();
+    TEST_ASSERT(!sig_span.empty(), "signal should respond when want_reply=true");
+    TEST_ASSERT(sig_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS),
+                "signal should return success when parsed");
+    return true;
+}
+
+bool test_direct_tcpip_open_requires_complete_type_specific_payload()
+{
+    SshConnectionManager mgr(nullptr);
+
+    SshChannelOpenMessage msg;
+    msg.channel_type = SSH_CHANNEL_DIRECT_TCPIP;
+    msg.sender_channel = 41;
+    msg.initial_window_size = SSH_DEFAULT_WINDOW_SIZE;
+    msg.maximum_packet_size = SSH_DEFAULT_MAX_PACKET_SIZE;
+
+    {
+        yuan::buffer::ByteBuffer payload;
+        SshMessageCodec::write_string(payload, "127.0.0.1");
+        SshMessageCodec::write_uint32(payload, 8080);
+        auto span = payload.readable_span();
+        msg.type_specific_data.assign(
+            reinterpret_cast<const uint8_t *>(span.data()),
+            reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+    }
+
+    auto incomplete_response = mgr.handle_channel_open(msg, &SshHandler::default_handler());
+    auto incomplete_span = incomplete_response.readable_span();
+    TEST_ASSERT(!incomplete_span.empty(), "incomplete direct-tcpip payload should be rejected with a response");
+    auto incomplete_decoded = SshMessageCodec::decode_channel_open_failure(
+        reinterpret_cast<const uint8_t *>(incomplete_span.data()), incomplete_span.size());
+    TEST_ASSERT(incomplete_decoded.has_value(), "incomplete direct-tcpip payload should return OPEN_FAILURE");
+
+    {
+        yuan::buffer::ByteBuffer payload;
+        SshMessageCodec::write_string(payload, "127.0.0.1");
+        SshMessageCodec::write_uint32(payload, 8080);
+        SshMessageCodec::write_string(payload, "10.0.0.8");
+        SshMessageCodec::write_uint32(payload, 50022);
+        payload.append_u8(0x7F);
+        auto span = payload.readable_span();
+        msg.type_specific_data.assign(
+            reinterpret_cast<const uint8_t *>(span.data()),
+            reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+    }
+
+    auto trailing_response = mgr.handle_channel_open(msg, &SshHandler::default_handler());
+    auto trailing_span = trailing_response.readable_span();
+    TEST_ASSERT(!trailing_span.empty(), "trailing bytes in direct-tcpip payload should be rejected");
+    auto trailing_decoded = SshMessageCodec::decode_channel_open_failure(
+        reinterpret_cast<const uint8_t *>(trailing_span.data()), trailing_span.size());
+    TEST_ASSERT(trailing_decoded.has_value(), "trailing bytes should return OPEN_FAILURE");
+    return true;
+}
+
+bool test_direct_tcpip_open_valid_payload_is_still_handled_by_handler_policy()
+{
+    SshConnectionManager mgr(nullptr);
+
+    SshChannelOpenMessage msg;
+    msg.channel_type = SSH_CHANNEL_DIRECT_TCPIP;
+    msg.sender_channel = 42;
+    msg.initial_window_size = SSH_DEFAULT_WINDOW_SIZE;
+    msg.maximum_packet_size = SSH_DEFAULT_MAX_PACKET_SIZE;
+
+    yuan::buffer::ByteBuffer payload;
+    SshMessageCodec::write_string(payload, "127.0.0.1");
+    SshMessageCodec::write_uint32(payload, 8080);
+    SshMessageCodec::write_string(payload, "10.0.0.8");
+    SshMessageCodec::write_uint32(payload, 50022);
+    auto span = payload.readable_span();
+    msg.type_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+    auto response = mgr.handle_channel_open(msg, &SshHandler::default_handler());
+    auto resp_span = response.readable_span();
+    TEST_ASSERT(!resp_span.empty(), "valid direct-tcpip payload should produce a response");
+    auto decoded = SshMessageCodec::decode_channel_open_failure(
+        reinterpret_cast<const uint8_t *>(resp_span.data()), resp_span.size());
+    TEST_ASSERT(decoded.has_value(), "default handler should still deny direct-tcpip by policy");
+    TEST_ASSERT(decoded->reason_code == static_cast<uint32_t>(SshChannelOpenFailureReason::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED),
+                "valid direct-tcpip payload should be denied by handler policy, not parse failure");
+    return true;
+}
+
+bool test_build_channel_exit_status_encodes_standard_channel_request()
+{
+    SshConnectionManager mgr(nullptr);
+    const auto packet = mgr.build_channel_exit_status(7, 123);
+    auto span = packet.readable_span();
+    TEST_ASSERT(!span.empty(), "exit-status packet should not be empty");
+
+    auto decoded = SshMessageCodec::decode_channel_request(
+        reinterpret_cast<const uint8_t *>(span.data()), span.size());
+    TEST_ASSERT(decoded.has_value(), "exit-status should decode as channel request");
+    TEST_ASSERT(decoded->recipient_channel == 7, "exit-status recipient should match");
+    TEST_ASSERT(decoded->request_type == "exit-status", "request type should be exit-status");
+    TEST_ASSERT(decoded->want_reply == false, "exit-status should not request a reply");
+
+    size_t offset = 0;
+    uint32_t status = SshMessageCodec::read_uint32(decoded->request_specific_data.data(),
+                                                   decoded->request_specific_data.size(), offset);
+    TEST_ASSERT(offset == decoded->request_specific_data.size(),
+                "exit-status payload should only contain a single uint32");
+    TEST_ASSERT(status == 123, "exit-status payload should keep status code");
+    return true;
+}
+
+bool test_build_channel_exit_signal_encodes_standard_channel_request()
+{
+    SshConnectionManager mgr(nullptr);
+    const auto packet = mgr.build_channel_exit_signal(9, "TERM", true, "terminated", "en-US");
+    auto span = packet.readable_span();
+    TEST_ASSERT(!span.empty(), "exit-signal packet should not be empty");
+
+    auto decoded = SshMessageCodec::decode_channel_request(
+        reinterpret_cast<const uint8_t *>(span.data()), span.size());
+    TEST_ASSERT(decoded.has_value(), "exit-signal should decode as channel request");
+    TEST_ASSERT(decoded->recipient_channel == 9, "exit-signal recipient should match");
+    TEST_ASSERT(decoded->request_type == "exit-signal", "request type should be exit-signal");
+    TEST_ASSERT(decoded->want_reply == false, "exit-signal should not request a reply");
+
+    size_t offset = 0;
+    auto signal_name = SshMessageCodec::read_string(decoded->request_specific_data.data(),
+                                                    decoded->request_specific_data.size(), offset);
+    TEST_ASSERT(signal_name.has_value() && *signal_name == "TERM", "exit-signal should encode signal name");
+    const bool core_dumped = SshMessageCodec::read_boolean(decoded->request_specific_data.data(),
+                                                           decoded->request_specific_data.size(), offset);
+    TEST_ASSERT(core_dumped, "exit-signal should encode core-dumped flag");
+    auto error_message = SshMessageCodec::read_string(decoded->request_specific_data.data(),
+                                                      decoded->request_specific_data.size(), offset);
+    TEST_ASSERT(error_message.has_value() && *error_message == "terminated", "exit-signal should encode error message");
+    auto language_tag = SshMessageCodec::read_string(decoded->request_specific_data.data(),
+                                                     decoded->request_specific_data.size(), offset);
+    TEST_ASSERT(language_tag.has_value() && *language_tag == "en-US", "exit-signal should encode language tag");
+    TEST_ASSERT(offset == decoded->request_specific_data.size(),
+                "exit-signal payload should be fully consumed");
+    return true;
+}
+
+bool test_session_dispatch_channel_close_emits_exit_status_before_close()
+{
+    SshSession session(1001, nullptr);
+    auto &mgr = session.connection_manager();
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 55, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+    TEST_ASSERT(channel->mark_command_started(), "channel should enter command-started state");
+
+    SshChannelCloseMessage close_msg;
+    close_msg.recipient_channel = 55;
+    auto close_payload_buf = SshMessageCodec::encode_channel_close(close_msg);
+    auto close_span = close_payload_buf.readable_span();
+    std::vector<uint8_t> close_payload(
+        reinterpret_cast<const uint8_t *>(close_span.data()),
+        reinterpret_cast<const uint8_t *>(close_span.data()) + close_span.size());
+
+    session.set_state(SshSession::State::active);
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_CLOSE, close_payload, nullptr);
+
+    auto outgoing = session.drain_outgoing();
+    TEST_ASSERT(outgoing.size() == 2,
+                "channel close for command channel should enqueue exit-status then channel-close");
+
+    auto first_span = outgoing[0].readable_span();
+    auto second_span = outgoing[1].readable_span();
+    TEST_ASSERT(!first_span.empty() && !second_span.empty(), "outgoing packets should be non-empty");
+
+    auto first_req = SshMessageCodec::decode_channel_request(
+        reinterpret_cast<const uint8_t *>(first_span.data()), first_span.size());
+    TEST_ASSERT(first_req.has_value(), "first response should decode as channel request");
+    TEST_ASSERT(first_req->request_type == "exit-status", "first response should be exit-status");
+
+    auto second_close = SshMessageCodec::decode_channel_close(
+        reinterpret_cast<const uint8_t *>(second_span.data()), second_span.size());
+    TEST_ASSERT(second_close.has_value(), "second response should decode as channel-close");
+    TEST_ASSERT(second_close->recipient_channel == 55,
+                "channel-close should target original remote recipient channel");
+    return true;
+}
+
+bool test_session_dispatch_channel_close_without_command_sends_only_close()
+{
+    SshSession session(1002, nullptr);
+    auto &mgr = session.connection_manager();
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 56, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+
+    SshChannelCloseMessage close_msg;
+    close_msg.recipient_channel = 56;
+    auto close_payload_buf = SshMessageCodec::encode_channel_close(close_msg);
+    auto close_span = close_payload_buf.readable_span();
+    std::vector<uint8_t> close_payload(
+        reinterpret_cast<const uint8_t *>(close_span.data()),
+        reinterpret_cast<const uint8_t *>(close_span.data()) + close_span.size());
+
+    session.set_state(SshSession::State::active);
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_CLOSE, close_payload, nullptr);
+
+    auto outgoing = session.drain_outgoing();
+    TEST_ASSERT(outgoing.size() == 1,
+                "non-command channel close should only enqueue channel-close response");
+
+    auto only_span = outgoing[0].readable_span();
+    auto decoded_close = SshMessageCodec::decode_channel_close(
+        reinterpret_cast<const uint8_t *>(only_span.data()), only_span.size());
+    TEST_ASSERT(decoded_close.has_value(), "response should decode as channel-close");
+    TEST_ASSERT(decoded_close->recipient_channel == 56,
+                "channel-close should target original remote recipient channel");
+    return true;
+}
+
+bool test_session_dispatch_channel_close_can_emit_exit_signal_via_handler()
+{
+    class ExitSignalHandler final : public SshHandler
+    {
+    public:
+        SshCommandExitInfo on_command_exit(SshSession *session,
+                                           SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            SshCommandExitInfo info;
+            info.use_signal = true;
+            info.signal_name = "TERM";
+            info.core_dumped = false;
+            info.error_message = "terminated by policy";
+            info.language_tag = "en-US";
+            return info;
+        }
+    };
+
+    SshSession session(1003, nullptr);
+    auto &mgr = session.connection_manager();
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 57, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+    TEST_ASSERT(channel->mark_command_started(), "channel should enter command-started state");
+
+    SshChannelCloseMessage close_msg;
+    close_msg.recipient_channel = 57;
+    auto close_payload_buf = SshMessageCodec::encode_channel_close(close_msg);
+    auto close_span = close_payload_buf.readable_span();
+    std::vector<uint8_t> close_payload(
+        reinterpret_cast<const uint8_t *>(close_span.data()),
+        reinterpret_cast<const uint8_t *>(close_span.data()) + close_span.size());
+
+    ExitSignalHandler handler;
+    session.set_state(SshSession::State::active);
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_CLOSE, close_payload, &handler);
+
+    auto outgoing = session.drain_outgoing();
+    TEST_ASSERT(outgoing.size() == 2,
+                "channel close for command channel should enqueue exit notification then channel-close");
+
+    auto first_span = outgoing[0].readable_span();
+    auto second_span = outgoing[1].readable_span();
+    auto first_req = SshMessageCodec::decode_channel_request(
+        reinterpret_cast<const uint8_t *>(first_span.data()), first_span.size());
+    TEST_ASSERT(first_req.has_value(), "first response should decode as channel request");
+    TEST_ASSERT(first_req->request_type == "exit-signal", "first response should be exit-signal");
+
+    size_t offset = 0;
+    auto signal_name = SshMessageCodec::read_string(first_req->request_specific_data.data(),
+                                                    first_req->request_specific_data.size(), offset);
+    TEST_ASSERT(signal_name.has_value() && *signal_name == "TERM", "exit-signal should carry signal name");
+    auto decoded_close = SshMessageCodec::decode_channel_close(
+        reinterpret_cast<const uint8_t *>(second_span.data()), second_span.size());
+    TEST_ASSERT(decoded_close.has_value(), "second response should decode as channel-close");
+    return true;
+}
+
+bool test_session_dispatch_repeated_channel_close_emits_exit_only_once()
+{
+    SshSession session(1004, nullptr);
+    auto &mgr = session.connection_manager();
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 58, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+    TEST_ASSERT(channel->mark_command_started(), "channel should enter command-started state");
+
+    SshChannelCloseMessage close_msg;
+    close_msg.recipient_channel = 58;
+    auto close_payload_buf = SshMessageCodec::encode_channel_close(close_msg);
+    auto close_span = close_payload_buf.readable_span();
+    std::vector<uint8_t> close_payload(
+        reinterpret_cast<const uint8_t *>(close_span.data()),
+        reinterpret_cast<const uint8_t *>(close_span.data()) + close_span.size());
+
+    session.set_state(SshSession::State::active);
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_CLOSE, close_payload, nullptr);
+    auto first_out = session.drain_outgoing();
+    TEST_ASSERT(first_out.size() == 2, "first close should emit exit-status and channel-close");
+
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_CLOSE, close_payload, nullptr);
+    auto second_out = session.drain_outgoing();
+    TEST_ASSERT(second_out.empty(), "repeated close after channel removal should not emit extra packets");
+    return true;
+}
+
+bool test_env_and_pty_rejected_after_command_started()
+{
+    class AcceptingHandler final : public SshHandler
+    {
+    public:
+        bool on_exec_request(SshSession *session,
+                             SshChannel *channel,
+                             const std::string &command) override
+        {
+            (void)session;
+            (void)channel;
+            (void)command;
+            return true;
+        }
+
+        bool on_env_request(SshSession *session,
+                            SshChannel *channel,
+                            const std::string &name,
+                            const std::string &value) override
+        {
+            (void)session;
+            (void)channel;
+            (void)name;
+            (void)value;
+            return true;
+        }
+
+        bool on_pty_request(SshSession *session,
+                            SshChannel *channel,
+                            const std::string &term,
+                            uint32_t width, uint32_t height,
+                            uint32_t pixel_width, uint32_t pixel_height,
+                            const std::vector<uint8_t> &modes) override
+        {
+            (void)session;
+            (void)channel;
+            (void)term;
+            (void)width;
+            (void)height;
+            (void)pixel_width;
+            (void)pixel_height;
+            (void)modes;
+            return true;
+        }
+    };
+
+    SshConnectionManager mgr(nullptr);
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 59, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+
+    AcceptingHandler handler;
+
+    SshChannelRequestMessage exec_msg;
+    exec_msg.recipient_channel = 59;
+    exec_msg.request_type = "exec";
+    exec_msg.want_reply = true;
+    exec_msg.request_specific_data = encode_string_payload("echo ok");
+    auto exec_reply = mgr.handle_channel_request(exec_msg, &handler);
+    auto exec_span = exec_reply.readable_span();
+    TEST_ASSERT(!exec_span.empty(), "exec should reply");
+    TEST_ASSERT(exec_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS),
+                "exec should succeed first");
+
+    yuan::buffer::ByteBuffer env_payload;
+    SshMessageCodec::write_string(env_payload, "A");
+    SshMessageCodec::write_string(env_payload, "1");
+    auto env_span = env_payload.readable_span();
+    SshChannelRequestMessage env_msg;
+    env_msg.recipient_channel = 59;
+    env_msg.request_type = "env";
+    env_msg.want_reply = true;
+    env_msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(env_span.data()),
+        reinterpret_cast<const uint8_t *>(env_span.data()) + env_span.size());
+
+    auto env_reply = mgr.handle_channel_request(env_msg, &handler);
+    auto env_reply_span = env_reply.readable_span();
+    TEST_ASSERT(!env_reply_span.empty(), "env after exec should reply");
+    TEST_ASSERT(env_reply_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "env must be rejected after command starts");
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm");
+    SshMessageCodec::write_uint32(pty_payload, 80);
+    SshMessageCodec::write_uint32(pty_payload, 24);
+    SshMessageCodec::write_uint32(pty_payload, 640);
+    SshMessageCodec::write_uint32(pty_payload, 480);
+    SshMessageCodec::write_string(pty_payload, std::string());
+    auto pty_span = pty_payload.readable_span();
+    SshChannelRequestMessage pty_msg;
+    pty_msg.recipient_channel = 59;
+    pty_msg.request_type = "pty-req";
+    pty_msg.want_reply = true;
+    pty_msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_span.data()) + pty_span.size());
+
+    auto pty_reply = mgr.handle_channel_request(pty_msg, &handler);
+    auto pty_reply_span = pty_reply.readable_span();
+    TEST_ASSERT(!pty_reply_span.empty(), "pty after exec should reply");
+    TEST_ASSERT(pty_reply_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "pty must be rejected after command starts");
+    return true;
+}
+
+bool test_shell_success_then_rejects_other_command_requests()
+{
+    class ShellAcceptingHandler final : public SshHandler
+    {
+    public:
+        bool on_shell_request(SshSession *session,
+                              SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return true;
+        }
+
+        bool on_exec_request(SshSession *session,
+                             SshChannel *channel,
+                             const std::string &command) override
+        {
+            (void)session;
+            (void)channel;
+            (void)command;
+            return true;
+        }
+
+        bool on_subsystem_request(SshSession *session,
+                                  SshChannel *channel,
+                                  const std::string &name) override
+        {
+            (void)session;
+            (void)channel;
+            (void)name;
+            return true;
+        }
+
+        bool on_env_request(SshSession *session,
+                            SshChannel *channel,
+                            const std::string &name,
+                            const std::string &value) override
+        {
+            (void)session;
+            (void)channel;
+            (void)name;
+            (void)value;
+            return true;
+        }
+
+        bool on_pty_request(SshSession *session,
+                            SshChannel *channel,
+                            const std::string &term,
+                            uint32_t width, uint32_t height,
+                            uint32_t pixel_width, uint32_t pixel_height,
+                            const std::vector<uint8_t> &modes) override
+        {
+            (void)session;
+            (void)channel;
+            (void)term;
+            (void)width;
+            (void)height;
+            (void)pixel_width;
+            (void)pixel_height;
+            (void)modes;
+            return true;
+        }
+    };
+
+    SshConnectionManager mgr(nullptr);
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 60, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+
+    ShellAcceptingHandler handler;
+
+    SshChannelRequestMessage shell_msg;
+    shell_msg.recipient_channel = 60;
+    shell_msg.request_type = "shell";
+    shell_msg.want_reply = true;
+    auto shell_reply = mgr.handle_channel_request(shell_msg, &handler);
+    auto shell_span = shell_reply.readable_span();
+    TEST_ASSERT(!shell_span.empty(), "shell should reply");
+    TEST_ASSERT(shell_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS),
+                "shell should succeed first");
+
+    SshChannelRequestMessage exec_msg;
+    exec_msg.recipient_channel = 60;
+    exec_msg.request_type = "exec";
+    exec_msg.want_reply = true;
+    exec_msg.request_specific_data = encode_string_payload("echo later");
+    auto exec_reply = mgr.handle_channel_request(exec_msg, &handler);
+    auto exec_span = exec_reply.readable_span();
+    TEST_ASSERT(!exec_span.empty(), "exec after shell should reply");
+    TEST_ASSERT(exec_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "exec should be rejected after shell");
+
+    SshChannelRequestMessage subsystem_msg;
+    subsystem_msg.recipient_channel = 60;
+    subsystem_msg.request_type = "subsystem";
+    subsystem_msg.want_reply = true;
+    subsystem_msg.request_specific_data = encode_string_payload("sftp");
+    auto subsystem_reply = mgr.handle_channel_request(subsystem_msg, &handler);
+    auto subsystem_span = subsystem_reply.readable_span();
+    TEST_ASSERT(!subsystem_span.empty(), "subsystem after shell should reply");
+    TEST_ASSERT(subsystem_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "subsystem should be rejected after shell");
+
+    yuan::buffer::ByteBuffer env_payload;
+    SshMessageCodec::write_string(env_payload, "B");
+    SshMessageCodec::write_string(env_payload, "2");
+    auto env_payload_span = env_payload.readable_span();
+    SshChannelRequestMessage env_msg;
+    env_msg.recipient_channel = 60;
+    env_msg.request_type = "env";
+    env_msg.want_reply = true;
+    env_msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(env_payload_span.data()),
+        reinterpret_cast<const uint8_t *>(env_payload_span.data()) + env_payload_span.size());
+    auto env_reply = mgr.handle_channel_request(env_msg, &handler);
+    auto env_span = env_reply.readable_span();
+    TEST_ASSERT(!env_span.empty(), "env after shell should reply");
+    TEST_ASSERT(env_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "env should be rejected after shell");
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm");
+    SshMessageCodec::write_uint32(pty_payload, 80);
+    SshMessageCodec::write_uint32(pty_payload, 24);
+    SshMessageCodec::write_uint32(pty_payload, 640);
+    SshMessageCodec::write_uint32(pty_payload, 480);
+    SshMessageCodec::write_string(pty_payload, std::string());
+    auto pty_payload_span = pty_payload.readable_span();
+    SshChannelRequestMessage pty_msg;
+    pty_msg.recipient_channel = 60;
+    pty_msg.request_type = "pty-req";
+    pty_msg.want_reply = true;
+    pty_msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_payload_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_payload_span.data()) + pty_payload_span.size());
+    auto pty_reply = mgr.handle_channel_request(pty_msg, &handler);
+    auto pty_span = pty_reply.readable_span();
+    TEST_ASSERT(!pty_span.empty(), "pty after shell should reply");
+    TEST_ASSERT(pty_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "pty should be rejected after shell");
+
+    return true;
+}
+
+bool test_channel_request_non_open_state_reply_behavior()
+{
+    SshConnectionManager mgr(nullptr);
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 61, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+
+    channel->set_state(SshChannel::State::eof);
+
+    SshChannelRequestMessage shell_with_reply;
+    shell_with_reply.recipient_channel = 61;
+    shell_with_reply.request_type = "shell";
+    shell_with_reply.want_reply = true;
+    auto reply = mgr.handle_channel_request(shell_with_reply, nullptr);
+    auto reply_span = reply.readable_span();
+    TEST_ASSERT(!reply_span.empty(), "non-open channel with want_reply should return response");
+    TEST_ASSERT(reply_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "non-open channel request should fail");
+
+    SshChannelRequestMessage shell_no_reply = shell_with_reply;
+    shell_no_reply.want_reply = false;
+    auto no_reply = mgr.handle_channel_request(shell_no_reply, nullptr);
+    auto no_reply_span = no_reply.readable_span();
+    TEST_ASSERT(no_reply_span.empty(), "non-open channel without want_reply should return no response");
+    return true;
+}
+
+bool test_subsystem_success_then_rejects_other_command_requests()
+{
+    class SubsystemAcceptingHandler final : public SshHandler
+    {
+    public:
+        bool on_subsystem_request(SshSession *session,
+                                  SshChannel *channel,
+                                  const std::string &name) override
+        {
+            (void)session;
+            (void)channel;
+            return name == "custom-subsys";
+        }
+
+        bool on_exec_request(SshSession *session,
+                             SshChannel *channel,
+                             const std::string &command) override
+        {
+            (void)session;
+            (void)channel;
+            (void)command;
+            return true;
+        }
+
+        bool on_shell_request(SshSession *session,
+                              SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return true;
+        }
+    };
+
+    SshConnectionManager mgr(nullptr);
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 62, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+
+    SubsystemAcceptingHandler handler;
+
+    SshChannelRequestMessage subsystem_msg;
+    subsystem_msg.recipient_channel = 62;
+    subsystem_msg.request_type = "subsystem";
+    subsystem_msg.want_reply = true;
+    subsystem_msg.request_specific_data = encode_string_payload("custom-subsys");
+    auto subsystem_reply = mgr.handle_channel_request(subsystem_msg, &handler);
+    auto subsystem_span = subsystem_reply.readable_span();
+    TEST_ASSERT(!subsystem_span.empty(), "subsystem should reply");
+    TEST_ASSERT(subsystem_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS),
+                "subsystem should succeed first");
+
+    SshChannelRequestMessage exec_msg;
+    exec_msg.recipient_channel = 62;
+    exec_msg.request_type = "exec";
+    exec_msg.want_reply = true;
+    exec_msg.request_specific_data = encode_string_payload("echo x");
+    auto exec_reply = mgr.handle_channel_request(exec_msg, &handler);
+    auto exec_span = exec_reply.readable_span();
+    TEST_ASSERT(!exec_span.empty(), "exec after subsystem should reply");
+    TEST_ASSERT(exec_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "exec should be rejected after subsystem starts");
+
+    SshChannelRequestMessage shell_msg;
+    shell_msg.recipient_channel = 62;
+    shell_msg.request_type = "shell";
+    shell_msg.want_reply = true;
+    auto shell_reply = mgr.handle_channel_request(shell_msg, &handler);
+    auto shell_span = shell_reply.readable_span();
+    TEST_ASSERT(!shell_span.empty(), "shell after subsystem should reply");
+    TEST_ASSERT(shell_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "shell should be rejected after subsystem starts");
+    return true;
+}
+
+bool test_session_dispatch_channel_close_uses_handler_exit_status_value()
+{
+    class ExitStatusHandler final : public SshHandler
+    {
+    public:
+        SshCommandExitInfo on_command_exit(SshSession *session,
+                                           SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            SshCommandExitInfo info;
+            info.use_signal = false;
+            info.exit_status = 42;
+            return info;
+        }
+    };
+
+    SshSession session(1005, nullptr);
+    auto &mgr = session.connection_manager();
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 63, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+    TEST_ASSERT(channel->mark_command_started(), "channel should enter command-started state");
+
+    SshChannelCloseMessage close_msg;
+    close_msg.recipient_channel = 63;
+    auto close_payload_buf = SshMessageCodec::encode_channel_close(close_msg);
+    auto close_span = close_payload_buf.readable_span();
+    std::vector<uint8_t> close_payload(
+        reinterpret_cast<const uint8_t *>(close_span.data()),
+        reinterpret_cast<const uint8_t *>(close_span.data()) + close_span.size());
+
+    ExitStatusHandler handler;
+    session.set_state(SshSession::State::active);
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_CLOSE, close_payload, &handler);
+
+    auto outgoing = session.drain_outgoing();
+    TEST_ASSERT(outgoing.size() == 2, "close should emit exit-status and channel-close");
+
+    auto first_span = outgoing[0].readable_span();
+    auto first_req = SshMessageCodec::decode_channel_request(
+        reinterpret_cast<const uint8_t *>(first_span.data()), first_span.size());
+    TEST_ASSERT(first_req.has_value(), "first response should decode as channel request");
+    TEST_ASSERT(first_req->request_type == "exit-status", "first response should be exit-status");
+
+    size_t offset = 0;
+    uint32_t status = SshMessageCodec::read_uint32(first_req->request_specific_data.data(),
+                                                   first_req->request_specific_data.size(), offset);
+    TEST_ASSERT(status == 42, "exit-status should carry handler-provided status code");
+    TEST_ASSERT(offset == first_req->request_specific_data.size(), "exit-status payload should contain only status");
+    return true;
+}
+
+bool test_session_dispatch_channel_close_exit_signal_payload_fields()
+{
+    class RichExitSignalHandler final : public SshHandler
+    {
+    public:
+        SshCommandExitInfo on_command_exit(SshSession *session,
+                                           SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            SshCommandExitInfo info;
+            info.use_signal = true;
+            info.signal_name = "KILL";
+            info.core_dumped = true;
+            info.error_message = "killed by test";
+            info.language_tag = "en-US";
+            return info;
+        }
+    };
+
+    SshSession session(1006, nullptr);
+    auto &mgr = session.connection_manager();
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 64, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+    TEST_ASSERT(channel->mark_command_started(), "channel should enter command-started state");
+
+    SshChannelCloseMessage close_msg;
+    close_msg.recipient_channel = 64;
+    auto close_payload_buf = SshMessageCodec::encode_channel_close(close_msg);
+    auto close_span = close_payload_buf.readable_span();
+    std::vector<uint8_t> close_payload(
+        reinterpret_cast<const uint8_t *>(close_span.data()),
+        reinterpret_cast<const uint8_t *>(close_span.data()) + close_span.size());
+
+    RichExitSignalHandler handler;
+    session.set_state(SshSession::State::active);
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_CLOSE, close_payload, &handler);
+
+    auto outgoing = session.drain_outgoing();
+    TEST_ASSERT(outgoing.size() == 2, "close should emit exit-signal and channel-close");
+
+    auto req_span = outgoing[0].readable_span();
+    auto req = SshMessageCodec::decode_channel_request(
+        reinterpret_cast<const uint8_t *>(req_span.data()), req_span.size());
+    TEST_ASSERT(req.has_value(), "first response should decode as channel request");
+    TEST_ASSERT(req->request_type == "exit-signal", "first response should be exit-signal");
+
+    size_t offset = 0;
+    auto signal_name = SshMessageCodec::read_string(req->request_specific_data.data(),
+                                                    req->request_specific_data.size(), offset);
+    TEST_ASSERT(signal_name.has_value() && *signal_name == "KILL", "exit-signal should carry configured signal");
+    bool core_dumped = SshMessageCodec::read_boolean(req->request_specific_data.data(),
+                                                     req->request_specific_data.size(), offset);
+    TEST_ASSERT(core_dumped, "exit-signal should carry configured core-dump flag");
+    auto error_message = SshMessageCodec::read_string(req->request_specific_data.data(),
+                                                      req->request_specific_data.size(), offset);
+    TEST_ASSERT(error_message.has_value() && *error_message == "killed by test",
+                "exit-signal should carry configured error message");
+    auto language_tag = SshMessageCodec::read_string(req->request_specific_data.data(),
+                                                     req->request_specific_data.size(), offset);
+    TEST_ASSERT(language_tag.has_value() && *language_tag == "en-US",
+                "exit-signal should carry configured language tag");
+    TEST_ASSERT(offset == req->request_specific_data.size(),
+                "exit-signal payload should be fully consumed");
+    return true;
+}
+
+bool test_channel_request_sequence_matrix_command_then_exec_shell_subsystem_fail()
+{
+    class AcceptingHandler final : public SshHandler
+    {
+    public:
+        bool on_exec_request(SshSession *session,
+                             SshChannel *channel,
+                             const std::string &command) override
+        {
+            (void)session;
+            (void)channel;
+            (void)command;
+            return true;
+        }
+
+        bool on_shell_request(SshSession *session,
+                              SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return true;
+        }
+
+        bool on_subsystem_request(SshSession *session,
+                                  SshChannel *channel,
+                                  const std::string &name) override
+        {
+            (void)session;
+            (void)channel;
+            (void)name;
+            return true;
+        }
+    };
+
+    SshConnectionManager mgr(nullptr);
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 65, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+
+    AcceptingHandler handler;
+
+    SshChannelRequestMessage first;
+    first.recipient_channel = 65;
+    first.request_type = "exec";
+    first.want_reply = true;
+    first.request_specific_data = encode_string_payload("echo first");
+    auto first_reply = mgr.handle_channel_request(first, &handler);
+    auto first_span = first_reply.readable_span();
+    TEST_ASSERT(!first_span.empty(), "first request should reply");
+    TEST_ASSERT(first_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS),
+                "first exec should succeed");
+
+    const std::array<std::string, 3> followups = { "exec", "shell", "subsystem" };
+    for (const auto & req_type : followups) {
+        SshChannelRequestMessage msg;
+        msg.recipient_channel = 65;
+        msg.request_type = req_type;
+        msg.want_reply = true;
+        if (req_type == "exec") {
+            msg.request_specific_data = encode_string_payload("echo second");
+        } else if (req_type == "subsystem") {
+            msg.request_specific_data = encode_string_payload("sftp");
+        }
+
+        auto reply = mgr.handle_channel_request(msg, &handler);
+        auto span = reply.readable_span();
+        TEST_ASSERT(!span.empty(), "follow-up command request should reply");
+        TEST_ASSERT(span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                    "follow-up command request should be rejected after first command starts");
+    }
+    return true;
+}
+
+bool test_terminal_session_state_records_accepted_pty_and_shell_flags()
+{
+    class InteractiveHandler final : public SshHandler
+    {
+    public:
+        bool on_pty_request(SshSession *session,
+                            SshChannel *channel,
+                            const std::string &term,
+                            uint32_t width, uint32_t height,
+                            uint32_t pixel_width, uint32_t pixel_height,
+                            const std::vector<uint8_t> &modes) override
+        {
+            (void)session;
+            (void)channel;
+            (void)term;
+            (void)width;
+            (void)height;
+            (void)pixel_width;
+            (void)pixel_height;
+            (void)modes;
+            return true;
+        }
+
+        bool on_shell_request(SshSession *session,
+                              SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return true;
+        }
+    };
+
+    SshConnectionManager mgr(nullptr);
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 66, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+
+    InteractiveHandler handler;
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm-256color");
+    SshMessageCodec::write_uint32(pty_payload, 132);
+    SshMessageCodec::write_uint32(pty_payload, 43);
+    SshMessageCodec::write_uint32(pty_payload, 1200);
+    SshMessageCodec::write_uint32(pty_payload, 860);
+    SshMessageCodec::write_string(pty_payload, std::string("\x01\x00\x00\x00\x00\x00", 6));
+
+    auto pty_span = pty_payload.readable_span();
+    SshChannelRequestMessage pty_msg;
+    pty_msg.recipient_channel = 66;
+    pty_msg.request_type = "pty-req";
+    pty_msg.want_reply = true;
+    pty_msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_span.data()) + pty_span.size());
+
+    auto pty_reply = mgr.handle_channel_request(pty_msg, &handler);
+    auto pty_reply_span = pty_reply.readable_span();
+    TEST_ASSERT(!pty_reply_span.empty(), "pty request should reply");
+    TEST_ASSERT(pty_reply_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS),
+                "pty request should be accepted by handler");
+
+    const auto &state_after_pty = channel->terminal_session_state();
+    TEST_ASSERT(state_after_pty.has_pty_request, "terminal state should mark accepted pty request");
+    TEST_ASSERT(state_after_pty.spec.term_env == "xterm-256color", "terminal term should be persisted");
+    TEST_ASSERT(state_after_pty.spec.width == 132 && state_after_pty.spec.height == 43,
+                "terminal character dimensions should be persisted");
+    TEST_ASSERT(state_after_pty.spec.pixel_width == 1200 && state_after_pty.spec.pixel_height == 860,
+                "terminal pixel dimensions should be persisted");
+    TEST_ASSERT(state_after_pty.spec.terminal_modes.size() == 6,
+                "terminal modes should be persisted");
+
+    SshChannelRequestMessage shell_msg;
+    shell_msg.recipient_channel = 66;
+    shell_msg.request_type = "shell";
+    shell_msg.want_reply = true;
+    auto shell_reply = mgr.handle_channel_request(shell_msg, &handler);
+    auto shell_reply_span = shell_reply.readable_span();
+    TEST_ASSERT(!shell_reply_span.empty(), "shell request should reply");
+    TEST_ASSERT(shell_reply_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS),
+                "shell request should be accepted by handler");
+
+    TEST_ASSERT(channel->terminal_session_state().interactive_shell_requested,
+                "terminal state should mark interactive shell requested");
+    return true;
+}
+
+bool test_pty_backend_prepare_and_shutdown_lifecycle()
+{
+    SshPtyProcess process;
+    SshTerminalSpec spec;
+    spec.term_env = "xterm-256color";
+    spec.width = 120;
+    spec.height = 40;
+    spec.pixel_width = 1200;
+    spec.pixel_height = 800;
+
+    std::string err;
+    const bool ok = process.prepare(spec, &err);
+#if defined(_WIN32)
+    TEST_ASSERT(!ok, "pty prepare should not be ready on windows placeholder");
+    TEST_ASSERT(!process.ready(), "pty process should remain not ready on windows placeholder");
+#else
+    TEST_ASSERT(ok, "pty prepare should succeed on unix-like platforms with openpty");
+    TEST_ASSERT(process.ready(), "pty process should be ready after prepare");
+    TEST_ASSERT(process.backend().master_fd() >= 0, "pty master fd should be valid");
+    TEST_ASSERT(process.backend().slave_fd() >= 0, "pty slave fd should be valid");
+#endif
+
+    process.shutdown();
+    TEST_ASSERT(!process.ready(), "pty process should not be ready after shutdown");
+    return true;
+}
+
+bool test_pty_process_launch_shell_and_capture_output()
+{
+#if defined(_WIN32)
+    return true;
+#else
+    SshPtyProcess process;
+    SshTerminalSpec spec;
+    spec.term_env = "xterm";
+    spec.width = 80;
+    spec.height = 24;
+
+    std::string err;
+    TEST_ASSERT(process.prepare(spec, &err), "pty process should prepare before launch shell");
+    TEST_ASSERT(process.launch_shell("printf shell-bridge-ok", false, &err),
+                "pty process should launch non-interactive shell command");
+
+    bool saw_output = false;
+    for (int i = 0; i < 20; ++i) {
+        std::vector<uint8_t> chunk;
+        if (process.read_output(&chunk, 4096) && !chunk.empty()) {
+            const std::string text(chunk.begin(), chunk.end());
+            if (text.find("shell-bridge-ok") != std::string::npos) {
+                saw_output = true;
+                break;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    TEST_ASSERT(saw_output, "pty process should expose shell output via master side read");
+
+    bool saw_exit = false;
+    SshPtyExitState state;
+    for (int i = 0; i < 50; ++i) {
+        if (process.poll_exit(&state)) {
+            saw_exit = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    TEST_ASSERT(saw_exit, "pty process should report child exit");
+    TEST_ASSERT(state.exited, "pty process child should exit normally for printf command");
+    TEST_ASSERT(state.exit_code == 0, "pty process child should exit with status 0");
+
+    process.shutdown();
+    TEST_ASSERT(!process.ready(), "pty process should not be ready after shutdown");
+    return true;
+#endif
+}
+
+bool test_session_pty_bridge_shell_data_and_exit_sequence()
+{
+#if defined(_WIN32)
+    return true;
+#else
+    class ShellAcceptHandler final : public SshHandler
+    {
+    public:
+        bool on_shell_request(SshSession *session,
+                              SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return true;
+        }
+
+        bool on_pty_request(SshSession *session,
+                            SshChannel *channel,
+                            const std::string &term,
+                            uint32_t width, uint32_t height,
+                            uint32_t pixel_width, uint32_t pixel_height,
+                            const std::vector<uint8_t> &modes) override
+        {
+            (void)session;
+            (void)channel;
+            (void)term;
+            (void)width;
+            (void)height;
+            (void)pixel_width;
+            (void)pixel_height;
+            (void)modes;
+            return true;
+        }
+    };
+
+    SshSession session(2002, nullptr);
+    session.set_state(SshSession::State::active);
+    auto *channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 89, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created for session PTY bridge test");
+
+    ShellAcceptHandler handler;
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm");
+    SshMessageCodec::write_uint32(pty_payload, 100);
+    SshMessageCodec::write_uint32(pty_payload, 30);
+    SshMessageCodec::write_uint32(pty_payload, 1000);
+    SshMessageCodec::write_uint32(pty_payload, 700);
+    SshMessageCodec::write_string(pty_payload, std::string());
+    auto pty_span = pty_payload.readable_span();
+
+    SshChannelRequestMessage pty_req;
+    pty_req.recipient_channel = 89;
+    pty_req.request_type = "pty-req";
+    pty_req.want_reply = true;
+    pty_req.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_span.data()) + pty_span.size());
+    auto pty_packet = SshMessageCodec::encode_channel_request(pty_req);
+    auto pty_packet_span = pty_packet.readable_span();
+    std::vector<uint8_t> pty_raw(
+        reinterpret_cast<const uint8_t *>(pty_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_packet_span.data()) + pty_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, pty_raw, &handler);
+
+    SshChannelRequestMessage shell_req;
+    shell_req.recipient_channel = 89;
+    shell_req.request_type = "shell";
+    shell_req.want_reply = true;
+    auto shell_packet = SshMessageCodec::encode_channel_request(shell_req);
+    auto shell_packet_span = shell_packet.readable_span();
+    std::vector<uint8_t> shell_raw(
+        reinterpret_cast<const uint8_t *>(shell_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(shell_packet_span.data()) + shell_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, shell_raw, &handler);
+
+    TEST_ASSERT(session.has_pty_process(89), "shell with accepted pty should start PTY process bridge");
+    TEST_ASSERT(channel->terminal_session_state().pty_bridge_active,
+                "channel terminal state should mark PTY bridge active");
+
+    const std::string script = "printf bridge-data; exit\n";
+    SshChannelDataMessage data_msg;
+    data_msg.recipient_channel = 89;
+    data_msg.data.assign(script.begin(), script.end());
+    auto data_packet = SshMessageCodec::encode_channel_data(data_msg);
+    auto data_span = data_packet.readable_span();
+    std::vector<uint8_t> data_raw(
+        reinterpret_cast<const uint8_t *>(data_span.data()),
+        reinterpret_cast<const uint8_t *>(data_span.data()) + data_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_DATA, data_raw, &handler);
+
+    bool saw_bridge_output = false;
+    bool saw_exit_status = false;
+    bool saw_close = false;
+    for (int i = 0; i < 80; ++i) {
+        session.pump_pty_once(89, &handler);
+        auto out = session.drain_outgoing();
+        for (auto &buf : out) {
+            auto span = buf.readable_span();
+            if (span.empty()) {
+                continue;
+            }
+            const auto *raw = reinterpret_cast<const uint8_t *>(span.data());
+            const auto type = static_cast<SshMessageType>(raw[0]);
+            if (type == SshMessageType::SSH_MSG_CHANNEL_DATA) {
+                auto decoded = SshMessageCodec::decode_channel_data(raw, span.size());
+                if (decoded) {
+                    const std::string text(decoded->data.begin(), decoded->data.end());
+                    if (text.find("bridge-data") != std::string::npos) {
+                        saw_bridge_output = true;
+                    }
+                }
+            } else if (type == SshMessageType::SSH_MSG_CHANNEL_REQUEST) {
+                auto decoded = SshMessageCodec::decode_channel_request(raw, span.size());
+                if (decoded && decoded->request_type == "exit-status") {
+                    saw_exit_status = true;
+                }
+            } else if (type == SshMessageType::SSH_MSG_CHANNEL_CLOSE) {
+                saw_close = true;
+            }
+        }
+
+        if (saw_bridge_output && saw_exit_status && saw_close) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    TEST_ASSERT(saw_bridge_output, "PTY bridge should forward shell output as channel-data");
+    TEST_ASSERT(saw_exit_status, "PTY bridge should emit exit-status when shell exits");
+    TEST_ASSERT(saw_close, "PTY bridge should emit channel-close when shell exits");
+    return true;
+#endif
+}
+
+bool test_session_pty_bridge_window_change_affects_shell_stty_size()
+{
+#if defined(_WIN32)
+    return true;
+#else
+    class ShellAcceptHandler final : public SshHandler
+    {
+    public:
+        bool on_shell_request(SshSession *session,
+                              SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return true;
+        }
+
+        bool on_pty_request(SshSession *session,
+                            SshChannel *channel,
+                            const std::string &term,
+                            uint32_t width, uint32_t height,
+                            uint32_t pixel_width, uint32_t pixel_height,
+                            const std::vector<uint8_t> &modes) override
+        {
+            (void)session;
+            (void)channel;
+            (void)term;
+            (void)width;
+            (void)height;
+            (void)pixel_width;
+            (void)pixel_height;
+            (void)modes;
+            return true;
+        }
+    };
+
+    SshSession session(2003, nullptr);
+    session.set_state(SshSession::State::active);
+    auto *channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 90, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created for window-change bridge test");
+
+    ShellAcceptHandler handler;
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm");
+    SshMessageCodec::write_uint32(pty_payload, 100);
+    SshMessageCodec::write_uint32(pty_payload, 30);
+    SshMessageCodec::write_uint32(pty_payload, 1000);
+    SshMessageCodec::write_uint32(pty_payload, 700);
+    SshMessageCodec::write_string(pty_payload, std::string());
+    auto pty_span = pty_payload.readable_span();
+    SshChannelRequestMessage pty_req;
+    pty_req.recipient_channel = 90;
+    pty_req.request_type = "pty-req";
+    pty_req.want_reply = true;
+    pty_req.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_span.data()) + pty_span.size());
+    auto pty_packet = SshMessageCodec::encode_channel_request(pty_req);
+    auto pty_packet_span = pty_packet.readable_span();
+    std::vector<uint8_t> pty_raw(
+        reinterpret_cast<const uint8_t *>(pty_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_packet_span.data()) + pty_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, pty_raw, &handler);
+
+    SshChannelRequestMessage shell_req;
+    shell_req.recipient_channel = 90;
+    shell_req.request_type = "shell";
+    shell_req.want_reply = true;
+    auto shell_packet = SshMessageCodec::encode_channel_request(shell_req);
+    auto shell_packet_span = shell_packet.readable_span();
+    std::vector<uint8_t> shell_raw(
+        reinterpret_cast<const uint8_t *>(shell_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(shell_packet_span.data()) + shell_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, shell_raw, &handler);
+    TEST_ASSERT(session.has_pty_process(90), "shell bridge should start PTY process");
+
+    yuan::buffer::ByteBuffer wc_payload;
+    SshMessageCodec::write_uint32(wc_payload, 101);
+    SshMessageCodec::write_uint32(wc_payload, 41);
+    SshMessageCodec::write_uint32(wc_payload, 1300);
+    SshMessageCodec::write_uint32(wc_payload, 900);
+    auto wc_span = wc_payload.readable_span();
+    SshChannelRequestMessage wc_req;
+    wc_req.recipient_channel = 90;
+    wc_req.request_type = "window-change";
+    wc_req.want_reply = true;
+    wc_req.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(wc_span.data()),
+        reinterpret_cast<const uint8_t *>(wc_span.data()) + wc_span.size());
+    auto wc_packet = SshMessageCodec::encode_channel_request(wc_req);
+    auto wc_packet_span = wc_packet.readable_span();
+    std::vector<uint8_t> wc_raw(
+        reinterpret_cast<const uint8_t *>(wc_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(wc_packet_span.data()) + wc_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, wc_raw, &handler);
+
+    const std::string script = "stty size; exit\n";
+    SshChannelDataMessage data_msg;
+    data_msg.recipient_channel = 90;
+    data_msg.data.assign(script.begin(), script.end());
+    auto data_packet = SshMessageCodec::encode_channel_data(data_msg);
+    auto data_span = data_packet.readable_span();
+    std::vector<uint8_t> data_raw(
+        reinterpret_cast<const uint8_t *>(data_span.data()),
+        reinterpret_cast<const uint8_t *>(data_span.data()) + data_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_DATA, data_raw, &handler);
+
+    bool saw_size = false;
+    for (int i = 0; i < 80; ++i) {
+        session.pump_pty_once(90, &handler);
+        auto out = session.drain_outgoing();
+        for (auto &buf : out) {
+            auto span = buf.readable_span();
+            if (span.empty()) {
+                continue;
+            }
+            const auto *raw = reinterpret_cast<const uint8_t *>(span.data());
+            if (static_cast<SshMessageType>(raw[0]) == SshMessageType::SSH_MSG_CHANNEL_DATA) {
+                auto decoded = SshMessageCodec::decode_channel_data(raw, span.size());
+                if (decoded) {
+                    const std::string text(decoded->data.begin(), decoded->data.end());
+                    if (text.find("41 101") != std::string::npos) {
+                        saw_size = true;
+                    }
+                }
+            }
+        }
+        if (saw_size) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    TEST_ASSERT(saw_size, "window-change should affect PTY size observed by stty");
+    return true;
+#endif
+}
+
+bool test_session_pty_bridge_signal_terminates_shell_child()
+{
+#if defined(_WIN32)
+    return true;
+#else
+    class ShellAcceptHandler final : public SshHandler
+    {
+    public:
+        bool on_shell_request(SshSession *session,
+                              SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return true;
+        }
+
+        bool on_pty_request(SshSession *session,
+                            SshChannel *channel,
+                            const std::string &term,
+                            uint32_t width, uint32_t height,
+                            uint32_t pixel_width, uint32_t pixel_height,
+                            const std::vector<uint8_t> &modes) override
+        {
+            (void)session;
+            (void)channel;
+            (void)term;
+            (void)width;
+            (void)height;
+            (void)pixel_width;
+            (void)pixel_height;
+            (void)modes;
+            return true;
+        }
+    };
+
+    SshSession session(2004, nullptr);
+    session.set_state(SshSession::State::active);
+    auto *channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 91, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created for signal bridge test");
+
+    ShellAcceptHandler handler;
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm");
+    SshMessageCodec::write_uint32(pty_payload, 100);
+    SshMessageCodec::write_uint32(pty_payload, 30);
+    SshMessageCodec::write_uint32(pty_payload, 1000);
+    SshMessageCodec::write_uint32(pty_payload, 700);
+    SshMessageCodec::write_string(pty_payload, std::string());
+    auto pty_span = pty_payload.readable_span();
+    SshChannelRequestMessage pty_req;
+    pty_req.recipient_channel = 91;
+    pty_req.request_type = "pty-req";
+    pty_req.want_reply = true;
+    pty_req.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_span.data()) + pty_span.size());
+    auto pty_packet = SshMessageCodec::encode_channel_request(pty_req);
+    auto pty_packet_span = pty_packet.readable_span();
+    std::vector<uint8_t> pty_raw(
+        reinterpret_cast<const uint8_t *>(pty_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_packet_span.data()) + pty_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, pty_raw, &handler);
+
+    SshChannelRequestMessage shell_req;
+    shell_req.recipient_channel = 91;
+    shell_req.request_type = "shell";
+    shell_req.want_reply = true;
+    auto shell_packet = SshMessageCodec::encode_channel_request(shell_req);
+    auto shell_packet_span = shell_packet.readable_span();
+    std::vector<uint8_t> shell_raw(
+        reinterpret_cast<const uint8_t *>(shell_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(shell_packet_span.data()) + shell_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, shell_raw, &handler);
+    TEST_ASSERT(session.has_pty_process(91), "shell bridge should start PTY process");
+
+    const std::string sleep_cmd = "sleep 30\n";
+    SshChannelDataMessage sleep_msg;
+    sleep_msg.recipient_channel = 91;
+    sleep_msg.data.assign(sleep_cmd.begin(), sleep_cmd.end());
+    auto sleep_packet = SshMessageCodec::encode_channel_data(sleep_msg);
+    auto sleep_span = sleep_packet.readable_span();
+    std::vector<uint8_t> sleep_raw(
+        reinterpret_cast<const uint8_t *>(sleep_span.data()),
+        reinterpret_cast<const uint8_t *>(sleep_span.data()) + sleep_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_DATA, sleep_raw, &handler);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+
+    SshChannelRequestMessage sig_req;
+    sig_req.recipient_channel = 91;
+    sig_req.request_type = "signal";
+    sig_req.want_reply = true;
+    sig_req.request_specific_data = encode_string_payload("KILL");
+    auto sig_packet = SshMessageCodec::encode_channel_request(sig_req);
+    auto sig_span = sig_packet.readable_span();
+    std::vector<uint8_t> sig_raw(
+        reinterpret_cast<const uint8_t *>(sig_span.data()),
+        reinterpret_cast<const uint8_t *>(sig_span.data()) + sig_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, sig_raw, &handler);
+
+    bool saw_exit_signal = false;
+    bool saw_close = false;
+    for (int i = 0; i < 120; ++i) {
+        session.pump_pty_once(91, &handler);
+        auto out = session.drain_outgoing();
+        for (auto &buf : out) {
+            auto span = buf.readable_span();
+            if (span.empty()) {
+                continue;
+            }
+            const auto *raw = reinterpret_cast<const uint8_t *>(span.data());
+            const auto type = static_cast<SshMessageType>(raw[0]);
+            if (type == SshMessageType::SSH_MSG_CHANNEL_REQUEST) {
+                auto decoded = SshMessageCodec::decode_channel_request(raw, span.size());
+                if (decoded && decoded->request_type == "exit-signal") {
+                    saw_exit_signal = true;
+                }
+            } else if (type == SshMessageType::SSH_MSG_CHANNEL_CLOSE) {
+                saw_close = true;
+            }
+        }
+        if (saw_exit_signal && saw_close) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    TEST_ASSERT(saw_exit_signal, "signal forwarding should lead to exit-signal notification");
+    TEST_ASSERT(saw_close, "signal forwarding should eventually close channel");
+    return true;
+#endif
+}
+
+bool test_session_pty_bridge_exec_with_pty_outputs_and_exits()
+{
+#if defined(_WIN32)
+    return true;
+#else
+    class ExecAcceptHandler final : public SshHandler
+    {
+    public:
+        bool enable_builtin_exec_bridge() const override
+        {
+            return true;
+        }
+
+        bool on_exec_request(SshSession *session,
+                             SshChannel *channel,
+                             const std::string &command) override
+        {
+            (void)session;
+            (void)channel;
+            (void)command;
+            return true;
+        }
+
+        bool on_pty_request(SshSession *session,
+                            SshChannel *channel,
+                            const std::string &term,
+                            uint32_t width, uint32_t height,
+                            uint32_t pixel_width, uint32_t pixel_height,
+                            const std::vector<uint8_t> &modes) override
+        {
+            (void)session;
+            (void)channel;
+            (void)term;
+            (void)width;
+            (void)height;
+            (void)pixel_width;
+            (void)pixel_height;
+            (void)modes;
+            return true;
+        }
+    };
+
+    SshSession session(2005, nullptr);
+    session.set_state(SshSession::State::active);
+    auto *channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 92, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created for exec PTY bridge test");
+
+    ExecAcceptHandler handler;
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm");
+    SshMessageCodec::write_uint32(pty_payload, 100);
+    SshMessageCodec::write_uint32(pty_payload, 30);
+    SshMessageCodec::write_uint32(pty_payload, 1000);
+    SshMessageCodec::write_uint32(pty_payload, 700);
+    SshMessageCodec::write_string(pty_payload, std::string());
+    auto pty_span = pty_payload.readable_span();
+    SshChannelRequestMessage pty_req;
+    pty_req.recipient_channel = 92;
+    pty_req.request_type = "pty-req";
+    pty_req.want_reply = true;
+    pty_req.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_span.data()) + pty_span.size());
+    auto pty_packet = SshMessageCodec::encode_channel_request(pty_req);
+    auto pty_packet_span = pty_packet.readable_span();
+    std::vector<uint8_t> pty_raw(
+        reinterpret_cast<const uint8_t *>(pty_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_packet_span.data()) + pty_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, pty_raw, &handler);
+
+    SshChannelRequestMessage exec_req;
+    exec_req.recipient_channel = 92;
+    exec_req.request_type = "exec";
+    exec_req.want_reply = true;
+    exec_req.request_specific_data = encode_string_payload("printf EXEC_BRIDGE_OK");
+    auto exec_packet = SshMessageCodec::encode_channel_request(exec_req);
+    auto exec_packet_span = exec_packet.readable_span();
+    std::vector<uint8_t> exec_raw(
+        reinterpret_cast<const uint8_t *>(exec_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(exec_packet_span.data()) + exec_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, exec_raw, &handler);
+
+    TEST_ASSERT(session.has_pty_process(92), "exec with accepted pty should start PTY process bridge");
+
+    bool saw_exec_output = false;
+    bool saw_exit = false;
+    for (int i = 0; i < 120; ++i) {
+        session.pump_pty_once(92, &handler);
+        auto out = session.drain_outgoing();
+        for (auto &buf : out) {
+            auto span = buf.readable_span();
+            if (span.empty()) {
+                continue;
+            }
+            const auto *raw = reinterpret_cast<const uint8_t *>(span.data());
+            const auto type = static_cast<SshMessageType>(raw[0]);
+            if (type == SshMessageType::SSH_MSG_CHANNEL_DATA) {
+                auto decoded = SshMessageCodec::decode_channel_data(raw, span.size());
+                if (decoded) {
+                    const std::string text(decoded->data.begin(), decoded->data.end());
+                    if (text.find("EXEC_BRIDGE_OK") != std::string::npos) {
+                        saw_exec_output = true;
+                    }
+                }
+            } else if (type == SshMessageType::SSH_MSG_CHANNEL_REQUEST) {
+                auto decoded = SshMessageCodec::decode_channel_request(raw, span.size());
+                if (decoded && (decoded->request_type == "exit-status" || decoded->request_type == "exit-signal")) {
+                    saw_exit = true;
+                }
+            }
+        }
+        if (saw_exec_output && saw_exit) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    TEST_ASSERT(saw_exec_output, "exec PTY bridge should forward command output");
+    TEST_ASSERT(saw_exit, "exec PTY bridge should emit exit notification");
+    return true;
+#endif
+}
+
+bool test_session_pty_bridge_exec_requires_handler_opt_in()
+{
+#if defined(_WIN32)
+    return true;
+#else
+    class ExecAcceptNoBridgeHandler final : public SshHandler
+    {
+    public:
+        bool on_exec_request(SshSession *session,
+                             SshChannel *channel,
+                             const std::string &command) override
+        {
+            (void)session;
+            (void)channel;
+            (void)command;
+            return true;
+        }
+
+        bool on_pty_request(SshSession *session,
+                            SshChannel *channel,
+                            const std::string &term,
+                            uint32_t width, uint32_t height,
+                            uint32_t pixel_width, uint32_t pixel_height,
+                            const std::vector<uint8_t> &modes) override
+        {
+            (void)session;
+            (void)channel;
+            (void)term;
+            (void)width;
+            (void)height;
+            (void)pixel_width;
+            (void)pixel_height;
+            (void)modes;
+            return true;
+        }
+    };
+
+    SshSession session(2006, nullptr);
+    session.set_state(SshSession::State::active);
+    auto *channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 93, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created for exec bridge opt-in test");
+
+    ExecAcceptNoBridgeHandler handler;
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm");
+    SshMessageCodec::write_uint32(pty_payload, 100);
+    SshMessageCodec::write_uint32(pty_payload, 30);
+    SshMessageCodec::write_uint32(pty_payload, 1000);
+    SshMessageCodec::write_uint32(pty_payload, 700);
+    SshMessageCodec::write_string(pty_payload, std::string());
+    auto pty_span = pty_payload.readable_span();
+    SshChannelRequestMessage pty_req;
+    pty_req.recipient_channel = 93;
+    pty_req.request_type = "pty-req";
+    pty_req.want_reply = true;
+    pty_req.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_span.data()) + pty_span.size());
+    auto pty_packet = SshMessageCodec::encode_channel_request(pty_req);
+    auto pty_packet_span = pty_packet.readable_span();
+    std::vector<uint8_t> pty_raw(
+        reinterpret_cast<const uint8_t *>(pty_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_packet_span.data()) + pty_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, pty_raw, &handler);
+
+    SshChannelRequestMessage exec_req;
+    exec_req.recipient_channel = 93;
+    exec_req.request_type = "exec";
+    exec_req.want_reply = true;
+    exec_req.request_specific_data = encode_string_payload("printf SHOULD_NOT_RUN");
+    auto exec_packet = SshMessageCodec::encode_channel_request(exec_req);
+    auto exec_packet_span = exec_packet.readable_span();
+    std::vector<uint8_t> exec_raw(
+        reinterpret_cast<const uint8_t *>(exec_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(exec_packet_span.data()) + exec_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, exec_raw, &handler);
+
+    TEST_ASSERT(!session.has_pty_process(93),
+                "exec PTY bridge should not start when handler does not opt in");
+    return true;
+#endif
+}
+
 int main()
 {
     std::cout << "=== SSH Tests ===" << std::endl;
@@ -1415,7 +3246,7 @@ int main()
     RUN_TEST(test_publickey_rsa_fallback_verifies_signature);
     RUN_TEST(test_publickey_ecdsa_fallback_verifies_signature);
     RUN_TEST(test_build_kex_init_uses_filtered_host_key_algorithms_in_config_order);
-    RUN_TEST(test_process_kex_init_negotiates_client_preference_and_hash);
+    RUN_TEST(test_process_kex_init_negotiates_config_preference_and_hash);
     RUN_TEST(test_first_kex_packet_follows_ignores_only_wrong_guess);
     RUN_TEST(test_process_newkeys_activates_encryption_after_kex);
     RUN_TEST(test_process_kex_init_message_uses_client_then_server_kex_payloads);
@@ -1424,10 +3255,37 @@ int main()
     RUN_TEST(test_local_file_system_basic_roundtrip);
     RUN_TEST(test_local_file_system_rejects_uid_gid_setstat);
     RUN_TEST(test_local_file_system_absolute_symlink_targets_stay_logical);
+    RUN_TEST(test_local_file_system_realpath_and_readlink_edge_inputs);
     RUN_TEST(test_packet_codec_plaintext_roundtrip_and_partial_parse);
     RUN_TEST(test_try_parse_marks_invalid_for_encrypted_bytes_before_newkeys);
     RUN_TEST(test_packet_codec_encrypted_roundtrip_and_mac_failure);
     RUN_TEST(test_packet_codec_aead_roundtrip_and_tag_failure);
+    RUN_TEST(test_channel_request_rejects_second_exec_and_second_shell);
+    RUN_TEST(test_channel_request_rejects_second_pty_and_parses_modes_as_string);
+    RUN_TEST(test_window_change_and_signal_always_reply_success_when_want_reply);
+    RUN_TEST(test_direct_tcpip_open_requires_complete_type_specific_payload);
+    RUN_TEST(test_direct_tcpip_open_valid_payload_is_still_handled_by_handler_policy);
+    RUN_TEST(test_build_channel_exit_status_encodes_standard_channel_request);
+    RUN_TEST(test_build_channel_exit_signal_encodes_standard_channel_request);
+    RUN_TEST(test_session_dispatch_channel_close_emits_exit_status_before_close);
+    RUN_TEST(test_session_dispatch_channel_close_without_command_sends_only_close);
+    RUN_TEST(test_session_dispatch_channel_close_can_emit_exit_signal_via_handler);
+    RUN_TEST(test_session_dispatch_repeated_channel_close_emits_exit_only_once);
+    RUN_TEST(test_env_and_pty_rejected_after_command_started);
+    RUN_TEST(test_shell_success_then_rejects_other_command_requests);
+    RUN_TEST(test_channel_request_non_open_state_reply_behavior);
+    RUN_TEST(test_subsystem_success_then_rejects_other_command_requests);
+    RUN_TEST(test_session_dispatch_channel_close_uses_handler_exit_status_value);
+    RUN_TEST(test_session_dispatch_channel_close_exit_signal_payload_fields);
+    RUN_TEST(test_channel_request_sequence_matrix_command_then_exec_shell_subsystem_fail);
+    RUN_TEST(test_terminal_session_state_records_accepted_pty_and_shell_flags);
+    RUN_TEST(test_pty_backend_prepare_and_shutdown_lifecycle);
+    RUN_TEST(test_pty_process_launch_shell_and_capture_output);
+    RUN_TEST(test_session_pty_bridge_shell_data_and_exit_sequence);
+    RUN_TEST(test_session_pty_bridge_window_change_affects_shell_stty_size);
+    RUN_TEST(test_session_pty_bridge_signal_terminates_shell_child);
+    RUN_TEST(test_session_pty_bridge_exec_with_pty_outputs_and_exits);
+    RUN_TEST(test_session_pty_bridge_exec_requires_handler_opt_in);
 
     std::cout << std::endl;
     std::cout << "Tests run:    " << g_tests_run << std::endl;

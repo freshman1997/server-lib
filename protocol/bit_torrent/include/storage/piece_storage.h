@@ -25,6 +25,7 @@ public:
     std::vector<uint32_t> scan_committed_pieces() const;
     std::vector<uint32_t> restore_verified_partial_pieces();
     bool commit_piece(int32_t piece_index);
+    bool discard_piece(int32_t piece_index);
     bool read_block(uint32_t piece_index, uint32_t offset, uint32_t length, std::vector<uint8_t> &out) const;
     void flush_all();
     void close_all();

@@ -240,14 +240,17 @@ int main()
     const auto root = std::filesystem::temp_directory_path() / "yuan_nas_service_smoke";
     const auto root_reloaded = std::filesystem::temp_directory_path() / "yuan_nas_service_smoke_reloaded";
     const auto root_admin = std::filesystem::temp_directory_path() / "yuan_nas_service_smoke_admin";
+    const auto root_smb = std::filesystem::temp_directory_path() / "yuan_nas_service_smoke_smb";
     const auto audit_path = root / "nas-audit.jsonl";
     std::error_code ec;
     std::filesystem::remove_all(root, ec);
     std::filesystem::remove_all(root_reloaded, ec);
     std::filesystem::remove_all(root_admin, ec);
+    std::filesystem::remove_all(root_smb, ec);
     std::filesystem::create_directories(root, ec);
     std::filesystem::create_directories(root_reloaded, ec);
     std::filesystem::create_directories(root_admin, ec);
+    std::filesystem::create_directories(root_smb, ec);
 
     auto metadata = std::make_shared<MemoryMetadataStore>();
     nas::NasUser user;
@@ -305,6 +308,7 @@ int main()
     check(health_resp.find("200") != std::string::npos, "nas health should return 200");
     check(health_resp.find("\"metadata_available\":true") != std::string::npos, "nas health should report metadata");
     check(health_resp.find("\"share_count\":1") != std::string::npos, "nas health should report share count");
+    check(health_resp.find("\"smb_enabled\":false") != std::string::npos, "nas health should report smb disabled by default");
 
     const std::string admin_auth = "Basic " + yuan::base::util::base64_encode("alice:secret");
     const std::string reader_auth = "Basic " + yuan::base::util::base64_encode("bob:reader");
@@ -545,10 +549,56 @@ int main()
           "nas service should accept WebDAV after reload");
     check(std::filesystem::exists(root_reloaded / "reloaded.txt"), "nas service reload should update share root");
 
+    const uint16_t smb_port = reserve_tcp_port();
+    check(smb_port != 0, "should reserve smb port");
+    const auto smb_config_path = root / "nas-smb-reload.json";
+    {
+        std::ofstream out(smb_config_path, std::ios::binary | std::ios::trunc);
+        out << "{"
+            << "\"port\":" << port << ","
+            << "\"http\":{\"enable_keep_alive\":false},"
+            << "\"smb\":{\"enabled\":true,\"port\":" << smb_port << ",\"require_signing\":true},"
+            << "\"nas\":{"
+            << "\"webdav_mount\":\"/dav\","
+            << "\"redis\":{\"enabled\":false},"
+            << "\"users\":[{\"id\":\"u1\",\"username\":\"alice\",\"password_hash\":\""
+            << user.password_hash << "\",\"admin\":true}],"
+            << "\"shares\":[{\"id\":\"s1\",\"name\":\"public\",\"root_path\":\""
+            << root_smb.generic_string() << "\",\"default_permissions\":[\"read\",\"write\",\"remove\"]}]"
+            << "}}";
+    }
+
+    check(service.reload_from_file(smb_config_path), "nas service should reload with smb enabled");
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    const auto smb_health_resp = roundtrip(port,
+        "GET /nas/health HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Connection: close\r\n\r\n");
+    check(smb_health_resp.find("\"smb_enabled\":true") != std::string::npos,
+          "nas health should report smb enabled after reload");
+    check(smb_health_resp.find("\"smb_port\":" + std::to_string(smb_port)) != std::string::npos,
+          "nas health should expose smb port");
+    check(smb_health_resp.find("\"smb_require_signing\":true") != std::string::npos,
+          "nas health should expose smb signing requirement");
+
+    socket_t smb_socket = ::socket(AF_INET, SOCK_STREAM, 0);
+    bool smb_connect_ok = false;
+    if (smb_socket != kInvalidSocket) {
+        sockaddr_in smb_addr{};
+        smb_addr.sin_family = AF_INET;
+        smb_addr.sin_port = htons(smb_port);
+        smb_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        smb_connect_ok = (::connect(smb_socket, reinterpret_cast<const sockaddr *>(&smb_addr), sizeof(smb_addr)) == 0);
+    }
+    close_socket(smb_socket);
+    check(smb_connect_ok, "nas service should accept smb tcp connection when enabled");
+
     service.stop();
     std::filesystem::remove_all(root, ec);
     std::filesystem::remove_all(root_reloaded, ec);
     std::filesystem::remove_all(root_admin, ec);
+    std::filesystem::remove_all(root_smb, ec);
 #ifdef _WIN32
     WSACleanup();
 #endif

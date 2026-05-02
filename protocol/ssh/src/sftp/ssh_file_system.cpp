@@ -202,19 +202,19 @@ namespace yuan::net::ssh
 
     std::string SshLocalFileSystem::resolve_path(const std::string & path) const
     {
-        if (path.empty() || path == ".") {
-            auto root = normalized_root_path();
-            root.make_preferred();
-            return root.string();
+        if (path.empty() || path[0] != '/') {
+            return "";
         }
 
-        if (path[0] != '/') {
-            return "";
+        for (const auto & part : FsPath(path)) {
+            if (part == "..") {
+                return "";
+            }
         }
 
         const auto root = normalized_root_path();
         FsPath relative;
-        for (const auto & part : FsPath(path)) {
+        for (const auto & part : FsPath(path).lexically_normal()) {
             if (part == "/" || part == ".") {
                 continue;
             }
@@ -223,7 +223,6 @@ namespace yuan::net::ssh
             }
             relative /= part;
         }
-        relative = relative.lexically_normal();
 
         const auto candidate = (root / relative).lexically_normal();
 
@@ -767,7 +766,8 @@ namespace yuan::net::ssh
 
         const auto root = normalized_root_path();
         auto relative = std::filesystem::relative(canonical, root, ec);
-        result.path = ec ? "/" : (relative.empty() ? "/" : "/" + relative.generic_string());
+        const bool is_root_relative = !ec && (relative.empty() || relative == FsPath("."));
+        result.path = ec ? "/" : (is_root_relative ? "/" : "/" + relative.generic_string());
 
         const auto status = std::filesystem::status(canonical, ec);
         if (!ec) {

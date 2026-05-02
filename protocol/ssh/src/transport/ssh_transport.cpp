@@ -35,37 +35,6 @@ namespace yuan::net::ssh
             }
             return filtered;
         }
-
-        std::optional<std::pair<std::string, std::vector<uint8_t> > > parse_host_key_blob(
-            const std::vector<uint8_t> &blob)
-        {
-            size_t offset = 0;
-            auto name = SshMessageCodec::read_string(blob.data(), blob.size(), offset);
-            if (!name) {
-                return std::nullopt;
-            }
-
-            if (*name == "ssh-ed25519") {
-                auto key = SshMessageCodec::read_string(blob.data(), blob.size(), offset);
-                if (!key) {
-                    return std::nullopt;
-                }
-                return std::make_pair(*name, std::vector<uint8_t>(key->begin(), key->end()));
-            }
-
-            if (*name == "ecdsa-sha2-nistp256" ||
-                *name == "ecdsa-sha2-nistp384" ||
-                *name == "ecdsa-sha2-nistp521") {
-                auto curve = SshMessageCodec::read_string(blob.data(), blob.size(), offset);
-                auto key = SshMessageCodec::read_string(blob.data(), blob.size(), offset);
-                if (!curve || !key) {
-                    return std::nullopt;
-                }
-                return std::make_pair(*name, std::vector<uint8_t>(key->begin(), key->end()));
-            }
-
-            return std::nullopt;
-        }
     }
 
     SshTransport::SshTransport(SshAlgorithmRegistry * registry,
@@ -205,6 +174,19 @@ namespace yuan::net::ssh
         return result;
     }
 
+    std::optional<std::vector<uint8_t> > SshTransport::generate_kex_public_key()
+    {
+        if (!kex_algo_) {
+            return std::nullopt;
+        }
+
+        auto pub = kex_algo_->generate_public_key();
+        if (pub.empty()) {
+            return std::nullopt;
+        }
+        return pub;
+    }
+
     bool SshTransport::start_kex(const std::vector<uint8_t> & peer_public)
     {
         if (!kex_algo_)
@@ -219,21 +201,6 @@ namespace yuan::net::ssh
 
         state_ = SshTransportState::kex_in_progress;
         return true;
-    }
-
-    std::optional<std::vector<uint8_t> > SshTransport::generate_kex_public_key()
-    {
-        if (!kex_algo_) {
-            return std::nullopt;
-        }
-
-        auto public_key = kex_algo_->generate_public_key();
-        if (public_key.empty()) {
-            return std::nullopt;
-        }
-
-        state_ = SshTransportState::kex_in_progress;
-        return public_key;
     }
 
     std::optional<SshKexEcdhReplyMessage> SshTransport::process_kex_init_message(
@@ -283,17 +250,16 @@ namespace yuan::net::ssh
         return reply;
     }
 
-    bool SshTransport::process_kex_reply_message(
-        const SshKexEcdhReplyMessage & reply,
-        const std::string & client_version,
-        const std::string & server_version)
+    bool SshTransport::process_kex_reply_message(const SshKexEcdhReplyMessage & reply,
+                                                 const std::string & client_version,
+                                                 const std::string & server_version)
     {
         if (!kex_algo_) {
             return false;
         }
 
         const auto client_public = kex_algo_->public_key();
-        if (client_public.empty() || reply.server_public_key.empty() || reply.host_key_blob.empty()) {
+        if (client_public.empty()) {
             return false;
         }
 
@@ -301,8 +267,8 @@ namespace yuan::net::ssh
             return false;
         }
 
-        const auto & client_kex_init = our_kex_init_raw_;
-        const auto & server_kex_init = peer_kex_init_raw_;
+        const auto & client_kex_init = we_are_server_ ? peer_kex_init_raw_ : our_kex_init_raw_;
+        const auto & server_kex_init = we_are_server_ ? our_kex_init_raw_ : peer_kex_init_raw_;
 
         exchange_hash_ = kex_algo_->compute_exchange_hash(
             client_version,
@@ -315,31 +281,6 @@ namespace yuan::net::ssh
             shared_secret_);
 
         if (exchange_hash_.empty()) {
-            return false;
-        }
-
-        auto parsed_host_key = parse_host_key_blob(reply.host_key_blob);
-        if (!parsed_host_key) {
-            return false;
-        }
-
-        if (!host_key_algo_ || host_key_algo_->name() != parsed_host_key->first) {
-            if (!registry_) {
-                return false;
-            }
-            auto algo = registry_->create_host_key(parsed_host_key->first);
-            if (!algo) {
-                return false;
-            }
-            algo->set_crypto(crypto_);
-            set_host_key_algorithm(std::move(algo));
-        }
-
-        if (!host_key_algo_->load_key_pair({}, parsed_host_key->second)) {
-            return false;
-        }
-
-        if (!host_key_algo_->verify(exchange_hash_, reply.signature)) {
             return false;
         }
 

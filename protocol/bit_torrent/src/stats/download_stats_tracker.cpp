@@ -1,6 +1,7 @@
 #include "stats/download_stats_tracker.h"
 
 #include <algorithm>
+#include <climits>
 
 namespace yuan::net::bit_torrent
 {
@@ -47,16 +48,20 @@ void DownloadStatsTracker::update_peer_counts(int32_t active_peers, int32_t tota
     stats_.total_peers_ = total_peers;
 }
 
-TrackerAnnounceContext DownloadStatsTracker::make_tracker_context(const TorrentMeta &meta, int32_t listen_port) const
-{
-    TrackerAnnounceContext ctx;
-    ctx.meta_ = &meta;
-    ctx.listen_port_ = listen_port;
-    ctx.uploaded_ = stats_.uploaded_bytes_;
-    ctx.downloaded_ = stats_.downloaded_bytes_;
-    ctx.left_ = std::max<int64_t>(0, meta.info.total_length_ - stats_.downloaded_bytes_);
-    return ctx;
-}
+    TrackerAnnounceContext DownloadStatsTracker::make_tracker_context(const TorrentMeta &meta, int32_t listen_port) const
+    {
+        TrackerAnnounceContext ctx;
+        ctx.meta_ = &meta;
+        ctx.listen_port_ = listen_port;
+        ctx.uploaded_ = stats_.uploaded_bytes_;
+        ctx.downloaded_ = stats_.downloaded_bytes_;
+        if (meta.info.total_length_ > 0) {
+            ctx.left_ = std::max<int64_t>(0, meta.info.total_length_ - stats_.downloaded_bytes_);
+        } else {
+            ctx.left_ = INT64_MAX;
+        }
+        return ctx;
+    }
 
 void DownloadStatsTracker::emit()
 {

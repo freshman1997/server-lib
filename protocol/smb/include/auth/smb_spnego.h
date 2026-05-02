@@ -21,6 +21,8 @@ namespace yuan::net::smb
 
         void set_credentials_db(std::function<bool(const std::string &, const std::string &, const std::string &)> validator);
         void set_password_lookup(std::function<std::optional<std::string>(const std::string &, const std::string &)> lookup);
+        void set_nt_hash_lookup(std::function<std::optional<std::string>(const std::string &, const std::string &)> lookup);
+        std::vector<uint8_t> extract_mech_token_for_test(const std::vector<uint8_t> &token);
 
     private:
         std::vector<uint8_t> extract_mech_token(const std::vector<uint8_t> &spnego_token);

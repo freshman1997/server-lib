@@ -55,37 +55,6 @@ namespace yuan::net::ssh
         return crypto.sha256(data, len);
     }
 
-    static std::vector<uint8_t> compute_exchange_hash(
-        const std::string &client_version,
-        const std::string &server_version,
-        const std::vector<uint8_t> &client_kex_init,
-        const std::vector<uint8_t> &server_kex_init,
-        const std::vector<uint8_t> &host_key,
-        const std::vector<uint8_t> &client_public,
-        const std::vector<uint8_t> &server_public,
-        const std::vector<uint8_t> &shared_secret,
-        const std::string &hash_name,
-        bool public_keys_are_strings)
-    {
-        std::vector<uint8_t> hash_input;
-        append_string(hash_input, client_version);
-        append_string(hash_input, server_version);
-        append_raw(hash_input, client_kex_init);
-        append_raw(hash_input, server_kex_init);
-        append_raw(hash_input, host_key);
-        if (public_keys_are_strings) {
-            append_raw(hash_input, client_public);
-            append_raw(hash_input, server_public);
-        } else {
-            append_mpint(hash_input, client_public);
-            append_mpint(hash_input, server_public);
-        }
-        append_mpint(hash_input, shared_secret);
-
-        SshCryptoOpenSSL crypto;
-        return compute_hash(crypto, hash_name, hash_input.data(), hash_input.size());
-    }
-
     std::vector<uint8_t> SshKeyDerivation::derive_key(
         const std::vector<uint8_t> & K,
         const std::vector<uint8_t> & H,
@@ -138,10 +107,18 @@ namespace yuan::net::ssh
         const std::vector<uint8_t> & server_public,
         const std::vector<uint8_t> & shared_secret)
     {
-        return compute_exchange_hash(client_version, server_version,
-                                     client_kex_init, server_kex_init,
-                                     host_key, client_public, server_public,
-                                     shared_secret, "sha256", false);
+        std::vector<uint8_t> hash_input;
+        append_string(hash_input, client_version);
+        append_string(hash_input, server_version);
+        append_raw(hash_input, client_kex_init);
+        append_raw(hash_input, server_kex_init);
+        append_raw(hash_input, host_key);
+        append_raw(hash_input, client_public);
+        append_raw(hash_input, server_public);
+        append_mpint(hash_input, shared_secret);
+
+        SshCryptoOpenSSL crypto;
+        return crypto.sha256(hash_input.data(), hash_input.size());
     }
 
     std::vector<uint8_t> SshKeyDerivation::compute_exchange_hash_sha384(
@@ -154,10 +131,18 @@ namespace yuan::net::ssh
         const std::vector<uint8_t> & server_public,
         const std::vector<uint8_t> & shared_secret)
     {
-        return compute_exchange_hash(client_version, server_version,
-                                     client_kex_init, server_kex_init,
-                                     host_key, client_public, server_public,
-                                     shared_secret, "sha384", false);
+        std::vector<uint8_t> hash_input;
+        append_string(hash_input, client_version);
+        append_string(hash_input, server_version);
+        append_raw(hash_input, client_kex_init);
+        append_raw(hash_input, server_kex_init);
+        append_raw(hash_input, host_key);
+        append_raw(hash_input, client_public);
+        append_raw(hash_input, server_public);
+        append_mpint(hash_input, shared_secret);
+
+        SshCryptoOpenSSL crypto;
+        return crypto.sha384(hash_input.data(), hash_input.size());
     }
 
     std::vector<uint8_t> SshKeyDerivation::compute_exchange_hash_sha512(
@@ -170,58 +155,18 @@ namespace yuan::net::ssh
         const std::vector<uint8_t> & server_public,
         const std::vector<uint8_t> & shared_secret)
     {
-        return compute_exchange_hash(client_version, server_version,
-                                     client_kex_init, server_kex_init,
-                                     host_key, client_public, server_public,
-                                     shared_secret, "sha512", false);
-    }
+        std::vector<uint8_t> hash_input;
+        append_string(hash_input, client_version);
+        append_string(hash_input, server_version);
+        append_raw(hash_input, client_kex_init);
+        append_raw(hash_input, server_kex_init);
+        append_raw(hash_input, host_key);
+        append_raw(hash_input, client_public);
+        append_raw(hash_input, server_public);
+        append_mpint(hash_input, shared_secret);
 
-    std::vector<uint8_t> SshKeyDerivation::compute_ecdh_exchange_hash_sha256(
-        const std::string & client_version,
-        const std::string & server_version,
-        const std::vector<uint8_t> & client_kex_init,
-        const std::vector<uint8_t> & server_kex_init,
-        const std::vector<uint8_t> & host_key,
-        const std::vector<uint8_t> & client_public,
-        const std::vector<uint8_t> & server_public,
-        const std::vector<uint8_t> & shared_secret)
-    {
-        return compute_exchange_hash(client_version, server_version,
-                                     client_kex_init, server_kex_init,
-                                     host_key, client_public, server_public,
-                                     shared_secret, "sha256", true);
-    }
-
-    std::vector<uint8_t> SshKeyDerivation::compute_ecdh_exchange_hash_sha384(
-        const std::string & client_version,
-        const std::string & server_version,
-        const std::vector<uint8_t> & client_kex_init,
-        const std::vector<uint8_t> & server_kex_init,
-        const std::vector<uint8_t> & host_key,
-        const std::vector<uint8_t> & client_public,
-        const std::vector<uint8_t> & server_public,
-        const std::vector<uint8_t> & shared_secret)
-    {
-        return compute_exchange_hash(client_version, server_version,
-                                     client_kex_init, server_kex_init,
-                                     host_key, client_public, server_public,
-                                     shared_secret, "sha384", true);
-    }
-
-    std::vector<uint8_t> SshKeyDerivation::compute_ecdh_exchange_hash_sha512(
-        const std::string & client_version,
-        const std::string & server_version,
-        const std::vector<uint8_t> & client_kex_init,
-        const std::vector<uint8_t> & server_kex_init,
-        const std::vector<uint8_t> & host_key,
-        const std::vector<uint8_t> & client_public,
-        const std::vector<uint8_t> & server_public,
-        const std::vector<uint8_t> & shared_secret)
-    {
-        return compute_exchange_hash(client_version, server_version,
-                                     client_kex_init, server_kex_init,
-                                     host_key, client_public, server_public,
-                                     shared_secret, "sha512", true);
+        SshCryptoOpenSSL crypto;
+        return crypto.sha512(hash_input.data(), hash_input.size());
     }
 
     std::vector<uint8_t> SshKeyDerivation::derive_session_id(const std::vector<uint8_t> & exchange_hash)

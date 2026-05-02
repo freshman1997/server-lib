@@ -53,9 +53,9 @@ namespace yuan::net::ssh
         std::optional<SshNegotiatedAlgorithms> process_kex_init(const SshKexInitMessage &msg,
                                                                 const SshServerConfig &config);
 
-        bool start_kex(const std::vector<uint8_t> &peer_public);
+        std::optional<std::vector<uint8_t>> generate_kex_public_key();
 
-        std::optional<std::vector<uint8_t> > generate_kex_public_key();
+        bool start_kex(const std::vector<uint8_t> &peer_public);
 
         std::optional<SshKexEcdhReplyMessage> process_kex_init_message(
             const std::vector<uint8_t> &client_public,
@@ -159,6 +159,12 @@ namespace yuan::net::ssh
         bool consume_pending_kex_guess();
 
         void reset_for_rekey();
+
+        void reset_packet_sequences()
+        {
+            send_seq_ = 0;
+            recv_seq_ = 0;
+        }
 
     private:
         SshTransportState state_ = SshTransportState::disconnected;

@@ -50,6 +50,15 @@ namespace yuan::net::bit_torrent
         std::string get_external_ip() const;
         uint16_t get_mapped_port() const;
 
+        bool is_igd_discovered() const
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            return !igd_control_url_.empty();
+        }
+
+        bool add_port_mapping(uint16_t internal_port);
+        bool remove_port_mapping(uint16_t external_port);
+
     private:
         // UPnP methods
         void discover_igd();
@@ -58,6 +67,7 @@ namespace yuan::net::bit_torrent
         bool fetch_igd_description(const std::string &location);
         bool parse_igd_services(const std::string &xml);
         bool soap_add_port_mapping();
+        bool soap_add_port_mapping(uint16_t internal_port);
         bool soap_delete_port_mapping();
         bool soap_get_external_ip();
         std::string http_request(const std::string &url, const std::string &soap_action,
@@ -84,6 +94,7 @@ namespace yuan::net::bit_torrent
         uint16_t internal_port_ = 0;
 
         // UPnP state
+        std::string igd_description_url_;
         std::string igd_control_url_;
         std::string igd_service_type_;
         std::string external_ip_;

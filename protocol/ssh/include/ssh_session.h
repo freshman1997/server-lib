@@ -3,6 +3,8 @@
 
 #include "auth/ssh_authenticator.h"
 #include "connection/ssh_connection_manager.h"
+#include "connection/ssh_pty_process.h"
+#include "connection/ssh_terminal_bridge.h"
 #include "protocol/ssh_constants.h"
 #include "protocol/ssh_structures.h"
 #include "transport/ssh_transport.h"
@@ -70,6 +72,15 @@ namespace yuan::net::ssh
             pre_rekey_state_ = s;
         }
 
+        bool kex_strict_mode() const
+        {
+            return kex_strict_mode_;
+        }
+        void set_kex_strict_mode(bool v)
+        {
+            kex_strict_mode_ = v;
+        }
+
         const std::string &username() const
         {
             return authenticator_.username();
@@ -132,6 +143,14 @@ namespace yuan::net::ssh
         void enqueue_outgoing(ByteBuffer buf);
         std::vector<ByteBuffer> drain_outgoing();
         void flush_channel_pending_data();
+        void register_pty_process(uint32_t channel_remote_id, std::unique_ptr<SshPtyProcess> process);
+        bool has_pty_process(uint32_t channel_remote_id) const;
+        bool has_any_pty_processes() const;
+        int first_pty_master_fd() const;
+        bool pump_pty_once(uint32_t channel_remote_id, SshHandler *handler);
+        bool pump_all_pty_once(SshHandler *handler);
+        void shutdown_pty_for_channel(uint32_t channel_remote_id);
+        void shutdown_all_pty_processes();
 
         ByteBuffer build_service_accept(const std::string &service_name) const;
         ByteBuffer build_userauth_success() const;
@@ -145,7 +164,6 @@ namespace yuan::net::ssh
         void handle_userauth_request(const std::vector<uint8_t> &payload, SshHandler *handler);
         void handle_userauth_info_response(const std::vector<uint8_t> &payload, SshHandler *handler);
         void handle_connection_message(SshMessageType msg_type, const std::vector<uint8_t> &payload, SshHandler *handler);
-
         uint64_t session_id_;
         SshServer *server_;
         State state_ = State::connected;
@@ -161,6 +179,9 @@ namespace yuan::net::ssh
 
         std::mutex outgoing_mutex_;
         std::deque<ByteBuffer> outgoing_;
+
+        std::unique_ptr<SshTerminalBridge> terminal_bridge_;
+        bool kex_strict_mode_ = false;
     };
 
     class SshSessionManager

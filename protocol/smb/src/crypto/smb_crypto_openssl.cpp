@@ -141,4 +141,12 @@ namespace yuan::net::smb
         HMAC(EVP_sha256(), key.data(), static_cast<int>(key.size()), data, len, result.data(), &outlen);
         return result;
     }
+
+    std::vector<uint8_t> SmbCryptoOpenSSL::hmac_sha512(const std::vector<uint8_t> & key, const uint8_t * data, size_t len)
+    {
+        std::vector<uint8_t> result(64);
+        unsigned int outlen = 64;
+        HMAC(EVP_sha512(), key.data(), static_cast<int>(key.size()), data, len, result.data(), &outlen);
+        return result;
+    }
 }

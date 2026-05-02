@@ -110,6 +110,12 @@ namespace yuan::net::bit_torrent
         if (!conn) {
             return;
         }
+
+        if (static_cast<int32_t>(pending_.size()) >= max_pending_) {
+            conn->close();
+            return;
+        }
+
         auto peer = std::make_shared<PeerConnection>();
 
         PendingInbound pending;

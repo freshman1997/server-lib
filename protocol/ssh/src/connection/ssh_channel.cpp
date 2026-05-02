@@ -77,6 +77,24 @@ namespace yuan::net::ssh
         return result;
     }
 
+    bool SshChannel::mark_command_started()
+    {
+        if (command_started_) {
+            return false;
+        }
+        command_started_ = true;
+        return true;
+    }
+
+    bool SshChannel::mark_pty_requested()
+    {
+        if (pty_requested_) {
+            return false;
+        }
+        pty_requested_ = true;
+        return true;
+    }
+
     bool SshChannel::mark_termination_notified()
     {
         if (termination_notified_) {

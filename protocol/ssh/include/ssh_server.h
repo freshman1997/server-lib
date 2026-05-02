@@ -3,6 +3,7 @@
 
 #include "ssh_config.h"
 #include "ssh_handler.h"
+#include "ssh_builtin_terminal_handler.h"
 #include "ssh_session.h"
 #include "algorithm/ssh_algorithm_registry.h"
 #include "crypto/ssh_crypto.h"
@@ -90,6 +91,7 @@ namespace yuan::net::ssh
         SshHostKeyProvider host_key_provider_;
         SshSessionManager session_mgr_;
         SshHandler *handler_ = nullptr;
+        SshBuiltinTerminalHandler builtin_terminal_handler_;
         std::atomic<bool> running_{ false };
 
 #if YUAN_ENABLE_SSH_SFTP

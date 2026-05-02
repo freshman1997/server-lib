@@ -30,6 +30,9 @@ namespace yuan::net::ssh
             "diffie-hellman-group18-sha512"
         };
         std::vector<std::string> cipher_algorithms = {
+            "chacha20-poly1305@openssh.com",
+            "aes256-gcm@openssh.com",
+            "aes128-gcm@openssh.com",
             "aes256-ctr",
             "aes192-ctr",
             "aes128-ctr"
@@ -57,6 +60,8 @@ namespace yuan::net::ssh
         std::string banner;
         bool enable_port_forwarding = true;
         bool enable_sftp = true;
+        bool enable_builtin_terminal_handler = true;
+        bool enable_openssh_compat_profile = true;
         std::string sftp_root_dir;
         std::string software_version = "YuanSSH_1.0";
     };

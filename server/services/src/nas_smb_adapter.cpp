@@ -116,6 +116,7 @@ namespace yuan::server
             }
             return required;
         }
+
     }
 
     yuan::net::smb::SmbServerConfig make_smb_config_from_nas_shares(
@@ -428,4 +429,5 @@ namespace yuan::server
         }
         return permissions_.allowed(share, *user, required);
     }
+
 }

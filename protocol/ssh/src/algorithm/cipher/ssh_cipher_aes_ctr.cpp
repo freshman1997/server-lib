@@ -60,9 +60,11 @@ namespace yuan::net::ssh
 
             enc_ctx_ = EVP_CIPHER_CTX_new();
             EVP_EncryptInit_ex(enc_ctx_, cipher, nullptr, key_.data(), iv_.data());
+            EVP_CIPHER_CTX_set_padding(enc_ctx_, 0);
 
             dec_ctx_ = EVP_CIPHER_CTX_new();
             EVP_EncryptInit_ex(dec_ctx_, cipher, nullptr, key_.data(), iv_.data());
+            EVP_CIPHER_CTX_set_padding(dec_ctx_, 0);
         }
 
         std::vector<uint8_t> encrypt(const uint8_t *data, size_t len) override
@@ -72,10 +74,11 @@ namespace yuan::net::ssh
 
             std::vector<uint8_t> out(len);
             int outlen = 0;
-            EVP_EncryptUpdate(enc_ctx_, out.data(), &outlen, data, static_cast<int>(len));
-            int tmplen = 0;
-            EVP_EncryptFinal_ex(enc_ctx_, out.data() + outlen, &tmplen);
-            out.resize(static_cast<size_t>(outlen + tmplen));
+            if (EVP_EncryptUpdate(enc_ctx_, out.data(), &outlen, data, static_cast<int>(len)) != 1 ||
+                outlen != static_cast<int>(len)) {
+                return {};
+            }
+            out.resize(static_cast<size_t>(outlen));
             return out;
         }
 
@@ -86,10 +89,11 @@ namespace yuan::net::ssh
 
             std::vector<uint8_t> out(len);
             int outlen = 0;
-            EVP_EncryptUpdate(dec_ctx_, out.data(), &outlen, data, static_cast<int>(len));
-            int tmplen = 0;
-            EVP_EncryptFinal_ex(dec_ctx_, out.data() + outlen, &tmplen);
-            out.resize(static_cast<size_t>(outlen + tmplen));
+            if (EVP_EncryptUpdate(dec_ctx_, out.data(), &outlen, data, static_cast<int>(len)) != 1 ||
+                outlen != static_cast<int>(len)) {
+                return {};
+            }
+            out.resize(static_cast<size_t>(outlen));
             return out;
         }
 

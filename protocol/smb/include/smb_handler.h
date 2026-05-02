@@ -43,6 +43,13 @@ namespace yuan::net::smb
             (void)domain;
             return std::nullopt;
         }
+        virtual std::optional<std::string> on_nt_hash_lookup(SmbSession *session, const std::string &user, const std::string &domain)
+        {
+            (void)session;
+            (void)user;
+            (void)domain;
+            return std::nullopt;
+        }
         virtual bool on_tree_connect(SmbSession *session, const std::string &path)
         {
             return true;

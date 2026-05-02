@@ -684,27 +684,33 @@ namespace yuan::net::ssh
         const std::vector<uint8_t> & private_key,
         const uint8_t * data, size_t len)
     {
-        OSSL_PARAM params[2];
-        params[0] = OSSL_PARAM_construct_octet_string(OSSL_PKEY_PARAM_PRIV_KEY,
-                                                      const_cast<uint8_t *>(private_key.data()),
-                                                      private_key.size());
-        params[1] = OSSL_PARAM_construct_end();
+        if (private_key.empty() || !data || len == 0) {
+            return {};
+        }
 
-        EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(nullptr, "ED25519", nullptr);
-        EVP_PKEY *pkey = nullptr;
-        EVP_PKEY_fromdata_init(ctx);
-        EVP_PKEY_fromdata(ctx, &pkey, EVP_PKEY_KEYPAIR, params);
+        EVP_PKEY *pkey = EVP_PKEY_new_raw_private_key_ex(
+            nullptr,
+            "ED25519",
+            nullptr,
+            private_key.data(),
+            private_key.size());
+        if (!pkey) {
+            return {};
+        }
 
         size_t sig_len = 64;
         std::vector<uint8_t> sig(sig_len);
-        EVP_PKEY_CTX *sign_ctx = nullptr;
         EVP_MD_CTX *md_ctx = EVP_MD_CTX_new();
-        EVP_DigestSignInit(md_ctx, &sign_ctx, nullptr, nullptr, pkey);
-        EVP_DigestSign(md_ctx, sig.data(), &sig_len, data, len);
+        EVP_PKEY_CTX *sign_ctx = nullptr;
+        if (!md_ctx || EVP_DigestSignInit(md_ctx, &sign_ctx, nullptr, nullptr, pkey) != 1 ||
+            EVP_DigestSign(md_ctx, sig.data(), &sig_len, data, len) != 1) {
+            EVP_MD_CTX_free(md_ctx);
+            EVP_PKEY_free(pkey);
+            return {};
+        }
 
         EVP_MD_CTX_free(md_ctx);
         EVP_PKEY_free(pkey);
-        EVP_PKEY_CTX_free(ctx);
         sig.resize(sig_len);
         return sig;
     }
@@ -714,28 +720,29 @@ namespace yuan::net::ssh
         const uint8_t * data, size_t len,
         const uint8_t * sig, size_t sig_len)
     {
-        if (sig_len != 64)
+        if (public_key.empty() || !data || len == 0 || !sig || sig_len != 64) {
             return false;
+        }
 
-        OSSL_PARAM params[2];
-        params[0] = OSSL_PARAM_construct_octet_string(OSSL_PKEY_PARAM_PUB_KEY,
-                                                      const_cast<uint8_t *>(public_key.data()),
-                                                      public_key.size());
-        params[1] = OSSL_PARAM_construct_end();
+        EVP_PKEY *pkey = EVP_PKEY_new_raw_public_key_ex(
+            nullptr,
+            "ED25519",
+            nullptr,
+            public_key.data(),
+            public_key.size());
+        if (!pkey) {
+            return false;
+        }
 
-        EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(nullptr, "ED25519", nullptr);
-        EVP_PKEY *pkey = nullptr;
-        EVP_PKEY_fromdata_init(ctx);
-        EVP_PKEY_fromdata(ctx, &pkey, EVP_PKEY_PUBLIC_KEY, params);
-
-        EVP_PKEY_CTX *verify_ctx = nullptr;
         EVP_MD_CTX *md_ctx = EVP_MD_CTX_new();
-        EVP_DigestVerifyInit(md_ctx, &verify_ctx, nullptr, nullptr, pkey);
-        int result = EVP_DigestVerify(md_ctx, sig, sig_len, data, len);
+        EVP_PKEY_CTX *verify_ctx = nullptr;
+        int result = 0;
+        if (md_ctx && EVP_DigestVerifyInit(md_ctx, &verify_ctx, nullptr, nullptr, pkey) == 1) {
+            result = EVP_DigestVerify(md_ctx, sig, sig_len, data, len);
+        }
 
         EVP_MD_CTX_free(md_ctx);
         EVP_PKEY_free(pkey);
-        EVP_PKEY_CTX_free(ctx);
         return result == 1;
     }
 

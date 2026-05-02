@@ -43,6 +43,7 @@ namespace yuan::server::events
     inline constexpr const char *bittorrent_peer_connected = "server.bittorrent.peer.connected";
     inline constexpr const char *bittorrent_piece_completed = "server.bittorrent.piece.completed";
     inline constexpr const char *bittorrent_torrent_completed = "server.bittorrent.torrent.completed";
+    inline constexpr const char *bittorrent_metadata_received = "server.bittorrent.metadata.received";
 }
 
 namespace yuan::server
@@ -277,6 +278,8 @@ namespace yuan::server
     {
         std::string service_name;
         std::string peer_id;
+        std::string peer_ip;
+        uint16_t peer_port = 0;
         std::string info_hash;
     };
 

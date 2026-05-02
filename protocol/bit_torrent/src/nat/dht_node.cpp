@@ -23,6 +23,9 @@
 #include <cstring>
 #include <algorithm>
 #include <random>
+#include <fstream>
+#include <thread>
+#include <mutex>
 
 namespace yuan::net::bit_torrent
 {
@@ -222,16 +225,30 @@ namespace yuan::net::bit_torrent
 
     void DhtNode::announce(const std::vector<uint8_t> & info_hash, uint16_t port)
     {
+        announce(info_hash, port, nullptr);
+    }
+
+    void DhtNode::announce(const std::vector<uint8_t> & info_hash, uint16_t port, PeerCallback cb)
+    {
         if (!running_)
             return;
 
         DhtNodeId target;
         std::memcpy(target.data(), info_hash.data(), 20);
 
+        std::string key(reinterpret_cast<const char *>(info_hash.data()), 20);
+
+        if (cb) {
+            ActiveLookup lookup;
+            lookup.callback = std::move(cb);
+            lookup.queries_sent = 0;
+            lookup.responses_received = 0;
+            active_lookups_[key] = std::move(lookup);
+        }
+
         auto closest = find_closest_nodes(target, 8);
 
         for (const auto &node : closest) {
-            // We need a token first, so send get_peers
             send_get_peers(node.ip_string(), node.port, info_hash);
         }
     }
@@ -369,6 +386,62 @@ namespace yuan::net::bit_torrent
         return total;
     }
 
+    bool DhtNode::save_routing_table(const std::string &path) const
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        if (!out.is_open())
+            return false;
+
+        uint32_t magic = 0x44485452;
+        uint32_t version = 1;
+        uint32_t count = 0;
+        for (const auto &b : buckets_)
+            count += static_cast<uint32_t>(b.nodes.size());
+
+        out.write(reinterpret_cast<const char *>(&magic), 4);
+        out.write(reinterpret_cast<const char *>(&version), 4);
+        out.write(reinterpret_cast<const char *>(&count), 4);
+
+        for (const auto &b : buckets_) {
+            for (const auto &node : b.nodes) {
+                auto compact = node.to_compact();
+                out.write(reinterpret_cast<const char *>(compact.data()), compact.size());
+            }
+        }
+
+        return out.good();
+    }
+
+    bool DhtNode::load_routing_table(const std::string &path)
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open())
+            return false;
+
+        uint32_t magic = 0, version = 0, count = 0;
+        in.read(reinterpret_cast<char *>(&magic), 4);
+        in.read(reinterpret_cast<char *>(&version), 4);
+        in.read(reinterpret_cast<char *>(&count), 4);
+
+        if (magic != 0x44485452 || version != 1)
+            return false;
+
+        if (count > config_.dht_max_nodes)
+            count = config_.dht_max_nodes;
+
+        for (uint32_t i = 0; i < count; ++i) {
+            uint8_t buf[26];
+            in.read(reinterpret_cast<char *>(buf), 26);
+            if (in.gcount() != 26)
+                break;
+
+            auto node = DhtCompactNode::from_compact(buf);
+            update_bucket(node);
+        }
+
+        return true;
+    }
+
     // ===== RPC =====
 
     void DhtNode::send_ping(const std::string & ip, uint16_t port)
@@ -434,6 +507,7 @@ namespace yuan::net::bit_torrent
 
         PendingQuery pq;
         pq.expire_time_ms = static_cast<int64_t>(base::time::steady_now_ms() + 15000);
+        pq.info_hash = info_hash;
         pending_queries_[tid] = pq;
     }
 
@@ -464,18 +538,35 @@ namespace yuan::net::bit_torrent
 
     void DhtNode::bootstrap()
     {
+        if (!runtime_)
+            return;
+
+        std::vector<std::pair<std::string, uint16_t>> nodes;
         for (size_t i = 0; i < BOOTSTRAP_NODE_COUNT; i++) {
-            // Resolve hostname and ping
-            // For simplicity, we use the known IPs for popular bootstrap nodes
-            // In production, use DNS resolution
             std::string host = BOOTSTRAP_NODES[i][0];
             uint16_t port = static_cast<uint16_t>(std::atoi(BOOTSTRAP_NODES[i][1]));
-
-            std::string ip = net::InetAddress::get_address_by_host(host);
-            if (!ip.empty()) {
-                send_ping(ip, port);
-            }
+            nodes.emplace_back(std::move(host), port);
         }
+
+        auto runtime = runtime_;
+        std::thread t([this, nodes = std::move(nodes), runtime]() {
+            std::vector<std::pair<std::string, uint16_t>> resolved;
+            for (const auto &node : nodes) {
+                std::string ip = net::InetAddress::get_address_by_host(node.first);
+                if (!ip.empty()) {
+                    resolved.emplace_back(ip, node.second);
+                }
+            }
+
+            if (!resolved.empty()) {
+                runtime->dispatch([this, resolved = std::move(resolved)]() {
+                    for (const auto &node : resolved) {
+                        send_ping(node.first, node.second);
+                    }
+                });
+            }
+        });
+        t.detach();
     }
 
     // ===== Response Handlers =====
@@ -524,7 +615,8 @@ namespace yuan::net::bit_torrent
                                             const DhtNodeId & id,
                                             const std::string & token,
                                             const std::vector<DhtCompactNode> & nodes,
-                                            const std::vector<PeerAddress> & peers)
+                                            const std::vector<PeerAddress> & peers,
+                                            const std::vector<uint8_t> & info_hash)
     {
         // Update routing table
         DhtCompactNode responder;
@@ -540,11 +632,17 @@ namespace yuan::net::bit_torrent
         auto expire_ms = static_cast<int64_t>(base::time::steady_now_ms() + 600000); // 10 minutes
         tokens_[key] = { token, expire_ms };
 
-        // Process discovered peers
+        // Dispatch peers to the correct per-info_hash callback or global callback
         if (!peers.empty()) {
-            // Find the active lookup for this info_hash
-            // We'll match by checking if any lookup has this ip as a queried node
-            if (peer_callback_) {
+            if (!info_hash.empty()) {
+                std::string ih_key(reinterpret_cast<const char *>(info_hash.data()), 20);
+                auto it = active_lookups_.find(ih_key);
+                if (it != active_lookups_.end() && it->second.callback) {
+                    it->second.callback(peers);
+                } else if (peer_callback_) {
+                    peer_callback_(peers);
+                }
+            } else if (peer_callback_) {
                 peer_callback_(peers);
             }
         }
@@ -698,7 +796,11 @@ namespace yuan::net::bit_torrent
         // Verify token
         std::string token_key = ip + ":" + std::to_string(port);
         auto tit = tokens_.find(token_key);
-        if (tit == tokens_.end() || tit->second.first != token) {
+        auto now_ms = static_cast<int64_t>(base::time::steady_now_ms());
+        if (tit == tokens_.end() || tit->second.first != token || now_ms > tit->second.second) {
+            if (tit != tokens_.end()) {
+                tokens_.erase(tit);
+            }
             // Invalid token - send error
             DicttionaryData resp;
             resp.add("t", new StringData(transaction_id));
@@ -872,7 +974,14 @@ namespace yuan::net::bit_torrent
             }
         } else if (msg_type == "r") {
             // Response to our query
-            pending_queries_.erase(tid);
+            std::vector<uint8_t> response_info_hash;
+            auto pit = pending_queries_.find(tid);
+            if (pit != pending_queries_.end()) {
+                response_info_hash = std::move(pit->second.info_hash);
+                pending_queries_.erase(pit);
+            } else {
+                pending_queries_.erase(tid);
+            }
 
             std::string str(reinterpret_cast<const char *>(data), len);
             auto *parsed = BencodingDataConverter::parse(str);
@@ -923,7 +1032,7 @@ namespace yuan::net::bit_torrent
             }
 
             if (!peers.empty()) {
-                handle_get_peers_response(remote_ip, remote_port, sender_id, token, nodes, peers);
+                handle_get_peers_response(remote_ip, remote_port, sender_id, token, nodes, peers, response_info_hash);
             } else if (!nodes.empty()) {
                 handle_find_node_response(remote_ip, remote_port, sender_id, nodes);
             } else {

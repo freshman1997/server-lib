@@ -493,6 +493,46 @@ namespace
         check(stats.find("200") != std::string::npos, "__proxy_stats should return 200");
     }
 
+    void test_proxy_unmatched_route_returns_404(uint16_t port)
+    {
+        const std::string resp = http_get(port, "/api/not-found");
+        check(!resp.empty(), "proxy unmatched route response should not be empty");
+        check(resp.find("404") != std::string::npos,
+              "unmatched proxy route should return 404");
+    }
+
+    void test_proxy_connect_failure_returns_502(uint16_t port)
+    {
+        const auto begin = std::chrono::steady_clock::now();
+        const std::string resp = http_get(port, "/proxy-fail/connect");
+        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - begin).count();
+
+        check(!resp.empty(), "proxy connect-failure response should not be empty");
+        check(resp.find("502") != std::string::npos,
+              "proxy connect failure should return 502");
+        check(elapsed_ms < 3000,
+              "proxy connect failure should return quickly");
+    }
+
+    void test_proxy_strip_prefix_rewrite(uint16_t port)
+    {
+        const std::string resp = http_get(port, "/proxy-rewrite/demo");
+        check(resp.find("200") != std::string::npos,
+              "proxy rewrite route should return 200");
+        check(resp.find("GET /rewritten/demo HTTP/1.1") != std::string::npos,
+              "proxy rewrite route should forward rewritten path");
+    }
+
+    void test_proxy_strip_prefix_empty_path(uint16_t port)
+    {
+        const std::string resp = http_get(port, "/proxy-root/");
+        check(resp.find("200") != std::string::npos,
+              "proxy root strip route should return 200");
+        check(resp.find("GET / HTTP/1.1") != std::string::npos,
+              "proxy root strip should normalize forwarded path to /");
+    }
+
     void test_http_caps_with_config_flags(uint16_t port)
     {
         nlohmann::json cfg;
@@ -2034,6 +2074,7 @@ int main()
 
     std::error_code cleanup_ec;
     std::filesystem::remove("http.json", cleanup_ec);
+    std::filesystem::remove("mini_nginx_proxy_test_upstream.log", cleanup_ec);
     (void)yuan::net::http::HttpConfigManager::get_instance()->reload_config();
     yuan::net::http::config::load_config();
 
@@ -2051,6 +2092,161 @@ int main()
 
     yuan::net::http::HttpServerConfig cfg;
     cfg.enable_keep_alive = false;
+
+    const uint16_t upstream_port = reserve_tcp_port();
+    check(upstream_port != 0, "should reserve proxy upstream test port");
+    if (upstream_port == 0) {
+        return 1;
+    }
+
+    const auto upstream_log_path = std::filesystem::current_path() / "mini_nginx_proxy_test_upstream.log";
+    {
+        std::ofstream clear_log(upstream_log_path, std::ios::binary | std::ios::trunc);
+    }
+
+    std::atomic_bool upstream_ready{ false };
+    std::atomic_bool upstream_stop{ false };
+    std::thread upstream_thread([upstream_port, &upstream_ready, &upstream_stop, upstream_log_path]() {
+        socket_t listener = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listener == kInvalidSocket) {
+            return;
+        }
+
+        int reuse = 1;
+#ifdef _WIN32
+        ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&reuse), sizeof(reuse));
+#else
+        ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#endif
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(upstream_port);
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listener, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) != 0 ||
+            ::listen(listener, 16) != 0) {
+            close_socket(listener);
+            return;
+        }
+
+#ifdef _WIN32
+        const DWORD accept_timeout_ms = 500;
+        (void)::setsockopt(listener, SOL_SOCKET, SO_RCVTIMEO,
+                           reinterpret_cast<const char *>(&accept_timeout_ms),
+                           sizeof(accept_timeout_ms));
+#else
+        timeval accept_tv{};
+        accept_tv.tv_sec = 0;
+        accept_tv.tv_usec = 500 * 1000;
+        (void)::setsockopt(listener, SOL_SOCKET, SO_RCVTIMEO, &accept_tv, sizeof(accept_tv));
+#endif
+
+        upstream_ready.store(true);
+        while (!upstream_stop.load()) {
+            socket_t client = ::accept(listener, nullptr, nullptr);
+            if (client == kInvalidSocket) {
+#ifdef _WIN32
+                const int err = WSAGetLastError();
+                if (err == WSAETIMEDOUT || err == WSAEWOULDBLOCK || err == WSAEINTR) {
+                    continue;
+                }
+#else
+                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                    continue;
+                }
+#endif
+                continue;
+            }
+
+            std::string req;
+            char buf[2048];
+            while (req.find("\r\n\r\n") == std::string::npos) {
+#ifdef _WIN32
+                const int rc = ::recv(client, buf, static_cast<int>(sizeof(buf)), 0);
+#else
+                const ssize_t rc = ::recv(client, buf, sizeof(buf), 0);
+#endif
+                if (rc <= 0) {
+                    break;
+                }
+                req.append(buf, static_cast<std::size_t>(rc));
+                if (req.size() > 16 * 1024) {
+                    break;
+                }
+            }
+
+            const auto req_line_end = req.find("\r\n");
+            const std::string req_line = req_line_end == std::string::npos ? req : req.substr(0, req_line_end);
+            {
+                std::ofstream out(upstream_log_path, std::ios::binary | std::ios::app);
+                out << req_line << '\n';
+            }
+
+            const std::string body = req_line;
+            const std::string response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n"
+                "Connection: close\r\n"
+                "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+            (void)send_all(client, response);
+            close_socket(client);
+        }
+
+        close_socket(listener);
+    });
+
+    for (int i = 0; i < 100 && !upstream_ready.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    check(upstream_ready.load(), "proxy upstream test server should start");
+
+    nlohmann::json proxy_cfg;
+    proxy_cfg["proxies"] = {
+        {
+            {"root", "/proxy-ok/"},
+            {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+            {"strip_prefix", false},
+            {"connect_timeout", 300},
+            {"read_timeout", 1200},
+            {"write_timeout", 800},
+            {"max_retries", 1}
+        },
+        {
+            {"root", "/proxy-fail/"},
+            {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", 1})})},
+            {"strip_prefix", false},
+            {"connect_timeout", 200},
+            {"read_timeout", 1000},
+            {"write_timeout", 500},
+            {"max_retries", 0}
+        },
+        {
+            {"root", "/proxy-rewrite/"},
+            {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+            {"strip_prefix", true},
+            {"rewrite", "/rewritten"},
+            {"connect_timeout", 300},
+            {"read_timeout", 1200},
+            {"write_timeout", 800},
+            {"max_retries", 0}
+        },
+        {
+            {"root", "/proxy-root/"},
+            {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+            {"strip_prefix", true},
+            {"connect_timeout", 300},
+            {"read_timeout", 1200},
+            {"write_timeout", 800},
+            {"max_retries", 0}
+        }
+    };
+    {
+        std::ofstream out("http.json", std::ios::binary | std::ios::trunc);
+        out << proxy_cfg.dump(2);
+    }
+    (void)yuan::net::http::HttpConfigManager::get_instance()->reload_config();
+    yuan::net::http::config::load_config();
+
     auto service = std::make_unique<yuan::server::HttpService>(port, cfg);
     if (!service->init()) {
         std::cerr << "http service init failed\n";
@@ -2103,6 +2299,11 @@ int main()
     test_http2_pseudo_after_regular_header_400(port);
     test_http2_hpack_indexed_headers_flow(port);
 
+    test_proxy_unmatched_route_returns_404(port);
+    test_proxy_connect_failure_returns_502(port);
+    test_proxy_strip_prefix_rewrite(port);
+    test_proxy_strip_prefix_empty_path(port);
+
     std::filesystem::remove("http.json", cleanup_ec);
     const nlohmann::json reset_cfg = {
         {"enable_http2", false},
@@ -2126,6 +2327,12 @@ int main()
 
     service->stop();
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+    upstream_stop.store(true);
+    if (upstream_thread.joinable()) {
+        upstream_thread.join();
+    }
+    std::filesystem::remove(upstream_log_path, cleanup_ec);
 
     const int exit_code = (g_failed > 0) ? 1 : 0;
     if (exit_code != 0) {

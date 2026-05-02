@@ -3,3 +3,4 @@ project(servers)
 
 add_subdirectory(match)
 add_subdirectory(mini_nginx)
+add_subdirectory(bt_downloader)

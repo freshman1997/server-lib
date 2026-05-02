@@ -1,20 +1,159 @@
 #include "ssh.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace yuan::net::ssh;
 
 namespace
 {
+    class SmokeExecHandler final : public SshHandler
+    {
+    public:
+        bool on_channel_open(SshSession *session,
+                             const std::string &channel_type,
+                             SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return channel_type == SSH_CHANNEL_SESSION;
+        }
+
+        bool on_direct_tcpip(SshSession *session,
+                             SshChannel *channel,
+                             const std::string &target_host,
+                             uint16_t target_port) override
+        {
+            (void)session;
+            (void)channel;
+            (void)target_host;
+            (void)target_port;
+            return false;
+        }
+
+        bool on_exec_request(SshSession *session,
+                             SshChannel *channel,
+                             const std::string &command) override
+        {
+            (void)command;
+            const std::string output = "exec-ok\n";
+            std::vector<uint8_t> data(output.begin(), output.end());
+            session->enqueue_outgoing(session->connection_manager().build_channel_data(channel->remote_id(), data));
+            session->enqueue_outgoing(session->connection_manager().build_channel_exit_status(channel->remote_id(), 0));
+            session->enqueue_outgoing(session->connection_manager().build_channel_eof(channel->remote_id()));
+            session->enqueue_outgoing(session->connection_manager().build_channel_close(channel->remote_id()));
+            return true;
+        }
+    };
+
     int run_command(const std::string & command)
     {
         return std::system(command.c_str());
+    }
+
+    std::string shell_quote(const std::string & value)
+    {
+#ifdef _WIN32
+        return "\"" + value + "\"";
+#else
+        std::string out = "'";
+        for (char c : value) {
+            if (c == '\'') {
+                out += "'\\''";
+            } else {
+                out.push_back(c);
+            }
+        }
+        out += "'";
+        return out;
+#endif
+    }
+
+    std::string join_command_args(const std::vector<std::string> & args)
+    {
+        std::string cmd;
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (i != 0) {
+                cmd += " ";
+            }
+            cmd += args[i];
+        }
+        return cmd;
+    }
+
+    std::string build_keygen_cmd(const std::filesystem::path & user_key)
+    {
+        std::vector<std::string> args = {
+            "ssh-keygen",
+            "-q",
+            "-t", "ed25519",
+            "-N", shell_quote(""),
+            "-f", shell_quote(user_key.string())
+        };
+        std::string cmd = join_command_args(args);
+#ifdef _WIN32
+        return "cmd /c " + cmd + " >nul 2>nul";
+#else
+        return cmd + " >/dev/null 2>&1";
+#endif
+    }
+
+    std::string build_sftp_cmd(const std::filesystem::path & batch_file,
+                               const std::filesystem::path & known_hosts,
+                               const std::filesystem::path & user_key,
+                               int port)
+    {
+        std::vector<std::string> args = {
+            "sftp",
+            "-vvv",
+            "-b", shell_quote(batch_file.string()),
+            "-oStrictHostKeyChecking=no",
+            "-oUserKnownHostsFile=" + shell_quote(known_hosts.string()),
+            "-oPreferredAuthentications=publickey",
+            "-oPubkeyAuthentication=yes",
+            "-oBatchMode=yes",
+            "-i", shell_quote(user_key.string()),
+            "-P", std::to_string(port),
+            "demo@127.0.0.1"
+        };
+        std::string cmd = join_command_args(args);
+#ifdef _WIN32
+        return "cmd /c " + cmd;
+#else
+        return cmd;
+#endif
+    }
+
+    std::string build_ssh_exec_cmd(const std::filesystem::path & known_hosts,
+                                   const std::filesystem::path & user_key,
+                                   int port,
+                                   const std::filesystem::path & exec_output)
+    {
+        std::vector<std::string> args = {
+            "ssh",
+            "-oStrictHostKeyChecking=no",
+            "-oUserKnownHostsFile=" + shell_quote(known_hosts.string()),
+            "-oPreferredAuthentications=publickey",
+            "-oPubkeyAuthentication=yes",
+            "-oBatchMode=yes",
+            "-i", shell_quote(user_key.string()),
+            "-p", std::to_string(port),
+            "demo@127.0.0.1",
+            "run-smoke-exec"
+        };
+        std::string cmd = join_command_args(args);
+#ifdef _WIN32
+        return "cmd /c " + cmd + " > " + shell_quote(exec_output.string()) + " 2>nul";
+#else
+        return cmd + " > " + shell_quote(exec_output.string()) + " 2>/dev/null";
+#endif
     }
 
     bool command_exists(const std::string & command)
@@ -43,10 +182,19 @@ namespace
 
 int main()
 {
-    if (!command_exists("ssh-keygen") || !command_exists("sftp")) {
+    const char * smoke_env = std::getenv("YUAN_RUN_OPENSSH_SMOKE");
+    if (!smoke_env || std::string(smoke_env) != "1") {
+        std::cout << "OpenSSH smoke test skipped (set YUAN_RUN_OPENSSH_SMOKE=1 to enable)." << std::endl;
+        return 0;
+    }
+
+    if (!command_exists("ssh-keygen") || !command_exists("sftp") || !command_exists("ssh")) {
         std::cout << "OpenSSH client tools are unavailable; skipping smoke test." << std::endl;
         return 0;
     }
+
+    const char * interactive_env = std::getenv("YUAN_RUN_OPENSSH_INTERACTIVE_SMOKE");
+    const bool run_interactive = interactive_env && std::string(interactive_env) == "1";
 
     const auto smoke_dir = make_smoke_dir();
     const auto host_key = smoke_dir / "ssh_host_rsa_key";
@@ -54,6 +202,8 @@ int main()
     const auto known_hosts = smoke_dir / "known_hosts";
     const auto batch_file = smoke_dir / "sftp_batch.txt";
     const auto downloaded = smoke_dir / "downloaded.txt";
+    const auto exec_output = smoke_dir / "exec_output.txt";
+    const auto shell_output = smoke_dir / "shell_output.txt";
     const auto sftp_root = smoke_dir / "root";
 
     std::error_code ec;
@@ -86,13 +236,7 @@ int main()
     }
     std::cout << "host key ready" << std::endl;
 
-#ifdef _WIN32
-    const std::string keygen_cmd =
-        "cmd /c ssh-keygen -q -t ed25519 -N \"\" -f " + user_key.string() + " >nul 2>nul";
-#else
-    const std::string keygen_cmd =
-        "ssh-keygen -q -t ed25519 -N '' -f '" + user_key.string() + "' >/dev/null 2>&1";
-#endif
+    const std::string keygen_cmd = build_keygen_cmd(user_key);
     if (run_command(keygen_cmd) != 0) {
         std::cerr << "failed to generate client key via ssh-keygen" << std::endl;
         return 1;
@@ -105,9 +249,11 @@ int main()
     config.auth_methods = { "publickey" };
     config.enable_sftp = true;
     config.sftp_root_dir = sftp_root.string();
+    config.enable_builtin_terminal_handler = true;
 
     int port = 0;
     bool found_bindable_port = false;
+    SmokeExecHandler smoke_handler;
     for (int candidate = choose_port(); candidate < choose_port() + 10; ++candidate) {
         yuan::net::NetworkRuntime probe_runtime;
         yuan::net::AsyncListenerHost probe_listener;
@@ -119,6 +265,7 @@ int main()
         probe_listener.close();
 
         auto server = std::make_unique<SshServer>(config);
+        server->set_handler(&smoke_handler);
         if (server->init(candidate)) {
             port = candidate;
             std::cout << "server started on port " << port << std::endl;
@@ -128,27 +275,83 @@ int main()
 
             std::this_thread::sleep_for(std::chrono::milliseconds(750));
 
-#ifdef _WIN32
-            const std::string sftp_cmd =
-                "cmd /c sftp -vvv -b " + batch_file.string() +
-                " -oStrictHostKeyChecking=no -oUserKnownHostsFile=" + known_hosts.string() +
-                " -oPreferredAuthentications=publickey -oPubkeyAuthentication=yes -oBatchMode=yes" +
-                " -i " + user_key.string() +
-                " -P " + std::to_string(port) +
-                " demo@127.0.0.1";
-#else
-            const std::string sftp_cmd =
-                "sftp -vvv -b '" + batch_file.string() + "'" +
-                " -oStrictHostKeyChecking=no -oUserKnownHostsFile='" + known_hosts.string() + "'" +
-                " -oPreferredAuthentications=publickey -oPubkeyAuthentication=yes -oBatchMode=yes" +
-                " -i '" + user_key.string() + "'" +
-                " -P " + std::to_string(port) +
-                " demo@127.0.0.1";
-#endif
+            const std::string sftp_cmd = build_sftp_cmd(batch_file, known_hosts, user_key, port);
 
             std::cout << "launching sftp" << std::endl;
             const int sftp_status = run_command(sftp_cmd);
             std::cout << "sftp exited with " << sftp_status << std::endl;
+
+            const std::string ssh_exec_cmd = build_ssh_exec_cmd(known_hosts, user_key, port, exec_output);
+            std::cout << "launching ssh exec" << std::endl;
+            const int ssh_exec_status = run_command(ssh_exec_cmd);
+            std::cout << "ssh exec exited with " << ssh_exec_status << std::endl;
+
+            int ssh_probe_status = 0;
+            if (run_interactive) {
+#ifdef _WIN32
+                const std::string ssh_probe_cmd =
+                    "cmd /c ssh -T -oStrictHostKeyChecking=no -oUserKnownHostsFile=" + shell_quote(known_hosts.string()) +
+                    " -oPreferredAuthentications=publickey -oPubkeyAuthentication=yes -oBatchMode=yes" +
+                    " -i " + shell_quote(user_key.string()) +
+                    " -p " + std::to_string(port) +
+                    " demo@127.0.0.1 exit 0 >nul 2>nul";
+#else
+                const std::string ssh_probe_cmd =
+                    "ssh -T -oStrictHostKeyChecking=no -oUserKnownHostsFile=" + shell_quote(known_hosts.string()) +
+                    " -oPreferredAuthentications=publickey -oPubkeyAuthentication=yes -oBatchMode=yes" +
+                    " -i " + shell_quote(user_key.string()) +
+                    " -p " + std::to_string(port) +
+                    " demo@127.0.0.1 exit 0 >/dev/null 2>/dev/null";
+#endif
+                std::cout << "launching ssh probe (-T)" << std::endl;
+                ssh_probe_status = run_command(ssh_probe_cmd);
+                std::cout << "ssh probe exited with " << ssh_probe_status << std::endl;
+
+#ifdef _WIN32
+                const std::string ssh_vscode_probe_cmd =
+                    "cmd /c ssh -T -oStrictHostKeyChecking=no -oUserKnownHostsFile=" + shell_quote(known_hosts.string()) +
+                    " -oPreferredAuthentications=publickey -oPubkeyAuthentication=yes -oBatchMode=yes" +
+                    " -i " + shell_quote(user_key.string()) +
+                    " -p " + std::to_string(port) +
+                    " demo@127.0.0.1 \"echo VSCODE_PROBE_OK && uname -s\" >nul 2>nul";
+#else
+                const std::string ssh_vscode_probe_cmd =
+                    "ssh -T -oStrictHostKeyChecking=no -oUserKnownHostsFile=" + shell_quote(known_hosts.string()) +
+                    " -oPreferredAuthentications=publickey -oPubkeyAuthentication=yes -oBatchMode=yes" +
+                    " -i " + shell_quote(user_key.string()) +
+                    " -p " + std::to_string(port) +
+                    " demo@127.0.0.1 \"echo VSCODE_PROBE_OK && uname -s\" >/dev/null 2>/dev/null";
+#endif
+                std::cout << "launching ssh vscode-like probe" << std::endl;
+                const int ssh_vscode_probe_status = run_command(ssh_vscode_probe_cmd);
+                std::cout << "ssh vscode-like probe exited with " << ssh_vscode_probe_status << std::endl;
+                if (ssh_vscode_probe_status != 0) {
+                    std::cerr << "ssh vscode-like probe command failed with exit code " << ssh_vscode_probe_status << std::endl;
+                    return 1;
+                }
+            }
+
+            int ssh_interactive_status = 0;
+            if (run_interactive) {
+#ifdef _WIN32
+                const std::string ssh_interactive_cmd =
+                    "cmd /c ssh -tt -oStrictHostKeyChecking=no -oUserKnownHostsFile=" + shell_quote(known_hosts.string()) +
+                    " -oPreferredAuthentications=publickey -oPubkeyAuthentication=yes -oBatchMode=yes" +
+                    " -i " + shell_quote(user_key.string()) +
+                    " -p " + std::to_string(port) +
+                    " demo@127.0.0.1 exit > " + shell_quote(shell_output.string()) + " 2>nul";
+#else
+                const std::string ssh_interactive_cmd =
+                    "ssh -tt -oStrictHostKeyChecking=no -oUserKnownHostsFile=" + shell_quote(known_hosts.string()) +
+                    " -oPreferredAuthentications=publickey -oPubkeyAuthentication=yes -oBatchMode=yes" +
+                    " -i " + shell_quote(user_key.string()) +
+                    " -p " + std::to_string(port) +
+                    " demo@127.0.0.1 exit > " + shell_quote(shell_output.string()) + " 2>/dev/null";
+#endif
+                std::cout << "launching ssh interactive" << std::endl;
+                ssh_interactive_status = run_command(ssh_interactive_cmd);
+                std::cout << "ssh interactive exited with " << ssh_interactive_status << std::endl;
+            }
 
             server->stop();
             if (server_thread.joinable()) {
@@ -160,11 +363,34 @@ int main()
                 return 1;
             }
 
+            if (ssh_exec_status != 0) {
+                std::cerr << "ssh exec smoke command failed with exit code " << ssh_exec_status << std::endl;
+                return 1;
+            }
+
+            if (run_interactive && ssh_interactive_status != 0) {
+                std::cerr << "ssh interactive smoke command failed with exit code " << ssh_interactive_status << std::endl;
+                return 1;
+            }
+
+            if (run_interactive && ssh_probe_status != 0) {
+                std::cerr << "ssh probe smoke command failed with exit code " << ssh_probe_status << std::endl;
+                return 1;
+            }
+
             std::ifstream downloaded_file(downloaded, std::ios::binary);
             std::string downloaded_text((std::istreambuf_iterator<char>(downloaded_file)),
                                         std::istreambuf_iterator<char>());
             if (downloaded_text != "hello from yuan ssh") {
                 std::cerr << "downloaded file content mismatch" << std::endl;
+                return 1;
+            }
+
+            std::ifstream exec_output_file(exec_output, std::ios::binary);
+            std::string exec_output_text((std::istreambuf_iterator<char>(exec_output_file)),
+                                         std::istreambuf_iterator<char>());
+            if (exec_output_text.find("exec-ok") == std::string::npos) {
+                std::cerr << "ssh exec output mismatch" << std::endl;
                 return 1;
             }
 

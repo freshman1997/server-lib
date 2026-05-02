@@ -325,7 +325,7 @@ namespace yuan::net::smb
 
     struct Smb2SetInfoResponse
     {
-        uint16_t structure_size = 9;
+        uint16_t structure_size = 2;
         uint16_t output_buffer_offset = 0;
         uint32_t output_buffer_length = 0;
     };
