@@ -20,6 +20,7 @@
 #include "net/session/connection_context.h"
 #include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
+#include "timer/timer_handle.h"
 #include "timer/timer_manager.h"
 #include "timer/timer_util.hpp"
 
@@ -59,8 +60,8 @@ namespace yuan::net
                 acceptor_.reset();
             }
             if (timeout_timer_) {
-                timeout_timer_->cancel();
-                timeout_timer_ = nullptr;
+                timeout_timer_.cancel();
+                timeout_timer_.reset();
             }
         }
 
@@ -82,12 +83,12 @@ namespace yuan::net
             return ConnectionContext(connection_);
         }
 
-        timer::Timer *schedule(uint32_t delay_ms, std::function<void()> callback)
+        timer::TimerHandle schedule(uint32_t delay_ms, std::function<void()> callback)
         {
-            return runtime_ ? runtime_->schedule(delay_ms, std::move(callback)) : nullptr;
+            return runtime_ ? runtime_->schedule_handle(delay_ms, std::move(callback)) : timer::TimerHandle{};
         }
 
-        void cancel_timer(timer::Timer *timer)
+        void cancel_timer(const timer::TimerHandle &timer)
         {
             if (runtime_) {
                 runtime_->cancel_timer(timer);
@@ -283,7 +284,7 @@ namespace yuan::net
 
         std::shared_ptr<Connection> connection_;
         std::unique_ptr<DatagramAcceptor> acceptor_;
-        timer::Timer *timeout_timer_ = nullptr;
+        timer::TimerHandle timeout_timer_;
         coroutine::CompletionEvent completion_event_;
         std::shared_ptr<ConnectionHandler> self_handler_holder_{ make_non_owning_handler(*this) };
     };

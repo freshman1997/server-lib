@@ -60,9 +60,7 @@ int main(int argc, char *argv[])
         std::cout << "Querying: " << domain << "\n";
         std::cout << "----------------------------------------\n";
 
-        const auto response = client.query_async(domain, DnsType::A).execute();
-        if (!response.get_answers().empty() ||
-            response.get_response_code() != DnsResponseCode::NO_ERROR) {
+        if (client.query(domain, DnsType::A)) {
             std::cout << "Query completed successfully!\n";
         } else {
             std::cout << "Query failed or timed out!\n";

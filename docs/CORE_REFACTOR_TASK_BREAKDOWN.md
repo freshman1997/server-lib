@@ -25,7 +25,7 @@
 
 ## P0：Baseline
 
-状态：进行中
+状态：已完成
 
 任务：
 
@@ -61,11 +61,11 @@
   - 建议名：`ConnectionView`。
   - 内部只保存 `Connection*`。
   - 只用于当前调用栈，不允许保存到 awaiter 成员。
-- [ ] 将 coroutine I/O awaiter 的成员从 `ConnectionRef` 改成 owning handle 或 shared operation state。
+- [x] 将 coroutine I/O awaiter 的成员从 `ConnectionRef` 改成 owning handle 或 shared operation state。
 - [x] `RuntimeView::{read,write,flush,close,receive_from}` 的 `Connection*` 重载先保留，但内部优先 `shared_from_this()` 进入 owner 路径。
 - [x] 为 `RuntimeView` 增加 `ConnectionHandle` I/O overload。
-- [ ] 给 `Connection*` 重载加注释或 deprecated 标记，说明它只是迁移入口。
-- [ ] 删除或降级 `ConnectionRef(Connection*)`。
+- [x] 删除 coroutine I/O `Connection*` 重载，避免裸指针进入跨挂起路径。
+- [x] 删除或降级 `ConnectionRef(Connection*)`。
 
 验收：
 
@@ -85,7 +85,11 @@
 - 已新增 `net/connection/connection_handle.h`。
 - 已新增 `connection_handle` 回归测试，验证 handle 持有 owner、view 只观察当前连接。
 - 已迁移 `test_async_facades` 的 immediate write/flush regression，用 `ConnectionHandle` 调用 `RuntimeView::write/flush`。
-- 尚未迁移 awaiter，下一步应从 `RuntimeView` 的 shared_ptr 路径开始替换内部存储。
+- `stream_io_awaitable` / `datagram_io_awaitable` / `connection_event_awaitable` 已改为保存 `ConnectionHandle`，不再保存 `ConnectionRef`。
+- `RuntimeView` / `NetworkRuntime::RuntimeView` 的 coroutine I/O 裸 `Connection*` 重载已删除；调用方需要传 `ConnectionHandle` 或 `std::shared_ptr<Connection>`。
+- 新增 `async_facades` 回归：`ConnectionHandle` 在 read 挂起后外部 shared_ptr 释放、随后 delayed close，awaiter 仍安全恢复。
+- 下一步进入 P2：把 timer lambda 从捕获 awaiter `this` 改成 weak operation state。
+- `ConnectionRef` 已删除，避免 raw pointer 构造继续伪装成可跨挂起引用。
 
 ## P2：Operation State
 
@@ -93,14 +97,26 @@
 
 建议任务：
 
-- [ ] 为每个 awaiter 引入 `OperationState`。
+- [x] 为每个 awaiter 引入 `OperationState` / shared state 等价结构。
   - 保存 handle、result、completed、cancelled、connection weak/shared handle。
   - timer lambda 捕获 weak state。
-- [ ] awaiter 析构只标记 cancelled，并取消 token/timer。
-- [ ] timeout、close、error、read/write completion 都通过同一个 `complete_once()`。
-- [ ] 统一 async read/write/flush/close/ssl handshake/receive 的状态转换。
+- [x] awaiter 析构只标记 cancelled，并取消 token/timer。
+- [x] timeout、close、error、read/write completion 都通过一次性完成路径收敛。
+- [x] 统一 async read/write/flush/close/ssl handshake/receive 的状态转换。
 - [x] 先修复 one-shot timer 触发后外部 cancel 的 UAF。
-- [ ] 把 `Timer*` 作为外部长期句柄的语义收紧，后续替换为安全 token/handle。
+- [x] 为 coroutine timeout 引入 `AwaiterTimeoutState`，timer callback 捕获 weak state，不再捕获 awaiter `this`。
+- [x] 迁移 stream read/write/flush、SSL handshake、datagram receive、connect timeout 到 weak timeout state。
+- [x] 新增 `async_read_timeout_then_late_event` 回归，验证 timeout 后 late read event 不二次恢复、不消费数据。
+- [x] 把 `Timer*` 作为外部长期句柄的语义收紧，后续替换为安全 token/handle。
+
+当前进度：
+
+- 新增 `timer::TimerHandle`，作为对外 timer token/handle 兼容层。
+- `NetworkRuntime` / `RuntimeView` 增加 `schedule_handle` / `schedule_periodic_handle` 和 `cancel_timer(TimerHandle)`。
+- `AsyncConnectionContext` / `AsyncClientSession` / `AsyncDatagramClient` 对外 schedule API 已返回 `TimerHandle`。
+- core legacy session facade 的 schedule/cancel API 和 timeout_timer_ 成员已迁移到 `TimerHandle`。
+- `timer_lifecycle` 和 `async_facades` 已迁移到 `TimerHandle` 路径，覆盖 one-shot timer fire 后 cancel 仍安全。
+- `AcceptAwaitable` 已迁移到 shared state，避免 handler 捕获 awaiter `this`。
 
 验收：
 
@@ -123,17 +139,28 @@
 
 建议任务：
 
-- [ ] 在 `Connection` 或具体 connection 中设计 waiter token。
+- [x] 在 `Connection` 或具体 connection 中设计 waiter token。
   - `add_read_waiter`
   - `add_write_waiter`
   - `add_close_waiter`
   - `add_error_waiter`
   - `remove_waiter`
-- [ ] `TcpConnection::on_read_event()` 读取完成后先更新状态，再唤醒 read waiters，再通知业务 handler。
-- [ ] `TcpConnection::on_write_event()` flush/drain 后唤醒 write waiters。
-- [ ] `do_close()` 唤醒 close/error waiters，不依赖业务 handler 是否存在。
-- [ ] UDP receive awaiter 同样迁移到 waiter 模型。
-- [ ] 删除 awaiter proxy handler 或只保留兼容层。
+- [x] `TcpConnection::on_read_event()` 读取完成后先更新状态，再唤醒 read waiters，再通知业务 handler。
+- [x] `TcpConnection::on_write_event()` flush/drain 后唤醒 write waiters。
+- [x] `do_close()` 唤醒 close/error waiters，不依赖业务 handler 是否存在。
+- [x] UDP receive awaiter 同样迁移到 waiter 模型。
+- [x] 删除 stream/datagram/event awaiter 中未使用的 proxy handler 兼容层。
+
+当前进度：
+
+- stream read/write/flush/close、datagram receive、connection event awaiter 已只使用 `Connection::add_event_waiter/remove_event_waiter`，不再保存或恢复 proxy handler。
+- 新增 `async_facades` 回归：read/flush/close awaiter 不替换已安装的业务 `ConnectionHandler`。
+- `accept_awaitable` 已改用 `StreamAcceptor::add_accept_waiter/remove_accept_waiter`，不再替换 acceptor handler。
+- `connect_awaitable` 已改用 `Connection::add_event_waiter/remove_event_waiter` 监听 connected/error/closed，不再安装 proxy handler。
+- `TcpConnection` connecting 完成/失败路径即使没有业务 handler 也会触发 connected/error waiters。
+- 新增 `async_facades` 回归：connect/accept awaiter 不替换业务 handler。
+- read waiter 策略明确为单连接同一时间只允许一个 active read waiter，第二个 concurrent read 返回 `invalid_state`。
+- 新增 `async_facades` 回归：multiple read waiter 被拒绝，已注册的第一个 waiter 仍能正常完成。
 
 验收：
 
@@ -143,10 +170,10 @@
 
 测试：
 
-- 业务 handler + async read 同时存在。
-- 两个 read waiter 同时注册时行为明确：拒绝第二个或按 FIFO 完成。
+- [x] 业务 handler + async read 同时存在。
+- [x] 两个 read waiter 同时注册时行为明确：拒绝第二个。
 - write waiter 和 close waiter 同时存在。
-- 协议层 handler 在 await 前后保持不变。
+- [x] 协议层 handler 在 await 前后保持不变。
 
 ## P4：Event Token
 
@@ -154,12 +181,19 @@
 
 建议任务：
 
-- [ ] 决定 generation 所属位置，推荐放在 `Channel`。
-- [ ] `PollEvent` 总是携带非零 token/generation。
-- [ ] `EpollPoller` 不维护一套独立但不同步的 generation。
-- [ ] `EventLoop` 对所有事件强制校验 token。
-- [ ] `close_channel/remove_channel` 后让旧 token 失效。
-- [ ] select/poll/kqueue 后端也保持同一语义。
+- [x] 决定 generation 所属位置，推荐放在 `Channel`。
+- [x] `PollEvent` 总是携带非零 token/generation。
+- [x] `EpollPoller` 不维护一套独立但不同步的 generation。
+- [x] `EventLoop` 对所有事件强制校验 token。
+- [x] `close_channel/remove_channel` 后让旧 token 失效。
+- [x] select/poll/kqueue 后端也保持同一语义。
+
+当前进度：
+
+- `Channel` 持有 generation，poller 统一从 `Channel::generation()` 生成 `PollEvent` token。
+- `EventLoop` 不再维护独立 `channel_generations_`，并拒绝 generation 为 0 的事件。
+- `close_channel()` 会 bump channel generation，使旧 `PollEvent` 失效。
+- 新增 `event_token` 回归测试，覆盖 matching generation、zero generation bypass、stale generation 和 close 后旧事件拒绝。
 
 验收：
 
@@ -178,11 +212,23 @@
 
 建议任务：
 
-- [ ] `TcpConnection::close()` 在 pending output 下进入 draining 状态。
-- [ ] `on_write_event()` 在 closing/draining 状态先 flush，output 为空后再 `do_close()`。
-- [ ] 明确 `shutdown_write()`、peer input shutdown、local close 的组合行为。
-- [ ] `get_local_address()` 返回真实 local address。
-- [ ] UDP idle close / abort / graceful close 状态命名统一。
+- [x] `TcpConnection::close()` 在 pending output 下进入 draining 状态。
+- [x] `on_write_event()` 在 closing/draining 状态先 flush，output 为空后再 `do_close()`。
+- [x] 明确 `shutdown_write()`、peer input shutdown、local close 的组合行为。
+- [x] `get_local_address()` 返回真实 local address。
+- [x] UDP idle close / abort / graceful close 状态命名统一。
+
+当前进度：
+
+- `TcpConnection` 缓存 `Socket::get_local_address()`，连接完成后刷新本地地址，`get_local_address()` 不再返回 remote address。
+- `write_and_flush` / `write_owned_and_flush` 允许 closing 状态继续 flush 已排队输出。
+- `on_write_event()` 在 closing 状态先 flush，只有输出为空后才通知 writable / on_write / do_close。
+- 新增 `tcp_close_semantics` 回归测试，覆盖 local/remote 端口区分、write/flush/read/close 基础链路。
+- `AsyncConnectionContext` / `AsyncListenerHost` 默认 handler 不再在 peer input shutdown 时主动 close，避免半关闭连接无法写响应。
+- `tcp_close_semantics` 已扩展覆盖 large payload write+close drain、peer half-close 后写响应、close/abort 幂等。
+- `TcpConnection::close()` 在 connecting 状态会直接进入 close 流程并恢复 close waiter，不再停留在 closing 等待永远不会来的连接事件。
+- `tcp_close_semantics` 已补 close while connecting 回归。
+- UDP close / abort / idle close 行为已补回归；edge-triggered read drain 已修复，避免 socket 仍有数据时丢失后续读事件。
 
 验收：
 
@@ -192,10 +238,10 @@
 
 测试：
 
-- write large payload then close。
-- peer half-close 后 server 写响应。
-- close while connecting。
-- close twice / abort then close。
+- [x] write large payload then close。
+- [x] peer half-close 后 server 写响应。
+- [x] close while connecting。
+- [x] close twice / abort then close。
 
 ## P6：API Cleanup 与模块边界
 
@@ -203,12 +249,12 @@
 
 建议任务：
 
-- [ ] 删除 `ConnectionRef` 或只保留同步 view。
-- [ ] 删除 `Task<T>::operator T()`。
-- [ ] `Task<T>::execute()` 改名或实现真正 sync wait。
-- [ ] detached task 增加异常 sink。
-- [ ] `net/secuity` 改成 `net/security`。
-- [ ] 评估 CMake target 拆分：
+- [x] 删除 `ConnectionRef` 或只保留同步 view。
+- [x] 删除 `Task<T>::operator T()`。
+- [x] `Task<T>::execute()` 改名或实现真正 sync wait。
+- [x] detached task 增加异常 sink。
+- [x] `net/secuity` 改成 `net/security`。
+- [x] 评估 CMake target 拆分：
   - `CoreBuffer`
   - `CoreTimer`
   - `CoreEvent`
@@ -220,6 +266,16 @@
 - 新 API 名字能表达生命周期和行为。
 - core 内部依赖方向清晰。
 - 协议层不依赖临时兼容类型。
+
+当前进度：
+
+- `Task<T>::operator T()` 已删除，避免未完成 task 被隐式取默认值。
+- `Task<T>::execute()` / `Task<void>::execute()` 改名为 `resume_once_and_get_result()`，名字明确表达只 resume 一次。
+- `sync_wait()` 的无 event loop fallback 已迁移到新 API。
+- `coroutine_runtime` 增加 task API 回归，覆盖 immediate result 和异常 rethrow。
+- `Task<void>` 增加 detached exception handler，detached coroutine 结束时会把未处理异常送入 sink，`coroutine_runtime` 已补回归。
+- SSL 相关实现已迁移到 `net/security`，核心与协议层 include 已改用新路径；`net/secuity` 兼容 wrapper 已删除。
+- CMake target 拆分已完成评估：当前仍以单一 `Core` 目标交付更稳妥，原因是 `net`、`coroutine`、`event` 之间仍存在大量交叉 include 和 link 路径；若强拆，最容易先落地的是 `CoreBase`、`CoreTimer`、`CoreBuffer`，其次是 `CoreEvent` / `CoreNet`，`CoreCoroutine` 最后拆更安全。
 
 ## 推进规则
 

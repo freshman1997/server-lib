@@ -6,6 +6,7 @@
 #include "ssh_handler.h"
 #include "ssh_config.h"
 #include "ssh_session.h"
+#include "ssh_server.h"
 #include <algorithm>
 
 namespace yuan::net::ssh
@@ -68,11 +69,118 @@ namespace yuan::net::ssh
             result.originator_port = static_cast<uint16_t>(originator_port);
             return result;
         }
+
+        struct TcpipForwardRequestData
+        {
+            std::string bind_addr;
+            uint16_t bind_port = 0;
+        };
+
+        std::optional<TcpipForwardRequestData> decode_tcpip_forward_request_data(const std::vector<uint8_t> &data)
+        {
+            size_t offset = 0;
+            auto addr = SshMessageCodec::read_string(data.data(), data.size(), offset);
+            if (!addr || offset + 4 > data.size()) {
+                return std::nullopt;
+            }
+
+            uint32_t port = SshMessageCodec::read_uint32(data.data(), data.size(), offset);
+            if (offset != data.size() || port > 65535) {
+                return std::nullopt;
+            }
+
+            TcpipForwardRequestData result;
+            result.bind_addr = std::move(*addr);
+            result.bind_port = static_cast<uint16_t>(port);
+            return result;
+        }
+
+        bool port_forwarding_enabled(const SshSession *session)
+        {
+            if (!session || !session->server()) {
+                return true;
+            }
+            return session->server()->config().enable_port_forwarding;
+        }
+
+        bool host_port_matches_pattern(const std::string &host,
+                                       uint16_t port,
+                                       const std::string &pattern)
+        {
+            const auto colon = pattern.rfind(':');
+            if (colon == std::string::npos || colon == 0 || colon + 1 >= pattern.size()) {
+                return false;
+            }
+
+            const std::string pattern_host = pattern.substr(0, colon);
+            const std::string pattern_port = pattern.substr(colon + 1);
+            if (pattern_host != "*" && pattern_host != host) {
+                return false;
+            }
+
+            if (pattern_port == "*") {
+                return true;
+            }
+
+            uint32_t parsed_port = 0;
+            for (char ch : pattern_port) {
+                if (ch < '0' || ch > '9') {
+                    return false;
+                }
+                parsed_port = parsed_port * 10 + static_cast<uint32_t>(ch - '0');
+                if (parsed_port > 65535) {
+                    return false;
+                }
+            }
+            return parsed_port == port;
+        }
+
+        bool permitopen_allows_target(const SshSession *session,
+                                      const std::string &host,
+                                      uint16_t port)
+        {
+            if (!session) {
+                return true;
+            }
+            const auto &permitopen = session->authorized_key_permitopen();
+            if (permitopen.empty()) {
+                return true;
+            }
+            for (const auto &pattern : permitopen) {
+                if (host_port_matches_pattern(host, port, pattern)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool permitlisten_allows_target(const SshSession *session,
+                                        const std::string &host,
+                                        uint16_t port)
+        {
+            if (!session) {
+                return true;
+            }
+            const auto &permitlisten = session->authorized_key_permitlisten();
+            if (permitlisten.empty()) {
+                return true;
+            }
+            for (const auto &pattern : permitlisten) {
+                if (host_port_matches_pattern(host, port, pattern)) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     SshConnectionManager::SshConnectionManager(SshSession * session, uint32_t max_channels)
-        : session_(session), max_channels_(max_channels)
+        : session_(session), max_channels_(max_channels), port_forwarding_(session)
     {
+        port_forwarding_.set_connection_manager(this);
+        if (session_) {
+            port_forwarding_.set_runtime(session_->runtime());
+        }
     }
 
     void SshConnectionManager::register_subsystem(const std::string & name, SubsystemFactory factory)
@@ -181,11 +289,28 @@ namespace yuan::net::ssh
         if (msg.channel_type == SSH_CHANNEL_SESSION) {
             // session channel authorization is handled by the configured/default handler
         } else if (msg.channel_type == SSH_CHANNEL_DIRECT_TCPIP) {
+            if (!port_forwarding_enabled(session_)) {
+                return build_channel_open_failure(msg.sender_channel,
+                                                  SshChannelOpenFailureReason::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED,
+                                                  "Port forwarding disabled");
+            }
+            if (session_ && session_->authorized_key_no_port_forwarding()) {
+                return build_channel_open_failure(msg.sender_channel,
+                                                  SshChannelOpenFailureReason::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED,
+                                                  "Port forwarding denied by authorized_keys");
+            }
+
             auto open_data = decode_direct_tcpip_open_data(msg);
             if (!open_data) {
                 return build_channel_open_failure(msg.sender_channel,
                                                   SshChannelOpenFailureReason::SSH_OPEN_CONNECT_FAILED,
                                                   "Invalid direct-tcpip parameters");
+            }
+
+            if (!permitopen_allows_target(session_, open_data->target_host, open_data->target_port)) {
+                return build_channel_open_failure(msg.sender_channel,
+                                                  SshChannelOpenFailureReason::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED,
+                                                  "Target blocked by permitopen");
             }
 
             if (!effective_handler->on_direct_tcpip(session_, ptr_of(channel),
@@ -396,7 +521,11 @@ namespace yuan::net::ssh
                 auto cmd = SshMessageCodec::read_string(msg.request_specific_data.data(),
                                                         msg.request_specific_data.size(), offset);
                 if (cmd) {
-                    exec_data.command = std::move(*cmd);
+                    if (session_ && session_->has_authorized_key_forced_command()) {
+                        exec_data.command = session_->authorized_key_forced_command();
+                    } else {
+                        exec_data.command = std::move(*cmd);
+                    }
                     success = effective_handler->on_exec_request(session_, channel, exec_data.command);
                     if (success) {
                         auto &terminal_state = channel->terminal_session_state();
@@ -431,7 +560,9 @@ namespace yuan::net::ssh
                 }
                 }
         } else if (msg.request_type == "pty-req") {
-                if (channel->command_started()) {
+                if (session_ && session_->authorized_key_no_pty()) {
+                    success = false;
+                } else if (channel->command_started()) {
                     success = false;
                 } else if (!channel->mark_pty_requested()) {
                     success = false;
@@ -525,9 +656,17 @@ namespace yuan::net::ssh
                     success = true;
                 }
         } else if (msg.request_type == "x11-req") {
-                success = effective_handler->on_x11_forward(session_, channel, "", "", 0);
+                if (session_ && session_->authorized_key_no_x11_forwarding()) {
+                    success = false;
+                } else {
+                    success = effective_handler->on_x11_forward(session_, channel, "", "", 0);
+                }
         } else if (msg.request_type == "auth-agent-req@openssh.com") {
-                success = effective_handler->on_agent_forward(session_, channel);
+                if (session_ && session_->authorized_key_no_agent_forwarding()) {
+                    success = false;
+                } else {
+                    success = effective_handler->on_agent_forward(session_, channel);
+                }
         } else {
                 success = effective_handler->on_channel_request(session_, channel,
                                                                 msg.request_type, msg.request_specific_data);
@@ -545,17 +684,62 @@ namespace yuan::net::ssh
     {
         auto *effective_handler = handler ? handler : &SshHandler::default_handler();
         if (msg.request_name == "tcpip-forward") {
-            size_t offset = 0;
-            auto addr = SshMessageCodec::read_string(msg.request_specific_data.data(),
-                                                     msg.request_specific_data.size(), offset);
-            uint32_t port = 0;
-            if (offset + 4 <= msg.request_specific_data.size()) {
-                port = SshMessageCodec::read_uint32(msg.request_specific_data.data(),
-                                                    msg.request_specific_data.size(), offset);
+            if (!port_forwarding_enabled(session_)) {
+                if (msg.want_reply) {
+                    return build_request_failure();
+                }
+                return ByteBuffer();
+            }
+            if (session_ && session_->authorized_key_no_port_forwarding()) {
+                if (msg.want_reply) {
+                    return build_request_failure();
+                }
+                return ByteBuffer();
             }
 
-            if (addr) {
-                uint16_t allocated = effective_handler->on_tcpip_forward(session_, *addr, static_cast<uint16_t>(port));
+            auto request_data = decode_tcpip_forward_request_data(msg.request_specific_data);
+            if (request_data) {
+                if (!permitlisten_allows_target(session_, request_data->bind_addr, request_data->bind_port)) {
+                    if (msg.want_reply) {
+                        return build_request_failure();
+                    }
+                    return ByteBuffer();
+                }
+                const uint16_t handler_allocated = effective_handler->on_tcpip_forward(session_,
+                                                                                        request_data->bind_addr,
+                                                                                        request_data->bind_port);
+                if (handler_allocated == 0) {
+                    if (msg.want_reply) {
+                        return build_request_failure();
+                    }
+                    return ByteBuffer();
+                }
+
+                uint16_t allocated = 0;
+                const bool accepted = port_forwarding_.handle_tcpip_forward(request_data->bind_addr,
+                                                                             handler_allocated,
+                                                                             allocated);
+                if (!accepted) {
+                    if (msg.want_reply) {
+                        return build_request_failure();
+                    }
+                    return ByteBuffer();
+                }
+
+                auto remote_listener = effective_handler->on_forwarded_tcpip_listener(
+                    session_,
+                    request_data->bind_addr,
+                    allocated > 0 ? allocated : request_data->bind_port);
+                if (remote_listener) {
+                    std::string forward_key = request_data->bind_addr + ":" + std::to_string(allocated);
+                    if (!port_forwarding_.attach_remote_forward_listener(forward_key, std::move(remote_listener))) {
+                        port_forwarding_.handle_cancel_tcpip_forward(request_data->bind_addr, allocated);
+                        if (msg.want_reply) {
+                            return build_request_failure();
+                        }
+                        return ByteBuffer();
+                    }
+                }
                 if (allocated > 0) {
                     if (msg.want_reply) {
                         ByteBuffer resp;
@@ -574,17 +758,31 @@ namespace yuan::net::ssh
         }
 
         if (msg.request_name == "cancel-tcpip-forward") {
-            size_t offset = 0;
-            auto addr = SshMessageCodec::read_string(msg.request_specific_data.data(),
-                                                     msg.request_specific_data.size(), offset);
-            uint32_t port = 0;
-            if (offset + 4 <= msg.request_specific_data.size()) {
-                port = SshMessageCodec::read_uint32(msg.request_specific_data.data(),
-                                                    msg.request_specific_data.size(), offset);
+            if (!port_forwarding_enabled(session_)) {
+                if (msg.want_reply) {
+                    return build_request_failure();
+                }
+                return ByteBuffer();
+            }
+            if (session_ && session_->authorized_key_no_port_forwarding()) {
+                if (msg.want_reply) {
+                    return build_request_failure();
+                }
+                return ByteBuffer();
             }
 
-            if (addr) {
-                effective_handler->on_cancel_tcpip_forward(session_, *addr, static_cast<uint16_t>(port));
+            auto request_data = decode_tcpip_forward_request_data(msg.request_specific_data);
+            if (request_data) {
+                const bool cancelled = port_forwarding_.handle_cancel_tcpip_forward(request_data->bind_addr,
+                                                                                     request_data->bind_port);
+                if (!cancelled && msg.want_reply) {
+                    return build_request_failure();
+                }
+                effective_handler->on_cancel_tcpip_forward(session_,
+                                                           request_data->bind_addr,
+                                                           request_data->bind_port);
+            } else if (msg.want_reply) {
+                return build_request_failure();
             }
 
             if (msg.want_reply) {
@@ -723,6 +921,109 @@ namespace yuan::net::ssh
         ByteBuffer buf;
         buf.append_u8(static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_FAILURE));
         return buf;
+    }
+
+    ByteBuffer SshConnectionManager::build_forwarded_tcpip_channel_open(const std::string & connected_address,
+                                                                         uint32_t connected_port,
+                                                                         const std::string & originator_address,
+                                                                         uint32_t originator_port,
+                                                                         uint32_t initial_window,
+                                                                         uint32_t maximum_packet_size)
+    {
+        SshChannelOpenMessage msg;
+        msg.channel_type = SSH_CHANNEL_FORWARDED_TCPIP;
+        msg.sender_channel = next_channel_id();
+        msg.initial_window_size = initial_window;
+        msg.maximum_packet_size = maximum_packet_size;
+
+        ByteBuffer payload;
+        SshMessageCodec::write_string(payload, connected_address);
+        SshMessageCodec::write_uint32(payload, connected_port);
+        SshMessageCodec::write_string(payload, originator_address);
+        SshMessageCodec::write_uint32(payload, originator_port);
+        auto span = payload.readable_span();
+        msg.type_specific_data.assign(
+            reinterpret_cast<const uint8_t *>(span.data()),
+            reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+        return SshMessageCodec::encode_channel_open(msg);
+    }
+
+    std::optional<uint32_t> SshConnectionManager::open_forwarded_tcpip_channel(const std::string & connected_address,
+                                                                                uint32_t connected_port,
+                                                                                const std::string & originator_address,
+                                                                                uint32_t originator_port,
+                                                                                ByteBuffer & packet_out,
+                                                                                uint32_t initial_window,
+                                                                                uint32_t maximum_packet_size)
+    {
+        if (channel_limit_reached()) {
+            return std::nullopt;
+        }
+
+        const uint32_t local_id = next_channel_id();
+        auto channel = std::make_unique<SshChannel>(
+            local_id,
+            SSH_CHANNEL_FORWARDED_TCPIP,
+            initial_window,
+            maximum_packet_size);
+        channel->set_state(SshChannel::State::opening);
+        channel->set_remote_window(initial_window);
+        channel->set_remote_max_packet(maximum_packet_size);
+
+        {
+            std::lock_guard<std::mutex> lock(channels_mutex_);
+            channels_.emplace(local_id, std::move(channel));
+        }
+
+        SshChannelOpenMessage msg;
+        msg.channel_type = SSH_CHANNEL_FORWARDED_TCPIP;
+        msg.sender_channel = local_id;
+        msg.initial_window_size = initial_window;
+        msg.maximum_packet_size = maximum_packet_size;
+
+        ByteBuffer payload;
+        SshMessageCodec::write_string(payload, connected_address);
+        SshMessageCodec::write_uint32(payload, connected_port);
+        SshMessageCodec::write_string(payload, originator_address);
+        SshMessageCodec::write_uint32(payload, originator_port);
+        auto span = payload.readable_span();
+        msg.type_specific_data.assign(
+            reinterpret_cast<const uint8_t *>(span.data()),
+            reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+        packet_out = SshMessageCodec::encode_channel_open(msg);
+        return local_id;
+    }
+
+    bool SshConnectionManager::register_forwarded_tcpip_handler(uint32_t local_channel_id,
+                                                                std::unique_ptr<SshChannelHandler> handler)
+    {
+        if (!handler) {
+            return false;
+        }
+
+        SshChannel *channel = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(channels_mutex_);
+            auto it = channels_.find(local_channel_id);
+            if (it == channels_.end()) {
+                return false;
+            }
+            channel = ptr_of(it->second);
+            channel->set_handler(std::move(handler));
+        }
+        return channel != nullptr;
+    }
+
+    void SshConnectionManager::set_runtime(coroutine::RuntimeView runtime)
+    {
+        port_forwarding_.set_runtime(runtime);
+    }
+
+    void SshConnectionManager::poll_async_tasks()
+    {
+        port_forwarding_.poll_remote_forward_accepts();
     }
 
     ByteBuffer SshConnectionManager::maybe_adjust_window(SshChannel * channel)

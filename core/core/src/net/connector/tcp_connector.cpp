@@ -7,12 +7,13 @@
 #include "net/handler/connector_handler.h"
 #include "net/handler/event_handler.h"
 #include "event/event_loop.h"
-#include "net/secuity/ssl_handler.h"
-#include "net/secuity/ssl_module.h"
+#include "net/security/ssl_handler.h"
+#include "net/security/ssl_module.h"
 #include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
 #include "net/socket/socket_ops.h"
 #include "timer/timer_manager.h"
+#include "timer/timer_handle.h"
 #include "timer/timer_util.hpp"
 
 #include <cassert>
@@ -31,10 +32,8 @@ namespace yuan::net
     public:
         void cancel_timer()
         {
-            if (conn_timer_) {
-                conn_timer_->cancel();
-                conn_timer_ = nullptr;
-            }
+            conn_timer_.cancel();
+            conn_timer_.reset();
         }
 
         void reset_connection_state()
@@ -53,7 +52,7 @@ namespace yuan::net
         std::shared_ptr<SSLModule> ssl_module = nullptr;
         ConnectionPtr conn_;
         std::shared_ptr<ConnectionHandler> connect_handler_;
-        timer::Timer *conn_timer_ = nullptr;
+        timer::TimerHandle conn_timer_;
         bool suppress_failure_callback_ = false;
         bool connected_ = false;
     };
@@ -216,7 +215,7 @@ namespace yuan::net
             data_->event_handler_->on_new_connection(conn);
         }
         data_->conn_ = conn;
-        data_->conn_timer_ = timer::TimerUtil::build_timeout_timer(data_->timer_manager_, data_->timeout_, this, &TcpConnector::on_connect_timeout);
+        data_->conn_timer_ = timer::TimerHandle(timer::TimerUtil::build_timeout_timer(data_->timer_manager_, data_->timeout_, this, &TcpConnector::on_connect_timeout));
 
         return true;
     }
@@ -280,7 +279,7 @@ namespace yuan::net
             data_->conn_ = conn;
             data_->connected_ = false;
             data_->suppress_failure_callback_ = false;
-            data_->conn_timer_ = timer::TimerUtil::build_timeout_timer(data_->timer_manager_, data_->timeout_, this, &TcpConnector::on_connect_timeout);
+            data_->conn_timer_ = timer::TimerHandle(timer::TimerUtil::build_timeout_timer(data_->timer_manager_, data_->timeout_, this, &TcpConnector::on_connect_timeout));
         } else {
             auto timed_out_conn = data_->conn_;
             if (data_->conn_) {

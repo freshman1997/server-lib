@@ -4,7 +4,7 @@
 #include "buffer/byte_buffer.h"
 #include "buffer/buffer_chain.h"
 #include "net/handler/select_handler.h"
-#include "net/secuity/ssl_handler.h"
+#include "net/security/ssl_handler.h"
 
 #include <algorithm>
 #include <cassert>
@@ -52,8 +52,9 @@ namespace yuan::net
         input_shutdown,
     };
 
-    static constexpr size_t DEFAULT_INPUT_BUFFER_SIZE = 256 * 1024;
-    static constexpr size_t DEFAULT_MAX_PACKET_SIZE = 1024 * 1024 * 5;
+        static constexpr size_t DEFAULT_INPUT_BUFFER_SIZE = 256 * 1024;
+        static constexpr size_t DEFAULT_MAX_PACKET_SIZE = 1024 * 1024 * 5;
+        static constexpr size_t ET_DRAIN_MAX_BUFFER_SIZE = 4 * 1024 * 1024;
 
     using SslHandshakeCallback = std::function<void(bool success)>;
 
@@ -147,6 +148,14 @@ namespace yuan::net
             return id;
         }
 
+        bool has_event_waiter(ConnectionEvent event) const
+        {
+            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            return std::any_of(waiters_.begin(), waiters_.end(), [event](const auto &entry) {
+                return entry.second.event == event;
+            });
+        }
+
         void remove_event_waiter(uint64_t id)
         {
             if (id == 0) {
@@ -170,6 +179,14 @@ namespace yuan::net
         ::yuan::buffer::ByteBuffer take_input_byte_buffer()
         {
             auto byte_buffer = input_buffer_.copy_readable();
+            input_buffer_.clear();
+            shrink_input_buffer_if_idle();
+            return byte_buffer;
+        }
+
+        ::yuan::buffer::ByteBuffer take_and_clear_input_byte_buffer()
+        {
+            auto byte_buffer = std::move(input_buffer_);
             input_buffer_.clear();
             shrink_input_buffer_if_idle();
             return byte_buffer;
@@ -247,6 +264,20 @@ namespace yuan::net
             return input_buffer_.writable_bytes() > 0;
         }
 
+        bool drain_grow_input_buffer()
+        {
+            if (input_buffer_.writable_bytes() > 0) {
+                return true;
+            }
+            if (input_buffer_.capacity() >= ET_DRAIN_MAX_BUFFER_SIZE) {
+                return false;
+            }
+            const size_t doubled = input_buffer_.capacity() * 2;
+            const size_t next_capacity = std::min<size_t>(ET_DRAIN_MAX_BUFFER_SIZE, doubled);
+            input_buffer_.reserve(next_capacity);
+            return input_buffer_.writable_bytes() > 0;
+        }
+
         ::yuan::buffer::ByteBuffer *ensure_output_chunk(std::size_t capacity = ::yuan::buffer::ByteBuffer::kDefaultCapacity)
         {
             auto *chunk = output_buffer_.back();
@@ -300,7 +331,7 @@ namespace yuan::net
             EventWaiter callback;
         };
 
-        std::mutex waiter_mutex_;
+        mutable std::mutex waiter_mutex_;
         uint64_t next_waiter_id_ = 1;
         std::unordered_map<uint64_t, WaiterEntry> waiters_;
     };

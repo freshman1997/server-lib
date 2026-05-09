@@ -4,6 +4,7 @@
 #include "common/def.h"
 #include "coroutine/task.h"
 #include "coroutine/io_result.h"
+#include "net/async/async_listener_host.h"
 #include "net/async/async_client_session.h"
 #include "net/runtime/network_runtime.h"
 #include "client/response_parser.h"
@@ -24,6 +25,13 @@ namespace yuan::net::ftp
     class FtpClient
     {
     public:
+        enum class DataMode
+        {
+            auto_select,
+            passive_only,
+            active_only
+        };
+
         FtpClient();
         ~FtpClient();
 
@@ -44,12 +52,22 @@ namespace yuan::net::ftp
         coroutine::Task<bool> upload_async(const std::string &local_path, const std::string &remote_path);
         coroutine::Task<bool> append_async(const std::string &local_path, const std::string &remote_path);
 
+        void set_data_mode(DataMode mode)
+        {
+            data_mode_ = mode;
+        }
+
         bool is_connected() const;
 
     private:
+        coroutine::Task<InetAddress> do_epsv();
+        coroutine::Task<bool> do_eprt(const std::string &ip, uint16_t port);
         coroutine::Task<FtpClientResponse> send_command_and_read(const std::string &cmd);
         coroutine::Task<FtpClientResponse> read_response();
         coroutine::Task<InetAddress> do_pasv();
+        coroutine::Task<InetAddress> open_data_channel(StreamMode mode);
+        coroutine::Task<bool> prepare_active_data_listener();
+        coroutine::Task<net::AsyncConnectionContext> accept_prepared_active_data_channel(StreamMode mode);
         coroutine::Task<net::AsyncConnectionContext> connect_data_channel(const InetAddress &data_addr, StreamMode mode);
         coroutine::Task<FtpTransferResult> transfer_data(net::AsyncConnectionContext &data_ctx, FtpFileInfo &file_info);
 
@@ -58,6 +76,8 @@ namespace yuan::net::ftp
         FtpResponseParser response_parser_;
         std::deque<FtpClientResponse> pending_responses_;
         std::unique_ptr<NetworkRuntime> owned_runtime_;
+        std::unique_ptr<net::AsyncListenerHost> active_listener_;
+        DataMode data_mode_ = DataMode::auto_select;
         bool connected_ = false;
     };
 }

@@ -158,11 +158,115 @@ namespace
         std::shared_ptr<yuan::net::SSLHandler> ssl_handler_;
     };
 
+    class ClosingConnection final : public yuan::net::Connection
+    {
+    public:
+        ClosingConnection()
+            : remote_addr_("127.0.0.1", 12345),
+              local_addr_("127.0.0.1", 23456)
+        {
+        }
+
+        yuan::net::ConnectionState get_connection_state() const override
+        {
+            return state_;
+        }
+
+        bool is_connected() const override
+        {
+            return state_ == yuan::net::ConnectionState::connected;
+        }
+
+        const yuan::net::InetAddress &get_remote_address() const override
+        {
+            return remote_addr_;
+        }
+
+        const yuan::net::InetAddress &get_local_address() const override
+        {
+            return local_addr_;
+        }
+
+        void write(const ::yuan::buffer::ByteBuffer &buffer) override
+        {
+            append_output(buffer);
+        }
+
+        void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer) override
+        {
+            write(buffer);
+            flush();
+        }
+
+        void flush() override
+        {
+            output_buffer_.clear();
+        }
+
+        void abort() override
+        {
+            close();
+        }
+
+        void close() override
+        {
+            if (state_ == yuan::net::ConnectionState::closed) {
+                return;
+            }
+            state_ = yuan::net::ConnectionState::closed;
+            notify_event_waiters(yuan::net::ConnectionEvent::closed);
+        }
+
+        void set_connection_handler(std::shared_ptr<yuan::net::ConnectionHandler> handler) override
+        {
+            handler_owner_ = std::move(handler);
+            handler_ = handler_owner_.get();
+        }
+
+        yuan::net::ConnectionHandler *get_connection_handler() const override
+        {
+            return handler_;
+        }
+
+        std::shared_ptr<yuan::net::ConnectionHandler> get_connection_handler_owner() const override
+        {
+            return handler_owner_;
+        }
+
+        void set_ssl_handler(std::shared_ptr<yuan::net::SSLHandler> sslHandler) override
+        {
+            ssl_handler_ = std::move(sslHandler);
+        }
+
+        void on_read_event() override
+        {
+        }
+
+        void on_write_event() override
+        {
+        }
+
+        void set_event_handler(yuan::net::EventHandler *eventHandler) override
+        {
+            event_handler_ = eventHandler;
+        }
+
+    private:
+        yuan::net::ConnectionState state_ = yuan::net::ConnectionState::connected;
+        yuan::net::InetAddress remote_addr_;
+        yuan::net::InetAddress local_addr_;
+        yuan::net::ConnectionHandler *handler_ = nullptr;
+        std::shared_ptr<yuan::net::ConnectionHandler> handler_owner_;
+        yuan::net::EventHandler *event_handler_ = nullptr;
+        std::shared_ptr<yuan::net::SSLHandler> ssl_handler_;
+    };
+
     class TrackingHandler final : public yuan::net::ConnectionHandler
     {
     public:
         void on_connected(const std::shared_ptr<yuan::net::Connection> &) override
         {
+            ++connected_count;
         }
 
         void on_error(const std::shared_ptr<yuan::net::Connection> &) override
@@ -180,6 +284,8 @@ namespace
         void on_close(const std::shared_ptr<yuan::net::Connection> &) override
         {
         }
+
+        int connected_count = 0;
     };
 
     uint16_t reserve_tcp_port()
@@ -385,10 +491,10 @@ namespace
         check(rv.timer_manager() != nullptr, "runtime_view should have timer manager");
 
         bool timer_fired = false;
-        auto *timer = runtime.schedule(10, [&timer_fired]() {
+        auto timer = runtime.schedule_handle(10, [&timer_fired]() {
         timer_fired = true;
         });
-        check(timer != nullptr, "schedule should return a timer");
+        check(static_cast<bool>(timer), "schedule_handle should return a timer handle");
 
         auto test_fn = [&](yuan::coroutine::RuntimeView rv)->yuan::coroutine::Task<int>
         {
@@ -421,6 +527,135 @@ namespace
 
         host.close();
         check(!host.is_listening(), "should not be listening after close");
+    }
+
+    void test_accept_awaitable_does_not_replace_handler()
+    {
+        std::cout << "  [AcceptAwaitable] accept waiter does not replace handler\n";
+
+        const uint16_t port = reserve_tcp_port();
+        check(port != 0, "should reserve a TCP port for accept waiter test");
+
+        yuan::net::NetworkRuntime runtime;
+        yuan::net::AsyncListenerHost host;
+        bool bound = host.bind("127.0.0.1", port, runtime);
+        check(bound, "accept waiter test bind should succeed");
+
+        auto handler = std::make_shared<TrackingHandler>();
+        host.acceptor()->set_connection_handler(handler);
+        check(host.acceptor()->connection_handler() == handler.get(),
+              "acceptor handler should be installed before async_accept");
+
+        std::thread client_thread([port]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (fd < 0) {
+                return;
+            }
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            addr.sin_port = htons(port);
+            (void)::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr));
+#ifdef _WIN32
+            ::closesocket(fd);
+#else
+            ::close(fd);
+#endif
+        });
+
+        auto test_fn = [&](yuan::coroutine::RuntimeView view)->yuan::coroutine::Task<int>
+        {
+            co_await view.schedule();
+            auto conn = co_await yuan::coroutine::async_accept(view, host.acceptor());
+            check(conn != nullptr, "async_accept should return accepted connection");
+            check(host.acceptor()->connection_handler() == handler.get(),
+                  "async_accept should not replace acceptor handler");
+            check(handler->connected_count == 1,
+                  "original acceptor handler should still observe accepted connection");
+            if (conn) {
+                conn->close();
+            }
+            host.close();
+            co_return 0;
+        };
+
+        const int result = yuan::coroutine::sync_wait(runtime.runtime_view(), test_fn(runtime.runtime_view()));
+        check(result == 0, "accept waiter preservation test should return 0");
+        if (client_thread.joinable()) {
+            client_thread.join();
+        }
+    }
+
+    void test_connect_awaitable_does_not_replace_handler()
+    {
+        std::cout << "  [ConnectAwaitable] connect waiter uses connection event waiters\n";
+
+        const uint16_t port = reserve_tcp_port();
+        check(port != 0, "should reserve a TCP port for connect waiter test");
+
+        std::thread server_thread([&]() {
+            int listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (listen_fd < 0) {
+                return;
+            }
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            addr.sin_port = htons(port);
+            if (::bind(listen_fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+#ifdef _WIN32
+                ::closesocket(listen_fd);
+#else
+                ::close(listen_fd);
+#endif
+                return;
+            }
+            ::listen(listen_fd, 1);
+            sockaddr_in peer{};
+#ifdef _WIN32
+            int peer_len = sizeof(peer);
+#else
+            socklen_t peer_len = sizeof(peer);
+#endif
+            int fd = ::accept(listen_fd, reinterpret_cast<sockaddr *>(&peer), &peer_len);
+            if (fd >= 0) {
+#ifdef _WIN32
+                ::closesocket(fd);
+#else
+                ::close(fd);
+#endif
+            }
+#ifdef _WIN32
+            ::closesocket(listen_fd);
+#else
+            ::close(listen_fd);
+#endif
+        });
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        yuan::net::NetworkRuntime runtime;
+        auto test_fn = [&](yuan::coroutine::RuntimeView view)->yuan::coroutine::Task<int>
+        {
+            co_await view.schedule();
+            auto result = co_await yuan::coroutine::async_connect(view, "127.0.0.1", port, 3000);
+            check(result.result == yuan::coroutine::ConnectResult::success,
+                  "async_connect should complete via connection event waiter");
+            check(result.connection != nullptr, "async_connect should return connection");
+            if (result.connection) {
+                check(result.connection->get_connection_handler() == nullptr,
+                      "async_connect should not install proxy connection handler");
+                result.connection->close();
+            }
+            co_return 0;
+        };
+
+        const int result = yuan::coroutine::sync_wait(runtime.runtime_view(), test_fn(runtime.runtime_view()));
+        check(result == 0, "connect waiter preservation test should return 0");
+        if (server_thread.joinable()) {
+            server_thread.join();
+        }
     }
 
     void test_async_connection_context_lifecycle()
@@ -519,6 +754,10 @@ namespace
             bool connected = co_await session.connect_async(rv, "127.0.0.1", port, 3000);
             check(connected, "connect_async should succeed");
             check(session.is_connected(), "session should be connected");
+            check(session.context().connection()->get_remote_address().get_port() == port,
+                  "remote address should match server port");
+            check(session.context().connection()->get_local_address().get_port() != port,
+                  "local address should be client ephemeral port, not remote port");
 
             std::string msg = "hello async";
             yuan::buffer::ByteBuffer write_buf;
@@ -812,6 +1051,165 @@ namespace
         check(result == 0, "immediate completion regression test should return 0");
     }
 
+    void test_async_read_handle_keeps_connection_until_close()
+    {
+        std::cout << "  [IO awaitables] read handle owns connection until close\n";
+
+        yuan::net::NetworkRuntime runtime;
+        auto rv = runtime.runtime_view();
+        std::weak_ptr<ClosingConnection> weak_conn;
+
+        auto test_fn = [&](yuan::coroutine::RuntimeView view)->yuan::coroutine::Task<int>
+        {
+            co_await view.schedule();
+            auto conn = std::make_shared<ClosingConnection>();
+            weak_conn = conn;
+            yuan::net::ConnectionHandle handle(conn);
+
+            view.schedule(10, [conn]() {
+                conn->close();
+            });
+            conn.reset();
+
+            auto result = co_await view.read(handle, 100);
+            check(result.status == yuan::coroutine::IoStatus::connection_closed,
+                  "async read should resume with connection_closed after delayed close");
+            check(!weak_conn.expired(),
+                  "ConnectionHandle should keep connection alive across suspended read");
+            handle = yuan::net::ConnectionHandle();
+            co_await view.schedule();
+            co_return 0;
+        };
+
+        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        check(result == 0, "read handle ownership regression test should return 0");
+        check(!weak_conn.expired(), "connection should remain alive while runtime timer storage is alive");
+    }
+
+    void test_async_read_timeout_then_late_event()
+    {
+        std::cout << "  [IO awaitables] read timeout ignores late event\n";
+
+        yuan::net::NetworkRuntime runtime;
+        auto rv = runtime.runtime_view();
+        auto conn = std::make_shared<ImmediateFlushConnection>();
+
+        auto test_fn = [&](yuan::coroutine::RuntimeView view)->yuan::coroutine::Task<int>
+        {
+            co_await view.schedule();
+            yuan::net::ConnectionHandle handle(conn);
+
+            auto result = co_await view.read(handle, 10);
+            check(result.status == yuan::coroutine::IoStatus::timed_out,
+                  "async read should return timed_out before data arrives");
+
+            conn->inject_input("late");
+            co_await view.schedule();
+            check(conn->input_readable_bytes() == 4,
+                  "late input should remain buffered after timed-out awaiter is cancelled");
+            co_return 0;
+        };
+
+        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        check(result == 0, "read timeout late event regression should return 0");
+    }
+
+    void test_multiple_read_waiters_rejected()
+    {
+        std::cout << "  [IO awaitables] multiple read waiters are rejected\n";
+
+        yuan::net::NetworkRuntime runtime;
+        auto rv = runtime.runtime_view();
+        auto conn = std::make_shared<ImmediateFlushConnection>();
+
+        auto pending_read = [&](yuan::coroutine::RuntimeView view,
+                                yuan::net::ConnectionHandle handle,
+                                bool &started)->yuan::coroutine::Task<yuan::coroutine::ReadResult>
+        {
+            started = true;
+            auto result = co_await view.read(handle, 100);
+            co_return result;
+        };
+
+        auto test_fn = [&](yuan::coroutine::RuntimeView view)->yuan::coroutine::Task<int>
+        {
+            co_await view.schedule();
+            yuan::net::ConnectionHandle handle(conn);
+            bool first_started = false;
+            auto first = pending_read(view, handle, first_started);
+            first.resume();
+            check(first_started, "first read coroutine should start");
+            check(conn->has_event_waiter(yuan::net::ConnectionEvent::readable),
+                  "first read should register readable waiter");
+
+            auto second = co_await view.read(handle, 100);
+            check(second.status == yuan::coroutine::IoStatus::invalid_state,
+                  "second concurrent read waiter should be rejected");
+
+            conn->inject_input("one");
+            co_await view.schedule();
+            check(first.done(), "first read coroutine should complete after input arrives");
+            auto first_result = first.resume_once_and_get_result();
+            check(first_result.status == yuan::coroutine::IoStatus::success,
+                  "first read waiter should still complete");
+            check(buffer_to_string(first_result.data) == "one",
+                  "first read waiter should receive injected data");
+            co_return 0;
+        };
+
+        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        check(result == 0, "multiple read waiter policy test should return 0");
+    }
+
+    void test_async_waiters_do_not_replace_handler()
+    {
+        std::cout << "  [IO awaitables] waiters do not replace handler\n";
+
+        yuan::net::NetworkRuntime runtime;
+        auto rv = runtime.runtime_view();
+        auto conn = std::make_shared<ImmediateFlushConnection>();
+        auto handler = std::make_shared<TrackingHandler>();
+        conn->set_connection_handler(handler);
+
+        auto test_fn = [&](yuan::coroutine::RuntimeView view)->yuan::coroutine::Task<int>
+        {
+            co_await view.schedule();
+            yuan::net::ConnectionHandle handle(conn);
+            check(conn->get_connection_handler() == handler.get(),
+                  "handler should be installed before awaiters");
+
+            conn->append_output("flush", 5);
+            auto flush_result = co_await view.flush(handle, 100);
+            check(flush_result.status == yuan::coroutine::IoStatus::success,
+                  "flush waiter should complete");
+            check(conn->get_connection_handler() == handler.get(),
+                  "flush waiter should not replace handler");
+
+            view.schedule(10, [conn]() {
+                conn->inject_input("read");
+            });
+            auto read_result = co_await view.read(handle, 100);
+            check(read_result.status == yuan::coroutine::IoStatus::success,
+                  "read waiter should complete");
+            check(conn->get_connection_handler() == handler.get(),
+                  "read waiter should not replace handler");
+
+            auto close_result = co_await view.close(handle);
+            check(close_result == yuan::coroutine::IoStatus::success,
+                  "close waiter should complete");
+            check(conn->get_connection_handler() == handler.get(),
+                  "close waiter should not replace handler");
+
+            auto local_addr = conn->get_local_address();
+            check(local_addr.get_ip() == "127.0.0.1" || !local_addr.get_ip().empty(),
+                  "local address should be populated before close");
+            co_return 0;
+        };
+
+        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        check(result == 0, "handler preservation regression should return 0");
+    }
+
 } // namespace
 
 int main()
@@ -820,6 +1218,8 @@ int main()
 
     test_network_runtime_lifecycle();
     test_async_listener_host_bind_close();
+    test_accept_awaitable_does_not_replace_handler();
+    test_connect_awaitable_does_not_replace_handler();
     test_async_connection_context_lifecycle();
     test_async_client_session_connect_read_write();
     test_async_request_client_one_shot();
@@ -827,6 +1227,10 @@ int main()
     test_async_datagram_client_send_and_receive_async();
     test_io_awaitables_via_connection_context();
     test_write_and_flush_immediate_completion_regression();
+    test_async_read_handle_keeps_connection_until_close();
+    test_async_read_timeout_then_late_event();
+    test_multiple_read_waiters_rejected();
+    test_async_waiters_do_not_replace_handler();
 
     std::cout << "\n";
     if (g_failed > 0) {

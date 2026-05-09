@@ -2,7 +2,7 @@
 #include "context.h"
 #include "coroutine/io_result.h"
 #include "net/runtime/network_runtime.h"
-#include "net/secuity/openssl.h"
+#include "net/security/openssl.h"
 #include "nlohmann/json.hpp"
 #include "nlohmann/json_fwd.hpp"
 #include "task/save_upload_tmp_chunk_task.h"
@@ -645,6 +645,9 @@ namespace yuan::net::http
 
         config::enable_http2 = config_.enable_http2;
         config::enable_http3 = config_.enable_http3;
+        max_connections_limit_.store(config_.max_connections, std::memory_order_relaxed);
+        max_connections_per_ip_limit_.store(config_.max_connections_per_ip, std::memory_order_relaxed);
+        max_inflight_requests_per_ip_limit_.store(config_.max_inflight_requests_per_ip, std::memory_order_relaxed);
 
         on("/__proxy_stats", [this](HttpRequest *req, HttpResponse *resp) {
             (void)req;
@@ -658,6 +661,7 @@ namespace yuan::net::http
             }
 
             const auto st = proxy->snapshot_stats();
+            const auto sst = snapshot_server_stats();
             nlohmann::json j;
             j["total_requests"] = st.total_requests;
             j["active_connections"] = st.active_connections;
@@ -667,6 +671,80 @@ namespace yuan::net::http
             j["ws_duplicate_upgrade_skipped"] = st.ws_duplicate_upgrade_skipped;
             j["ws_stale_upgrade_skipped"] = st.ws_stale_upgrade_skipped;
             j["unmapped_close_events"] = st.unmapped_close_events;
+            j["connection_rejected_total"] = sst.connection_rejected_total;
+            j["inflight_rejected_total"] = sst.inflight_rejected_total;
+            j["active_http_connections"] = sst.active_http_connections;
+            j["active_inflight_requests"] = sst.active_inflight_requests;
+            resp->json(j.dump(), ResponseCode::ok_);
+            if (req->get_version() != HttpVersion::v_2_0) {
+                resp->send();
+            }
+        });
+
+        on("/__mini_nginx_stats", [this](HttpRequest *req, HttpResponse *resp) {
+            nlohmann::json j;
+
+            const auto sst = snapshot_server_stats();
+            j["server"]["active_http_connections"] = sst.active_http_connections;
+            j["server"]["active_inflight_requests"] = sst.active_inflight_requests;
+            j["server"]["connection_rejected_total"] = sst.connection_rejected_total;
+            j["server"]["inflight_rejected_total"] = sst.inflight_rejected_total;
+            j["server"]["max_connections"] = config_.max_connections;
+            j["server"]["max_connections_per_ip"] = config_.max_connections_per_ip;
+            j["server"]["max_inflight_requests_per_ip"] = config_.max_inflight_requests_per_ip;
+            j["server"]["enable_http2"] = config_.enable_http2;
+            j["server"]["enable_http3"] = config_.enable_http3;
+            j["server"]["enable_keep_alive"] = config_.enable_keep_alive;
+
+            const auto reject_counters = snapshot_route_reject_counters();
+            j["server"]["route_reject_counters"] = nlohmann::json::array();
+            for (const auto &item : reject_counters) {
+                nlohmann::json r;
+                r["route"] = item.route;
+                r["rate_limit"] = item.rate_limit;
+                r["inflight"] = item.inflight;
+                r["conn_reject"] = item.conn_reject;
+                j["server"]["route_reject_counters"].push_back(std::move(r));
+            }
+
+            auto *proxy = get_proxy();
+            if (proxy) {
+                const auto pst = proxy->snapshot_stats();
+                j["proxy"]["total_requests"] = pst.total_requests;
+                j["proxy"]["active_connections"] = pst.active_connections;
+                j["proxy"]["failed_requests"] = pst.failed_requests;
+                j["proxy"]["pool_hits"] = pst.pool_hits;
+                j["proxy"]["pool_misses"] = pst.pool_misses;
+                j["proxy"]["ws_duplicate_upgrade_skipped"] = pst.ws_duplicate_upgrade_skipped;
+                j["proxy"]["ws_stale_upgrade_skipped"] = pst.ws_stale_upgrade_skipped;
+                j["proxy"]["unmapped_close_events"] = pst.unmapped_close_events;
+
+                const auto &routes = proxy->get_routes();
+                j["proxy"]["routes_count"] = routes.size();
+                j["proxy"]["routes"] = nlohmann::json::array();
+                for (const auto &kv : routes) {
+                    nlohmann::json r;
+                    r["path"] = kv.first;
+                    r["targets"] = kv.second.targets.size();
+                    r["max_retries"] = kv.second.max_retries;
+                    r["failure_threshold"] = kv.second.failure_threshold;
+                    r["unhealthy_cooldown_ms"] = kv.second.unhealthy_cooldown_ms;
+                    j["proxy"]["routes"].push_back(std::move(r));
+                }
+
+                const auto health = proxy->snapshot_target_health();
+                j["proxy"]["target_health_count"] = health.size();
+                j["proxy"]["target_health"] = nlohmann::json::array();
+                for (const auto &item : health) {
+                    nlohmann::json h;
+                    h["target"] = item.target_key;
+                    h["healthy"] = item.healthy;
+                    h["consecutive_failures"] = item.consecutive_failures;
+                    h["unhealthy_until_ms"] = item.unhealthy_until_ms;
+                    j["proxy"]["target_health"].push_back(std::move(h));
+                }
+            }
+
             resp->json(j.dump(), ResponseCode::ok_);
             if (req->get_version() != HttpVersion::v_2_0) {
                 resp->send();
@@ -785,6 +863,7 @@ namespace yuan::net::http
         h2_dispatch_paths_.clear();
         h2_dispatch_paths_.insert("/__http_caps");
         h2_dispatch_paths_.insert("/__proxy_stats");
+        h2_dispatch_paths_.insert("/__mini_nginx_stats");
         h2_dispatch_paths_.insert("/__h2_echo");
         h2_dispatch_paths_.insert("/__h2_no_content");
 
@@ -1042,6 +1121,13 @@ namespace yuan::net::http
             return true;
         }
 
+        if (!global_pipeline_.empty() && !global_pipeline_.execute(request, response)) {
+            if (response && response->get_response_code() == ResponseCode::too_many_requests) {
+                increment_reject_counter(reject_route_key(request), RejectReason::rate_limit);
+            }
+            return true;
+        }
+
         if (proxy_ && proxy_->is_proxy_url(request->get_raw_url())) {
             const auto &route_key = proxy_->find_proxy_route(request->get_raw_url());
             auto *upgrade = request->get_header("upgrade");
@@ -1069,13 +1155,7 @@ namespace yuan::net::http
             }
             if (is_ws_upgrade) {
                 proxy_->handle_websocket_upgrade_by_url(request, response, route_key);
-            } else {
-                proxy_->serve_proxy(request, response);
             }
-            return true;
-        }
-
-        if (!global_pipeline_.empty() && !global_pipeline_.execute(request, response)) {
             return true;
         }
 
@@ -1174,10 +1254,25 @@ namespace yuan::net::http
         if (thread_pool_) {
             thread_pool_->shutdown();
         }
+
+        for (auto &[id, session] : sessions_) {
+            if (session) {
+                auto *ctx = session->get_context();
+                if (ctx) {
+                    auto *conn = ctx->get_connection();
+                    if (conn && conn->is_connected()) {
+                        conn->close();
+                    }
+                }
+            }
+        }
+
         listener_.close();
         if (owned_runtime_) {
             owned_runtime_->stop();
         }
+
+        sessions_.clear();
     }
 
     void HttpServer::on(const std::string & url, request_function func, bool is_prefix)
@@ -1206,6 +1301,160 @@ namespace yuan::net::http
         return h2_dispatch_paths_.contains(std::string(path));
     }
 
+    bool HttpServer::allow_new_connection(const net::Connection &conn)
+    {
+        const int max_connections = max_connections_limit_.load(std::memory_order_relaxed);
+        const int max_connections_per_ip = max_connections_per_ip_limit_.load(std::memory_order_relaxed);
+        std::lock_guard<std::mutex> lock(conn_limit_mutex_);
+        if (max_connections > 0) {
+            int total = 0;
+            for (const auto &kv : active_conn_per_ip_) {
+                total += kv.second;
+            }
+            if (total >= max_connections) {
+                return false;
+            }
+        }
+
+        const uint32_t ip = conn.get_remote_address().get_net_ip();
+        if (max_connections_per_ip > 0) {
+            const int cur = active_conn_per_ip_[ip];
+            if (cur >= max_connections_per_ip) {
+                return false;
+            }
+        }
+
+        ++active_conn_per_ip_[ip];
+        return true;
+    }
+
+    void HttpServer::on_connection_closed(const net::Connection &conn)
+    {
+        const uint32_t ip = conn.get_remote_address().get_net_ip();
+
+        std::lock_guard<std::mutex> lock(conn_limit_mutex_);
+        auto it = active_conn_per_ip_.find(ip);
+        if (it != active_conn_per_ip_.end()) {
+            --it->second;
+            if (it->second <= 0) {
+                active_conn_per_ip_.erase(it);
+            }
+        }
+    }
+
+    bool HttpServer::try_acquire_inflight_request(const HttpRequest *request)
+    {
+        const int max_inflight_requests_per_ip = max_inflight_requests_per_ip_limit_.load(std::memory_order_relaxed);
+        if (!request || max_inflight_requests_per_ip <= 0) {
+            return true;
+        }
+
+        const uint32_t ip = request->get_peer_ip_uint32();
+        std::lock_guard<std::mutex> lock(inflight_mutex_);
+        int &cur = inflight_req_per_ip_[ip];
+        if (cur >= max_inflight_requests_per_ip) {
+            return false;
+        }
+        ++cur;
+        return true;
+    }
+
+    void HttpServer::release_inflight_request(const HttpRequest *request)
+    {
+        if (!request || max_inflight_requests_per_ip_limit_.load(std::memory_order_relaxed) <= 0) {
+            return;
+        }
+
+        const uint32_t ip = request->get_peer_ip_uint32();
+        std::lock_guard<std::mutex> lock(inflight_mutex_);
+        auto it = inflight_req_per_ip_.find(ip);
+        if (it == inflight_req_per_ip_.end()) {
+            return;
+        }
+        --it->second;
+        if (it->second <= 0) {
+            inflight_req_per_ip_.erase(it);
+        }
+    }
+
+    HttpServerStats HttpServer::snapshot_server_stats() const
+    {
+        HttpServerStats st;
+        st.connection_rejected_total = connection_rejected_total_.load(std::memory_order_relaxed);
+        st.inflight_rejected_total = inflight_rejected_total_.load(std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(conn_limit_mutex_);
+            for (const auto &kv : active_conn_per_ip_) {
+                st.active_http_connections += kv.second;
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(inflight_mutex_);
+            for (const auto &kv : inflight_req_per_ip_) {
+                st.active_inflight_requests += kv.second;
+            }
+        }
+        return st;
+    }
+
+    std::vector<RouteRejectCounters> HttpServer::snapshot_route_reject_counters() const
+    {
+        std::lock_guard<std::mutex> lock(reject_counters_mutex_);
+        std::vector<RouteRejectCounters> out;
+        out.reserve(reject_counters_.size());
+        for (const auto &kv : reject_counters_) {
+            out.push_back(kv.second);
+        }
+        return out;
+    }
+
+    void HttpServer::update_runtime_limits(int max_connections,
+                                           int max_connections_per_ip,
+                                           int max_inflight_requests_per_ip)
+    {
+        max_connections_limit_.store(max_connections, std::memory_order_relaxed);
+        max_connections_per_ip_limit_.store(max_connections_per_ip, std::memory_order_relaxed);
+        max_inflight_requests_per_ip_limit_.store(max_inflight_requests_per_ip, std::memory_order_relaxed);
+    }
+
+    std::string HttpServer::reject_route_key(const HttpRequest *request) const
+    {
+        if (!request) {
+            return "unknown";
+        }
+
+        const std::string raw = request->get_raw_url();
+        if (proxy_ && proxy_->is_proxy_url(raw)) {
+            const std::string route = proxy_->find_proxy_route(raw);
+            if (!route.empty()) {
+                return route;
+            }
+        }
+
+        return std::string(request->get_path());
+    }
+
+    void HttpServer::increment_reject_counter(std::string route_key, RejectReason reason)
+    {
+        if (route_key.empty()) {
+            route_key = "unknown";
+        }
+        std::lock_guard<std::mutex> lock(reject_counters_mutex_);
+        auto &c = reject_counters_[route_key];
+        c.route = route_key;
+        switch (reason) {
+        case RejectReason::rate_limit:
+            ++c.rate_limit;
+            break;
+        case RejectReason::inflight:
+            ++c.inflight;
+            break;
+        case RejectReason::conn_reject:
+            ++c.conn_reject;
+            break;
+        }
+    }
+
     bool HttpServer::dispatch_h2_context(HttpSessionContext *context)
     {
         if (!context) {
@@ -1223,12 +1472,15 @@ namespace yuan::net::http
             return true;
         }
 
-        if (proxy_ && proxy_->is_proxy_url(request->get_raw_url())) {
-            proxy_->serve_proxy(request, response);
+        if (!global_pipeline_.empty() && !global_pipeline_.execute(request, response)) {
+            if (response && response->get_response_code() == ResponseCode::too_many_requests) {
+                increment_reject_counter(reject_route_key(request), RejectReason::rate_limit);
+            }
             return true;
         }
 
-        if (!global_pipeline_.empty() && !global_pipeline_.execute(request, response)) {
+        if (proxy_ && proxy_->is_proxy_url(request->get_raw_url())) {
+            proxy_->serve_proxy(request, response);
             return true;
         }
 
@@ -1257,6 +1509,15 @@ namespace yuan::net::http
     {
         auto conn = ctx.connection();
         if (!conn) {
+            co_return;
+        }
+
+        if (!allow_new_connection(*conn)) {
+            ++connection_rejected_total_;
+            increment_reject_counter("connection_limit", RejectReason::conn_reject);
+            conn->append_output("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+            conn->flush();
+            conn->close();
             co_return;
         }
 
@@ -1408,7 +1669,18 @@ namespace yuan::net::http
                     continue;
                 }
 
+                const bool inflight_acquired = try_acquire_inflight_request(context->get_request());
+                if (!inflight_acquired) {
+                    ++inflight_rejected_total_;
+                    increment_reject_counter(reject_route_key(context->get_request()), RejectReason::inflight);
+                    context->process_error(ResponseCode::too_many_requests);
+                    break;
+                }
+
                 (void)dispatch_request(context);
+                if (proxy_ && proxy_->is_proxy_url(context->get_request()->get_raw_url())) {
+                    co_await proxy_->serve_proxy_async(context->get_request(), context->get_response());
+                }
 
                 if (context->ws_handoff_ && ws_proxy_handler_) {
                     std::string route_key = std::move(context->ws_route_key_);
@@ -1421,10 +1693,12 @@ namespace yuan::net::http
                     auto proxy_task = ws_proxy_handler_(std::move(ctx), raw_url, route_key, client_key, subproto, std::move(leftover));
                     proxy_task.resume();
                     proxy_task.detach();
+                    release_inflight_request(context->get_request());
                     co_return;
                 }
 
                 finalize_request(sessionId, session_ptr, context);
+                release_inflight_request(context->get_request());
 
                 while (context->get_response()->is_uploading()) {
                     auto flush_result = co_await ctx.flush_async();
@@ -1438,6 +1712,7 @@ namespace yuan::net::http
             {
                 LOG_ERROR("Invalid UTF-8 or format error while processing HTTP request: {}", e.what());
                 if (find_http_session(sessions_, sessionId)) {
+                    release_inflight_request(context->get_request());
                     context->process_error(ResponseCode::bad_request);
                 }
             }
@@ -1445,6 +1720,7 @@ namespace yuan::net::http
             {
                 LOG_ERROR("Exception while processing HTTP request: {}", e.what());
                 if (find_http_session(sessions_, sessionId)) {
+                    release_inflight_request(context->get_request());
                     context->process_error(ResponseCode::internal_server_error);
                 }
             }
@@ -1452,6 +1728,7 @@ namespace yuan::net::http
             {
                 LOG_ERROR("Unknown exception while processing HTTP request");
                 if (find_http_session(sessions_, sessionId)) {
+                    release_inflight_request(context->get_request());
                     context->process_error(ResponseCode::internal_server_error);
                 }
             }
@@ -1464,6 +1741,7 @@ namespace yuan::net::http
         if (proxy_ && conn) {
             proxy_->on_client_close(conn);
         }
+        on_connection_closed(*conn);
         sessions_.erase(sessionId);
 
         co_return;
@@ -1900,9 +2178,7 @@ namespace yuan::net::http
             }
         }
 
-        const auto max_content_size = static_cast<std::size_t>(config::client_max_content_length);
-        const auto remaining = length - static_cast<std::size_t>(offset);
-        const auto sz = (std::min)(max_content_size, remaining);
+        const auto sz = length - static_cast<std::size_t>(offset);
 
         std::error_code stat_ec;
         const auto write_time = std::filesystem::last_write_time(std::filesystem::path(std::u8string(path.begin(), path.end())), stat_ec);
@@ -1925,10 +2201,10 @@ namespace yuan::net::http
         }
 
         if (has_range) {
-            const auto end_pos = offset + sz - 1;
+            const auto end_pos = length - 1;
             resp->add_header("Content-Range",
                              "bytes " + std::to_string(offset) + "-" +
-                                 std::to_string(end_pos) + "/" + std::to_string(length));
+                                  std::to_string(end_pos) + "/" + std::to_string(length));
             resp->set_response_code(ResponseCode::partial_content);
         } else {
             resp->set_response_code(ResponseCode::ok_);
@@ -2256,6 +2532,9 @@ namespace yuan::net::http
         (void)req;
         if (HttpConfigManager::get_instance()->reload_config()) {
             load_static_paths();
+            if (!init_proxy_if_needed()) {
+                LOG_ERROR("reload proxy config failed");
+            }
             refresh_h2_dispatch_paths();
             resp->append_body("Configuration reloaded successfully.");
         } else {

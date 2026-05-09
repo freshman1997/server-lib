@@ -11,22 +11,36 @@
 #include "net/channel/channel.h"
 #include "net/poller/kqueue_poller.h"
 
+#include <cstdint>
+
 namespace yuan::net
 {
     class KQueuePoller::HelperData
     {
     public:
-        struct ChannelEntry
-        {
-            Channel *channel = nullptr;
-            uint64_t generation = 0;
-        };
-
         int kqueuefd_;
         std::set<int> fds_;
-        std::unordered_map<int, ChannelEntry> channels_;
+        std::unordered_map<int, Channel *> channels_;
         std::vector<struct kevent> kqueue_events_;
     };
+
+    namespace
+    {
+        static uintptr_t encode_kqueue_token(int fd, uint64_t generation)
+        {
+            return (static_cast<uintptr_t>(generation) << 32) | static_cast<uint32_t>(fd);
+        }
+
+        static int decode_kqueue_fd(uintptr_t token)
+        {
+            return static_cast<int>(token & 0xffffffffULL);
+        }
+
+        static uint64_t decode_kqueue_generation(uintptr_t token)
+        {
+            return static_cast<uint64_t>(token >> 32);
+        }
+    }
 
     const int KQueuePoller::MAX_EVENT = 4096;
 
@@ -94,12 +108,12 @@ namespace yuan::net
                     ev |= Channel::WRITE_EVENT;
                 }
 
-                const int fd = static_cast<int>(event.ident);
-                auto it = data_->channels_.find(fd);
-                if (ev != Channel::NONE_EVENT && it != data_->channels_.end() && it->second.channel) {
+                const uintptr_t token = reinterpret_cast<uintptr_t>(event.udata);
+                const int fd = decode_kqueue_fd(token);
+                if (ev != Channel::NONE_EVENT) {
                     auto &pe = revents_by_fd[fd];
                     pe.fd = fd;
-                    pe.generation = it->second.generation;
+                    pe.generation = decode_kqueue_generation(token);
                     pe.revents |= ev;
                 }
             }
@@ -130,22 +144,22 @@ namespace yuan::net
             return;
         }
 
-        auto &entry = data_->channels_[channel->get_fd()];
-        entry.channel = channel;
+        data_->channels_[channel->get_fd()] = channel;
+        const uintptr_t token = encode_kqueue_token(channel->get_fd(), channel->generation());
 
         struct kevent events[2];
         int count = 0;
 
         if (channel->get_events() & Channel::READ_EVENT) {
-            EV_SET(&events[count++], channel->get_fd(), EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, channel);
+            EV_SET(&events[count++], channel->get_fd(), EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, reinterpret_cast<void*>(token));
         } else if (it != data_->fds_.end()) {
-            EV_SET(&events[count++], channel->get_fd(), EVFILT_READ, EV_DELETE, 0, 0, channel);
+            EV_SET(&events[count++], channel->get_fd(), EVFILT_READ, EV_DELETE, 0, 0, nullptr);
         }
 
         if (channel->get_events() & Channel::WRITE_EVENT) {
-            EV_SET(&events[count++], channel->get_fd(), EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, channel);
+            EV_SET(&events[count++], channel->get_fd(), EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, reinterpret_cast<void*>(token));
         } else if (it != data_->fds_.end()) {
-            EV_SET(&events[count++], channel->get_fd(), EVFILT_WRITE, EV_DELETE, 0, 0, channel);
+            EV_SET(&events[count++], channel->get_fd(), EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
         }
 
         if (count > 0) {

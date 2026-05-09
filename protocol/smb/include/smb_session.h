@@ -28,6 +28,7 @@ namespace yuan::net::smb
     {
         uint32_t tree_id = 0;
         std::string share_name;
+        std::shared_ptr<SmbShare> share_owner;
         SmbShare *share = nullptr;
         bool is_dfs = false;
         bool is_ca = false;

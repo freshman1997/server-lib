@@ -66,7 +66,7 @@ namespace yuan::net
                 co_return coroutine::ReadResult::with_status(coroutine::IoStatus::invalid_state);
             }
 
-            co_return co_await coroutine::async_receive_from(rv, connection_, timeout_ms);
+            co_return co_await coroutine::async_receive_from(rv, connection_->shared_from_this(), timeout_ms);
         }
 
         coroutine::DatagramSendResult send(const ::yuan::buffer::ByteBuffer &buffer)
@@ -136,18 +136,18 @@ namespace yuan::net
             return external_runtime_;
         }
 
-        timer::Timer *schedule(uint32_t delay_ms, std::function<void()> callback)
+        timer::TimerHandle schedule(uint32_t delay_ms, std::function<void()> callback)
         {
-            return runtime_view().schedule(delay_ms, std::move(callback));
+            return runtime_view().schedule_handle(delay_ms, std::move(callback));
         }
 
-        timer::Timer *schedule_periodic(uint32_t delay_ms, uint32_t interval_ms,
-                                        std::function<void()> callback, int repeat = 0)
+        timer::TimerHandle schedule_periodic(uint32_t delay_ms, uint32_t interval_ms,
+                                             std::function<void()> callback, int repeat = 0)
         {
-            return runtime_view().schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat);
+            return runtime_view().schedule_periodic_handle(delay_ms, interval_ms, std::move(callback), repeat);
         }
 
-        void cancel_timer(timer::Timer *timer)
+        void cancel_timer(const timer::TimerHandle &timer)
         {
             coroutine::RuntimeView::cancel_timer(timer);
         }
@@ -234,4 +234,3 @@ namespace yuan::net
 } // namespace yuan::net
 
 #endif
-

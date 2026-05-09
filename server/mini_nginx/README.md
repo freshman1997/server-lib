@@ -50,12 +50,17 @@ Top-level fields:
   - `enable_keep_alive` bool
   - `enable_cors` bool
   - `max_body_size` number
+  - `max_connections` int
+  - `max_connections_per_ip` int
+  - `max_inflight_requests_per_ip` int
+  - `max_concurrent_requests_per_ip` int (alias of `max_inflight_requests_per_ip`)
 - `upstreams` object
   - key is upstream name
   - value fields:
     - `balance` (`round_robin|random|least_conn|weighted_rr`)
     - `connect_timeout`, `read_timeout`, `write_timeout` (ms)
     - `max_retries`, `pool_size`, `idle_timeout`
+    - `failure_threshold`, `unhealthy_cooldown_ms` (passive health circuit-break)
     - `servers` array of `{ "host": "...", "port": 9001, "weight": 1 }`
 - `routes` array
   - each route:
@@ -70,6 +75,10 @@ Additional top-level fields:
   - `json` bool (json line format)
   - `path` string
 - `reload_check_interval_ms` int
+- `rate_limit` object
+  - `enabled` bool
+  - `requests_per_second` int
+  - `burst` int
 - `static` array
   - each item:
     - `location` URL prefix (example `/static`)
@@ -83,9 +92,9 @@ Additional top-level fields:
 
 Example: see `mini_nginx.json`.
 
-## Backward compatibility
+## Config compatibility
 
-Legacy flat format with `proxies` is still supported.
+Only the new structured format is supported (`server` + `upstreams` + `routes`).
 
 ## Hot reload
 

@@ -57,6 +57,7 @@ namespace yuan::net::ssh
         uint32_t idle_timeout_ms = 0;
         uint32_t max_auth_attempts = 6;
         uint32_t auth_timeout_ms = 60000;
+        uint32_t auth_failure_delay_ms = 0;
         std::string banner;
         bool enable_port_forwarding = true;
         bool enable_sftp = true;

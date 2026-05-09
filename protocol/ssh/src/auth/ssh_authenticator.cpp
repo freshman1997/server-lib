@@ -1,8 +1,59 @@
 #include "auth/ssh_authenticator.h"
 #include "ssh_handler.h"
+#include "ssh_session.h"
+
+#include "logger.h"
+#include "net/socket/inet_address.h"
 
 namespace yuan::net::ssh
 {
+    namespace
+    {
+        const char * auth_result_name(SshAuthResult result)
+        {
+            switch (result) {
+            case SshAuthResult::SUCCESS:
+                return "success";
+            case SshAuthResult::FAILURE:
+                return "failure";
+            case SshAuthResult::NEED_MORE:
+                return "need_more";
+            default:
+                return "unknown";
+            }
+        }
+
+        std::string auth_peer_address(SshSession *session)
+        {
+            if (!session) {
+                return "unknown";
+            }
+            auto conn = session->client_connection();
+            if (!conn) {
+                return "unknown";
+            }
+            return conn->get_remote_address().to_address_key();
+        }
+
+        void log_auth_attempt(SshSession *session,
+                              const std::string &username,
+                              const std::string &method,
+                              SshAuthResult result,
+                              uint32_t attempts,
+                              uint32_t max_attempts)
+        {
+            const std::string peer = auth_peer_address(session);
+            LOG_INFO_TAG("ssh-auth",
+                         "event=auth_attempt peer={} user={} method={} result={} attempts={}/{}",
+                         peer,
+                         username,
+                         method,
+                         auth_result_name(result),
+                         attempts,
+                         max_attempts);
+        }
+    }
+
     SshAuthenticator::SshAuthenticator(uint32_t max_attempts)
         : max_attempts_(max_attempts)
     {
@@ -158,7 +209,12 @@ namespace yuan::net::ssh
         if (handler_result == SshAuthResult::SUCCESS) {
             state_ = State::authenticated;
             pending_auth_response_ = PendingAuthResponse::none;
+            log_auth_attempt(session, username_, msg.method_name, SshAuthResult::SUCCESS, auth_attempts_, max_attempts_);
             return SshAuthResult::SUCCESS;
+        }
+
+        if (session) {
+            session->clear_authorized_key_restrictions();
         }
 
         if (handler_result == SshAuthResult::NEED_MORE) {
@@ -169,14 +225,18 @@ namespace yuan::net::ssh
             } else if (msg.method_name == "keyboard-interactive") {
                 pending_auth_response_ = PendingAuthResponse::info_request;
             }
+            log_auth_attempt(session, username_, msg.method_name, SshAuthResult::NEED_MORE, auth_attempts_, max_attempts_);
             return SshAuthResult::NEED_MORE;
         }
 
         auth_attempts_++;
         if (max_attempts_exceeded()) {
             state_ = State::failed;
+            log_auth_attempt(session, username_, msg.method_name, SshAuthResult::FAILURE, auth_attempts_, max_attempts_);
             return SshAuthResult::FAILURE;
         }
+
+        log_auth_attempt(session, username_, msg.method_name, SshAuthResult::FAILURE, auth_attempts_, max_attempts_);
 
         return SshAuthResult::FAILURE;
     }
@@ -205,6 +265,7 @@ namespace yuan::net::ssh
         if (handler_result == SshAuthResult::SUCCESS) {
             state_ = State::authenticated;
             pending_auth_response_ = PendingAuthResponse::none;
+            log_auth_attempt(session, username_, current_method_, SshAuthResult::SUCCESS, auth_attempts_, max_attempts_);
             return SshAuthResult::SUCCESS;
         }
 
@@ -212,14 +273,18 @@ namespace yuan::net::ssh
             if (current_method_ == "keyboard-interactive") {
                 pending_auth_response_ = PendingAuthResponse::info_request;
             }
+            log_auth_attempt(session, username_, current_method_, SshAuthResult::NEED_MORE, auth_attempts_, max_attempts_);
             return SshAuthResult::NEED_MORE;
         }
 
         auth_attempts_++;
         if (max_attempts_exceeded()) {
             state_ = State::failed;
+            log_auth_attempt(session, username_, current_method_, SshAuthResult::FAILURE, auth_attempts_, max_attempts_);
             return SshAuthResult::FAILURE;
         }
+
+        log_auth_attempt(session, username_, current_method_, SshAuthResult::FAILURE, auth_attempts_, max_attempts_);
 
         return SshAuthResult::FAILURE;
     }

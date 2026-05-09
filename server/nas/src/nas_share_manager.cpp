@@ -24,13 +24,49 @@ namespace yuan::server::nas
     {
     }
 
+    NasShareManager::NasShareManager(const NasShareManager &other)
+    {
+        std::lock_guard<std::mutex> lock(other.mutex_);
+        shares_ = other.shares_;
+    }
+
+    NasShareManager &NasShareManager::operator=(const NasShareManager &other)
+    {
+        if (this == &other) {
+            return *this;
+        }
+
+        std::scoped_lock lock(mutex_, other.mutex_);
+        shares_ = other.shares_;
+        return *this;
+    }
+
+    NasShareManager::NasShareManager(NasShareManager &&other) noexcept
+    {
+        std::lock_guard<std::mutex> lock(other.mutex_);
+        shares_ = std::move(other.shares_);
+    }
+
+    NasShareManager &NasShareManager::operator=(NasShareManager &&other) noexcept
+    {
+        if (this == &other) {
+            return *this;
+        }
+
+        std::scoped_lock lock(mutex_, other.mutex_);
+        shares_ = std::move(other.shares_);
+        return *this;
+    }
+
     void NasShareManager::replace(std::vector<NasShare> shares)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         shares_ = std::move(shares);
     }
 
     std::optional<NasShare> NasShareManager::find_by_name(std::string_view name) const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         auto it = std::find_if(shares_.begin(), shares_.end(), [&](const NasShare &share) {
             return share.enabled && share.name == name;
         });
@@ -77,8 +113,9 @@ namespace yuan::server::nas
         return resolved;
     }
 
-    const std::vector<NasShare> &NasShareManager::shares() const
+    std::vector<NasShare> NasShareManager::shares() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return shares_;
     }
 

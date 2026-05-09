@@ -3,6 +3,7 @@
 #include "response_code.h"
 #include "buffer/byte_buffer.h"
 
+#include <cstdint>
 #include <memory>
 
 namespace yuan::net
@@ -101,6 +102,8 @@ namespace yuan::net::http
 
         bool is_downloading() const;
 
+        uint64_t request_elapsed_ms() const;
+
         bool ws_handoff_ = false;
         std::string ws_route_key_;
         std::string ws_client_key_;
@@ -112,6 +115,7 @@ namespace yuan::net::http
     private:
         Mode mode_;
         bool has_parsed_;
+        uint64_t request_start_ms_;
         std::weak_ptr<net::Connection> conn_owner_;
         Connection *conn_;
         std::unique_ptr<HttpRequest> request_;

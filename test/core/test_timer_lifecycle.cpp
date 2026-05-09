@@ -2,6 +2,7 @@
 #include "coroutine/sync_wait.h"
 #include "coroutine/task.h"
 #include "net/runtime/network_runtime.h"
+#include "timer/timer_handle.h"
 
 #include <iostream>
 
@@ -19,12 +20,12 @@ int main()
     auto view = runtime.runtime_view().raw();
 
     bool fired = false;
-    auto *timer = runtime.schedule(10, [&fired]() {
+    auto timer = runtime.schedule_handle(10, [&fired]() {
         fired = true;
     });
 
     if (!timer) {
-        std::cerr << "schedule should return timer\n";
+        std::cerr << "schedule_handle should return timer handle\n";
         return 1;
     }
 

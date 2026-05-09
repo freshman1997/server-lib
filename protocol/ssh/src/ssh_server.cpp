@@ -345,6 +345,12 @@ namespace yuan::net::ssh
                 }
             }
 
+            session->connection_manager().poll_async_tasks();
+            auto forwarded_opens = session->drain_pending_forwarded_tcpip_open();
+            for (auto &open_packet : forwarded_opens) {
+                co_await send_packet(open_packet);
+            }
+
             while (recv_buf.readable_bytes() > 0) {
                 auto parse = session->transport().try_parse_packet(recv_buf);
                 if (parse.invalid) {
@@ -386,6 +392,12 @@ namespace yuan::net::ssh
                 }
 
                 recv_buf.consume(parse.total_bytes);
+
+                session->connection_manager().poll_async_tasks();
+                auto forwarded_opens = session->drain_pending_forwarded_tcpip_open();
+                for (auto &open_packet : forwarded_opens) {
+                    co_await send_packet(open_packet);
+                }
 
                 if (payload->empty()) {
                     continue;
@@ -523,6 +535,10 @@ namespace yuan::net::ssh
                 if (session->state() == SshSession::State::auth_start) {
                     auto accept = session->build_service_accept(SSH_SERVICE_USERAUTH);
                     co_await send_packet(accept);
+                    if (!config_.banner.empty()) {
+                        auto banner = session->build_userauth_banner(config_.banner);
+                        co_await send_packet(banner);
+                    }
                 } else if (session->state() == SshSession::State::auth_success) {
                     auto success = session->build_userauth_success();
                     co_await send_packet(success);
@@ -545,6 +561,9 @@ namespace yuan::net::ssh
                         co_await send_packet(info_buf);
                     }
                 } else if (session->state() == SshSession::State::authenticating) {
+                    if (config_.auth_failure_delay_ms > 0) {
+                        co_await ctx.runtime_view().sleep_for(config_.auth_failure_delay_ms);
+                    }
                     auto failure = session->build_userauth_failure(false);
                     co_await send_packet(failure);
                 }

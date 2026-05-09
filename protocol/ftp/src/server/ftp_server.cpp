@@ -1,6 +1,7 @@
 #include "server/ftp_server.h"
 #include "coroutine/io_result.h"
 #include "coroutine/stream_io_awaitable.h"
+#include "coroutine/connect_awaitable.h"
 #include "net/connection/connection.h"
 #include "net/connection/stream_transport.h"
 #include "net/channel/channel.h"
@@ -41,8 +42,22 @@ namespace yuan::net::ftp
 
     bool FtpServer::serve(int port, NetworkRuntime & runtime)
     {
-        if (!listener_.bind(port, runtime)) {
-            LOG_ERROR("cant listen on port: {}!", port);
+        return serve(std::string{}, port, runtime);
+    }
+
+    bool FtpServer::serve(const std::string &host, int port)
+    {
+        owned_runtime_ = std::make_unique<NetworkRuntime>();
+        return serve(host, port, *owned_runtime_);
+    }
+
+    bool FtpServer::serve(const std::string &host, int port, NetworkRuntime & runtime)
+    {
+        closing_ = false;
+
+        bool bind_ok = host.empty() ? listener_.bind(port, runtime) : listener_.bind(host, port, runtime);
+        if (!bind_ok) {
+            LOG_ERROR("cant listen on {}:{}", host.empty() ? "0.0.0.0" : host, port);
             if (owned_runtime_)
                 owned_runtime_.reset();
             return false;
@@ -53,11 +68,13 @@ namespace yuan::net::ftp
                 co_await handle_connection(std::move(ctx));
             });
 
+        accept_task_ = listener_.run_async();
+        accept_task_.resume();
+
         if (owned_runtime_) {
-            auto accept_task = listener_.run_async();
-            accept_task.resume();
             owned_runtime_->run();
             listener_.close();
+            accept_task_ = {};
             owned_runtime_.reset();
         }
 
@@ -72,7 +89,10 @@ namespace yuan::net::ftp
         }
 
         auto session = std::make_unique<ServerFtpSession>(conn, this, false, true);
-        active_sessions_.insert(ptr_of(session));
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            active_sessions_.insert(ptr_of(session));
+        }
 
         ctx.append_output("220 Welcome to FTP server.\r\n");
         ctx.flush();
@@ -115,6 +135,20 @@ namespace yuan::net::ftp
 
                     if (data_listener && file_info) {
                         co_await data_transfer(ctx.runtime_view(), std::move(data_listener), file_info, ctx);
+                    } else if (file_info) {
+                        const auto active_addr = session->get_active_addr();
+                        if (active_addr.has_value()) {
+                            auto *conn = session->get_connection();
+                            if (conn && conn->get_remote_address().get_ip() != active_addr->get_ip()) {
+                                ctx.append_output("425 PORT address must match control connection peer.\r\n");
+                                ctx.flush();
+                                continue;
+                            }
+                            co_await active_data_transfer(ctx.runtime_view(), *active_addr, file_info, ctx);
+                        } else {
+                            ctx.append_output("425 No data connection mode selected.\r\n");
+                            ctx.flush();
+                        }
                     }
                 }
 
@@ -128,6 +162,100 @@ namespace yuan::net::ftp
         return_passive_port(ptr_of(session));
         on_session_closed(ptr_of(session));
         session->detach_async();
+        co_return;
+    }
+
+    coroutine::Task<void> FtpServer::active_data_transfer(
+        coroutine::RuntimeView rv,
+        const net::InetAddress & active_addr,
+        FtpFileInfo * file_info,
+        net::AsyncConnectionContext & control_ctx)
+    {
+        auto connect_result = co_await coroutine::async_connect(rv, active_addr.get_ip(), active_addr.get_port());
+        if (connect_result.result != coroutine::ConnectResult::success || !connect_result.connection) {
+            if (control_ctx.is_connected()) {
+                control_ctx.append_output("425 Can't open data connection.\r\n");
+                control_ctx.flush();
+            }
+            co_return;
+        }
+
+        net::AsyncConnectionContext data_ctx(connect_result.connection, rv);
+
+        if (auto stream = std::dynamic_pointer_cast<StreamTransport>(connect_result.connection)) {
+            if (auto *channel = stream->stream_channel()) {
+                if (file_info->mode_ == StreamMode::Receiver) {
+                    channel->disable_write();
+                    channel->enable_read();
+                } else {
+                    channel->disable_read();
+                    channel->enable_write();
+                }
+                rv.update_channel(channel);
+            }
+        }
+
+        bool transfer_ok = false;
+
+        if (file_info->mode_ == StreamMode::Sender) {
+            while (!file_info->is_completed()) {
+                ::yuan::buffer::ByteBuffer buff(default_write_buff_size);
+                int ret = file_info->read_file(default_write_buff_size, buff);
+                if (ret < 0) {
+                    break;
+                }
+                if (buff.readable_bytes() > 0) {
+                    data_ctx.write_and_flush(buff);
+                    auto flush_result = co_await data_ctx.flush_async();
+                    if (flush_result.status != coroutine::IoStatus::success) {
+                        break;
+                    }
+                }
+                if (file_info->is_completed()) {
+                    transfer_ok = true;
+                    break;
+                }
+            }
+            (void)data_ctx.connection()->shutdown_write();
+        } else {
+            while (true) {
+                auto read_result = co_await data_ctx.read_async();
+                if (read_result.status != coroutine::IoStatus::success) {
+                    break;
+                }
+                int ret = file_info->write_file(read_result.data);
+                if (ret < 0) {
+                    break;
+                }
+                if (file_info->is_completed()) {
+                    transfer_ok = true;
+                    break;
+                }
+            }
+            if (file_info->file_size_ == 0 && !file_info->is_completed()) {
+                if (file_info->fstream_) {
+                    file_info->fstream_->flush();
+                    file_info->fstream_->close();
+                    file_info->fstream_.reset();
+                }
+                file_info->state_ = FileState::processed;
+                transfer_ok = true;
+            }
+        }
+
+        if (data_ctx.is_connected()) {
+            co_await data_ctx.close_async();
+        }
+
+        if (control_ctx.is_connected()) {
+            if (transfer_ok) {
+                control_ctx.append_output("226 Transfer complete.\r\n");
+            } else {
+                control_ctx.append_output("426 Connection closed; transfer aborted.\r\n");
+            }
+            control_ctx.flush();
+        }
+
         co_return;
     }
 
@@ -145,9 +273,6 @@ namespace yuan::net::ftp
             }
             co_return;
         }
-
-        data_conn->set_connection_handler(std::shared_ptr<net::ConnectionHandler>{});
-        rv.register_connection(data_conn, nullptr);
 
         net::AsyncConnectionContext data_ctx(data_conn, rv);
 
@@ -185,6 +310,7 @@ namespace yuan::net::ftp
                     break;
                 }
             }
+            (void)data_ctx.connection()->shutdown_write();
         } else {
             while (true) {
                 auto read_result = co_await data_ctx.read_async();
@@ -201,12 +327,19 @@ namespace yuan::net::ftp
                 }
             }
             if (file_info->file_size_ == 0 && !file_info->is_completed()) {
+                if (file_info->fstream_) {
+                    file_info->fstream_->flush();
+                    file_info->fstream_->close();
+                    file_info->fstream_.reset();
+                }
                 file_info->state_ = FileState::processed;
                 transfer_ok = true;
             }
         }
 
-        co_await data_ctx.close_async();
+        if (data_ctx.is_connected()) {
+            co_await data_ctx.close_async();
+        }
 
         if (control_ctx.is_connected()) {
             if (transfer_ok) {
@@ -235,17 +368,27 @@ namespace yuan::net::ftp
         if (!session) {
             return;
         }
-        active_sessions_.erase(session);
-        LOG_INFO("ftp session closed, remaining sessions: {}", active_sessions_.size());
+
+        std::size_t remaining = 0;
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            active_sessions_.erase(session);
+            remaining = active_sessions_.size();
+        }
+        LOG_INFO("ftp session closed, remaining sessions: {}", remaining);
     }
 
     void FtpServer::return_passive_port(FtpSession * session)
     {
+        if (!session) {
+            return;
+        }
         auto passive_addr = session->get_passive_addr();
         if (passive_addr.has_value()) {
             ServerContext::get_instance()->remove_stream_port(passive_addr->get_port());
             session->clear_passive_addr();
         }
+        session->clear_active_addr();
     }
 
     void FtpServer::quit()
@@ -255,6 +398,9 @@ namespace yuan::net::ftp
         }
 
         closing_ = true;
+
+        listener_.close();
+        accept_task_ = {};
 
         if (owned_runtime_) {
             owned_runtime_->stop();

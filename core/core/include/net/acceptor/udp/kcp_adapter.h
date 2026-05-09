@@ -4,6 +4,7 @@
 #include "net/acceptor/udp/adapter.h"
 #include "net/connection/connection.h"
 #include "timer/timer.h"
+#include "timer/timer_handle.h"
 #include "timer/timer_manager.h"
 #include "timer/timer_task.h"
 
@@ -31,7 +32,7 @@ namespace yuan::net
         int conv;
         ikcpcb *kcp_;
         Connection *conn_;
-        timer::Timer *updateTimer_;
+        timer::TimerHandle updateTimer_;
     };
 }
 

@@ -1095,7 +1095,7 @@ bool test_local_file_system()
 
     LocalFileSystem fs(test_dir);
 
-    auto open_result = fs.open("testfile.txt", FILE_GENERIC_READ, FILE_OPEN, 0);
+    auto open_result = fs.open("testfile.txt", SMB_FILE_GENERIC_READ, SMB_FILE_OPEN, 0);
     TEST_ASSERT(open_result.success, "Open should succeed");
     TEST_ASSERT(open_result.handle != nullptr, "Should have valid handle");
     TEST_ASSERT(!open_result.is_directory, "Should not be directory");
@@ -1112,7 +1112,6 @@ bool test_local_file_system()
     TEST_ASSERT(info.has_value(), "Query info should succeed");
 
     fs.close(open_result.handle);
-
     std::filesystem::remove_all(test_dir);
     return true;
 }
@@ -1135,7 +1134,7 @@ bool test_local_file_system_directory()
 
     LocalFileSystem fs(test_dir);
 
-    auto open_result = fs.open("", FILE_GENERIC_READ, FILE_OPEN, FILE_DIRECTORY_FILE);
+    auto open_result = fs.open("", SMB_FILE_GENERIC_READ, SMB_FILE_OPEN, SMB_FILE_DIRECTORY_FILE);
     TEST_ASSERT(open_result.success, "Open directory should succeed");
     TEST_ASSERT(open_result.is_directory, "Should be directory");
 
@@ -1168,7 +1167,7 @@ bool test_local_file_system_set_info_rename_delete()
 
     LocalFileSystem fs(test_dir);
 
-    auto open_result = fs.open("old.txt", FILE_GENERIC_READ | FILE_GENERIC_WRITE, FILE_OPEN, 0);
+    auto open_result = fs.open("old.txt", SMB_FILE_GENERIC_READ | SMB_FILE_GENERIC_WRITE, SMB_FILE_OPEN, 0);
     TEST_ASSERT(open_result.success, "Open file for mutation should succeed");
 
     auto new_name = Smb2Codec::utf8_to_utf16le("new.txt");
@@ -1211,7 +1210,7 @@ bool test_local_file_system_absolute_rename()
 
     LocalFileSystem fs(test_dir);
 
-    auto open_result = fs.open("old.txt", FILE_GENERIC_READ | FILE_GENERIC_WRITE, FILE_OPEN, 0);
+    auto open_result = fs.open("old.txt", SMB_FILE_GENERIC_READ | SMB_FILE_GENERIC_WRITE, SMB_FILE_OPEN, 0);
     TEST_ASSERT(open_result.success, "Open file for absolute rename should succeed");
 
     auto new_name = Smb2Codec::utf8_to_utf16le("\\new.txt");
@@ -1251,7 +1250,7 @@ bool test_local_file_system_directory_cursor()
 
     LocalFileSystem fs(test_dir);
 
-    auto open_result = fs.open("", FILE_GENERIC_READ, FILE_OPEN, FILE_DIRECTORY_FILE);
+    auto open_result = fs.open("", SMB_FILE_GENERIC_READ, SMB_FILE_OPEN, SMB_FILE_DIRECTORY_FILE);
     TEST_ASSERT(open_result.success, "Open directory for cursor test should succeed");
 
     auto first = fs.query_directory(open_result.handle, "*.txt", FileInfoClass::FileIdBothDirectoryInformation, true, 1);
@@ -1467,10 +1466,11 @@ bool test_dispatcher_query_filesystem_info()
     share_cfg.path = test_dir;
     share_mgr.add_share(share_cfg);
 
-    LocalFileSystem fs(test_dir);
+    auto fs = std::make_unique<LocalFileSystem>(test_dir);
+    LocalFileSystem *fs_ptr = fs.get();
     SmbShare *share = share_mgr.find_share("public");
     TEST_ASSERT(share != nullptr, "Filesystem info share should exist");
-    share->set_file_system(&fs);
+    share->set_file_system(std::move(fs));
 
     SmbLockManager lock_mgr;
     SmbPipeManager pipe_mgr;
@@ -1487,7 +1487,7 @@ bool test_dispatcher_query_filesystem_info()
     tree.share = share;
     const uint32_t tree_id = session->add_tree_connection(std::move(tree));
 
-    auto open_result = fs.open("", FILE_GENERIC_READ, FILE_OPEN, FILE_DIRECTORY_FILE);
+    auto open_result = fs_ptr->open("", SMB_FILE_GENERIC_READ, SMB_FILE_OPEN, SMB_FILE_DIRECTORY_FILE);
     TEST_ASSERT(open_result.success, "Open share root for filesystem info should succeed");
 
     FileId fid = session->allocate_file_id();
@@ -1534,10 +1534,10 @@ bool test_dispatcher_query_filesystem_info()
     const uint32_t output_len = Smb2Codec::read_le32(raw + SMB2_HEADER_SIZE + 4);
     TEST_ASSERT(output_len >= 20, "Filesystem attribute info should include payload");
     const uint32_t fs_attrs = Smb2Codec::read_le32(raw + SMB2_HEADER_SIZE + 8);
-    TEST_ASSERT((fs_attrs & FILE_UNICODE_ON_DISK) != 0, "Filesystem attrs should advertise unicode names");
+    TEST_ASSERT((fs_attrs & SMB_FILE_UNICODE_ON_DISK) != 0, "Filesystem attrs should advertise unicode names");
 
     share->remove_open_file(fid);
-    fs.close(open_result.handle);
+    fs_ptr->close(open_result.handle);
     session_mgr.remove_session(session->session_id());
     std::filesystem::remove_all(test_dir);
     return true;
@@ -1833,10 +1833,11 @@ bool test_dispatcher_set_info_permission_hooks()
     share_cfg.path = test_dir;
     share_mgr.add_share(share_cfg);
 
-    LocalFileSystem fs(test_dir);
+    auto fs = std::make_unique<LocalFileSystem>(test_dir);
+    LocalFileSystem *fs_ptr = fs.get();
     SmbShare *share = share_mgr.find_share("public");
     TEST_ASSERT(share != nullptr, "SetInfo permission share should exist");
-    share->set_file_system(&fs);
+    share->set_file_system(std::move(fs));
 
     SmbLockManager lock_mgr;
     SmbPipeManager pipe_mgr;
@@ -1854,7 +1855,7 @@ bool test_dispatcher_set_info_permission_hooks()
     tree.share = share;
     const uint32_t tree_id = session->add_tree_connection(std::move(tree));
 
-    auto open_result = fs.open("old.txt", FILE_GENERIC_READ | FILE_GENERIC_WRITE, FILE_OPEN, 0);
+    auto open_result = fs_ptr->open("old.txt", SMB_FILE_GENERIC_READ | SMB_FILE_GENERIC_WRITE, SMB_FILE_OPEN, 0);
     TEST_ASSERT(open_result.success, "Open file for dispatcher set_info permission should succeed");
 
     FileId fid = session->allocate_file_id();
@@ -1937,7 +1938,7 @@ bool test_dispatcher_set_info_permission_hooks()
     TEST_ASSERT(std::filesystem::exists(test_dir + "/old.txt"), "Denied delete should not remove file");
 
     share->remove_open_file(fid);
-    fs.close(open_result.handle);
+    fs_ptr->close(open_result.handle);
     session_mgr.remove_session(session->session_id());
     std::filesystem::remove_all(test_dir);
     return true;

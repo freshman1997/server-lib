@@ -13,6 +13,7 @@
 #ifdef _WIN32
 #include <io.h>
 #else
+#include <sys/types.h>
 #include <unistd.h>
 #endif
 
@@ -163,6 +164,45 @@ namespace yuan::net::ssh
         std::string to_generic_string(const FsPath & path)
         {
             return path.generic_string();
+        }
+
+#ifndef _WIN32
+        uid_t sftp_uid_to_native(uint32_t uid)
+        {
+            return uid == UINT32_MAX ? static_cast<uid_t>(-1) : static_cast<uid_t>(uid);
+        }
+
+        gid_t sftp_gid_to_native(uint32_t gid)
+        {
+            return gid == UINT32_MAX ? static_cast<gid_t>(-1) : static_cast<gid_t>(gid);
+        }
+#endif
+
+        SshFsStatVfsResult statvfs_for_path(const std::filesystem::path &path)
+        {
+            SshFsStatVfsResult result;
+            std::error_code ec;
+            const auto info = std::filesystem::space(path, ec);
+            if (ec) {
+                result.status = error_code_to_status(ec);
+                result.status_message = ec.message();
+                return result;
+            }
+
+            result.f_bsize = 4096;
+            result.f_frsize = 4096;
+            result.f_blocks = info.capacity / result.f_frsize;
+            result.f_bfree = info.free / result.f_frsize;
+            result.f_bavail = info.available / result.f_frsize;
+            result.f_files = 0;
+            result.f_ffree = 0;
+            result.f_favail = 0;
+            result.f_fsid = 0;
+            result.f_flag = 0;
+            result.f_namemax = 255;
+            result.success = true;
+            result.status = SftpStatus::SSH_FX_OK;
+            return result;
         }
     }
 
@@ -564,11 +604,22 @@ namespace yuan::net::ssh
             }
         }
 
+#ifdef _WIN32
         if (attrs.flags & SSH_FILEXFER_ATTR_UIDGID) {
             result.status = SftpStatus::SSH_FX_OP_UNSUPPORTED;
             result.status_message = "UID/GID updates are not supported by the local SFTP filesystem";
             return result;
         }
+#else
+        if (attrs.flags & SSH_FILEXFER_ATTR_UIDGID) {
+            if (::chown(fs_path.c_str(), sftp_uid_to_native(attrs.uid), sftp_gid_to_native(attrs.gid)) != 0) {
+                const int err = errno;
+                result.status = errno_to_status(err);
+                result.status_message = std::strerror(err);
+                return result;
+            }
+        }
+#endif
 
         result.success = true;
         result.status = SftpStatus::SSH_FX_OK;
@@ -585,6 +636,40 @@ namespace yuan::net::ssh
             return result;
         }
 
+#ifdef _WIN32
+        if (attrs.flags & SSH_FILEXFER_ATTR_UIDGID) {
+            SshFsSimpleResult result;
+            result.status = SftpStatus::SSH_FX_OP_UNSUPPORTED;
+            result.status_message = "UID/GID updates are not supported by the local SFTP filesystem";
+            return result;
+        }
+#else
+        SftpFileAttrs path_attrs = attrs;
+        if (attrs.flags & SSH_FILEXFER_ATTR_UIDGID) {
+            const int fd = it->second.file ? ::fileno(it->second.file) : -1;
+            if (fd < 0) {
+                SshFsSimpleResult result;
+                result.status = SftpStatus::SSH_FX_FAILURE;
+                result.status_message = "Invalid file descriptor";
+                return result;
+            }
+            if (::fchown(fd, sftp_uid_to_native(attrs.uid), sftp_gid_to_native(attrs.gid)) != 0) {
+                SshFsSimpleResult result;
+                const int err = errno;
+                result.status = errno_to_status(err);
+                result.status_message = std::strerror(err);
+                return result;
+            }
+            path_attrs.flags &= ~SSH_FILEXFER_ATTR_UIDGID;
+            if (path_attrs.flags == 0) {
+                SshFsSimpleResult result;
+                result.success = true;
+                result.status = SftpStatus::SSH_FX_OK;
+                return result;
+            }
+        }
+#endif
+
         std::string logical_path = "/";
         const auto root = normalized_root_path();
         std::error_code ec;
@@ -592,7 +677,11 @@ namespace yuan::net::ssh
         if (!ec) {
             logical_path += relative.generic_string();
         }
+#ifdef _WIN32
         return setstat(logical_path, attrs);
+#else
+        return setstat(logical_path, path_attrs);
+#endif
     }
 
     SshFsOpenResult SshLocalFileSystem::opendir(const std::string & path)
@@ -639,6 +728,7 @@ namespace yuan::net::ssh
         }
 
         const auto handle = handle_id_to_string(next_handle_id_++);
+        state.path = FsPath(resolved);
         dir_handles_[handle] = std::move(state);
         result.success = true;
         result.handle = handle;
@@ -955,6 +1045,77 @@ namespace yuan::net::ssh
 
         result.success = true;
         result.status = SftpStatus::SSH_FX_OK;
+        return result;
+    }
+
+    SshFsSimpleResult SshLocalFileSystem::hardlink(const std::string & old_path, const std::string & new_path)
+    {
+        SshFsSimpleResult result;
+        const auto resolved_old = resolve_path(old_path);
+        const auto resolved_new = resolve_path(new_path);
+        if (resolved_old.empty() || resolved_new.empty()) {
+            result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
+            result.status_message = "Invalid path";
+            return result;
+        }
+
+        std::error_code ec;
+        if (!std::filesystem::exists(resolved_old, ec) || ec) {
+            result.status = ec ? error_code_to_status(ec) : SftpStatus::SSH_FX_NO_SUCH_FILE;
+            result.status_message = ec ? ec.message() : "No such file";
+            return result;
+        }
+
+        if (std::filesystem::exists(resolved_new, ec)) {
+            result.status = SftpStatus::SSH_FX_FILE_ALREADY_EXISTS;
+            result.status_message = "Target already exists";
+            return result;
+        }
+        if (ec) {
+            result.status = error_code_to_status(ec);
+            result.status_message = ec.message();
+            return result;
+        }
+
+        std::filesystem::create_hard_link(resolved_old, resolved_new, ec);
+        if (ec) {
+            result.status = error_code_to_status(ec);
+            result.status_message = ec.message();
+            return result;
+        }
+
+        result.success = true;
+        result.status = SftpStatus::SSH_FX_OK;
+        return result;
+    }
+
+    SshFsStatVfsResult SshLocalFileSystem::statvfs(const std::string & path)
+    {
+        const auto resolved = resolve_path(path);
+        if (resolved.empty()) {
+            SshFsStatVfsResult result;
+            result.status = SftpStatus::SSH_FX_NO_SUCH_PATH;
+            result.status_message = "Invalid path";
+            return result;
+        }
+        return statvfs_for_path(FsPath(resolved));
+    }
+
+    SshFsStatVfsResult SshLocalFileSystem::fstatvfs(const std::string & handle)
+    {
+        auto fit = file_handles_.find(handle);
+        if (fit != file_handles_.end()) {
+            return statvfs_for_path(fit->second.path);
+        }
+
+        auto dit = dir_handles_.find(handle);
+        if (dit != dir_handles_.end()) {
+            return statvfs_for_path(dit->second.path);
+        }
+
+        SshFsStatVfsResult result;
+        result.status = SftpStatus::SSH_FX_INVALID_HANDLE;
+        result.status_message = "Invalid handle";
         return result;
     }
 }

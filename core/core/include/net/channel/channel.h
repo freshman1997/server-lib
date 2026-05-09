@@ -67,6 +67,11 @@ namespace yuan::net
 
         void clear_handler();
 
+        bool has_handler() const noexcept
+        {
+            return handler_ != nullptr || !handler_owner_.expired();
+        }
+
         void set_revent(int revent)
         {
             revent_ = revent;
@@ -82,6 +87,24 @@ namespace yuan::net
             return priority_;
         }
 
+        uint64_t generation() const noexcept
+        {
+            return generation_;
+        }
+
+        void set_generation(uint64_t generation) noexcept
+        {
+            generation_ = generation == 0 ? 1 : generation;
+        }
+
+        void bump_generation() noexcept
+        {
+            ++generation_;
+            if (generation_ == 0) {
+                generation_ = 1;
+            }
+        }
+
     public:
         static constexpr int READ_EVENT = 0b001;
         static constexpr int WRITE_EVENT = 0b010;
@@ -93,6 +116,7 @@ namespace yuan::net
         int fd_;
         int revent_;
         int priority_;
+        uint64_t generation_;
         SelectHandler *handler_;
         std::weak_ptr<SelectHandler> handler_owner_;
     };

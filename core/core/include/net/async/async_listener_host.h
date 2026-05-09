@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "coroutine/accept_awaitable.h"
 #include "coroutine/runtime.h"
@@ -15,7 +16,7 @@
 #include "net/connection/stream_transport.h"
 #include "net/runtime/network_runtime.h"
 #include "net/socket/socket.h"
-#include "net/secuity/ssl_module.h"
+#include "net/security/ssl_module.h"
 
 namespace yuan::net
 {
@@ -47,9 +48,11 @@ namespace yuan::net
 
         void close()
         {
+            if (state_) {
+                state_->runtime = nullptr;
+            }
             if (acceptor_) {
                 acceptor_->close();
-                acceptor_.reset();
             }
             runtime_ = nullptr;
         }
@@ -61,7 +64,7 @@ namespace yuan::net
 
         void set_connection_handler(AsyncConnectionHandler handler)
         {
-            conn_handler_ = std::move(handler);
+            state_->conn_handler = std::move(handler);
         }
 
         coroutine::Task<std::shared_ptr<Connection>> accept_async()
@@ -77,29 +80,10 @@ namespace yuan::net
 
         coroutine::Task<void> run_async()
         {
-            auto rv = runtime_->runtime_view();
-            while (true) {
-                auto conn = co_await coroutine::async_accept(rv, acceptor_.get());
-                if (!conn) {
-                    break;
-                }
-
-                conn->set_event_handler(runtime_->event_loop());
-                conn->set_connection_handler(default_handler_holder_);
-
-                if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
-                    if (auto *channel = stream->stream_channel()) {
-                        runtime_->event_loop()->update_channel(channel);
-                    }
-                }
-
-                if (conn_handler_) {
-                    auto ctx = AsyncConnectionContext(conn, static_cast<coroutine::RuntimeView>(rv));
-                    auto task = conn_handler_(std::move(ctx));
-                    task.resume();
-                    task.detach();
-                }
+            if (acceptor_) {
+                acceptor_->set_connection_handler(dispatch_handler_holder_);
             }
+            co_return;
         }
 
         bool is_listening() const noexcept
@@ -109,7 +93,7 @@ namespace yuan::net
 
         NetworkRuntime *runtime() const noexcept
         {
-            return runtime_;
+            return state_ ? state_->runtime : nullptr;
         }
 
         StreamAcceptor *acceptor() const noexcept
@@ -118,9 +102,53 @@ namespace yuan::net
         }
 
     private:
+        struct State
+        {
+            NetworkRuntime *runtime = nullptr;
+            AsyncConnectionHandler conn_handler{};
+            std::shared_ptr<ConnectionHandler> default_handler{};
+        };
+
+        static void on_connection_accepted(const std::shared_ptr<State> &state,
+                                           const std::shared_ptr<Connection> &conn)
+        {
+            if (!state || !conn || !state->runtime) {
+                return;
+            }
+
+            auto *runtime = state->runtime;
+            auto *loop = runtime->event_loop();
+            if (!loop) {
+                return;
+            }
+
+            conn->set_event_handler(loop);
+            conn->set_connection_handler(state->default_handler);
+
+            if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
+                if (auto *channel = stream->stream_channel()) {
+                    loop->update_channel(channel);
+                }
+            }
+
+            if (state->conn_handler) {
+                auto ctx = AsyncConnectionContext(conn, static_cast<coroutine::RuntimeView>(runtime->runtime_view()));
+                auto task = state->conn_handler(std::move(ctx));
+                task.resume();
+                task.detach();
+            }
+        }
+
         bool setup(const std::string &host, uint16_t port, NetworkRuntime &runtime)
         {
+            if (acceptor_) {
+                acceptor_->close();
+                acceptor_.reset();
+            }
+
             runtime_ = &runtime;
+            state_->runtime = &runtime;
+            state_->default_handler = default_handler_holder_;
 
             auto *loop = runtime.event_loop();
             auto *tm = runtime.timer_manager();
@@ -184,21 +212,52 @@ namespace yuan::net
             }
             void on_input_shutdown(const std::shared_ptr<Connection> &conn) override
             {
+                (void)conn;
+            }
+        };
+
+        class DispatchHandler final : public yuan::net::ConnectionHandler
+        {
+        public:
+            explicit DispatchHandler(std::weak_ptr<State> state) noexcept
+                : state_(std::move(state))
+            {
+            }
+
+            void on_connected(const std::shared_ptr<Connection> &conn) override
+            {
+                AsyncListenerHost::on_connection_accepted(state_.lock(), conn);
+            }
+            void on_error(const std::shared_ptr<Connection> &conn) override
+            {
                 if (conn) {
                     conn->close();
                 }
             }
+            void on_read(const std::shared_ptr<Connection> &) override
+            {
+            }
+            void on_write(const std::shared_ptr<Connection> &) override
+            {
+            }
+            void on_close(const std::shared_ptr<Connection> &) override
+            {
+            }
+
+        private:
+            std::weak_ptr<State> state_;
         };
 
         NetworkRuntime *runtime_ = nullptr;
+        std::shared_ptr<State> state_ = std::make_shared<State>();
         std::unique_ptr<StreamAcceptor> acceptor_;
         std::shared_ptr<SSLModule> ssl_module_;
-        AsyncConnectionHandler conn_handler_;
         DefaultHandler default_handler_;
         std::shared_ptr<ConnectionHandler> default_handler_holder_{ make_non_owning_handler(default_handler_) };
+        DispatchHandler dispatch_handler_{ state_ };
+        std::shared_ptr<ConnectionHandler> dispatch_handler_holder_{ make_non_owning_handler(dispatch_handler_) };
     };
 
 } // namespace yuan::net
 
 #endif
-

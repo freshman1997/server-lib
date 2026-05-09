@@ -1,5 +1,5 @@
-#ifndef __NET_SECUITY_SSL_HANDLER_H__
-#define __NET_SECUITY_SSL_HANDLER_H__
+#ifndef __NET_SECURITY_SSL_HANDLER_H__
+#define __NET_SECURITY_SSL_HANDLER_H__
 #include <cstddef>
 #include <string_view>
 

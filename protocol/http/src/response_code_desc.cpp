@@ -21,6 +21,7 @@ namespace yuan::net::http
         {ResponseCode::conflict, "409 Conflict"},
         {ResponseCode::precondition_failed, "412 Precondition Failed"},
         {ResponseCode::payload_too_large, "413 Payload Too Large"},
+        {ResponseCode::too_many_requests, "429 Too Many Requests"},
         {ResponseCode::unsupported_media_type, "415 Unsupported Media Type"},
         {ResponseCode::unprocessable_entity, "422 Unprocessable Entity"},
         {ResponseCode::locked, "423 Locked"},

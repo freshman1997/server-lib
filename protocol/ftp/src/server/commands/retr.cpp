@@ -12,7 +12,9 @@ namespace yuan::net::ftp
             return denied;
         }
         if (!session->get_passive_addr().has_value()) {
-            return {FtpResponseCode::__425__, "Use PASV before RETR."};
+            if (!session->get_active_addr().has_value()) {
+                return {FtpResponseCode::__425__, "Use PASV or PORT before RETR."};
+            }
         }
         const auto path = resolve_path(session, args);
         if (!path_within_root(session, path) || !std::filesystem::is_regular_file(path)) {

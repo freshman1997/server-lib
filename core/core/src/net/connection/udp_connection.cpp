@@ -43,7 +43,6 @@ namespace yuan::net
         connectionHandlerOwner_.reset();
         eventHandler_ = nullptr;
         instance_ = nullptr;
-        alive_timer_ = nullptr;
         idle_cnt_ = 0;
     }
 
@@ -58,10 +57,8 @@ namespace yuan::net
         closed_ = true;
         active_ = false;
         state_ = ConnectionState::closed;
-        if (alive_timer_) {
-            alive_timer_->cancel();
-            alive_timer_ = nullptr;
-        }
+        alive_timer_.cancel();
+        alive_timer_.reset();
 
         if (adapter_) {
             adapter_->on_release();
@@ -230,32 +227,32 @@ namespace yuan::net
     // 丢弃所有未发送的数据，立即标记销�?
     void UdpConnection::abort()
     {
-        if (is_closing_) {
-            return; // 防止重复销�?
+        if (is_closing_ || state_ == ConnectionState::closed) {
+            return;
         }
         is_closing_ = true;
         closed_ = true;
         state_ = ConnectionState::closed;
-        // 使用延迟删除，避免在事件回调中直接删�?
+        output_buffer_.clear();
+        pending_output_buffer_.clear();
         do_close();
     }
 
-    // 发送完数据后返�?
+    // Graceful close drains queued datagrams before notifying close.
     void UdpConnection::close()
     {
-        if (is_closing_ || closed_) {
-            return; // 防止重复调用
+        if (is_closing_ || state_ == ConnectionState::closed) {
+            return;
         }
-        ConnectionState lastState = state_;
         state_ = ConnectionState::closing;
         closed_ = true;
+        process_pending_output_buffer();
         auto *front = output_buffer_.front();
-        if (lastState == ConnectionState::connecting || (front && front->readable_bytes() > 0)) {
+        if (front && front->readable_bytes() > 0) {
             flush();
             return;
         }
         is_closing_ = true;
-        // 使用延迟删除，避免在事件回调中直接删�?
         do_close();
     }
 
@@ -321,10 +318,8 @@ namespace yuan::net
         }
         cleanup_done_ = true;
         is_closing_ = true;
-        if (alive_timer_) {
-            alive_timer_->cancel();
-            alive_timer_ = nullptr;
-        }
+        alive_timer_.cancel();
+        alive_timer_.reset();
         auto self = std::static_pointer_cast<UdpConnection>(shared_from_this());
         [[maybe_unused]] auto handler_owner = std::move(connectionHandlerOwner_);
         auto *handler = ptr_of(handler_owner);
@@ -363,7 +358,7 @@ namespace yuan::net
                 handler->on_connected(shared_from_this());
             }
             if (instance_ && instance_->get_timer_manager()) {
-                alive_timer_ = instance_->get_timer_manager()->interval(0, 10 * 1000, this, -1);
+                alive_timer_ = instance_->get_timer_manager()->interval_handle(0, 10 * 1000, this, -1);
             }
         }
     }
@@ -375,7 +370,7 @@ namespace yuan::net
         }
 
         if (!active_) {
-            abort();
+            close();
             return;
         }
 

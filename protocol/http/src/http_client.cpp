@@ -10,7 +10,7 @@
 #include "ops/option.h"
 #include "response.h"
 #include "session.h"
-#include "net/secuity/openssl.h"
+#include "net/security/openssl.h"
 
 namespace yuan::net::http
 {

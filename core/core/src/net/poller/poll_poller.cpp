@@ -14,14 +14,8 @@ namespace yuan::net
     class PollPoller::HelperData
     {
     public:
-        struct ChannelEntry
-        {
-            net::Channel *channel = nullptr;
-            uint64_t generation = 0;
-        };
-
         std::vector<struct pollfd> fds_;
-        std::unordered_map<int, ChannelEntry> channels_;
+        std::unordered_map<int, net::Channel *> channels_;
         std::vector<int> removed_fds_;
     };
 
@@ -81,11 +75,11 @@ namespace yuan::net
 
             const int fd = data_->fds_[i].fd;
             auto it = data_->channels_.find(fd);
-            if (it != data_->channels_.end() && ev != Channel::NONE_EVENT && it->second.channel) {
+            if (it != data_->channels_.end() && ev != Channel::NONE_EVENT && it->second) {
                 PollEvent pe;
                 pe.fd = fd;
                 pe.revents = ev;
-                pe.generation = it->second.generation;
+                pe.generation = it->second->generation();
                 events.push_back(pe);
             }
         }
@@ -95,8 +89,7 @@ namespace yuan::net
 
     void PollPoller::do_add_channel(Channel * channel)
     {
-        auto &entry = data_->channels_[channel->get_fd()];
-        entry.channel = channel;
+        data_->channels_[channel->get_fd()] = channel;
         struct pollfd pfd;
         pfd.fd = channel->get_fd();
         pfd.events = 0;
@@ -132,8 +125,7 @@ namespace yuan::net
                     return pfd.fd == fd;
                 });
 
-                auto &entry = data_->channels_[channel->get_fd()];
-                entry.channel = channel;
+                data_->channels_[channel->get_fd()] = channel;
                 if (it != data_->fds_.end()) {
                     it->events = 0;
                     it->revents = 0;
@@ -158,7 +150,7 @@ namespace yuan::net
         }
 
         data_->removed_fds_.push_back(channel->get_fd());
-        data_->channels_[channel->get_fd()].channel = nullptr;
+        data_->channels_[channel->get_fd()] = nullptr;
     }
 }
 #endif

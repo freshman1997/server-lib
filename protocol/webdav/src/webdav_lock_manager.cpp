@@ -1,8 +1,8 @@
 #include "webdav_lock_manager.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
-#include <random>
 #include <sstream>
 
 namespace yuan::net::webdav
@@ -23,11 +23,12 @@ namespace yuan::net::webdav
 
         std::string make_token()
         {
-            static std::random_device rd;
-            static std::mt19937_64 rng(rd());
-            std::uniform_int_distribution<unsigned long long> dist;
+            static std::atomic<uint64_t> seq{ 1 };
+            const auto id = seq.fetch_add(1, std::memory_order_relaxed);
+            const auto now = static_cast<uint64_t>(
+                std::chrono::steady_clock::now().time_since_epoch().count());
             std::ostringstream oss;
-            oss << "opaquelocktoken:" << std::hex << dist(rng) << dist(rng);
+            oss << "opaquelocktoken:" << std::hex << now << id;
             return oss.str();
         }
     }
@@ -35,38 +36,44 @@ namespace yuan::net::webdav
     LockInfo WebDavLockManager::create(std::string href, LockScope scope, Depth depth, std::string owner,
                                        std::chrono::seconds timeout)
     {
-        prune_expired();
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(mutex_);
+        prune_expired_locked(now);
         LockInfo info;
         info.token = make_token();
         info.href = normalize_href(href);
         info.scope = scope;
         info.depth = depth;
         info.owner = std::move(owner);
-        info.expires_at = std::chrono::steady_clock::now() + timeout;
+        info.expires_at = now + timeout;
         locks_[info.token] = info;
         return info;
     }
 
     bool WebDavLockManager::refresh(std::string_view token, std::chrono::seconds timeout)
     {
-        prune_expired();
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(mutex_);
+        prune_expired_locked(now);
         auto it = locks_.find(normalize_token(token));
         if (it == locks_.end()) {
             return false;
         }
-        it->second.expires_at = std::chrono::steady_clock::now() + timeout;
+        it->second.expires_at = now + timeout;
         return true;
     }
 
     bool WebDavLockManager::unlock(std::string_view token)
     {
-        prune_expired();
+        std::lock_guard<std::mutex> lock(mutex_);
+        prune_expired_locked(std::chrono::steady_clock::now());
         return locks_.erase(normalize_token(token)) > 0;
     }
 
     bool WebDavLockManager::allows(std::string_view href, std::string_view if_header_or_token) const
     {
-        prune_expired();
+        std::lock_guard<std::mutex> lock(mutex_);
+        prune_expired_locked(std::chrono::steady_clock::now());
         const std::string token = normalize_token(if_header_or_token);
         for (const auto &[_, lock] : locks_) {
             if (!covers(lock, href)) {
@@ -82,7 +89,8 @@ namespace yuan::net::webdav
 
     std::vector<LockInfo> WebDavLockManager::active_locks(std::string_view href) const
     {
-        prune_expired();
+        std::lock_guard<std::mutex> lock(mutex_);
+        prune_expired_locked(std::chrono::steady_clock::now());
         std::vector<LockInfo> out;
         for (const auto &[_, lock] : locks_) {
             if (covers(lock, href)) {
@@ -94,7 +102,8 @@ namespace yuan::net::webdav
 
     std::optional<LockInfo> WebDavLockManager::find(std::string_view token) const
     {
-        prune_expired();
+        std::lock_guard<std::mutex> lock(mutex_);
+        prune_expired_locked(std::chrono::steady_clock::now());
         auto it = locks_.find(normalize_token(token));
         if (it == locks_.end()) {
             return std::nullopt;
@@ -104,7 +113,12 @@ namespace yuan::net::webdav
 
     void WebDavLockManager::prune_expired() const
     {
-        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(mutex_);
+        prune_expired_locked(std::chrono::steady_clock::now());
+    }
+
+    void WebDavLockManager::prune_expired_locked(std::chrono::steady_clock::time_point now) const
+    {
         for (auto it = locks_.begin(); it != locks_.end();) {
             if (it->second.expires_at <= now) {
                 it = locks_.erase(it);

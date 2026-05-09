@@ -1,7 +1,7 @@
 #ifndef __NET_CONNECTOR_H__
 #define __NET_CONNECTOR_H__
 #include "net/handler/event_handler.h"
-#include "net/secuity/ssl_module.h"
+#include "net/security/ssl_module.h"
 #include "net/socket/inet_address.h"
 #include "timer/timer_manager.h"
 #include "net/handler/connector_handler.h"

@@ -1,5 +1,5 @@
-#include "net/secuity/openssl.h"
-#include "net/secuity/ssl_handler.h"
+#include "net/security/openssl.h"
+#include "net/security/ssl_handler.h"
 
 #include <cerrno>
 #include <cstring>

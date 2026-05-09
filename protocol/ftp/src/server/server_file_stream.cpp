@@ -123,7 +123,7 @@ namespace yuan::net::ftp
             return true;
         }
 
-        auto sock = std::make_unique<Socket>("", addr.get_port());
+        auto sock = std::make_unique<Socket>(addr.get_ip().c_str(), addr.get_port());
         if (!sock->valid()) {
             LOG_ERROR("cant create socket file descriptor!");
             return false;

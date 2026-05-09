@@ -4,6 +4,7 @@
 #include "webdav_types.h"
 
 #include <chrono>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -39,8 +40,10 @@ namespace yuan::net::webdav
     private:
         static bool covers(const LockInfo &lock, std::string_view href);
         static std::string normalize_token(std::string_view token);
+        void prune_expired_locked(std::chrono::steady_clock::time_point now) const;
 
         mutable std::unordered_map<std::string, LockInfo> locks_;
+        mutable std::mutex mutex_;
     };
 }
 

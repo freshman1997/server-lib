@@ -19,4 +19,3 @@ namespace yuan::net::ftp
     CommandType CommandAllo::get_command_type() { return CommandType::cmd_allo; }
     std::string CommandAllo::get_command_name() { return "ALLO"; }
 }
-#include "common/session.h"

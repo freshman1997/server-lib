@@ -3,6 +3,7 @@
 
 #include <coroutine>
 #include <exception>
+#include <functional>
 #include <utility>
 
 namespace yuan::coroutine
@@ -120,16 +121,11 @@ namespace yuan::coroutine
                 return std::move(handle_.promise().value_);
             }
 
-            T execute()
-            {
-                resume();
-                return std::move(handle_.promise().value_);
-            }
-
-            operator T() const
-            {
-                return std::move(handle_.promise().value_);
-            }
+        T resume_once_and_get_result()
+        {
+            resume();
+            return get_result();
+        }
 
         class awaiter
         {
@@ -181,6 +177,29 @@ namespace yuan::coroutine
             std::coroutine_handle<> continuation_{};
             bool detached_ = false;
 
+            static std::function<void(std::exception_ptr)> &detached_exception_handler()
+            {
+                static std::function<void(std::exception_ptr)> handler;
+                return handler;
+            }
+
+            static void notify_detached_exception(const std::exception_ptr &exception) noexcept
+            {
+                if (!exception) {
+                    return;
+                }
+
+                auto &handler = detached_exception_handler();
+                if (!handler) {
+                    return;
+                }
+
+                try {
+                    handler(exception);
+                } catch (...) {
+                }
+            }
+
             Task get_return_object()
             {
                 return Task{ std::coroutine_handle<promise_type>::from_promise(*this) };
@@ -200,6 +219,7 @@ namespace yuan::coroutine
                 std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) const noexcept
                 {
                     if (handle.promise().detached_) {
+                        promise_type::notify_detached_exception(handle.promise().exception_);
                         handle.destroy();
                         return std::noop_coroutine();
                     }
@@ -260,11 +280,22 @@ namespace yuan::coroutine
             }
         }
 
+        static void set_detached_exception_handler(std::function<void(std::exception_ptr)> handler)
+        {
+            promise_type::detached_exception_handler() = std::move(handler);
+        }
+
+        static void clear_detached_exception_handler()
+        {
+            promise_type::detached_exception_handler() = {};
+        }
+
         void detach() noexcept
         {
             if (handle_) {
                 handle_.promise().detached_ = true;
                 if (handle_.done()) {
+                    promise_type::notify_detached_exception(handle_.promise().exception_);
                     handle_.destroy();
                 }
                 handle_ = nullptr;
@@ -290,7 +321,7 @@ namespace yuan::coroutine
             }
         }
 
-        void execute()
+        void resume_once_and_get_result()
         {
             resume();
             get_result();

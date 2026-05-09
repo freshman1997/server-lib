@@ -12,7 +12,9 @@ namespace yuan::net::ftp
             return denied;
         }
         if (!session->get_passive_addr().has_value()) {
-            return { FtpResponseCode::__425__, "Use PASV before NLST." };
+            if (!session->get_active_addr().has_value()) {
+                return { FtpResponseCode::__425__, "Use PASV or PORT before NLST." };
+            }
         }
         auto target = resolve_path(session, args);
         if (!path_within_root(session, target) || !std::filesystem::exists(target)) {

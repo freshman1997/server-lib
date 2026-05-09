@@ -1,5 +1,6 @@
 #ifdef __linux__
 #include <cstring>
+#include <cerrno>
 #include <set>
 #include <unordered_map>
 #include <unistd.h>
@@ -16,12 +17,6 @@ namespace yuan::net
     class EpollPoller::HelperData
     {
     public:
-        struct ChannelEntry
-        {
-            Channel *channel = nullptr;
-            uint64_t generation = 0;
-        };
-
         HelperData() = default;
         ~HelperData()
         {
@@ -33,7 +28,7 @@ namespace yuan::net
     public:
         int epoll_fd_;
         std::set<int> fds_;
-        std::unordered_map<int, ChannelEntry> channels_;
+        std::unordered_map<int, Channel *> channels_;
         std::vector<struct epoll_event> epoll_events_;
     };
 
@@ -77,7 +72,11 @@ namespace yuan::net
 
     uint64_t EpollPoller::poll(uint32_t timeout, std::vector<PollEvent> & events)
     {
-        int nevent = ::epoll_wait(data_->epoll_fd_, &*data_->epoll_events_.begin(), (int)data_->epoll_events_.size(), timeout);
+        int nevent = -1;
+        do {
+            nevent = ::epoll_wait(data_->epoll_fd_, &*data_->epoll_events_.begin(), (int)data_->epoll_events_.size(), timeout);
+        } while (nevent < 0 && errno == EINTR);
+
         uint64_t tm = base::time::get_tick_count();
         if (nevent < 0) {
             return tm;
@@ -121,13 +120,11 @@ namespace yuan::net
             if (!channel->has_events()) {
                 remove_channel(channel);
             } else {
-                auto &entry = data_->channels_[fd];
-                entry.channel = channel;
+                data_->channels_[fd] = channel;
                 update(EPOLL_CTL_MOD, channel);
             }
         } else {
-            auto &entry = data_->channels_[fd];
-            entry.channel = channel;
+            data_->channels_[fd] = channel;
             update(EPOLL_CTL_ADD, channel);
             data_->fds_.insert(fd);
         }
@@ -157,9 +154,7 @@ namespace yuan::net
                 event.events |= EPOLLOUT;
             }
 
-            auto it = data_->channels_.find(channel->get_fd());
-            const uint64_t generation = (it == data_->channels_.end()) ? 0 : it->second.generation;
-            event.data.u64 = encode_token(channel->get_fd(), generation);
+            event.data.u64 = encode_token(channel->get_fd(), channel->generation());
 
             ret = ::epoll_ctl(data_->epoll_fd_, op, channel->get_fd(), &event);
         } else {

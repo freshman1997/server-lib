@@ -45,6 +45,8 @@ namespace yuan::net::ftp
         cmd_size,
         cmd_rest,
         cmd_nlist,
+        cmd_epsv,
+        cmd_eprt,
     };
 
     class Command

@@ -150,6 +150,7 @@ namespace yuan::net::ftp
         std::string cwd_;
         std::string root_dir_;
         std::optional<InetAddress> passive_addr_;
+        std::optional<InetAddress> active_addr_;
         std::unordered_map<std::string, FtpSessionValue> values;
     };
 
@@ -192,6 +193,8 @@ namespace yuan::net::ftp
         bool login();
         void set_username(const std::string &username);
         void set_password(const std::string &passwd);
+        const std::string &get_username() const;
+        const std::string &get_password() const;
         bool start_file_stream(const InetAddress &addr, StreamMode mode);
         bool login_success()
         {
@@ -217,6 +220,12 @@ namespace yuan::net::ftp
             return context_.passive_addr_;
         }
         void clear_passive_addr();
+        void set_active_addr(const InetAddress &addr);
+        std::optional<InetAddress> get_active_addr() const
+        {
+            return context_.active_addr_;
+        }
+        void clear_active_addr();
         void check_file_stream(FtpFileStreamSession *fs);
         void set_keep_util_sent_flag(bool flag)
         {

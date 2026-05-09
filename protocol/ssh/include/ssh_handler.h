@@ -4,8 +4,14 @@
 #include "protocol/ssh_constants.h"
 #include "protocol/ssh_structures.h"
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
+
+namespace yuan::net
+{
+    class StreamAcceptor;
+}
 
 namespace yuan::net::ssh
 {
@@ -89,6 +95,17 @@ namespace yuan::net::ssh
                                              const std::string &bind_addr,
                                              uint16_t bind_port)
         {
+        }
+
+        virtual std::shared_ptr<::yuan::net::StreamAcceptor> on_forwarded_tcpip_listener(
+            SshSession *session,
+            const std::string &bind_addr,
+            uint16_t bind_port)
+        {
+            (void)session;
+            (void)bind_addr;
+            (void)bind_port;
+            return {};
         }
 
         virtual bool on_direct_tcpip(SshSession *session,

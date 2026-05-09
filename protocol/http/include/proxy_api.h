@@ -63,6 +63,8 @@ namespace yuan::net::http
         int read_timeout_ms = 30000;
         int write_timeout_ms = 10000;
         int max_retries = 2;
+        int failure_threshold = 3;
+        int unhealthy_cooldown_ms = 5000;
         size_t max_pool_size_per_target = 8;
         size_t idle_timeout_seconds = 60;
     };
@@ -77,6 +79,14 @@ namespace yuan::net::http
         uint64_t ws_duplicate_upgrade_skipped = 0;
         uint64_t ws_stale_upgrade_skipped = 0;
         uint64_t unmapped_close_events = 0;
+    };
+
+    struct TargetHealthSnapshot
+    {
+        std::string target_key;
+        bool healthy = true;
+        int consecutive_failures = 0;
+        uint64_t unhealthy_until_ms = 0;
     };
 
     class HttpProxyHandler
@@ -94,12 +104,14 @@ namespace yuan::net::http
         virtual bool is_proxy_url(const std::string &url) const = 0;
 
         virtual void serve_proxy(HttpRequest *req, HttpResponse *resp) = 0;
+        virtual yuan::coroutine::Task<void> serve_proxy_async(HttpRequest *req, HttpResponse *resp) = 0;
         virtual void handle_websocket_upgrade_by_url(HttpRequest *req, HttpResponse *resp, const std::string &route_key) = 0;
         virtual void on_client_close(const std::shared_ptr<Connection> &conn) = 0;
 
         virtual HttpProxyStats snapshot_stats() const = 0;
         virtual const std::unordered_map<std::string, ProxyRoute> &get_routes() const = 0;
         virtual ProxyTarget select_target_public(const ProxyRoute &route) = 0;
+        virtual std::vector<TargetHealthSnapshot> snapshot_target_health() const = 0;
     };
 
     struct PooledConnection
@@ -223,6 +235,7 @@ namespace yuan::net::http
         bool is_proxy_url(const std::string &url) const override;
 
         void serve_proxy(HttpRequest *req, HttpResponse *resp) override;
+        yuan::coroutine::Task<void> serve_proxy_async(HttpRequest *req, HttpResponse *resp) override;
         void handle_websocket_upgrade_by_url(HttpRequest *req, HttpResponse *resp, const std::string &route_key) override;
         void on_client_close(const std::shared_ptr<Connection> &conn) override;
 
@@ -246,16 +259,18 @@ namespace yuan::net::http
             return select_target(route);
         }
 
+        std::vector<TargetHealthSnapshot> snapshot_target_health() const override;
+
     private:
         ProxyTarget select_target(const ProxyRoute &route);
         ProxyTarget select_weighted_random(const std::vector<ProxyTarget> &targets);
         ProxyTarget select_least_connections(const ProxyRoute &route);
+        ProxyTarget select_least_connections(const std::vector<ProxyTarget> &targets);
 
         void build_forward_request(HttpRequest *orig_req, const ProxyRoute &route, const ProxyTarget &target, bool is_websocket = false);
         yuan::coroutine::Task<void> handle_proxy_async(HttpRequest *req, HttpResponse *resp,
                                                        const std::string &route_key,
                                                        const ProxyRoute &route,
-                                                       const ProxyTarget &target,
                                                        Connection *clientConn);
         yuan::coroutine::Task<void> handle_websocket_upgrade_async(HttpRequest *req,
                                                                    HttpResponse *resp,
@@ -267,6 +282,10 @@ namespace yuan::net::http
         void map_connections(const std::shared_ptr<Connection> &clientConn, const std::shared_ptr<Connection> &serverConn, const std::string &routeKey);
         bool unmap_and_close_peer(Connection *conn, bool is_client);
         void forward_data(Connection *src, Connection *dst);
+        std::string target_key(const ProxyTarget &target) const;
+        bool is_target_available(const ProxyTarget &target) const;
+        void mark_target_failure(const ProxyTarget &target, const ProxyRoute &route);
+        void mark_target_success(const ProxyTarget &target);
 
         bool handle_websocket_upgrade(HttpRequest *req, HttpResponse *resp, const ProxyRoute &route, const ProxyTarget &target);
         void remove_connection_from_pools(Connection *conn);
@@ -289,6 +308,14 @@ namespace yuan::net::http
 
         std::unordered_map<std::string, std::shared_ptr<TargetConnectionPool> > pools_;
         mutable std::mutex pools_mutex_;
+
+        struct TargetHealthState
+        {
+            int consecutive_failures = 0;
+            uint64_t unhealthy_until_ms = 0;
+        };
+        std::unordered_map<std::string, TargetHealthState> target_health_;
+        mutable std::mutex health_mutex_;
 
         std::unordered_map<Connection *, int> pending_requests_;
         mutable std::mt19937 rng_{ std::random_device{}() };

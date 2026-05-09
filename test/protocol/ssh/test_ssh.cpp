@@ -5,9 +5,14 @@
 #include "openssl/params.h"
 #include "openssl/x509.h"
 
+#include "net/connection/connection.h"
+#include "net/socket/inet_address.h"
+
 #include <cstdint>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -491,6 +496,20 @@ namespace
             reinterpret_cast<const uint8_t *>(outer_span.data()) + outer_span.size());
     }
 
+    std::vector<uint8_t> build_kex_signature_field(const std::string & algorithm,
+                                                   const std::vector<uint8_t> & signature)
+    {
+        yuan::buffer::ByteBuffer field;
+        SshMessageCodec::write_string(field, algorithm);
+        SshMessageCodec::write_string(field, std::string(
+            reinterpret_cast<const char *>(signature.data()),
+            signature.size()));
+        auto span = field.readable_span();
+        return std::vector<uint8_t>(
+            reinterpret_cast<const uint8_t *>(span.data()),
+            reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+    }
+
     std::vector<uint8_t> build_rsa_public_key_blob(const std::vector<uint8_t> & public_key_der)
     {
         const uint8_t * der_ptr = public_key_der.data();
@@ -555,6 +574,41 @@ namespace
             reinterpret_cast<const uint8_t *>(span.data()) + span.size());
     }
 
+    std::vector<uint8_t> build_ed25519_host_key_blob(const std::vector<uint8_t> & public_key)
+    {
+        yuan::buffer::ByteBuffer buf;
+        SshMessageCodec::write_string(buf, "ssh-ed25519");
+        SshMessageCodec::write_string(buf, std::string(
+            reinterpret_cast<const char *>(public_key.data()),
+            public_key.size()));
+
+        auto span = buf.readable_span();
+        return std::vector<uint8_t>(
+            reinterpret_cast<const uint8_t *>(span.data()),
+            reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+    }
+
+    std::vector<uint8_t> build_fake_kex_exchange_hash(const std::string & client_version,
+                                                       const std::string & server_version,
+                                                       const std::vector<uint8_t> & client_kex_init,
+                                                       const std::vector<uint8_t> & server_kex_init,
+                                                       const std::vector<uint8_t> & host_key_blob,
+                                                       const std::vector<uint8_t> & client_public,
+                                                       const std::vector<uint8_t> & server_public,
+                                                       const std::vector<uint8_t> & shared_secret)
+    {
+        return {
+            static_cast<uint8_t>(client_version.size()),
+            static_cast<uint8_t>(server_version.size()),
+            static_cast<uint8_t>(client_kex_init.size()),
+            static_cast<uint8_t>(server_kex_init.size()),
+            static_cast<uint8_t>(host_key_blob.size()),
+            static_cast<uint8_t>(client_public.size()),
+            static_cast<uint8_t>(server_public.size()),
+            static_cast<uint8_t>(shared_secret.size())
+        };
+    }
+
     SshCipherContext build_active_cipher_context(SshAlgorithmRegistry & registry,
                                                  const std::string & cipher_name,
                                                  bool with_mac = true)
@@ -582,9 +636,152 @@ namespace
         std::filesystem::create_directories(dir, ec);
         return dir;
     }
+
+    class ScopedEnvVar
+    {
+    public:
+        ScopedEnvVar(const std::string &name, const std::string &value)
+            : name_(name)
+        {
+            const char *existing = std::getenv(name_.c_str());
+            if (existing) {
+                had_original_ = true;
+                original_ = existing;
+            }
+            set(value);
+        }
+
+        ~ScopedEnvVar()
+        {
+            if (had_original_) {
+                set(original_);
+            } else {
+                unset();
+            }
+        }
+
+    private:
+        void set(const std::string &value)
+        {
+#ifdef _WIN32
+            _putenv_s(name_.c_str(), value.c_str());
+#else
+            setenv(name_.c_str(), value.c_str(), 1);
+#endif
+        }
+
+        void unset()
+        {
+#ifdef _WIN32
+            _putenv_s(name_.c_str(), "");
+#else
+            unsetenv(name_.c_str());
+#endif
+        }
+
+        std::string name_;
+        std::string original_;
+        bool had_original_ = false;
+    };
+
+    std::string base64_encode(const std::vector<uint8_t> &input)
+    {
+        if (input.empty()) {
+            return {};
+        }
+        std::string out(((input.size() + 2) / 3) * 4, '\0');
+        const int written = EVP_EncodeBlock(
+            reinterpret_cast<unsigned char *>(out.data()),
+            input.data(),
+            static_cast<int>(input.size()));
+        if (written <= 0) {
+            return {};
+        }
+        out.resize(static_cast<size_t>(written));
+        return out;
+    }
+
+    class TestConnection final : public yuan::net::Connection
+    {
+    public:
+        TestConnection(const yuan::net::InetAddress &remote,
+                       const yuan::net::InetAddress &local)
+            : remote_(remote), local_(local)
+        {
+        }
+
+        yuan::net::ConnectionState get_connection_state() const override
+        {
+            return yuan::net::ConnectionState::connected;
+        }
+
+        bool is_connected() const override
+        {
+            return true;
+        }
+
+        const yuan::net::InetAddress &get_remote_address() const override
+        {
+            return remote_;
+        }
+
+        const yuan::net::InetAddress &get_local_address() const override
+        {
+            return local_;
+        }
+
+        void write(const ::yuan::buffer::ByteBuffer &) override
+        {
+        }
+
+        void write_and_flush(const ::yuan::buffer::ByteBuffer &) override
+        {
+        }
+
+        void flush() override
+        {
+        }
+
+        void abort() override
+        {
+        }
+
+        void close() override
+        {
+        }
+
+        void set_connection_handler(std::shared_ptr<yuan::net::ConnectionHandler>) override
+        {
+        }
+
+        yuan::net::ConnectionHandler *get_connection_handler() const override
+        {
+            return nullptr;
+        }
+
+        void set_ssl_handler(std::shared_ptr<yuan::net::SSLHandler>) override
+        {
+        }
+
+        void on_read_event() override
+        {
+        }
+
+        void on_write_event() override
+        {
+        }
+
+        void set_event_handler(yuan::net::EventHandler *) override
+        {
+        }
+
+    private:
+        yuan::net::InetAddress remote_;
+        yuan::net::InetAddress local_;
+    };
 }
 
-bool test_password_auth_without_handler_uses_method_fallback()
+bool test_password_auth_without_handler_is_rejected_by_default()
 {
     SshAuthenticator auth;
     auth.register_method(std::make_unique<SshAuthPassword>());
@@ -603,9 +800,34 @@ bool test_password_auth_without_handler_uses_method_fallback()
     msg.method_specific_data.insert(msg.method_specific_data.end(), { 'p', 'a', 's', 's' });
 
     auto result = auth.process_userauth_request(nullptr, nullptr, msg);
-    TEST_ASSERT(result == SshAuthResult::SUCCESS,
-                "password auth should fall back to built-in method when handler is absent");
-    TEST_ASSERT(auth.authenticated(), "authenticator should enter authenticated state");
+    TEST_ASSERT(result == SshAuthResult::FAILURE,
+                "password auth should be rejected by default when handler is absent");
+    TEST_ASSERT(!auth.authenticated(), "authenticator should remain unauthenticated");
+    return true;
+}
+
+bool test_keyboard_interactive_without_handler_stays_challenge_then_fails()
+{
+    SshAuthenticator auth;
+    auth.register_method(std::make_unique<SshAuthKeyboardInteractive>());
+    TEST_ASSERT(auth.process_service_request(SSH_SERVICE_USERAUTH),
+                "userauth service request should succeed");
+
+    SshUserauthRequestMessage msg;
+    msg.username = "demo";
+    msg.service_name = SSH_SERVICE_CONNECTION;
+    msg.method_name = "keyboard-interactive";
+
+    auto result = auth.process_userauth_request(nullptr, nullptr, msg);
+    TEST_ASSERT(result == SshAuthResult::NEED_MORE,
+                "keyboard-interactive should request challenge by default");
+
+    SshUserauthInfoResponseMessage info;
+    info.responses = { "any" };
+    auto response_result = auth.process_info_response(nullptr, nullptr, info);
+    TEST_ASSERT(response_result == SshAuthResult::FAILURE,
+                "keyboard-interactive response should fail by default without handler");
+    TEST_ASSERT(!auth.authenticated(), "authenticator should remain unauthenticated");
     return true;
 }
 
@@ -720,6 +942,276 @@ bool test_request_success_encoding_uses_message_byte()
     return true;
 }
 
+bool test_tcpip_forward_global_request_rejects_incomplete_payload()
+{
+    class ForwardCountingHandler final : public SshHandler
+    {
+    public:
+        uint32_t tcpip_forward_calls = 0;
+
+        uint16_t on_tcpip_forward(SshSession *session,
+                                  const std::string &bind_addr,
+                                  uint16_t bind_port) override
+        {
+            (void)session;
+            (void)bind_addr;
+            (void)bind_port;
+            ++tcpip_forward_calls;
+            return 2022;
+        }
+    };
+
+    SshConnectionManager mgr(nullptr);
+    ForwardCountingHandler handler;
+
+    SshGlobalRequestMessage msg;
+    msg.request_name = "tcpip-forward";
+    msg.want_reply = true;
+    msg.request_specific_data = encode_string_payload("127.0.0.1");
+
+    auto response = mgr.handle_global_request(msg, &handler);
+    auto span = response.readable_span();
+    TEST_ASSERT(!span.empty(), "invalid tcpip-forward payload should produce a response");
+    TEST_ASSERT(span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_FAILURE),
+                "invalid tcpip-forward payload should return REQUEST_FAILURE");
+    TEST_ASSERT(handler.tcpip_forward_calls == 0,
+                "invalid tcpip-forward payload should not invoke handler callback");
+    return true;
+}
+
+bool test_cancel_tcpip_forward_global_request_rejects_incomplete_payload()
+{
+    class CancelCountingHandler final : public SshHandler
+    {
+    public:
+        uint32_t cancel_tcpip_forward_calls = 0;
+
+        void on_cancel_tcpip_forward(SshSession *session,
+                                     const std::string &bind_addr,
+                                     uint16_t bind_port) override
+        {
+            (void)session;
+            (void)bind_addr;
+            (void)bind_port;
+            ++cancel_tcpip_forward_calls;
+        }
+    };
+
+    SshConnectionManager mgr(nullptr);
+    CancelCountingHandler handler;
+
+    SshGlobalRequestMessage msg;
+    msg.request_name = "cancel-tcpip-forward";
+    msg.want_reply = true;
+    msg.request_specific_data = encode_string_payload("127.0.0.1");
+
+    auto response = mgr.handle_global_request(msg, &handler);
+    auto span = response.readable_span();
+    TEST_ASSERT(!span.empty(), "invalid cancel-tcpip-forward payload should produce a response");
+    TEST_ASSERT(span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_FAILURE),
+                "invalid cancel-tcpip-forward payload should return REQUEST_FAILURE");
+    TEST_ASSERT(handler.cancel_tcpip_forward_calls == 0,
+                "invalid cancel-tcpip-forward payload should not invoke handler callback");
+    return true;
+}
+
+bool test_tcpip_forward_global_request_fails_when_port_forwarding_disabled()
+{
+    class ForwardCountingHandler final : public SshHandler
+    {
+    public:
+        uint32_t tcpip_forward_calls = 0;
+
+        uint16_t on_tcpip_forward(SshSession *session,
+                                  const std::string &bind_addr,
+                                  uint16_t bind_port) override
+        {
+            (void)session;
+            (void)bind_addr;
+            (void)bind_port;
+            ++tcpip_forward_calls;
+            return 2222;
+        }
+    };
+
+    SshServerConfig cfg;
+    cfg.enable_port_forwarding = false;
+    SshServer server(cfg);
+    SshSession session(3001, &server);
+    SshConnectionManager mgr(&session);
+    ForwardCountingHandler handler;
+
+    yuan::buffer::ByteBuffer payload;
+    SshMessageCodec::write_string(payload, "127.0.0.1");
+    SshMessageCodec::write_uint32(payload, 8080);
+    auto span = payload.readable_span();
+
+    SshGlobalRequestMessage msg;
+    msg.request_name = "tcpip-forward";
+    msg.want_reply = true;
+    msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+    auto response = mgr.handle_global_request(msg, &handler);
+    auto resp_span = response.readable_span();
+    TEST_ASSERT(!resp_span.empty(), "disabled port forwarding should produce a reply");
+    TEST_ASSERT(resp_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_FAILURE),
+                "tcpip-forward should fail when forwarding is disabled");
+    TEST_ASSERT(handler.tcpip_forward_calls == 0,
+                "tcpip-forward callback should not run when forwarding is disabled");
+    return true;
+}
+
+bool test_direct_tcpip_open_fails_when_port_forwarding_disabled()
+{
+    class DirectTcpipAllowHandler final : public SshHandler
+    {
+    public:
+        bool on_channel_open(SshSession *, const std::string &channel_type, SshChannel *) override
+        {
+            return channel_type == SSH_CHANNEL_DIRECT_TCPIP;
+        }
+
+        bool on_direct_tcpip(SshSession *, SshChannel *, const std::string &, uint16_t) override
+        {
+            return true;
+        }
+    };
+
+    SshServerConfig cfg;
+    cfg.enable_port_forwarding = false;
+    SshServer server(cfg);
+    SshSession session(3002, &server);
+    SshConnectionManager mgr(&session);
+    DirectTcpipAllowHandler handler;
+
+    SshChannelOpenMessage msg;
+    msg.channel_type = SSH_CHANNEL_DIRECT_TCPIP;
+    msg.sender_channel = 50;
+    msg.initial_window_size = SSH_DEFAULT_WINDOW_SIZE;
+    msg.maximum_packet_size = SSH_DEFAULT_MAX_PACKET_SIZE;
+
+    yuan::buffer::ByteBuffer payload;
+    SshMessageCodec::write_string(payload, "127.0.0.1");
+    SshMessageCodec::write_uint32(payload, 80);
+    SshMessageCodec::write_string(payload, "10.0.0.9");
+    SshMessageCodec::write_uint32(payload, 30000);
+    auto span = payload.readable_span();
+    msg.type_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+    auto response = mgr.handle_channel_open(msg, &handler);
+    auto resp_span = response.readable_span();
+    TEST_ASSERT(!resp_span.empty(), "direct-tcpip should produce response when forwarding disabled");
+    auto decoded = SshMessageCodec::decode_channel_open_failure(
+        reinterpret_cast<const uint8_t *>(resp_span.data()), resp_span.size());
+    TEST_ASSERT(decoded.has_value(), "direct-tcpip should return OPEN_FAILURE when forwarding disabled");
+    TEST_ASSERT(decoded->reason_code == static_cast<uint32_t>(SshChannelOpenFailureReason::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED),
+                "direct-tcpip disabled failure should be ADMINISTRATIVELY_PROHIBITED");
+    return true;
+}
+
+bool test_tcpip_forward_duplicate_request_returns_failure()
+{
+    class StaticForwardHandler final : public SshHandler
+    {
+    public:
+        uint16_t on_tcpip_forward(SshSession *session,
+                                  const std::string &bind_addr,
+                                  uint16_t bind_port) override
+        {
+            (void)session;
+            (void)bind_addr;
+            return bind_port == 0 ? 2222 : bind_port;
+        }
+    };
+
+    SshConnectionManager mgr(nullptr);
+    StaticForwardHandler handler;
+
+    yuan::buffer::ByteBuffer payload;
+    SshMessageCodec::write_string(payload, "127.0.0.1");
+    SshMessageCodec::write_uint32(payload, 2222);
+    auto span = payload.readable_span();
+
+    SshGlobalRequestMessage msg;
+    msg.request_name = "tcpip-forward";
+    msg.want_reply = true;
+    msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+    auto first = mgr.handle_global_request(msg, &handler);
+    auto first_span = first.readable_span();
+    TEST_ASSERT(!first_span.empty(), "first tcpip-forward should produce a reply");
+    TEST_ASSERT(first_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_SUCCESS),
+                "first tcpip-forward should succeed");
+
+    auto second = mgr.handle_global_request(msg, &handler);
+    auto second_span = second.readable_span();
+    TEST_ASSERT(!second_span.empty(), "duplicate tcpip-forward should produce a reply");
+    TEST_ASSERT(second_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_FAILURE),
+                "duplicate tcpip-forward should fail");
+    return true;
+}
+
+bool test_cancel_tcpip_forward_unknown_binding_returns_failure()
+{
+    class StaticForwardHandler final : public SshHandler
+    {
+    public:
+        uint16_t on_tcpip_forward(SshSession *session,
+                                  const std::string &bind_addr,
+                                  uint16_t bind_port) override
+        {
+            (void)session;
+            (void)bind_addr;
+            return bind_port == 0 ? 2222 : bind_port;
+        }
+    };
+
+    SshConnectionManager mgr(nullptr);
+    StaticForwardHandler handler;
+
+    yuan::buffer::ByteBuffer forward_payload;
+    SshMessageCodec::write_string(forward_payload, "127.0.0.1");
+    SshMessageCodec::write_uint32(forward_payload, 2222);
+    auto forward_span = forward_payload.readable_span();
+
+    SshGlobalRequestMessage forward_msg;
+    forward_msg.request_name = "tcpip-forward";
+    forward_msg.want_reply = true;
+    forward_msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(forward_span.data()),
+        reinterpret_cast<const uint8_t *>(forward_span.data()) + forward_span.size());
+    auto first = mgr.handle_global_request(forward_msg, &handler);
+    auto first_span = first.readable_span();
+    TEST_ASSERT(!first_span.empty() &&
+                    first_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_SUCCESS),
+                "setup tcpip-forward should succeed");
+
+    yuan::buffer::ByteBuffer cancel_payload;
+    SshMessageCodec::write_string(cancel_payload, "127.0.0.1");
+    SshMessageCodec::write_uint32(cancel_payload, 3333);
+    auto cancel_span = cancel_payload.readable_span();
+
+    SshGlobalRequestMessage cancel_msg;
+    cancel_msg.request_name = "cancel-tcpip-forward";
+    cancel_msg.want_reply = true;
+    cancel_msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(cancel_span.data()),
+        reinterpret_cast<const uint8_t *>(cancel_span.data()) + cancel_span.size());
+
+    auto cancel_reply = mgr.handle_global_request(cancel_msg, &handler);
+    auto cancel_reply_span = cancel_reply.readable_span();
+    TEST_ASSERT(!cancel_reply_span.empty(), "cancel for unknown binding should produce a reply");
+    TEST_ASSERT(cancel_reply_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_FAILURE),
+                "cancel for unknown binding should fail");
+    return true;
+}
+
 bool test_publickey_rsa_fallback_verifies_signature()
 {
     SshCryptoOpenSSL crypto;
@@ -766,6 +1258,1021 @@ bool test_publickey_ecdsa_fallback_verifies_signature()
     const auto signature = wrap_signature_blob(algorithm, raw_signature);
     TEST_ASSERT(auth.verify_signature(session_id, username, algorithm, public_key_blob, signature),
                 "ecdsa-sha2-nistp256 publickey fallback should verify a valid signature");
+    return true;
+}
+
+bool test_publickey_authorized_keys_from_option_blocks_mismatched_remote_ip()
+{
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+
+    const auto encoded = base64_encode(key_blob);
+    out << "from=\"127.0.0.1\" ssh-ed25519 " << encoded << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5001, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("10.1.2.3", 40000),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+
+    const auto result = auth.authenticate(&session, "demo", creds);
+    TEST_ASSERT(result == SshAuthResult::FAILURE,
+                "authorized_keys from option should reject non-matching remote ip");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_publickey_authorized_keys_from_option_allows_matching_remote_ip()
+{
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+
+    const auto encoded = base64_encode(key_blob);
+    out << "from=\"127.0.0.*\" ssh-ed25519 " << encoded << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5002, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("127.0.0.1", 40001),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+
+    const auto result = auth.authenticate(&session, "demo", creds);
+    TEST_ASSERT(result == SshAuthResult::NEED_MORE,
+                "authorized_keys from option should allow matching remote ip and continue publickey flow");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_publickey_authorized_keys_no_pty_rejects_pty_request()
+{
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+
+    const auto encoded = base64_encode(key_blob);
+    out << "no-pty ssh-ed25519 " << encoded << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5003, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("127.0.0.1", 40002),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+
+    const auto auth_result = auth.authenticate(&session, "demo", creds);
+    TEST_ASSERT(auth_result == SshAuthResult::NEED_MORE,
+                "publickey without signature should pass key authorization first");
+
+    auto *channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 300, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created for no-pty test");
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm");
+    SshMessageCodec::write_uint32(pty_payload, 80);
+    SshMessageCodec::write_uint32(pty_payload, 24);
+    SshMessageCodec::write_uint32(pty_payload, 800);
+    SshMessageCodec::write_uint32(pty_payload, 600);
+    SshMessageCodec::write_string(pty_payload, std::string());
+
+    auto pty_span = pty_payload.readable_span();
+    SshChannelRequestMessage pty_msg;
+    pty_msg.recipient_channel = 300;
+    pty_msg.request_type = "pty-req";
+    pty_msg.want_reply = true;
+    pty_msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_span.data()) + pty_span.size());
+
+    auto response = session.connection_manager().handle_channel_request(pty_msg, nullptr);
+    auto response_span = response.readable_span();
+    TEST_ASSERT(!response_span.empty(), "pty request should produce response");
+    TEST_ASSERT(response_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "no-pty option should reject pty request");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_publickey_authorized_keys_forced_command_overrides_exec_command()
+{
+    class RecordingExecHandler final : public SshHandler
+    {
+    public:
+        std::string last_command;
+
+        bool on_exec_request(SshSession *, SshChannel *, const std::string &command) override
+        {
+            last_command = command;
+            return true;
+        }
+    };
+
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+
+    const auto encoded = base64_encode(key_blob);
+    out << "command=\"/usr/bin/id\" ssh-ed25519 " << encoded << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5004, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("127.0.0.1", 40003),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+
+    const auto auth_result = auth.authenticate(&session, "demo", creds);
+    TEST_ASSERT(auth_result == SshAuthResult::NEED_MORE,
+                "publickey without signature should pass key authorization first");
+
+    auto *channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 301, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created for forced-command test");
+
+    SshChannelRequestMessage exec_msg;
+    exec_msg.recipient_channel = 301;
+    exec_msg.request_type = "exec";
+    exec_msg.want_reply = true;
+    exec_msg.request_specific_data = encode_string_payload("echo user-cmd");
+
+    RecordingExecHandler handler;
+    auto response = session.connection_manager().handle_channel_request(exec_msg, &handler);
+    auto response_span = response.readable_span();
+    TEST_ASSERT(!response_span.empty(), "exec request should produce response");
+    TEST_ASSERT(response_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS),
+                "forced command exec should still be accepted");
+    TEST_ASSERT(handler.last_command == "/usr/bin/id",
+                "command option should override client requested exec command");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_publickey_authorized_keys_no_port_forwarding_blocks_global_forward_requests()
+{
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+    out << "no-port-forwarding ssh-ed25519 " << base64_encode(key_blob) << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5005, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("127.0.0.1", 40004),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+    TEST_ASSERT(auth.authenticate(&session, "demo", creds) == SshAuthResult::NEED_MORE,
+                "key with no-port-forwarding option should authorize probe stage");
+
+    yuan::buffer::ByteBuffer payload;
+    SshMessageCodec::write_string(payload, "127.0.0.1");
+    SshMessageCodec::write_uint32(payload, 2222);
+    auto span = payload.readable_span();
+
+    SshGlobalRequestMessage msg;
+    msg.request_name = "tcpip-forward";
+    msg.want_reply = true;
+    msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+    auto reply = session.connection_manager().handle_global_request(msg, nullptr);
+    auto reply_span = reply.readable_span();
+    TEST_ASSERT(!reply_span.empty(), "no-port-forwarding should produce a failure reply");
+    TEST_ASSERT(reply_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_FAILURE),
+                "no-port-forwarding should reject tcpip-forward requests");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_publickey_authorized_keys_no_agent_no_x11_block_channel_requests()
+{
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+    out << "no-agent-forwarding,no-x11-forwarding ssh-ed25519 " << base64_encode(key_blob) << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5006, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("127.0.0.1", 40005),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+    TEST_ASSERT(auth.authenticate(&session, "demo", creds) == SshAuthResult::NEED_MORE,
+                "key with no-agent/no-x11 options should authorize probe stage");
+
+    auto *channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 302, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created for no-agent/no-x11 test");
+
+    SshChannelRequestMessage x11_msg;
+    x11_msg.recipient_channel = 302;
+    x11_msg.request_type = "x11-req";
+    x11_msg.want_reply = true;
+    auto x11_reply = session.connection_manager().handle_channel_request(x11_msg, nullptr);
+    auto x11_span = x11_reply.readable_span();
+    TEST_ASSERT(!x11_span.empty(), "x11 request should produce reply");
+    TEST_ASSERT(x11_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "no-x11-forwarding should reject x11 request");
+
+    SshChannelRequestMessage agent_msg;
+    agent_msg.recipient_channel = 302;
+    agent_msg.request_type = "auth-agent-req@openssh.com";
+    agent_msg.want_reply = true;
+    auto agent_reply = session.connection_manager().handle_channel_request(agent_msg, nullptr);
+    auto agent_span = agent_reply.readable_span();
+    TEST_ASSERT(!agent_span.empty(), "agent request should produce reply");
+    TEST_ASSERT(agent_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "no-agent-forwarding should reject agent request");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_publickey_authorized_keys_permitopen_blocks_unlisted_direct_tcpip_target()
+{
+    class DirectTcpipAllowHandler final : public SshHandler
+    {
+    public:
+        bool on_channel_open(SshSession *, const std::string &channel_type, SshChannel *) override
+        {
+            return channel_type == SSH_CHANNEL_DIRECT_TCPIP;
+        }
+
+        bool on_direct_tcpip(SshSession *, SshChannel *, const std::string &, uint16_t) override
+        {
+            return true;
+        }
+    };
+
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+    out << "permitopen=\"127.0.0.1:22\" ssh-ed25519 " << base64_encode(key_blob) << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5007, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("127.0.0.1", 40006),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+    TEST_ASSERT(auth.authenticate(&session, "demo", creds) == SshAuthResult::NEED_MORE,
+                "key with permitopen should authorize probe stage");
+
+    SshChannelOpenMessage msg;
+    msg.channel_type = SSH_CHANNEL_DIRECT_TCPIP;
+    msg.sender_channel = 303;
+    msg.initial_window_size = SSH_DEFAULT_WINDOW_SIZE;
+    msg.maximum_packet_size = SSH_DEFAULT_MAX_PACKET_SIZE;
+
+    yuan::buffer::ByteBuffer payload;
+    SshMessageCodec::write_string(payload, "8.8.8.8");
+    SshMessageCodec::write_uint32(payload, 53);
+    SshMessageCodec::write_string(payload, "10.0.0.1");
+    SshMessageCodec::write_uint32(payload, 40000);
+    auto span = payload.readable_span();
+    msg.type_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+    DirectTcpipAllowHandler handler;
+    auto reply = session.connection_manager().handle_channel_open(msg, &handler);
+    auto reply_span = reply.readable_span();
+    TEST_ASSERT(!reply_span.empty(), "direct-tcpip open should produce reply");
+    auto decoded = SshMessageCodec::decode_channel_open_failure(
+        reinterpret_cast<const uint8_t *>(reply_span.data()), reply_span.size());
+    TEST_ASSERT(decoded.has_value(), "permitopen mismatch should reject direct-tcpip open");
+    TEST_ASSERT(decoded->reason_code == static_cast<uint32_t>(SshChannelOpenFailureReason::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED),
+                "permitopen mismatch should map to ADMINISTRATIVELY_PROHIBITED");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_publickey_authorized_keys_permitopen_allows_listed_direct_tcpip_target()
+{
+    class DirectTcpipAllowHandler final : public SshHandler
+    {
+    public:
+        bool on_channel_open(SshSession *, const std::string &channel_type, SshChannel *) override
+        {
+            return channel_type == SSH_CHANNEL_DIRECT_TCPIP;
+        }
+
+        bool on_direct_tcpip(SshSession *, SshChannel *, const std::string &, uint16_t) override
+        {
+            return true;
+        }
+    };
+
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+    out << "permitopen=\"127.0.0.1:22\" ssh-ed25519 " << base64_encode(key_blob) << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5008, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("127.0.0.1", 40007),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+    TEST_ASSERT(auth.authenticate(&session, "demo", creds) == SshAuthResult::NEED_MORE,
+                "key with permitopen should authorize probe stage");
+
+    SshChannelOpenMessage msg;
+    msg.channel_type = SSH_CHANNEL_DIRECT_TCPIP;
+    msg.sender_channel = 304;
+    msg.initial_window_size = SSH_DEFAULT_WINDOW_SIZE;
+    msg.maximum_packet_size = SSH_DEFAULT_MAX_PACKET_SIZE;
+
+    yuan::buffer::ByteBuffer payload;
+    SshMessageCodec::write_string(payload, "127.0.0.1");
+    SshMessageCodec::write_uint32(payload, 22);
+    SshMessageCodec::write_string(payload, "10.0.0.2");
+    SshMessageCodec::write_uint32(payload, 40001);
+    auto span = payload.readable_span();
+    msg.type_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+    DirectTcpipAllowHandler handler;
+    auto reply = session.connection_manager().handle_channel_open(msg, &handler);
+    auto reply_span = reply.readable_span();
+    TEST_ASSERT(!reply_span.empty(), "direct-tcpip open should produce reply");
+    auto ok = SshMessageCodec::decode_channel_open_confirmation(
+        reinterpret_cast<const uint8_t *>(reply_span.data()), reply_span.size());
+    TEST_ASSERT(ok.has_value(), "permitopen listed target should allow direct-tcpip open");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_publickey_authorized_keys_permitlisten_blocks_unlisted_tcpip_forward()
+{
+    class StaticForwardHandler final : public SshHandler
+    {
+    public:
+        uint16_t on_tcpip_forward(SshSession *, const std::string &, uint16_t bind_port) override
+        {
+            return bind_port == 0 ? 2222 : bind_port;
+        }
+    };
+
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+    out << "permitlisten=\"127.0.0.1:2200\" ssh-ed25519 " << base64_encode(key_blob) << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5009, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("127.0.0.1", 40008),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+    TEST_ASSERT(auth.authenticate(&session, "demo", creds) == SshAuthResult::NEED_MORE,
+                "key with permitlisten should authorize probe stage");
+
+    yuan::buffer::ByteBuffer payload;
+    SshMessageCodec::write_string(payload, "127.0.0.1");
+    SshMessageCodec::write_uint32(payload, 3333);
+    auto span = payload.readable_span();
+
+    SshGlobalRequestMessage msg;
+    msg.request_name = "tcpip-forward";
+    msg.want_reply = true;
+    msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+    StaticForwardHandler handler;
+    auto reply = session.connection_manager().handle_global_request(msg, &handler);
+    auto reply_span = reply.readable_span();
+    TEST_ASSERT(!reply_span.empty(), "permitlisten mismatch should produce reply");
+    TEST_ASSERT(reply_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_FAILURE),
+                "permitlisten mismatch should reject tcpip-forward");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_publickey_authorized_keys_permitlisten_allows_listed_tcpip_forward()
+{
+    class StaticForwardHandler final : public SshHandler
+    {
+    public:
+        uint16_t on_tcpip_forward(SshSession *, const std::string &, uint16_t bind_port) override
+        {
+            return bind_port == 0 ? 2200 : bind_port;
+        }
+    };
+
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+    out << "permitlisten=\"127.0.0.1:2200\" ssh-ed25519 " << base64_encode(key_blob) << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5010, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("127.0.0.1", 40009),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+    TEST_ASSERT(auth.authenticate(&session, "demo", creds) == SshAuthResult::NEED_MORE,
+                "key with permitlisten should authorize probe stage");
+
+    yuan::buffer::ByteBuffer payload;
+    SshMessageCodec::write_string(payload, "127.0.0.1");
+    SshMessageCodec::write_uint32(payload, 2200);
+    auto span = payload.readable_span();
+
+    SshGlobalRequestMessage msg;
+    msg.request_name = "tcpip-forward";
+    msg.want_reply = true;
+    msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+    StaticForwardHandler handler;
+    auto reply = session.connection_manager().handle_global_request(msg, &handler);
+    auto reply_span = reply.readable_span();
+    TEST_ASSERT(!reply_span.empty(), "permitlisten match should produce reply");
+    TEST_ASSERT(reply_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_SUCCESS),
+                "permitlisten match should allow tcpip-forward");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_publickey_authorized_keys_restrict_blocks_pty_by_default()
+{
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+    out << "restrict ssh-ed25519 " << base64_encode(key_blob) << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5011, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("127.0.0.1", 40010),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+    TEST_ASSERT(auth.authenticate(&session, "demo", creds) == SshAuthResult::NEED_MORE,
+                "restrict option should still allow key authorization stage");
+
+    auto *channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 305, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created for restrict pty test");
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm");
+    SshMessageCodec::write_uint32(pty_payload, 80);
+    SshMessageCodec::write_uint32(pty_payload, 24);
+    SshMessageCodec::write_uint32(pty_payload, 800);
+    SshMessageCodec::write_uint32(pty_payload, 600);
+    SshMessageCodec::write_string(pty_payload, std::string());
+
+    auto pty_span = pty_payload.readable_span();
+    SshChannelRequestMessage pty_msg;
+    pty_msg.recipient_channel = 305;
+    pty_msg.request_type = "pty-req";
+    pty_msg.want_reply = true;
+    pty_msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_span.data()) + pty_span.size());
+
+    auto reply = session.connection_manager().handle_channel_request(pty_msg, nullptr);
+    auto reply_span = reply.readable_span();
+    TEST_ASSERT(!reply_span.empty(), "pty request should produce reply");
+    TEST_ASSERT(reply_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_FAILURE),
+                "restrict option should reject pty request by default");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_publickey_authorized_keys_restrict_with_pty_reenables_pty()
+{
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+    out << "restrict,pty ssh-ed25519 " << base64_encode(key_blob) << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5012, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("127.0.0.1", 40011),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+    TEST_ASSERT(auth.authenticate(&session, "demo", creds) == SshAuthResult::NEED_MORE,
+                "restrict,pty should still allow key authorization stage");
+
+    auto *channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 306, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created for restrict,pty test");
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm");
+    SshMessageCodec::write_uint32(pty_payload, 80);
+    SshMessageCodec::write_uint32(pty_payload, 24);
+    SshMessageCodec::write_uint32(pty_payload, 800);
+    SshMessageCodec::write_uint32(pty_payload, 600);
+    SshMessageCodec::write_string(pty_payload, std::string());
+
+    auto pty_span = pty_payload.readable_span();
+    SshChannelRequestMessage pty_msg;
+    pty_msg.recipient_channel = 306;
+    pty_msg.request_type = "pty-req";
+    pty_msg.want_reply = true;
+    pty_msg.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_span.data()) + pty_span.size());
+
+    class AcceptPtyHandler final : public SshHandler
+    {
+    public:
+        bool on_pty_request(SshSession *, SshChannel *, const std::string &, uint32_t, uint32_t, uint32_t, uint32_t,
+                            const std::vector<uint8_t> &) override
+        {
+            return true;
+        }
+    } handler;
+
+    auto reply = session.connection_manager().handle_channel_request(pty_msg, &handler);
+    auto reply_span = reply.readable_span();
+    TEST_ASSERT(!reply_span.empty(), "pty request should produce reply");
+    TEST_ASSERT(reply_span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS),
+                "pty option should re-enable pty after restrict");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_publickey_authorized_keys_no_port_forwarding_blocks_direct_tcpip_open()
+{
+    class DirectTcpipAllowHandler final : public SshHandler
+    {
+    public:
+        bool on_channel_open(SshSession *, const std::string &channel_type, SshChannel *) override
+        {
+            return channel_type == SSH_CHANNEL_DIRECT_TCPIP;
+        }
+
+        bool on_direct_tcpip(SshSession *, SshChannel *, const std::string &, uint16_t) override
+        {
+            return true;
+        }
+    };
+
+    SshCryptoOpenSSL crypto;
+    SshAuthPublickey auth(&crypto);
+
+    const auto keypair = crypto.generate_ed25519_key_pair();
+    yuan::buffer::ByteBuffer key_blob_buf;
+    SshMessageCodec::write_string(key_blob_buf, "ssh-ed25519");
+    SshMessageCodec::write_string(key_blob_buf, std::string(
+        reinterpret_cast<const char *>(keypair.public_key.data()),
+        keypair.public_key.size()));
+    auto key_blob_span = key_blob_buf.readable_span();
+    std::vector<uint8_t> key_blob(
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()),
+        reinterpret_cast<const uint8_t *>(key_blob_span.data()) + key_blob_span.size());
+
+    const auto auth_dir = make_temp_ssh_dir();
+    const auto auth_file = auth_dir / "authorized_keys";
+    std::ofstream out(auth_file);
+    TEST_ASSERT(out.good(), "authorized_keys temp file should be writable");
+    out << "no-port-forwarding ssh-ed25519 " << base64_encode(key_blob) << " test-key\n";
+    out.close();
+
+    ScopedEnvVar auth_keys_env("YUAN_SSH_AUTHORIZED_KEYS", auth_file.string());
+
+    SshAuthCredentials creds;
+    creds.public_key_algorithm = "ssh-ed25519";
+    creds.public_key_blob = key_blob;
+    creds.has_signature = false;
+
+    SshSession session(5013, nullptr);
+    auto conn = std::make_shared<TestConnection>(
+        yuan::net::InetAddress("127.0.0.1", 40012),
+        yuan::net::InetAddress("127.0.0.1", 2222));
+    session.set_client_connection(conn);
+    TEST_ASSERT(auth.authenticate(&session, "demo", creds) == SshAuthResult::NEED_MORE,
+                "key with no-port-forwarding should authorize probe stage");
+
+    SshChannelOpenMessage msg;
+    msg.channel_type = SSH_CHANNEL_DIRECT_TCPIP;
+    msg.sender_channel = 307;
+    msg.initial_window_size = SSH_DEFAULT_WINDOW_SIZE;
+    msg.maximum_packet_size = SSH_DEFAULT_MAX_PACKET_SIZE;
+
+    yuan::buffer::ByteBuffer payload;
+    SshMessageCodec::write_string(payload, "127.0.0.1");
+    SshMessageCodec::write_uint32(payload, 22);
+    SshMessageCodec::write_string(payload, "10.0.0.3");
+    SshMessageCodec::write_uint32(payload, 40002);
+    auto span = payload.readable_span();
+    msg.type_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+    DirectTcpipAllowHandler handler;
+    auto reply = session.connection_manager().handle_channel_open(msg, &handler);
+    auto reply_span = reply.readable_span();
+    TEST_ASSERT(!reply_span.empty(), "direct-tcpip should produce reply");
+    auto decoded = SshMessageCodec::decode_channel_open_failure(
+        reinterpret_cast<const uint8_t *>(reply_span.data()), reply_span.size());
+    TEST_ASSERT(decoded.has_value(), "no-port-forwarding should reject direct-tcpip");
+    TEST_ASSERT(decoded->reason_code == static_cast<uint32_t>(SshChannelOpenFailureReason::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED),
+                "no-port-forwarding direct-tcpip rejection should be ADMINISTRATIVELY_PROHIBITED");
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove_all(auth_dir, cleanup_ec);
+    return true;
+}
+
+bool test_server_config_exposes_auth_failure_delay_field()
+{
+    SshServerConfig cfg;
+    cfg.auth_failure_delay_ms = 42;
+    TEST_ASSERT(cfg.auth_failure_delay_ms == 42,
+                "server config should store auth_failure_delay_ms value");
+
+    SshServerConfig defaults;
+    TEST_ASSERT(defaults.auth_failure_delay_ms == 0,
+                "server config auth failure delay should default to disabled");
+    return true;
+}
+
+bool test_session_build_userauth_banner_encodes_banner_message()
+{
+    SshSession session(6001, nullptr);
+    const auto packet = session.build_userauth_banner("Welcome test banner");
+    auto span = packet.readable_span();
+    TEST_ASSERT(!span.empty(), "userauth banner packet should not be empty");
+
+    auto decoded = SshMessageCodec::decode_userauth_banner(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        span.size());
+    TEST_ASSERT(decoded.has_value(), "userauth banner packet should decode");
+    TEST_ASSERT(decoded->message == "Welcome test banner",
+                "decoded banner message should match encoded message");
+    return true;
+}
+
+bool test_build_forwarded_tcpip_channel_open_encodes_expected_payload()
+{
+    SshConnectionManager mgr(nullptr);
+    auto packet = mgr.build_forwarded_tcpip_channel_open(
+        "127.0.0.1",
+        2222,
+        "10.0.0.5",
+        43123,
+        SSH_DEFAULT_WINDOW_SIZE,
+        SSH_DEFAULT_MAX_PACKET_SIZE);
+
+    auto span = packet.readable_span();
+    TEST_ASSERT(!span.empty(), "forwarded-tcpip channel open packet should not be empty");
+    auto decoded = SshMessageCodec::decode_channel_open(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        span.size());
+    TEST_ASSERT(decoded.has_value(), "forwarded-tcpip channel open packet should decode");
+    TEST_ASSERT(decoded->channel_type == SSH_CHANNEL_FORWARDED_TCPIP,
+                "channel type should be forwarded-tcpip");
+
+    size_t offset = 0;
+    auto connected_addr = SshMessageCodec::read_string(
+        decoded->type_specific_data.data(), decoded->type_specific_data.size(), offset);
+    TEST_ASSERT(connected_addr.has_value() && *connected_addr == "127.0.0.1",
+                "connected address should match");
+    uint32_t connected_port = SshMessageCodec::read_uint32(
+        decoded->type_specific_data.data(), decoded->type_specific_data.size(), offset);
+    TEST_ASSERT(connected_port == 2222, "connected port should match");
+    auto originator_addr = SshMessageCodec::read_string(
+        decoded->type_specific_data.data(), decoded->type_specific_data.size(), offset);
+    TEST_ASSERT(originator_addr.has_value() && *originator_addr == "10.0.0.5",
+                "originator address should match");
+    uint32_t originator_port = SshMessageCodec::read_uint32(
+        decoded->type_specific_data.data(), decoded->type_specific_data.size(), offset);
+    TEST_ASSERT(originator_port == 43123, "originator port should match");
+    return true;
+}
+
+bool test_open_forwarded_tcpip_channel_registers_opening_channel_and_packet()
+{
+    SshConnectionManager mgr(nullptr);
+    ByteBuffer packet;
+    auto channel_id = mgr.open_forwarded_tcpip_channel(
+        "127.0.0.1",
+        2200,
+        "10.1.1.8",
+        51000,
+        packet,
+        SSH_DEFAULT_WINDOW_SIZE,
+        SSH_DEFAULT_MAX_PACKET_SIZE);
+
+    TEST_ASSERT(channel_id.has_value(), "open_forwarded_tcpip_channel should allocate local channel");
+
+    auto *channel = mgr.find_channel(*channel_id);
+    TEST_ASSERT(channel != nullptr, "allocated forwarded-tcpip channel should be tracked");
+    TEST_ASSERT(channel->channel_type() == SSH_CHANNEL_FORWARDED_TCPIP,
+                "tracked channel type should be forwarded-tcpip");
+    TEST_ASSERT(channel->state() == SshChannel::State::opening,
+                "forwarded-tcpip channel should start in opening state");
+
+    auto span = packet.readable_span();
+    TEST_ASSERT(!span.empty(), "forwarded-tcpip open packet should not be empty");
+    auto decoded = SshMessageCodec::decode_channel_open(
+        reinterpret_cast<const uint8_t *>(span.data()),
+        span.size());
+    TEST_ASSERT(decoded.has_value(), "forwarded-tcpip open packet should decode");
+    TEST_ASSERT(decoded->channel_type == SSH_CHANNEL_FORWARDED_TCPIP,
+                "packet channel type should be forwarded-tcpip");
+    TEST_ASSERT(decoded->sender_channel == *channel_id,
+                "packet sender channel should match registered local channel id");
     return true;
 }
 
@@ -1145,6 +2652,237 @@ bool test_rekey_preserves_session_id_across_new_exchange()
     return true;
 }
 
+bool test_rekey_soak_multiple_cycles_preserve_session_and_data_path()
+{
+    SshAlgorithmRegistry registry;
+    registry.register_kex("test-kex", []() { return std::make_unique<FakeKexAlgorithm>(); });
+    registry.register_host_key("test-host", []() { return std::make_unique<FakeHostKeyAlgorithm>(); });
+    registry.register_cipher("test-cipher", []() { return std::make_unique<FakeCipher>(); });
+    registry.register_mac("test-mac", []() { return std::make_unique<FakeMac>(); });
+    registry.register_compression("none", []() { return std::make_unique<FakeCompression>(); });
+
+    SshCryptoOpenSSL crypto;
+    SshTransport transport(&registry, &crypto, true);
+    transport.set_host_key_algorithm(std::make_unique<FakeHostKeyAlgorithm>());
+    transport.set_client_version("SSH-2.0-Client");
+    transport.set_server_version("SSH-2.0-Server");
+
+    SshServerConfig config;
+    config.kex_algorithms = { "test-kex" };
+    config.host_key_algorithms = { "test-host" };
+    config.cipher_algorithms = { "test-cipher" };
+    config.mac_algorithms = { "test-mac" };
+    config.compression_algorithms = { "none" };
+
+    auto build_peer_raw = [](const SshKexInitMessage & peer)
+    {
+        yuan::buffer::ByteBuffer raw = SshMessageCodec::encode_kex_init(peer);
+        return std::vector<uint8_t>(
+            reinterpret_cast<const uint8_t *>(raw.read_ptr()),
+            reinterpret_cast<const uint8_t *>(raw.read_ptr()) + raw.readable_bytes());
+    };
+
+    SshKexInitMessage peer;
+    peer.kex_algorithms = "test-kex";
+    peer.server_host_key_algorithms = "test-host";
+    peer.encryption_algorithms_client_to_server = "test-cipher";
+    peer.encryption_algorithms_server_to_client = "test-cipher";
+    peer.mac_algorithms_client_to_server = "test-mac";
+    peer.mac_algorithms_server_to_client = "test-mac";
+    peer.compression_algorithms_client_to_server = "none";
+    peer.compression_algorithms_server_to_client = "none";
+
+    transport.build_kex_init(config);
+    transport.set_peer_kex_init_raw(build_peer_raw(peer));
+    auto initial_negotiated = transport.process_kex_init(peer, config);
+    TEST_ASSERT(initial_negotiated.has_value(), "initial negotiation should succeed");
+    auto initial_reply = transport.process_kex_init_message({ 0x10, 0x20, 0x30 }, "SSH-2.0-Client", "SSH-2.0-Server");
+    TEST_ASSERT(initial_reply.has_value(), "initial kex reply should succeed");
+    TEST_ASSERT(transport.process_newkeys(), "initial NEWKEYS should succeed");
+    const auto session_id = transport.session_id();
+    TEST_ASSERT(!session_id.empty(), "session id should be established before soak loop");
+
+    for (int cycle = 0; cycle < 32; ++cycle) {
+        std::vector<uint8_t> payload = {
+            static_cast<uint8_t>(0x40 + (cycle & 0x3F)),
+            static_cast<uint8_t>(0x80 + (cycle & 0x3F)),
+            static_cast<uint8_t>(cycle)
+        };
+        auto packet_before = transport.encode_packet(payload.data(), payload.size());
+        auto decoded_before = transport.decode_packet(
+            reinterpret_cast<const uint8_t *>(packet_before.read_ptr()), packet_before.readable_bytes());
+        TEST_ASSERT(decoded_before.has_value() && *decoded_before == payload,
+                    "soak: active keys should roundtrip payload before rekey");
+
+        transport.reset_for_rekey();
+        TEST_ASSERT(transport.state() == SshTransportState::kex_init,
+                    "soak: reset_for_rekey should move transport to kex_init");
+        TEST_ASSERT(transport.is_encrypted(),
+                    "soak: old keys should remain active until next NEWKEYS");
+
+        transport.build_kex_init(config);
+        transport.set_peer_kex_init_raw(build_peer_raw(peer));
+        auto negotiated = transport.process_kex_init(peer, config);
+        TEST_ASSERT(negotiated.has_value(), "soak: rekey negotiation should succeed");
+        auto reply = transport.process_kex_init_message(
+            { static_cast<uint8_t>(0x01 + cycle), static_cast<uint8_t>(0x11 + cycle), static_cast<uint8_t>(0x21 + cycle) },
+            "SSH-2.0-Client",
+            "SSH-2.0-Server");
+        TEST_ASSERT(reply.has_value(), "soak: rekey reply should succeed");
+        TEST_ASSERT(transport.process_newkeys(), "soak: rekey NEWKEYS should succeed");
+        TEST_ASSERT(transport.session_id() == session_id,
+                    "soak: session id must remain stable across rekeys");
+        TEST_ASSERT(transport.is_encrypted(), "soak: transport should remain encrypted after rekey");
+
+        auto packet_after = transport.encode_packet(payload.data(), payload.size());
+        auto decoded_after = transport.decode_packet(
+            reinterpret_cast<const uint8_t *>(packet_after.read_ptr()), packet_after.readable_bytes());
+        TEST_ASSERT(decoded_after.has_value() && *decoded_after == payload,
+                    "soak: new keys should roundtrip payload after rekey");
+    }
+
+    return true;
+}
+
+bool test_process_kex_reply_message_verifies_host_key_signature()
+{
+    SshAlgorithmRegistry registry;
+    registry.register_kex("test-kex", []() { return std::make_unique<FakeKexAlgorithm>(); });
+    registry.register_host_key("ssh-ed25519", []() { return std::make_unique<FakeHostKeyAlgorithm>(); });
+    registry.register_cipher("test-cipher", []() { return std::make_unique<FakeCipher>(); });
+    registry.register_mac("test-mac", []() { return std::make_unique<FakeMac>(); });
+    registry.register_compression("none", []() { return std::make_unique<FakeCompression>(); });
+
+    SshCryptoOpenSSL crypto;
+    SshTransport transport(&registry, &crypto, false);
+
+    const std::string client_version = "SSH-2.0-Client";
+    const std::string server_version = "SSH-2.0-Server";
+    transport.set_client_version(client_version);
+    transport.set_server_version(server_version);
+
+    SshServerConfig config;
+    config.kex_algorithms = { "test-kex" };
+    config.host_key_algorithms = { "ssh-ed25519" };
+    config.cipher_algorithms = { "test-cipher" };
+    config.mac_algorithms = { "test-mac" };
+    config.compression_algorithms = { "none" };
+
+    auto our_kex = transport.build_kex_init(config);
+    (void)our_kex;
+
+    SshKexInitMessage peer;
+    peer.kex_algorithms = "test-kex";
+    peer.server_host_key_algorithms = "ssh-ed25519";
+    peer.encryption_algorithms_client_to_server = "test-cipher";
+    peer.encryption_algorithms_server_to_client = "test-cipher";
+    peer.mac_algorithms_client_to_server = "test-mac";
+    peer.mac_algorithms_server_to_client = "test-mac";
+    peer.compression_algorithms_client_to_server = "none";
+    peer.compression_algorithms_server_to_client = "none";
+
+    yuan::buffer::ByteBuffer peer_raw = SshMessageCodec::encode_kex_init(peer);
+    std::vector<uint8_t> peer_kex_raw(
+        reinterpret_cast<const uint8_t *>(peer_raw.read_ptr()),
+        reinterpret_cast<const uint8_t *>(peer_raw.read_ptr()) + peer_raw.readable_bytes());
+    transport.set_peer_kex_init_raw(peer_kex_raw);
+
+    auto negotiated = transport.process_kex_init(peer, config);
+    TEST_ASSERT(negotiated.has_value(), "client-side kex negotiation should succeed");
+
+    const auto host_key_pair = crypto.generate_ed25519_key_pair();
+    TEST_ASSERT(host_key_pair.public_key.size() == 32, "ed25519 public key should be 32 bytes");
+    TEST_ASSERT(host_key_pair.private_key.size() == 32, "ed25519 private key should be 32 bytes");
+
+    const auto host_key_blob = build_ed25519_host_key_blob(host_key_pair.public_key);
+    const std::vector<uint8_t> server_public = { 0x09, 0x08, 0x07 };
+    const std::vector<uint8_t> client_public = { 0xAA, 0xBB, 0xCC };
+    auto shared_secret = server_public;
+    shared_secret.push_back(0x42);
+
+    const auto exchange_hash = build_fake_kex_exchange_hash(
+        client_version,
+        server_version,
+        transport.our_kex_init_raw(),
+        peer_kex_raw,
+        host_key_blob,
+        client_public,
+        server_public,
+        shared_secret);
+    const auto raw_signature = crypto.ed25519_sign(
+        host_key_pair.private_key,
+        exchange_hash.data(),
+        exchange_hash.size());
+    TEST_ASSERT(!raw_signature.empty(), "ed25519 signature should be generated for exchange hash");
+
+    SshKexEcdhReplyMessage reply;
+    reply.host_key_blob = host_key_blob;
+    reply.server_public_key = server_public;
+    reply.signature = build_kex_signature_field("ssh-ed25519", raw_signature);
+
+    TEST_ASSERT(transport.process_kex_reply_message(reply, client_version, server_version),
+                "client should accept KEX reply with valid host key signature");
+    return true;
+}
+
+bool test_process_kex_reply_message_rejects_invalid_host_key_signature()
+{
+    SshAlgorithmRegistry registry;
+    registry.register_kex("test-kex", []() { return std::make_unique<FakeKexAlgorithm>(); });
+    registry.register_host_key("ssh-ed25519", []() { return std::make_unique<FakeHostKeyAlgorithm>(); });
+    registry.register_cipher("test-cipher", []() { return std::make_unique<FakeCipher>(); });
+    registry.register_mac("test-mac", []() { return std::make_unique<FakeMac>(); });
+    registry.register_compression("none", []() { return std::make_unique<FakeCompression>(); });
+
+    SshCryptoOpenSSL crypto;
+    SshTransport transport(&registry, &crypto, false);
+
+    const std::string client_version = "SSH-2.0-Client";
+    const std::string server_version = "SSH-2.0-Server";
+    transport.set_client_version(client_version);
+    transport.set_server_version(server_version);
+
+    SshServerConfig config;
+    config.kex_algorithms = { "test-kex" };
+    config.host_key_algorithms = { "ssh-ed25519" };
+    config.cipher_algorithms = { "test-cipher" };
+    config.mac_algorithms = { "test-mac" };
+    config.compression_algorithms = { "none" };
+
+    auto our_kex = transport.build_kex_init(config);
+    (void)our_kex;
+
+    SshKexInitMessage peer;
+    peer.kex_algorithms = "test-kex";
+    peer.server_host_key_algorithms = "ssh-ed25519";
+    peer.encryption_algorithms_client_to_server = "test-cipher";
+    peer.encryption_algorithms_server_to_client = "test-cipher";
+    peer.mac_algorithms_client_to_server = "test-mac";
+    peer.mac_algorithms_server_to_client = "test-mac";
+    peer.compression_algorithms_client_to_server = "none";
+    peer.compression_algorithms_server_to_client = "none";
+
+    yuan::buffer::ByteBuffer peer_raw = SshMessageCodec::encode_kex_init(peer);
+    transport.set_peer_kex_init_raw(std::vector<uint8_t>(
+        reinterpret_cast<const uint8_t *>(peer_raw.read_ptr()),
+        reinterpret_cast<const uint8_t *>(peer_raw.read_ptr()) + peer_raw.readable_bytes()));
+
+    auto negotiated = transport.process_kex_init(peer, config);
+    TEST_ASSERT(negotiated.has_value(), "client-side kex negotiation should succeed");
+
+    const auto host_key_pair = crypto.generate_ed25519_key_pair();
+    const auto host_key_blob = build_ed25519_host_key_blob(host_key_pair.public_key);
+
+    SshKexEcdhReplyMessage reply;
+    reply.host_key_blob = host_key_blob;
+    reply.server_public_key = { 0x09, 0x08, 0x07 };
+    reply.signature = build_kex_signature_field("ssh-ed25519", std::vector<uint8_t>(64, 0xAB));
+
+    TEST_ASSERT(!transport.process_kex_reply_message(reply, client_version, server_version),
+                "client should reject KEX reply with invalid host key signature");
+    return true;
+}
+
 bool test_packet_codec_plaintext_roundtrip_and_partial_parse()
 {
     const std::vector<uint8_t> payload = { 0x32, 0x00, 0x00, 0x00, 0x01 };
@@ -1230,7 +2968,7 @@ bool test_local_file_system_basic_roundtrip()
     return true;
 }
 
-bool test_local_file_system_rejects_uid_gid_setstat()
+bool test_local_file_system_uid_gid_setstat_behavior()
 {
 #if YUAN_ENABLE_SSH_SFTP
     const auto root = make_temp_ssh_dir();
@@ -1248,16 +2986,22 @@ bool test_local_file_system_rejects_uid_gid_setstat()
 
         SftpFileAttrs attrs;
         attrs.flags = SSH_FILEXFER_ATTR_UIDGID;
-        attrs.uid = 1000;
-        attrs.gid = 1000;
+        attrs.uid = UINT32_MAX;
+        attrs.gid = UINT32_MAX;
 
         auto setstat_result = fs.setstat("/owner.txt", attrs);
-        TEST_ASSERT(setstat_result.status == SftpStatus::SSH_FX_OP_UNSUPPORTED,
-                    "uid/gid setstat should fail explicitly when unsupported");
-
         auto fsetstat_result = fs.fsetstat(open_result.handle, attrs);
+#ifdef _WIN32
+        TEST_ASSERT(setstat_result.status == SftpStatus::SSH_FX_OP_UNSUPPORTED,
+                    "uid/gid setstat should remain unsupported on Windows");
         TEST_ASSERT(fsetstat_result.status == SftpStatus::SSH_FX_OP_UNSUPPORTED,
-                    "uid/gid fsetstat should fail explicitly when unsupported");
+                    "uid/gid fsetstat should remain unsupported on Windows");
+#else
+        TEST_ASSERT(setstat_result.status != SftpStatus::SSH_FX_OP_UNSUPPORTED,
+                    "uid/gid setstat should no longer be hardcoded unsupported on POSIX");
+        TEST_ASSERT(fsetstat_result.status != SftpStatus::SSH_FX_OP_UNSUPPORTED,
+                    "uid/gid fsetstat should no longer be hardcoded unsupported on POSIX");
+#endif
 
         auto close_result = fs.close(open_result.handle);
         TEST_ASSERT(close_result.success, "local fs should close file after uid/gid test");
@@ -1363,6 +3107,470 @@ bool test_local_file_system_realpath_and_readlink_edge_inputs()
     return true;
 }
 
+bool test_sftp_extended_posix_rename_moves_file_and_returns_ok_status()
+{
+#if YUAN_ENABLE_SSH_SFTP
+    const auto root = make_temp_ssh_dir();
+    std::error_code cleanup_ec;
+
+    {
+        auto fs = std::make_unique<SshLocalFileSystem>(root.string());
+        SshSession session(4001, nullptr);
+        session.set_state(SshSession::State::active);
+        auto *channel = session.connection_manager().create_channel(
+            SSH_CHANNEL_SESSION, 120, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+        TEST_ASSERT(channel != nullptr, "channel should be created for sftp extended rename test");
+
+        auto subsystem = std::make_unique<SshSftpSubsystem>(fs.get());
+        auto *subsystem_raw = subsystem.get();
+        channel->set_handler(std::move(subsystem));
+        subsystem_raw->on_open(channel);
+
+        yuan::buffer::ByteBuffer init_payload;
+        init_payload.append_u32(3);
+        SftpPacket init_packet;
+        init_packet.type = SftpPacketType::SSH_FXP_INIT;
+        {
+            auto span = init_payload.readable_span();
+            init_packet.payload.assign(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+        }
+        auto init_wire = SshSftpCodec::encode(init_packet);
+        {
+            auto span = init_wire.readable_span();
+            std::vector<uint8_t> bytes(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+            subsystem_raw->on_data(channel, bytes);
+        }
+
+        const uint32_t open_flags =
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_READ) |
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_WRITE) |
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_CREAT) |
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_TRUNC);
+        auto open_result = fs->open("/src.txt", open_flags, {});
+        TEST_ASSERT(open_result.success, "local fs should create source file");
+        const std::vector<uint8_t> content = { 'x' };
+        auto write_result = fs->write(open_result.handle, 0, content.data(), static_cast<uint32_t>(content.size()));
+        TEST_ASSERT(write_result.success, "local fs should write source file");
+        auto close_result = fs->close(open_result.handle);
+        TEST_ASSERT(close_result.success, "local fs should close source file");
+
+        yuan::buffer::ByteBuffer ext_payload;
+        SshMessageCodec::write_string(ext_payload, "posix-rename@openssh.com");
+        SshMessageCodec::write_string(ext_payload, "/src.txt");
+        SshMessageCodec::write_string(ext_payload, "/dst.txt");
+
+        SftpPacket ext_packet;
+        ext_packet.type = SftpPacketType::SSH_FXP_EXTENDED;
+        ext_packet.request_id = 77;
+        {
+            auto span = ext_payload.readable_span();
+            ext_packet.payload.assign(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+        }
+
+        auto ext_wire = SshSftpCodec::encode(ext_packet);
+        {
+            auto span = ext_wire.readable_span();
+            std::vector<uint8_t> bytes(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+            subsystem_raw->on_data(channel, bytes);
+        }
+
+        auto outgoing = session.connection_manager().drain_channel_pending_data();
+        bool saw_status_ok = false;
+        for (const auto &msg_buf : outgoing) {
+            auto msg_span = msg_buf.readable_span();
+            if (msg_span.empty()) {
+                continue;
+            }
+
+            auto channel_data = SshMessageCodec::decode_channel_data(
+                reinterpret_cast<const uint8_t *>(msg_span.data()), msg_span.size());
+            if (!channel_data) {
+                continue;
+            }
+
+            auto sftp_packet = SshSftpCodec::decode(channel_data->data.data(), channel_data->data.size());
+            if (!sftp_packet || sftp_packet->type != SftpPacketType::SSH_FXP_STATUS || sftp_packet->request_id != 77) {
+                continue;
+            }
+
+            if (sftp_packet->payload.size() < 4) {
+                continue;
+            }
+            uint32_t status_code =
+                (static_cast<uint32_t>(sftp_packet->payload[0]) << 24) |
+                (static_cast<uint32_t>(sftp_packet->payload[1]) << 16) |
+                (static_cast<uint32_t>(sftp_packet->payload[2]) << 8) |
+                static_cast<uint32_t>(sftp_packet->payload[3]);
+            if (status_code == static_cast<uint32_t>(SftpStatus::SSH_FX_OK)) {
+                saw_status_ok = true;
+                break;
+            }
+        }
+
+        TEST_ASSERT(saw_status_ok, "posix-rename extended request should return SSH_FX_OK status");
+
+        auto src_stat = fs->stat("/src.txt");
+        TEST_ASSERT(!src_stat.success, "source path should not exist after posix-rename");
+        auto dst_stat = fs->stat("/dst.txt");
+        TEST_ASSERT(dst_stat.success, "destination path should exist after posix-rename");
+    }
+
+    std::filesystem::remove_all(root, cleanup_ec);
+#endif
+    return true;
+}
+
+bool test_sftp_extended_hardlink_creates_link_and_returns_ok_status()
+{
+#if YUAN_ENABLE_SSH_SFTP
+    const auto root = make_temp_ssh_dir();
+    std::error_code cleanup_ec;
+
+    {
+        auto fs = std::make_unique<SshLocalFileSystem>(root.string());
+        SshSession session(4002, nullptr);
+        session.set_state(SshSession::State::active);
+        auto *channel = session.connection_manager().create_channel(
+            SSH_CHANNEL_SESSION, 121, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+        TEST_ASSERT(channel != nullptr, "channel should be created for sftp extended hardlink test");
+
+        auto subsystem = std::make_unique<SshSftpSubsystem>(fs.get());
+        auto *subsystem_raw = subsystem.get();
+        channel->set_handler(std::move(subsystem));
+        subsystem_raw->on_open(channel);
+
+        yuan::buffer::ByteBuffer init_payload;
+        init_payload.append_u32(3);
+        SftpPacket init_packet;
+        init_packet.type = SftpPacketType::SSH_FXP_INIT;
+        {
+            auto span = init_payload.readable_span();
+            init_packet.payload.assign(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+        }
+        auto init_wire = SshSftpCodec::encode(init_packet);
+        {
+            auto span = init_wire.readable_span();
+            std::vector<uint8_t> bytes(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+            subsystem_raw->on_data(channel, bytes);
+        }
+
+        const uint32_t open_flags =
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_READ) |
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_WRITE) |
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_CREAT) |
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_TRUNC);
+        auto open_result = fs->open("/src.txt", open_flags, {});
+        TEST_ASSERT(open_result.success, "local fs should create source file");
+        const std::vector<uint8_t> content = { 'h', 'l' };
+        auto write_result = fs->write(open_result.handle, 0, content.data(), static_cast<uint32_t>(content.size()));
+        TEST_ASSERT(write_result.success, "local fs should write source file");
+        auto close_result = fs->close(open_result.handle);
+        TEST_ASSERT(close_result.success, "local fs should close source file");
+
+        yuan::buffer::ByteBuffer ext_payload;
+        SshMessageCodec::write_string(ext_payload, "hardlink@openssh.com");
+        SshMessageCodec::write_string(ext_payload, "/src.txt");
+        SshMessageCodec::write_string(ext_payload, "/dst-link.txt");
+
+        SftpPacket ext_packet;
+        ext_packet.type = SftpPacketType::SSH_FXP_EXTENDED;
+        ext_packet.request_id = 78;
+        {
+            auto span = ext_payload.readable_span();
+            ext_packet.payload.assign(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+        }
+
+        auto ext_wire = SshSftpCodec::encode(ext_packet);
+        {
+            auto span = ext_wire.readable_span();
+            std::vector<uint8_t> bytes(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+            subsystem_raw->on_data(channel, bytes);
+        }
+
+        auto outgoing = session.connection_manager().drain_channel_pending_data();
+        bool saw_status_ok = false;
+        for (const auto &msg_buf : outgoing) {
+            auto msg_span = msg_buf.readable_span();
+            if (msg_span.empty()) {
+                continue;
+            }
+
+            auto channel_data = SshMessageCodec::decode_channel_data(
+                reinterpret_cast<const uint8_t *>(msg_span.data()), msg_span.size());
+            if (!channel_data) {
+                continue;
+            }
+
+            auto sftp_packet = SshSftpCodec::decode(channel_data->data.data(), channel_data->data.size());
+            if (!sftp_packet || sftp_packet->type != SftpPacketType::SSH_FXP_STATUS || sftp_packet->request_id != 78) {
+                continue;
+            }
+
+            if (sftp_packet->payload.size() < 4) {
+                continue;
+            }
+            uint32_t status_code =
+                (static_cast<uint32_t>(sftp_packet->payload[0]) << 24) |
+                (static_cast<uint32_t>(sftp_packet->payload[1]) << 16) |
+                (static_cast<uint32_t>(sftp_packet->payload[2]) << 8) |
+                static_cast<uint32_t>(sftp_packet->payload[3]);
+            if (status_code == static_cast<uint32_t>(SftpStatus::SSH_FX_OK)) {
+                saw_status_ok = true;
+                break;
+            }
+        }
+
+        TEST_ASSERT(saw_status_ok, "hardlink extended request should return SSH_FX_OK status");
+        auto dst_stat = fs->stat("/dst-link.txt");
+        TEST_ASSERT(dst_stat.success, "hardlink target path should exist after hardlink operation");
+    }
+
+    std::filesystem::remove_all(root, cleanup_ec);
+#endif
+    return true;
+}
+
+bool test_sftp_extended_statvfs_and_fstatvfs_return_extended_reply()
+{
+#if YUAN_ENABLE_SSH_SFTP
+    const auto root = make_temp_ssh_dir();
+    std::error_code cleanup_ec;
+
+    {
+        auto fs = std::make_unique<SshLocalFileSystem>(root.string());
+        SshSession session(4003, nullptr);
+        session.set_state(SshSession::State::active);
+        auto *channel = session.connection_manager().create_channel(
+            SSH_CHANNEL_SESSION, 122, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+        TEST_ASSERT(channel != nullptr, "channel should be created for sftp statvfs test");
+
+        auto subsystem = std::make_unique<SshSftpSubsystem>(fs.get());
+        auto *subsystem_raw = subsystem.get();
+        channel->set_handler(std::move(subsystem));
+        subsystem_raw->on_open(channel);
+
+        yuan::buffer::ByteBuffer init_payload;
+        init_payload.append_u32(3);
+        SftpPacket init_packet;
+        init_packet.type = SftpPacketType::SSH_FXP_INIT;
+        {
+            auto span = init_payload.readable_span();
+            init_packet.payload.assign(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+        }
+        auto init_wire = SshSftpCodec::encode(init_packet);
+        {
+            auto span = init_wire.readable_span();
+            std::vector<uint8_t> bytes(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+            subsystem_raw->on_data(channel, bytes);
+        }
+
+        const uint32_t open_flags =
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_READ) |
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_WRITE) |
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_CREAT) |
+            static_cast<uint32_t>(SftpOpenFlags::SSH_FXF_TRUNC);
+        auto open_result = fs->open("/for-fstatvfs.txt", open_flags, {});
+        TEST_ASSERT(open_result.success, "local fs should create file for fstatvfs");
+
+        auto send_extended = [&](uint32_t request_id, const std::string &name, const std::string &arg) {
+            yuan::buffer::ByteBuffer ext_payload;
+            SshMessageCodec::write_string(ext_payload, name);
+            SshMessageCodec::write_string(ext_payload, arg);
+
+            SftpPacket ext_packet;
+            ext_packet.type = SftpPacketType::SSH_FXP_EXTENDED;
+            ext_packet.request_id = request_id;
+            auto span = ext_payload.readable_span();
+            ext_packet.payload.assign(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+            auto ext_wire = SshSftpCodec::encode(ext_packet);
+            auto wire_span = ext_wire.readable_span();
+            std::vector<uint8_t> bytes(
+                reinterpret_cast<const uint8_t *>(wire_span.data()),
+                reinterpret_cast<const uint8_t *>(wire_span.data()) + wire_span.size());
+            subsystem_raw->on_data(channel, bytes);
+        };
+
+        send_extended(79, "statvfs@openssh.com", "/");
+        send_extended(80, "fstatvfs@openssh.com", open_result.handle);
+
+        auto outgoing = session.connection_manager().drain_channel_pending_data();
+        bool saw_statvfs_reply = false;
+        bool saw_fstatvfs_reply = false;
+
+        for (const auto &msg_buf : outgoing) {
+            auto msg_span = msg_buf.readable_span();
+            if (msg_span.empty()) {
+                continue;
+            }
+
+            auto channel_data = SshMessageCodec::decode_channel_data(
+                reinterpret_cast<const uint8_t *>(msg_span.data()), msg_span.size());
+            if (!channel_data) {
+                continue;
+            }
+
+            auto sftp_packet = SshSftpCodec::decode(channel_data->data.data(), channel_data->data.size());
+            if (!sftp_packet) {
+                continue;
+            }
+
+            if (sftp_packet->type == SftpPacketType::SSH_FXP_EXTENDED_REPLY &&
+                (sftp_packet->request_id == 79 || sftp_packet->request_id == 80)) {
+                TEST_ASSERT(sftp_packet->payload.size() == 88,
+                            "statvfs/fstatvfs extended reply payload should contain 11 u64 fields");
+                if (sftp_packet->request_id == 79) {
+                    saw_statvfs_reply = true;
+                } else {
+                    saw_fstatvfs_reply = true;
+                }
+            }
+        }
+
+        TEST_ASSERT(saw_statvfs_reply, "statvfs should return SSH_FXP_EXTENDED_REPLY");
+        TEST_ASSERT(saw_fstatvfs_reply, "fstatvfs should return SSH_FXP_EXTENDED_REPLY");
+
+        auto close_result = fs->close(open_result.handle);
+        TEST_ASSERT(close_result.success, "local fs should close file after fstatvfs test");
+    }
+
+    std::filesystem::remove_all(root, cleanup_ec);
+#endif
+    return true;
+}
+
+bool test_sftp_extended_invalid_and_unsupported_requests_return_status_errors()
+{
+#if YUAN_ENABLE_SSH_SFTP
+    const auto root = make_temp_ssh_dir();
+    std::error_code cleanup_ec;
+
+    {
+        auto fs = std::make_unique<SshLocalFileSystem>(root.string());
+        SshSession session(4004, nullptr);
+        session.set_state(SshSession::State::active);
+        auto *channel = session.connection_manager().create_channel(
+            SSH_CHANNEL_SESSION, 123, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+        TEST_ASSERT(channel != nullptr, "channel should be created for sftp extended error test");
+
+        auto subsystem = std::make_unique<SshSftpSubsystem>(fs.get());
+        auto *subsystem_raw = subsystem.get();
+        channel->set_handler(std::move(subsystem));
+        subsystem_raw->on_open(channel);
+
+        yuan::buffer::ByteBuffer init_payload;
+        init_payload.append_u32(3);
+        SftpPacket init_packet;
+        init_packet.type = SftpPacketType::SSH_FXP_INIT;
+        {
+            auto span = init_payload.readable_span();
+            init_packet.payload.assign(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+        }
+        auto init_wire = SshSftpCodec::encode(init_packet);
+        {
+            auto span = init_wire.readable_span();
+            std::vector<uint8_t> bytes(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+            subsystem_raw->on_data(channel, bytes);
+        }
+
+        auto send_extended = [&](uint32_t request_id, const std::string &name, bool with_arg) {
+            yuan::buffer::ByteBuffer ext_payload;
+            SshMessageCodec::write_string(ext_payload, name);
+            if (with_arg) {
+                SshMessageCodec::write_string(ext_payload, "/");
+            }
+
+            SftpPacket ext_packet;
+            ext_packet.type = SftpPacketType::SSH_FXP_EXTENDED;
+            ext_packet.request_id = request_id;
+            auto span = ext_payload.readable_span();
+            ext_packet.payload.assign(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+
+            auto ext_wire = SshSftpCodec::encode(ext_packet);
+            auto wire_span = ext_wire.readable_span();
+            std::vector<uint8_t> bytes(
+                reinterpret_cast<const uint8_t *>(wire_span.data()),
+                reinterpret_cast<const uint8_t *>(wire_span.data()) + wire_span.size());
+            subsystem_raw->on_data(channel, bytes);
+        };
+
+        send_extended(81, "statvfs@openssh.com", false);
+        send_extended(82, "unknown@openssh.com", true);
+
+        auto outgoing = session.connection_manager().drain_channel_pending_data();
+        bool saw_bad_message = false;
+        bool saw_unsupported = false;
+
+        for (const auto &msg_buf : outgoing) {
+            auto msg_span = msg_buf.readable_span();
+            if (msg_span.empty()) {
+                continue;
+            }
+
+            auto channel_data = SshMessageCodec::decode_channel_data(
+                reinterpret_cast<const uint8_t *>(msg_span.data()), msg_span.size());
+            if (!channel_data) {
+                continue;
+            }
+
+            auto sftp_packet = SshSftpCodec::decode(channel_data->data.data(), channel_data->data.size());
+            if (!sftp_packet || sftp_packet->type != SftpPacketType::SSH_FXP_STATUS) {
+                continue;
+            }
+            if (sftp_packet->payload.size() < 4) {
+                continue;
+            }
+            const uint32_t status_code =
+                (static_cast<uint32_t>(sftp_packet->payload[0]) << 24) |
+                (static_cast<uint32_t>(sftp_packet->payload[1]) << 16) |
+                (static_cast<uint32_t>(sftp_packet->payload[2]) << 8) |
+                static_cast<uint32_t>(sftp_packet->payload[3]);
+
+            if (sftp_packet->request_id == 81 && status_code == static_cast<uint32_t>(SftpStatus::SSH_FX_BAD_MESSAGE)) {
+                saw_bad_message = true;
+            }
+            if (sftp_packet->request_id == 82 && status_code == static_cast<uint32_t>(SftpStatus::SSH_FX_OP_UNSUPPORTED)) {
+                saw_unsupported = true;
+            }
+        }
+
+        TEST_ASSERT(saw_bad_message, "malformed statvfs request should return SSH_FX_BAD_MESSAGE");
+        TEST_ASSERT(saw_unsupported, "unknown extended request should return SSH_FX_OP_UNSUPPORTED");
+    }
+
+    std::filesystem::remove_all(root, cleanup_ec);
+#endif
+    return true;
+}
+
 bool test_try_parse_marks_invalid_for_encrypted_bytes_before_newkeys()
 {
     SshAlgorithmRegistry registry;
@@ -1453,6 +3661,68 @@ bool test_packet_codec_aead_roundtrip_and_tag_failure()
     auto tampered_decoded = SshPacketCodec::decode(
         3, reinterpret_cast<const uint8_t *>(tampered.read_ptr()), tampered.readable_bytes(), &ctx);
     TEST_ASSERT(!tampered_decoded.has_value(), "tampered AEAD tag should fail decode");
+    return true;
+}
+
+bool test_packet_codec_fuzz_like_random_inputs_are_safe()
+{
+    SshAlgorithmRegistry registry;
+    registry.register_cipher("test-cipher", []() { return std::make_unique<FakeCipher>(); });
+    registry.register_mac("test-mac", []() { return std::make_unique<FakeMac>(); });
+    registry.register_cipher("test-aead", []() { return std::make_unique<FakeAeadCipher>(); });
+    registry.register_cipher("test-opaque", []() { return std::make_unique<FakeOpaqueCipher>(); });
+    registry.register_compression("none", []() { return std::make_unique<FakeCompression>(); });
+
+    auto ctr_ctx = build_active_cipher_context(registry, "test-cipher", true);
+    auto aead_ctx = build_active_cipher_context(registry, "test-aead", false);
+    auto opaque_ctx = build_active_cipher_context(registry, "test-opaque", true);
+
+    uint32_t seed = 0xC0FFEE12u;
+    auto next_u32 = [&seed]() -> uint32_t {
+        seed = seed * 1664525u + 1013904223u;
+        return seed;
+    };
+
+    for (int i = 0; i < 400; ++i) {
+        const size_t len = static_cast<size_t>(next_u32() % 512u);
+        std::vector<uint8_t> raw(len);
+        for (size_t j = 0; j < len; ++j) {
+            raw[j] = static_cast<uint8_t>(next_u32() & 0xFFu);
+        }
+
+        yuan::buffer::ByteBuffer buf;
+        if (!raw.empty()) {
+            buf.append(raw.data(), raw.size());
+        }
+
+        const auto plain = SshPacketCodec::try_parse(buf, false, nullptr, static_cast<uint32_t>(i));
+        TEST_ASSERT(!plain.complete || plain.total_bytes <= len,
+                    "fuzz/plain: parser total_bytes must not exceed available bytes");
+
+        const auto ctr = SshPacketCodec::try_parse(buf, true, &ctr_ctx, static_cast<uint32_t>(i));
+        TEST_ASSERT(!ctr.complete || ctr.total_bytes <= len,
+                    "fuzz/ctr: parser total_bytes must not exceed available bytes");
+
+        const auto aead = SshPacketCodec::try_parse(buf, true, &aead_ctx, static_cast<uint32_t>(i));
+        TEST_ASSERT(!aead.complete || aead.total_bytes <= len,
+                    "fuzz/aead: parser total_bytes must not exceed available bytes");
+
+        const auto opaque = SshPacketCodec::try_parse(buf, true, &opaque_ctx, static_cast<uint32_t>(i));
+        TEST_ASSERT(!opaque.complete || opaque.total_bytes <= len,
+                    "fuzz/opaque: parser total_bytes must not exceed available bytes");
+
+        if (!raw.empty()) {
+            const auto maybe_plain = SshPacketCodec::decode(static_cast<uint32_t>(i), raw.data(), raw.size(), nullptr);
+            (void)maybe_plain;
+            const auto maybe_ctr = SshPacketCodec::decode(static_cast<uint32_t>(i), raw.data(), raw.size(), &ctr_ctx);
+            (void)maybe_ctr;
+            const auto maybe_aead = SshPacketCodec::decode(static_cast<uint32_t>(i), raw.data(), raw.size(), &aead_ctx);
+            (void)maybe_aead;
+            const auto maybe_opaque = SshPacketCodec::decode(static_cast<uint32_t>(i), raw.data(), raw.size(), &opaque_ctx);
+            (void)maybe_opaque;
+        }
+    }
+
     return true;
 }
 
@@ -3237,29 +5507,61 @@ int main()
 {
     std::cout << "=== SSH Tests ===" << std::endl;
 
-    RUN_TEST(test_password_auth_without_handler_uses_method_fallback);
+    RUN_TEST(test_password_auth_without_handler_is_rejected_by_default);
+    RUN_TEST(test_keyboard_interactive_without_handler_stays_challenge_then_fails);
     RUN_TEST(test_session_channel_open_without_handler_is_allowed);
     RUN_TEST(test_builtin_subsystem_request_without_handler_is_allowed);
     RUN_TEST(test_default_handler_denies_direct_tcpip_channel_open);
     RUN_TEST(test_default_handler_still_allows_builtin_subsystem);
     RUN_TEST(test_request_success_encoding_uses_message_byte);
+    RUN_TEST(test_tcpip_forward_global_request_rejects_incomplete_payload);
+    RUN_TEST(test_cancel_tcpip_forward_global_request_rejects_incomplete_payload);
+    RUN_TEST(test_tcpip_forward_global_request_fails_when_port_forwarding_disabled);
+    RUN_TEST(test_direct_tcpip_open_fails_when_port_forwarding_disabled);
+    RUN_TEST(test_tcpip_forward_duplicate_request_returns_failure);
+    RUN_TEST(test_cancel_tcpip_forward_unknown_binding_returns_failure);
     RUN_TEST(test_publickey_rsa_fallback_verifies_signature);
     RUN_TEST(test_publickey_ecdsa_fallback_verifies_signature);
+    RUN_TEST(test_publickey_authorized_keys_from_option_blocks_mismatched_remote_ip);
+    RUN_TEST(test_publickey_authorized_keys_from_option_allows_matching_remote_ip);
+    RUN_TEST(test_publickey_authorized_keys_no_pty_rejects_pty_request);
+    RUN_TEST(test_publickey_authorized_keys_forced_command_overrides_exec_command);
+    RUN_TEST(test_publickey_authorized_keys_no_port_forwarding_blocks_global_forward_requests);
+    RUN_TEST(test_publickey_authorized_keys_no_agent_no_x11_block_channel_requests);
+    RUN_TEST(test_publickey_authorized_keys_permitopen_blocks_unlisted_direct_tcpip_target);
+    RUN_TEST(test_publickey_authorized_keys_permitopen_allows_listed_direct_tcpip_target);
+    RUN_TEST(test_publickey_authorized_keys_permitlisten_blocks_unlisted_tcpip_forward);
+    RUN_TEST(test_publickey_authorized_keys_permitlisten_allows_listed_tcpip_forward);
+    RUN_TEST(test_publickey_authorized_keys_restrict_blocks_pty_by_default);
+    RUN_TEST(test_publickey_authorized_keys_restrict_with_pty_reenables_pty);
+    RUN_TEST(test_publickey_authorized_keys_no_port_forwarding_blocks_direct_tcpip_open);
+    RUN_TEST(test_server_config_exposes_auth_failure_delay_field);
+    RUN_TEST(test_session_build_userauth_banner_encodes_banner_message);
+    RUN_TEST(test_build_forwarded_tcpip_channel_open_encodes_expected_payload);
+    RUN_TEST(test_open_forwarded_tcpip_channel_registers_opening_channel_and_packet);
     RUN_TEST(test_build_kex_init_uses_filtered_host_key_algorithms_in_config_order);
     RUN_TEST(test_process_kex_init_negotiates_config_preference_and_hash);
     RUN_TEST(test_first_kex_packet_follows_ignores_only_wrong_guess);
     RUN_TEST(test_process_newkeys_activates_encryption_after_kex);
     RUN_TEST(test_process_kex_init_message_uses_client_then_server_kex_payloads);
+    RUN_TEST(test_process_kex_reply_message_verifies_host_key_signature);
+    RUN_TEST(test_process_kex_reply_message_rejects_invalid_host_key_signature);
     RUN_TEST(test_reset_for_rekey_keeps_existing_encryption_active);
     RUN_TEST(test_rekey_preserves_session_id_across_new_exchange);
+    RUN_TEST(test_rekey_soak_multiple_cycles_preserve_session_and_data_path);
     RUN_TEST(test_local_file_system_basic_roundtrip);
-    RUN_TEST(test_local_file_system_rejects_uid_gid_setstat);
+    RUN_TEST(test_local_file_system_uid_gid_setstat_behavior);
     RUN_TEST(test_local_file_system_absolute_symlink_targets_stay_logical);
     RUN_TEST(test_local_file_system_realpath_and_readlink_edge_inputs);
+    RUN_TEST(test_sftp_extended_posix_rename_moves_file_and_returns_ok_status);
+    RUN_TEST(test_sftp_extended_hardlink_creates_link_and_returns_ok_status);
+    RUN_TEST(test_sftp_extended_statvfs_and_fstatvfs_return_extended_reply);
+    RUN_TEST(test_sftp_extended_invalid_and_unsupported_requests_return_status_errors);
     RUN_TEST(test_packet_codec_plaintext_roundtrip_and_partial_parse);
     RUN_TEST(test_try_parse_marks_invalid_for_encrypted_bytes_before_newkeys);
     RUN_TEST(test_packet_codec_encrypted_roundtrip_and_mac_failure);
     RUN_TEST(test_packet_codec_aead_roundtrip_and_tag_failure);
+    RUN_TEST(test_packet_codec_fuzz_like_random_inputs_are_safe);
     RUN_TEST(test_channel_request_rejects_second_exec_and_second_shell);
     RUN_TEST(test_channel_request_rejects_second_pty_and_parses_modes_as_string);
     RUN_TEST(test_window_change_and_signal_always_reply_success_when_want_reply);

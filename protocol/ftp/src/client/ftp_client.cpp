@@ -3,6 +3,7 @@
 #include "coroutine/stream_io_awaitable.h"
 #include "coroutine/connect_awaitable.h"
 #include "coroutine/sync_wait.h"
+#include "net/async/async_listener_host.h"
 #include "net/connection/connection.h"
 #include "net/connection/stream_transport.h"
 #include "net/channel/channel.h"
@@ -15,6 +16,15 @@
 #include <filesystem>
 #include <sstream>
 #include <vector>
+#include <optional>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#endif
 
 namespace yuan::net::ftp
 {
@@ -32,13 +42,103 @@ namespace yuan::net::ftp
             std::string item;
             std::vector<int> parts;
             while (std::getline(ss, item, ',')) {
-                parts.push_back(std::stoi(item));
+                try {
+                    const int value = std::stoi(item);
+                    if (value < 0 || value > 255) {
+                        return {};
+                    }
+                    parts.push_back(value);
+                } catch (...) {
+                    return {};
+                }
             }
             if (parts.size() != 6) {
                 return {};
             }
             std::string ip = std::to_string(parts[0]) + "." + std::to_string(parts[1]) + "." + std::to_string(parts[2]) + "." + std::to_string(parts[3]);
             return { ip, parts[4] * 256 + parts[5] };
+        }
+
+        InetAddress parse_epsv_endpoint(const std::string &body, const std::string &fallback_ip)
+        {
+            const auto left = body.find('(');
+            const auto right = body.find(')', left == std::string::npos ? 0 : left + 1);
+            if (left == std::string::npos || right == std::string::npos || right <= left + 1) {
+                return {};
+            }
+
+            const std::string payload = body.substr(left + 1, right - left - 1);
+            if (payload.size() < 5) {
+                return {};
+            }
+
+            const char delimiter = payload.front();
+            if (payload[payload.size() - 1] != delimiter) {
+                return {};
+            }
+
+            int delimiter_count = 0;
+            for (char ch : payload) {
+                if (ch == delimiter) {
+                    ++delimiter_count;
+                }
+            }
+            if (delimiter_count != 4) {
+                return {};
+            }
+
+            const std::size_t third = payload.rfind(delimiter);
+            if (third == std::string::npos || third == 0) {
+                return {};
+            }
+            const std::size_t second = payload.rfind(delimiter, third - 1);
+            if (second == std::string::npos) {
+                return {};
+            }
+
+            const std::string port_text = payload.substr(second + 1, third - second - 1);
+            if (port_text.empty()) {
+                return {};
+            }
+
+            try {
+                const int port = std::stoi(port_text);
+                if (port <= 0 || port > 65535) {
+                    return {};
+                }
+                return { fallback_ip, port };
+            } catch (...) {
+                return {};
+            }
+        }
+
+        std::string format_port_command(const std::string &ip, int port)
+        {
+            std::stringstream ss(ip);
+            std::string seg;
+            std::vector<int> octets;
+            while (std::getline(ss, seg, '.')) {
+                try {
+                    int value = std::stoi(seg);
+                    if (value < 0 || value > 255) {
+                        return {};
+                    }
+                    octets.push_back(value);
+                } catch (...) {
+                    return {};
+                }
+            }
+            if (octets.size() != 4 || port <= 0 || port > 65535) {
+                return {};
+            }
+            const int p1 = port / 256;
+            const int p2 = port % 256;
+            return "PORT " + std::to_string(octets[0]) + "," +
+                   std::to_string(octets[1]) + "," +
+                   std::to_string(octets[2]) + "," +
+                   std::to_string(octets[3]) + "," +
+                   std::to_string(p1) + "," +
+                   std::to_string(p2) + "\r\n";
         }
     }
 
@@ -112,6 +212,11 @@ namespace yuan::net::ftp
 
     void FtpClient::quit()
     {
+        active_listener_.reset();
+        if (control_session_.is_connected()) {
+            auto rv = control_session_.runtime_view();
+            (void)coroutine::sync_wait(rv, send_command_and_read("QUIT\r\n"));
+        }
         if (control_session_.is_connected()) {
             control_session_.close();
         }
@@ -205,6 +310,172 @@ namespace yuan::net::ftp
         co_return parse_pasv_endpoint(resp.body_);
     }
 
+    coroutine::Task<InetAddress> FtpClient::do_epsv()
+    {
+        auto resp = co_await send_command_and_read("EPSV\r\n");
+        if (resp.code_ != 229) {
+            co_return InetAddress{};
+        }
+
+        std::string control_ip = "127.0.0.1";
+        if (auto *conn = control_session_.native_handle()) {
+            control_ip = conn->get_remote_address().get_ip();
+        }
+        co_return parse_epsv_endpoint(resp.body_, control_ip);
+    }
+
+    coroutine::Task<bool> FtpClient::do_eprt(const std::string & ip, uint16_t port)
+    {
+        const std::string af = ip.find(':') != std::string::npos ? "2" : "1";
+        const std::string cmd = "EPRT |" + af + "|" + ip + "|" + std::to_string(port) + "|\r\n";
+        auto resp = co_await send_command_and_read(cmd);
+        co_return resp.code_ == 200;
+    }
+
+    coroutine::Task<InetAddress> FtpClient::open_data_channel(StreamMode mode)
+    {
+        if (data_mode_ == DataMode::active_only) {
+            co_return InetAddress{};
+        }
+
+        if (data_mode_ == DataMode::auto_select || data_mode_ == DataMode::passive_only) {
+            auto epsv_addr = co_await do_epsv();
+            if (epsv_addr.get_port() > 0) {
+                co_return epsv_addr;
+            }
+
+            auto pasv_addr = co_await do_pasv();
+            if (pasv_addr.get_port() > 0) {
+                co_return pasv_addr;
+            }
+        }
+
+        co_return InetAddress{};
+    }
+
+    coroutine::Task<bool> FtpClient::prepare_active_data_listener()
+    {
+        active_listener_.reset();
+
+        if (!control_session_.is_connected()) {
+            co_return false;
+        }
+
+        auto *control_conn = control_session_.native_handle();
+        if (!control_conn) {
+            co_return false;
+        }
+
+        const std::string local_ip = control_conn->get_local_address().get_ip();
+        if (local_ip.empty()) {
+            co_return false;
+        }
+
+        if (!owned_runtime_) {
+            co_return false;
+        }
+
+        active_listener_ = std::make_unique<net::AsyncListenerHost>();
+        if (!active_listener_->bind(local_ip, 0, *owned_runtime_)) {
+            active_listener_.reset();
+            co_return false;
+        }
+
+        auto *acceptor = active_listener_->acceptor();
+        auto *listener_channel = acceptor ? acceptor->listener_channel() : nullptr;
+        if (!listener_channel) {
+            active_listener_->close();
+            active_listener_.reset();
+            co_return false;
+        }
+
+        int bound_port = 0;
+
+        // best effort: derive port from acceptor fd
+        {
+            sockaddr_storage addr{};
+#ifdef _WIN32
+            int len = static_cast<int>(sizeof(addr));
+#else
+            socklen_t len = sizeof(addr);
+#endif
+            if (::getsockname(listener_channel->get_fd(), reinterpret_cast<sockaddr *>(&addr), &len) == 0) {
+                net::InetAddress bound(addr);
+                bound_port = bound.get_port();
+            }
+        }
+
+        if (bound_port <= 0) {
+            active_listener_->close();
+            active_listener_.reset();
+            co_return false;
+        }
+
+        bool ok = co_await do_eprt(local_ip, static_cast<uint16_t>(bound_port));
+        if (!ok) {
+            const auto cmd = format_port_command(local_ip, bound_port);
+            if (cmd.empty()) {
+                active_listener_->close();
+                active_listener_.reset();
+                co_return false;
+            }
+            auto resp = co_await send_command_and_read(cmd);
+            if (resp.code_ != 200) {
+                active_listener_->close();
+                active_listener_.reset();
+                co_return false;
+            }
+        }
+
+        co_return true;
+    }
+
+    coroutine::Task<net::AsyncConnectionContext> FtpClient::accept_prepared_active_data_channel(StreamMode mode)
+    {
+        if (!active_listener_) {
+            co_return net::AsyncConnectionContext{};
+        }
+
+        auto rv = control_session_.runtime_view();
+
+        auto data_conn = co_await active_listener_->accept_async();
+        if (!data_conn) {
+            active_listener_->close();
+            active_listener_.reset();
+            co_return net::AsyncConnectionContext{};
+        }
+
+        net::AsyncConnectionContext data_ctx(data_conn, rv);
+        data_ctx.install_default_handler();
+
+        active_listener_->close();
+        active_listener_.reset();
+        if (auto stream = std::dynamic_pointer_cast<StreamTransport>(data_conn)) {
+            if (auto *channel = stream->stream_channel()) {
+                if (mode == StreamMode::Receiver) {
+                    channel->disable_write();
+                    channel->enable_read();
+                } else {
+                    channel->disable_read();
+                    channel->enable_write();
+                }
+                rv.update_channel(channel);
+            }
+        }
+
+        co_return data_ctx;
+    }
+
+    namespace
+    {
+        struct FtpDataPrep
+        {
+            bool passive = false;
+            InetAddress passive_addr;
+            bool active_ready = false;
+        };
+    }
+
     coroutine::Task<net::AsyncConnectionContext> FtpClient::connect_data_channel(const InetAddress & data_addr, StreamMode mode)
     {
         auto rv = control_session_.runtime_view();
@@ -256,9 +527,10 @@ namespace yuan::net::ftp
                     break;
                 }
             }
+            (void)data_ctx.connection()->shutdown_write();
         } else {
             while (true) {
-                auto read_result = co_await data_ctx.read_async();
+                auto read_result = co_await data_ctx.read_async(0, false);
                 if (read_result.status != coroutine::IoStatus::success) {
                     break;
                 }
@@ -268,6 +540,9 @@ namespace yuan::net::ftp
                 }
                 if (file_info.is_completed()) {
                     transfer_ok = true;
+                    break;
+                }
+                if (read_result.data.readable_bytes() == 0) {
                     break;
                 }
             }
@@ -289,13 +564,15 @@ namespace yuan::net::ftp
 
     coroutine::Task<std::string> FtpClient::list_async(const std::string & path)
     {
-        auto data_addr = co_await do_pasv();
-        if (data_addr.get_port() <= 0) {
-            co_return{};
+        FtpDataPrep prep;
+        if (data_mode_ != DataMode::active_only) {
+            prep.passive_addr = co_await open_data_channel(StreamMode::Receiver);
+            prep.passive = prep.passive_addr.get_port() > 0;
         }
-
-        auto data_ctx = co_await connect_data_channel(data_addr, StreamMode::Receiver);
-        if (!data_ctx.is_connected()) {
+        if (!prep.passive && data_mode_ != DataMode::passive_only) {
+            prep.active_ready = co_await prepare_active_data_listener();
+        }
+        if (!prep.passive && !prep.active_ready) {
             co_return{};
         }
 
@@ -307,8 +584,18 @@ namespace yuan::net::ftp
 
         auto cmd = path.empty() ? "LIST\r\n" : "LIST " + path + "\r\n";
         auto cmd_resp = co_await send_command_and_read(cmd);
-        if (cmd_resp.code_ != 150) {
-            data_ctx.close();
+        if (cmd_resp.code_ != 150 && cmd_resp.code_ != 125) {
+            active_listener_.reset();
+            co_return{};
+        }
+
+        net::AsyncConnectionContext data_ctx;
+        if (prep.passive) {
+            data_ctx = co_await connect_data_channel(prep.passive_addr, StreamMode::Receiver);
+        } else {
+            data_ctx = co_await accept_prepared_active_data_channel(StreamMode::Receiver);
+        }
+        if (!data_ctx.is_connected()) {
             co_return{};
         }
 
@@ -327,13 +614,15 @@ namespace yuan::net::ftp
 
     coroutine::Task<std::string> FtpClient::nlist_async(const std::string & path)
     {
-        auto data_addr = co_await do_pasv();
-        if (data_addr.get_port() <= 0) {
-            co_return{};
+        FtpDataPrep prep;
+        if (data_mode_ != DataMode::active_only) {
+            prep.passive_addr = co_await open_data_channel(StreamMode::Receiver);
+            prep.passive = prep.passive_addr.get_port() > 0;
         }
-
-        auto data_ctx = co_await connect_data_channel(data_addr, StreamMode::Receiver);
-        if (!data_ctx.is_connected()) {
+        if (!prep.passive && data_mode_ != DataMode::passive_only) {
+            prep.active_ready = co_await prepare_active_data_listener();
+        }
+        if (!prep.passive && !prep.active_ready) {
             co_return{};
         }
 
@@ -345,8 +634,18 @@ namespace yuan::net::ftp
 
         auto cmd = path.empty() ? "NLST\r\n" : "NLST " + path + "\r\n";
         auto cmd_resp = co_await send_command_and_read(cmd);
-        if (cmd_resp.code_ != 150) {
-            data_ctx.close();
+        if (cmd_resp.code_ != 150 && cmd_resp.code_ != 125) {
+            active_listener_.reset();
+            co_return{};
+        }
+
+        net::AsyncConnectionContext data_ctx;
+        if (prep.passive) {
+            data_ctx = co_await connect_data_channel(prep.passive_addr, StreamMode::Receiver);
+        } else {
+            data_ctx = co_await accept_prepared_active_data_channel(StreamMode::Receiver);
+        }
+        if (!data_ctx.is_connected()) {
             co_return{};
         }
 
@@ -392,13 +691,15 @@ namespace yuan::net::ftp
             }
         }
 
-        auto data_addr = co_await do_pasv();
-        if (data_addr.get_port() <= 0) {
-            co_return false;
+        FtpDataPrep prep;
+        if (data_mode_ != DataMode::active_only) {
+            prep.passive_addr = co_await open_data_channel(StreamMode::Receiver);
+            prep.passive = prep.passive_addr.get_port() > 0;
         }
-
-        auto data_ctx = co_await connect_data_channel(data_addr, StreamMode::Receiver);
-        if (!data_ctx.is_connected()) {
+        if (!prep.passive && data_mode_ != DataMode::passive_only) {
+            prep.active_ready = co_await prepare_active_data_listener();
+        }
+        if (!prep.passive && !prep.active_ready) {
             co_return false;
         }
 
@@ -421,15 +722,25 @@ namespace yuan::net::ftp
         info.ready_ = true;
 
         auto cmd_resp = co_await send_command_and_read("RETR " + remote_path + "\r\n");
-        if (cmd_resp.code_ != 150) {
-            data_ctx.close();
+        if (cmd_resp.code_ != 150 && cmd_resp.code_ != 125) {
+            active_listener_.reset();
+            co_return false;
+        }
+
+        net::AsyncConnectionContext data_ctx;
+        if (prep.passive) {
+            data_ctx = co_await connect_data_channel(prep.passive_addr, StreamMode::Receiver);
+        } else {
+            data_ctx = co_await accept_prepared_active_data_channel(StreamMode::Receiver);
+        }
+        if (!data_ctx.is_connected()) {
             co_return false;
         }
 
         auto transfer_result = co_await transfer_data(data_ctx, info);
 
         auto final_resp = co_await read_response();
-        co_return transfer_result.ok &&final_resp.code_ == 226;
+        co_return transfer_result.ok && final_resp.code_ == 226;
     }
 
     coroutine::Task<bool> FtpClient::upload_async(const std::string & local_path, const std::string & remote_path)
@@ -446,13 +757,15 @@ namespace yuan::net::ftp
             co_return false;
         }
 
-        auto data_addr = co_await do_pasv();
-        if (data_addr.get_port() <= 0) {
-            co_return false;
+        FtpDataPrep prep;
+        if (data_mode_ != DataMode::active_only) {
+            prep.passive_addr = co_await open_data_channel(StreamMode::Sender);
+            prep.passive = prep.passive_addr.get_port() > 0;
         }
-
-        auto data_ctx = co_await connect_data_channel(data_addr, StreamMode::Sender);
-        if (!data_ctx.is_connected()) {
+        if (!prep.passive && data_mode_ != DataMode::passive_only) {
+            prep.active_ready = co_await prepare_active_data_listener();
+        }
+        if (!prep.passive && !prep.active_ready) {
             co_return false;
         }
 
@@ -464,15 +777,25 @@ namespace yuan::net::ftp
         info.ready_ = true;
 
         auto cmd_resp = co_await send_command_and_read("STOR " + remote_path + "\r\n");
-        if (cmd_resp.code_ != 150) {
-            data_ctx.close();
+        if (cmd_resp.code_ != 150 && cmd_resp.code_ != 125) {
+            active_listener_.reset();
+            co_return false;
+        }
+
+        net::AsyncConnectionContext data_ctx;
+        if (prep.passive) {
+            data_ctx = co_await connect_data_channel(prep.passive_addr, StreamMode::Sender);
+        } else {
+            data_ctx = co_await accept_prepared_active_data_channel(StreamMode::Sender);
+        }
+        if (!data_ctx.is_connected()) {
             co_return false;
         }
 
         auto transfer_result = co_await transfer_data(data_ctx, info);
 
         auto final_resp = co_await read_response();
-        co_return transfer_result.ok &&final_resp.code_ == 226;
+        co_return transfer_result.ok && final_resp.code_ == 226;
     }
 
     coroutine::Task<bool> FtpClient::append_async(const std::string & local_path, const std::string & remote_path)
@@ -489,13 +812,15 @@ namespace yuan::net::ftp
             co_return false;
         }
 
-        auto data_addr = co_await do_pasv();
-        if (data_addr.get_port() <= 0) {
-            co_return false;
+        FtpDataPrep prep;
+        if (data_mode_ != DataMode::active_only) {
+            prep.passive_addr = co_await open_data_channel(StreamMode::Sender);
+            prep.passive = prep.passive_addr.get_port() > 0;
         }
-
-        auto data_ctx = co_await connect_data_channel(data_addr, StreamMode::Sender);
-        if (!data_ctx.is_connected()) {
+        if (!prep.passive && data_mode_ != DataMode::passive_only) {
+            prep.active_ready = co_await prepare_active_data_listener();
+        }
+        if (!prep.passive && !prep.active_ready) {
             co_return false;
         }
 
@@ -507,14 +832,24 @@ namespace yuan::net::ftp
         info.ready_ = true;
 
         auto cmd_resp = co_await send_command_and_read("APPE " + remote_path + "\r\n");
-        if (cmd_resp.code_ != 150) {
-            data_ctx.close();
+        if (cmd_resp.code_ != 150 && cmd_resp.code_ != 125) {
+            active_listener_.reset();
+            co_return false;
+        }
+
+        net::AsyncConnectionContext data_ctx;
+        if (prep.passive) {
+            data_ctx = co_await connect_data_channel(prep.passive_addr, StreamMode::Sender);
+        } else {
+            data_ctx = co_await accept_prepared_active_data_channel(StreamMode::Sender);
+        }
+        if (!data_ctx.is_connected()) {
             co_return false;
         }
 
         auto transfer_result = co_await transfer_data(data_ctx, info);
 
         auto final_resp = co_await read_response();
-        co_return transfer_result.ok &&final_resp.code_ == 226;
+        co_return transfer_result.ok && final_resp.code_ == 226;
     }
 }

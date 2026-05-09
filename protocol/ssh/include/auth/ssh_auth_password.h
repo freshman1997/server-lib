@@ -19,9 +19,8 @@ namespace yuan::net::ssh
         {
             (void)session;
             (void)username;
-            if (credentials.password.empty())
-                return SshAuthResult::FAILURE;
-            return SshAuthResult::SUCCESS;
+            (void)credentials;
+            return SshAuthResult::FAILURE;
         }
     };
 }

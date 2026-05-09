@@ -23,11 +23,17 @@
 #include "http_server.h"
 #include "timer/timer.h"
 #include "coroutine/connect_awaitable.h"
+#include "net/async/async_connection_context.h"
 
 namespace yuan::net::http
 {
     namespace
     {
+        static uint64_t now_ms_steady()
+        {
+            return base::time::steady_now_ms();
+        }
+
         const char *connect_result_text(yuan::coroutine::ConnectResult result)
         {
             using Result = yuan::coroutine::ConnectResult;
@@ -95,10 +101,6 @@ namespace yuan::net::http
                 rr_index_.store((idx + 1) % count, std::memory_order_relaxed);
                 return pc.conn;
             }
-        }
-
-        if (connections_.size() < max_size_) {
-            return create_new_connection(proxy, server);
         }
 
         return nullptr;
@@ -554,13 +556,21 @@ namespace yuan::net::http
         }
 
         auto task = handle_websocket_upgrade_async(req, resp, route_key, route, target, clientConn);
+        task.resume();
         task.detach();
     }
 
     void HttpProxy::serve_proxy(HttpRequest * req, HttpResponse * resp)
     {
+        auto task = serve_proxy_async(req, resp);
+        task.resume();
+        task.detach();
+    }
+
+    yuan::coroutine::Task<void> HttpProxy::serve_proxy_async(HttpRequest * req, HttpResponse * resp)
+    {
         if (!req || !resp) {
-            return;
+            co_return;
         }
 
         ++stats_.total_requests;
@@ -570,13 +580,13 @@ namespace yuan::net::http
         if (!clientConn) {
             resp->process_error(ResponseCode::internal_server_error);
             ++stats_.failed_requests;
-            return;
+            co_return;
         }
 
         const std::string route_key = find_proxy_route(req->get_raw_url());
         if (route_key.empty()) {
             resp->process_error(ResponseCode::not_found);
-            return;
+            co_return;
         }
 
         ProxyRoute route;
@@ -586,13 +596,10 @@ namespace yuan::net::http
             if (routeIt == routes_.end()) {
                 resp->process_error(ResponseCode::bad_gateway);
                 ++stats_.failed_requests;
-                return;
+                co_return;
             }
             route = routeIt->second;
         }
-
-        ProxyTarget target = select_target(route);
-        build_forward_request(req, route, target);
 
         {
             std::lock_guard<std::mutex> lock(mapping_mutex_);
@@ -600,7 +607,7 @@ namespace yuan::net::http
             if (csIt != cs_mapping_.end() && csIt->second) {
                 req->pack_and_send(csIt->second);
                 csIt->second->flush();
-                return;
+                co_return;
             }
 
             auto reqIt = pending_requests_.find(clientConn);
@@ -611,105 +618,148 @@ namespace yuan::net::http
                 } else {
                     ++reqIt->second;
                 }
-                return;
+                co_return;
             }
         }
 
-        auto task = handle_proxy_async(req, resp, route_key, route, target, clientConn);
-        task.detach();
+        co_await handle_proxy_async(req, resp, route_key, route, clientConn);
     }
 
     yuan::coroutine::Task<void> HttpProxy::handle_proxy_async(HttpRequest *req, HttpResponse *resp,
                                                               const std::string &route_key,
                                                               const ProxyRoute &route,
-                                                              const ProxyTarget &target,
                                                               Connection *clientConn)
     {
         if (!server_ || !server_->runtime() || !clientConn || !req || !resp) {
             co_return;
         }
 
-        auto pool = get_or_create_pool(target, route);
-        if (pool) {
-            Connection *pooledConn = pool->acquire(this, server_);
-            if (pooledConn) {
-                ++stats_.pool_hits;
-                LOG_DEBUG_TAG("handle_proxy_async",
-                              "[Proxy] pool hit route='{}' target={}:{} active={} total={}",
-                              route_key,
-                              target.host,
-                              target.port,
-                              pool->active_count(),
-                              pool->total_count());
-                map_connections(clientConn->shared_from_this(), pooledConn->shared_from_this(), route_key);
-                req->pack_and_send(pooledConn);
-                pooledConn->flush();
+        const std::string original_url = req->get_raw_url();
+        const int max_attempts = route.max_retries > 0 ? (route.max_retries + 1) : 1;
+        for (int attempt = 0; attempt < max_attempts; ++attempt) {
+            const ProxyTarget target = select_target(route);
+            req->set_raw_url(original_url);
+            build_forward_request(req, route, target);
+
+            auto pool = get_or_create_pool(target, route);
+            if (pool) {
+                Connection *pooledConn = pool->acquire(this, server_);
+                if (pooledConn) {
+                    ++stats_.pool_hits;
+                    LOG_DEBUG_TAG("handle_proxy_async",
+                                  "[Proxy] pool hit route='{}' target={}:{} active={} total={} attempt={}/{}",
+                                  route_key,
+                                  target.host,
+                                  target.port,
+                                  pool->active_count(),
+                                  pool->total_count(),
+                                  attempt + 1,
+                                  max_attempts);
+                    map_connections(clientConn->shared_from_this(), pooledConn->shared_from_this(), route_key);
+                    req->pack_and_send(pooledConn);
+                    pooledConn->flush();
+                    co_return;
+                }
+            }
+
+            ++stats_.pool_misses;
+            LOG_DEBUG_TAG("handle_proxy_async",
+                          "[Proxy] pool miss route='{}' target={}:{} timeout_ms={} attempt={}/{}",
+                          route_key,
+                          target.host,
+                          target.port,
+                          route.connect_timeout_ms,
+                          attempt + 1,
+                          max_attempts);
+
+            const uint64_t dial_start_ms = base::time::steady_now_ms();
+
+            auto connect_result = co_await yuan::coroutine::async_connect(
+                static_cast<yuan::coroutine::RuntimeView>(server_->runtime()->runtime_view()),
+                target.host,
+                target.port,
+                route.connect_timeout_ms > 0 ? static_cast<uint32_t>(route.connect_timeout_ms) : 0U);
+
+            const uint64_t dial_elapsed_ms = base::time::steady_now_ms() - dial_start_ms;
+
+            if (connect_result.result != yuan::coroutine::ConnectResult::success || !connect_result.connection) {
+                mark_target_failure(target, route);
+                LOG_WARN_TAG("handle_proxy_async",
+                             "[Proxy] upstream dial failed route='{}' target={}:{} result={} elapsed_ms={} timeout_ms={} attempt={}/{}",
+                             route_key,
+                             target.host,
+                             target.port,
+                             connect_result_text(connect_result.result),
+                             dial_elapsed_ms,
+                             route.connect_timeout_ms,
+                             attempt + 1,
+                             max_attempts);
+                if (attempt + 1 < max_attempts) {
+                    continue;
+                }
+                resp->process_error(connect_result.result == yuan::coroutine::ConnectResult::timed_out
+                                        ? ResponseCode::gateway_timeout
+                                        : ResponseCode::bad_gateway);
+                clientConn->flush();
+                ++stats_.failed_requests;
                 co_return;
             }
-        }
 
-        ++stats_.pool_misses;
-        LOG_DEBUG_TAG("handle_proxy_async",
-                      "[Proxy] pool miss route='{}' target={}:{} timeout_ms={}",
-                      route_key,
-                      target.host,
-                      target.port,
-                      route.connect_timeout_ms);
+            {
+                std::lock_guard<std::mutex> lock(mapping_mutex_);
+                if (cs_mapping_.find(clientConn) != cs_mapping_.end()) {
+                    ++stats_.ws_stale_upgrade_skipped;
+                    LOG_DEBUG_TAG("handle_websocket_upgrade_async",
+                                  "[Proxy][WS] skip stale upgrade after connect route='{}' target={}:{}",
+                                  route_key,
+                                  target.host,
+                                  target.port);
+                    co_return;
+                }
+            }
 
-        const uint64_t dial_start_ms = base::time::steady_now_ms();
+            LOG_DEBUG_TAG("handle_proxy_async",
+                          "[Proxy] upstream dial success route='{}' target={}:{} elapsed_ms={} attempt={}/{}",
+                          route_key,
+                          target.host,
+                          target.port,
+                          dial_elapsed_ms,
+                          attempt + 1,
+                          max_attempts);
 
-        auto connect_result = co_await yuan::coroutine::async_connect(
-            static_cast<yuan::coroutine::RuntimeView>(server_->runtime()->runtime_view()),
-            target.host,
-            target.port,
-            route.connect_timeout_ms > 0 ? static_cast<uint32_t>(route.connect_timeout_ms) : 0U);
+            auto remote_owner = connect_result.connection;
+            Connection *remoteConn = &*remote_owner;
+            server_->runtime()->register_connection(remote_owner, make_non_owning_handler(this));
 
-        const uint64_t dial_elapsed_ms = base::time::steady_now_ms() - dial_start_ms;
-
-        if (connect_result.result != yuan::coroutine::ConnectResult::success || !connect_result.connection) {
-            LOG_WARN_TAG("handle_proxy_async",
-                         "[Proxy] upstream dial failed route='{}' target={}:{} result={} elapsed_ms={} timeout_ms={}",
-                         route_key,
-                         target.host,
-                         target.port,
-                         connect_result_text(connect_result.result),
-                         dial_elapsed_ms,
-                         route.connect_timeout_ms);
-            resp->process_error(connect_result.result == yuan::coroutine::ConnectResult::timed_out
-                                    ? ResponseCode::gateway_timeout
-                                    : ResponseCode::bad_gateway);
-            ++stats_.failed_requests;
+            ++stats_.active_connections;
+            map_connections(clientConn->shared_from_this(), remote_owner, route_key);
+            req->pack_and_send(remoteConn);
+            yuan::net::AsyncConnectionContext remote_ctx(remote_owner, server_->runtime()->runtime_view());
+            auto write_result = co_await remote_ctx.flush_async(
+                route.write_timeout_ms > 0 ? static_cast<uint32_t>(route.write_timeout_ms) : 0U);
+            if (write_result.status != yuan::coroutine::IoStatus::success) {
+                mark_target_failure(target, route);
+                LOG_WARN_TAG("handle_proxy_async",
+                             "[Proxy] upstream request write failed route='{}' target={}:{} status={} attempt={}/{}",
+                             route_key,
+                             target.host,
+                             target.port,
+                             static_cast<int>(write_result.status),
+                             attempt + 1,
+                             max_attempts);
+                ++stats_.failed_requests;
+                if (attempt + 1 < max_attempts) {
+                    if (remoteConn) {
+                        remoteConn->close();
+                    }
+                    (void)unmap_and_close_peer(clientConn, true);
+                    continue;
+                }
+                co_return;
+            }
+            mark_target_success(target);
             co_return;
         }
-
-        {
-            std::lock_guard<std::mutex> lock(mapping_mutex_);
-            if (cs_mapping_.find(clientConn) != cs_mapping_.end()) {
-                ++stats_.ws_stale_upgrade_skipped;
-                LOG_DEBUG_TAG("handle_websocket_upgrade_async",
-                              "[Proxy][WS] skip stale upgrade after connect route='{}' target={}:{}",
-                              route_key,
-                              target.host,
-                              target.port);
-                co_return;
-            }
-        }
-
-        LOG_DEBUG_TAG("handle_proxy_async",
-                      "[Proxy] upstream dial success route='{}' target={}:{} elapsed_ms={}",
-                      route_key,
-                      target.host,
-                      target.port,
-                      dial_elapsed_ms);
-
-        auto remote_owner = connect_result.connection;
-        Connection *remoteConn = &*remote_owner;
-        server_->runtime()->register_connection(remote_owner, make_non_owning_handler(this));
-
-        ++stats_.active_connections;
-        map_connections(clientConn->shared_from_this(), remote_owner, route_key);
-        req->pack_and_send(remoteConn);
-        remoteConn->flush();
         co_return;
     }
 
@@ -739,30 +789,57 @@ namespace yuan::net::http
         return out;
     }
 
+    std::vector<TargetHealthSnapshot> HttpProxy::snapshot_target_health() const
+    {
+        std::vector<TargetHealthSnapshot> out;
+        const uint64_t now = now_ms_steady();
+        std::lock_guard<std::mutex> lock(health_mutex_);
+        out.reserve(target_health_.size());
+        for (const auto &kv : target_health_) {
+            TargetHealthSnapshot item;
+            item.target_key = kv.first;
+            item.consecutive_failures = kv.second.consecutive_failures;
+            item.unhealthy_until_ms = kv.second.unhealthy_until_ms;
+            item.healthy = (item.unhealthy_until_ms == 0 || now >= item.unhealthy_until_ms);
+            out.push_back(std::move(item));
+        }
+        return out;
+    }
+
     ProxyTarget HttpProxy::select_target(const ProxyRoute & route)
     {
         if (route.targets.empty())
             return ProxyTarget{};
 
+        std::vector<ProxyTarget> healthy;
+        healthy.reserve(route.targets.size());
+        for (const auto &target : route.targets) {
+            if (is_target_available(target)) {
+                healthy.push_back(target);
+            }
+        }
+
+        const auto &candidates = healthy.empty() ? route.targets : healthy;
+
         switch (route.balance) {
         case ProxyRoute::BalanceStrategy::round_robin: {
             std::lock_guard<std::mutex> lock(rr_mutex_);
             auto &idx = rr_indices_[route.match_pattern];
-            size_t i = idx % route.targets.size();
+            size_t i = idx % candidates.size();
             idx++;
-            return route.targets[i];
+            return candidates[i];
         }
         case ProxyRoute::BalanceStrategy::random: {
             std::lock_guard<std::mutex> lock(rr_mutex_);
-            std::uniform_int_distribution<size_t> dist(0, route.targets.size() - 1);
-            return route.targets[dist(rng_)];
+            std::uniform_int_distribution<size_t> dist(0, candidates.size() - 1);
+            return candidates[dist(rng_)];
         }
         case ProxyRoute::BalanceStrategy::least_connections:
-            return select_least_connections(route);
+            return select_least_connections(candidates);
         case ProxyRoute::BalanceStrategy::weighted_round_robin:
-            return select_weighted_random(route.targets);
+            return select_weighted_random(candidates);
         default:
-            return route.targets[0];
+            return candidates[0];
         }
     }
 
@@ -786,10 +863,19 @@ namespace yuan::net::http
 
     ProxyTarget HttpProxy::select_least_connections(const ProxyRoute & route)
     {
-        ProxyTarget best = route.targets[0];
+        return select_least_connections(route.targets);
+    }
+
+    ProxyTarget HttpProxy::select_least_connections(const std::vector<ProxyTarget> &targets)
+    {
+        if (targets.empty()) {
+            return ProxyTarget{};
+        }
+
+        ProxyTarget best = targets[0];
         size_t min_active = SIZE_MAX;
 
-        for (const auto &target : route.targets) {
+        for (const auto &target : targets) {
             std::string pool_id = target.host + ":" + std::to_string(target.port);
 
             std::lock_guard<std::mutex> lock(pools_mutex_);
@@ -851,7 +937,13 @@ namespace yuan::net::http
                 path.erase(0, route.match_pattern.size());
             }
             if (!route.rewrite_prefix.empty()) {
+                if (!path.empty() && path.front() != '/') {
+                    path.insert(path.begin(), '/');
+                }
                 path = route.rewrite_prefix + path;
+            }
+            if (path.empty()) {
+                path = "/";
             }
             std::string new_url = path;
             if (!query.empty()) {
@@ -860,6 +952,54 @@ namespace yuan::net::http
             }
             orig_req->set_raw_url(std::move(new_url));
         }
+    }
+
+    std::string HttpProxy::target_key(const ProxyTarget &target) const
+    {
+        return target.host + ":" + std::to_string(target.port);
+    }
+
+    bool HttpProxy::is_target_available(const ProxyTarget &target) const
+    {
+        const uint64_t now = now_ms_steady();
+        std::lock_guard<std::mutex> lock(health_mutex_);
+        const auto it = target_health_.find(target_key(target));
+        if (it == target_health_.end()) {
+            return true;
+        }
+        return it->second.unhealthy_until_ms == 0 || now >= it->second.unhealthy_until_ms;
+    }
+
+    void HttpProxy::mark_target_failure(const ProxyTarget &target, const ProxyRoute &route)
+    {
+        if (route.failure_threshold <= 0 || route.unhealthy_cooldown_ms <= 0) {
+            return;
+        }
+        const uint64_t now = now_ms_steady();
+        const std::string key = target_key(target);
+        std::lock_guard<std::mutex> lock(health_mutex_);
+        auto &state = target_health_[key];
+        ++state.consecutive_failures;
+        if (state.consecutive_failures >= route.failure_threshold) {
+            state.unhealthy_until_ms = now + static_cast<uint64_t>(route.unhealthy_cooldown_ms);
+            LOG_WARN_TAG("mark_target_failure",
+                         "[Proxy] mark target unhealthy {} failures={} cooldown_ms={}",
+                         key,
+                         state.consecutive_failures,
+                         route.unhealthy_cooldown_ms);
+        }
+    }
+
+    void HttpProxy::mark_target_success(const ProxyTarget &target)
+    {
+        const std::string key = target_key(target);
+        std::lock_guard<std::mutex> lock(health_mutex_);
+        auto it = target_health_.find(key);
+        if (it == target_health_.end()) {
+            return;
+        }
+        it->second.consecutive_failures = 0;
+        it->second.unhealthy_until_ms = 0;
     }
 
     yuan::coroutine::Task<void> HttpProxy::handle_websocket_upgrade_async(HttpRequest *req,

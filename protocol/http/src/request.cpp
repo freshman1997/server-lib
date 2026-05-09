@@ -109,7 +109,7 @@ namespace yuan::net::http
     }
 
     target->append_output("\r\n");
-    context_->get_connection()->flush();
+    target->flush();
 
     return true;
 }
@@ -171,4 +171,3 @@ namespace yuan::net::http
         return (it != cks.end()) ? it->second : "";
     }
 }
-

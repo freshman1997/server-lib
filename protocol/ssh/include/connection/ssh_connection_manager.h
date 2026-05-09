@@ -2,14 +2,17 @@
 #define __NET_SSH_CONNECTION_SSH_CONNECTION_MANAGER_H__
 
 #include "connection/ssh_channel.h"
+#include "connection/ssh_port_forwarding.h"
 #include "protocol/ssh_constants.h"
 #include "protocol/ssh_structures.h"
 #include "ssh_channel_handler.h"
 #include "buffer/byte_buffer.h"
+#include "coroutine/runtime_view.h"
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -76,6 +79,27 @@ namespace yuan::net::ssh
         ByteBuffer build_request_success(const std::vector<uint8_t> &data = {}) const;
         ByteBuffer build_request_failure() const;
 
+        ByteBuffer build_forwarded_tcpip_channel_open(const std::string &connected_address,
+                                                      uint32_t connected_port,
+                                                      const std::string &originator_address,
+                                                      uint32_t originator_port,
+                                                      uint32_t initial_window = SSH_DEFAULT_WINDOW_SIZE,
+                                                      uint32_t maximum_packet_size = SSH_DEFAULT_MAX_PACKET_SIZE);
+
+        std::optional<uint32_t> open_forwarded_tcpip_channel(const std::string &connected_address,
+                                                             uint32_t connected_port,
+                                                             const std::string &originator_address,
+                                                             uint32_t originator_port,
+                                                             ByteBuffer &packet_out,
+                                                             uint32_t initial_window = SSH_DEFAULT_WINDOW_SIZE,
+                                                             uint32_t maximum_packet_size = SSH_DEFAULT_MAX_PACKET_SIZE);
+
+        bool register_forwarded_tcpip_handler(uint32_t local_channel_id,
+                                              std::unique_ptr<SshChannelHandler> handler);
+
+        void set_runtime(coroutine::RuntimeView runtime);
+        void poll_async_tasks();
+
         std::vector<ByteBuffer> drain_channel_pending_data();
 
     private:
@@ -88,6 +112,7 @@ namespace yuan::net::ssh
         mutable std::mutex channels_mutex_;
         std::unordered_map<uint32_t, std::unique_ptr<SshChannel> > channels_;
 
+        SshPortForwarding port_forwarding_;
         std::unordered_map<std::string, SubsystemFactory> subsystem_factories_;
     };
 }

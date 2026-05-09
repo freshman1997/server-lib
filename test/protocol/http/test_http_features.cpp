@@ -491,6 +491,11 @@ namespace
 
         const std::string stats = http_get(port, "/__proxy_stats");
         check(stats.find("200") != std::string::npos, "__proxy_stats should return 200");
+
+        const std::string mini_stats = http_get(port, "/__mini_nginx_stats");
+        check(mini_stats.find("200") != std::string::npos, "__mini_nginx_stats should return 200");
+        check(mini_stats.find("\"server\"") != std::string::npos, "__mini_nginx_stats should include server section");
+        check(mini_stats.find("\"proxy\"") != std::string::npos, "__mini_nginx_stats should include proxy section");
     }
 
     void test_proxy_unmatched_route_returns_404(uint16_t port)
@@ -2218,7 +2223,9 @@ int main()
             {"connect_timeout", 200},
             {"read_timeout", 1000},
             {"write_timeout", 500},
-            {"max_retries", 0}
+            {"max_retries", 0},
+            {"failure_threshold", 1},
+            {"unhealthy_cooldown_ms", 500}
         },
         {
             {"root", "/proxy-rewrite/"},

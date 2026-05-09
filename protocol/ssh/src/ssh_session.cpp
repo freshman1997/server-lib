@@ -58,6 +58,27 @@ namespace yuan::net::ssh
         }
     }
 
+    void SshSession::enqueue_pending_forwarded_tcpip_open(ByteBuffer buf)
+    {
+        if (buf.readable_bytes() == 0) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(pending_forwarded_open_mutex_);
+        pending_forwarded_opens_.push_back(std::move(buf));
+    }
+
+    std::vector<ByteBuffer> SshSession::drain_pending_forwarded_tcpip_open()
+    {
+        std::vector<ByteBuffer> result;
+        std::lock_guard<std::mutex> lock(pending_forwarded_open_mutex_);
+        result.reserve(pending_forwarded_opens_.size());
+        for (auto &buf : pending_forwarded_opens_) {
+            result.push_back(std::move(buf));
+        }
+        pending_forwarded_opens_.clear();
+        return result;
+    }
+
     void SshSession::register_pty_process(uint32_t channel_remote_id, std::unique_ptr<SshPtyProcess> process)
     {
         if (terminal_bridge_) {
@@ -334,6 +355,14 @@ namespace yuan::net::ssh
         SshServiceAcceptMessage msg;
         msg.service_name = service_name;
         return SshMessageCodec::encode_service_accept(msg);
+    }
+
+    ByteBuffer SshSession::build_userauth_banner(const std::string & message) const
+    {
+        SshUserauthBannerMessage msg;
+        msg.message = message;
+        msg.language = "en";
+        return SshMessageCodec::encode_userauth_banner(msg);
     }
 
     ByteBuffer SshSession::build_userauth_success() const

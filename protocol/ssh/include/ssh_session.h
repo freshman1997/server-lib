@@ -112,6 +112,11 @@ namespace yuan::net::ssh
             return server_;
         }
 
+        const SshServer *server() const
+        {
+            return server_;
+        }
+
         void set_client_connection(const std::shared_ptr<net::Connection> &conn)
         {
             client_conn_owner_ = conn;
@@ -131,6 +136,7 @@ namespace yuan::net::ssh
         void set_runtime(coroutine::RuntimeView rv)
         {
             runtime_ = rv;
+            conn_mgr_.set_runtime(rv);
         }
 
         coroutine::RuntimeView runtime() const
@@ -143,6 +149,8 @@ namespace yuan::net::ssh
         void enqueue_outgoing(ByteBuffer buf);
         std::vector<ByteBuffer> drain_outgoing();
         void flush_channel_pending_data();
+        void enqueue_pending_forwarded_tcpip_open(ByteBuffer buf);
+        std::vector<ByteBuffer> drain_pending_forwarded_tcpip_open();
         void register_pty_process(uint32_t channel_remote_id, std::unique_ptr<SshPtyProcess> process);
         bool has_pty_process(uint32_t channel_remote_id) const;
         bool has_any_pty_processes() const;
@@ -152,7 +160,76 @@ namespace yuan::net::ssh
         void shutdown_pty_for_channel(uint32_t channel_remote_id);
         void shutdown_all_pty_processes();
 
+        void set_authorized_key_restrictions(bool no_pty,
+                                             std::string forced_command,
+                                             bool no_port_forwarding = false,
+                                             bool no_agent_forwarding = false,
+                                             bool no_x11_forwarding = false,
+                                             std::vector<std::string> permitopen = {},
+                                             std::vector<std::string> permitlisten = {})
+        {
+            authorized_key_no_pty_ = no_pty;
+            authorized_key_forced_command_ = std::move(forced_command);
+            authorized_key_no_port_forwarding_ = no_port_forwarding;
+            authorized_key_no_agent_forwarding_ = no_agent_forwarding;
+            authorized_key_no_x11_forwarding_ = no_x11_forwarding;
+            authorized_key_permitopen_ = std::move(permitopen);
+            authorized_key_permitlisten_ = std::move(permitlisten);
+        }
+
+        void clear_authorized_key_restrictions()
+        {
+            authorized_key_no_pty_ = false;
+            authorized_key_forced_command_.clear();
+            authorized_key_no_port_forwarding_ = false;
+            authorized_key_no_agent_forwarding_ = false;
+            authorized_key_no_x11_forwarding_ = false;
+            authorized_key_permitopen_.clear();
+            authorized_key_permitlisten_.clear();
+        }
+
+        bool authorized_key_no_pty() const
+        {
+            return authorized_key_no_pty_;
+        }
+
+        bool has_authorized_key_forced_command() const
+        {
+            return !authorized_key_forced_command_.empty();
+        }
+
+        bool authorized_key_no_port_forwarding() const
+        {
+            return authorized_key_no_port_forwarding_;
+        }
+
+        bool authorized_key_no_agent_forwarding() const
+        {
+            return authorized_key_no_agent_forwarding_;
+        }
+
+        bool authorized_key_no_x11_forwarding() const
+        {
+            return authorized_key_no_x11_forwarding_;
+        }
+
+        const std::string &authorized_key_forced_command() const
+        {
+            return authorized_key_forced_command_;
+        }
+
+        const std::vector<std::string> &authorized_key_permitopen() const
+        {
+            return authorized_key_permitopen_;
+        }
+
+        const std::vector<std::string> &authorized_key_permitlisten() const
+        {
+            return authorized_key_permitlisten_;
+        }
+
         ByteBuffer build_service_accept(const std::string &service_name) const;
+        ByteBuffer build_userauth_banner(const std::string &message) const;
         ByteBuffer build_userauth_success() const;
         ByteBuffer build_userauth_failure(bool partial_success) const;
         ByteBuffer build_userauth_pk_ok(const std::string &algo, const std::vector<uint8_t> &key_blob) const;
@@ -180,8 +257,18 @@ namespace yuan::net::ssh
         std::mutex outgoing_mutex_;
         std::deque<ByteBuffer> outgoing_;
 
+        std::mutex pending_forwarded_open_mutex_;
+        std::deque<ByteBuffer> pending_forwarded_opens_;
+
         std::unique_ptr<SshTerminalBridge> terminal_bridge_;
         bool kex_strict_mode_ = false;
+        bool authorized_key_no_pty_ = false;
+        bool authorized_key_no_port_forwarding_ = false;
+        bool authorized_key_no_agent_forwarding_ = false;
+        bool authorized_key_no_x11_forwarding_ = false;
+        std::string authorized_key_forced_command_;
+        std::vector<std::string> authorized_key_permitopen_;
+        std::vector<std::string> authorized_key_permitlisten_;
     };
 
     class SshSessionManager

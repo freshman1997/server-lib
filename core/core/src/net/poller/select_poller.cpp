@@ -12,16 +12,10 @@ namespace yuan::net
     class SelectPoller::HelperData
     {
     public:
-        struct ChannelEntry
-        {
-            net::Channel *channel = nullptr;
-            uint64_t generation = 0;
-        };
-
         fd_set reads_;
         fd_set writes_;
 		fd_set excepts_;
-        std::map<int, ChannelEntry> sockets_;
+        std::map<int, net::Channel *> sockets_;
         std::mutex mutex_;
     };
 
@@ -51,25 +45,25 @@ namespace yuan::net
 
         int max_fd = 0;
         for (auto i = data_->sockets_.begin(); i != data_->sockets_.end(); ++i) {
-            if (!i->second.channel) {
+            if (!i->second) {
                 continue;
             }
 
-            if (i->second.channel->get_events() & Channel::READ_EVENT) {
+            if (i->second->get_events() & Channel::READ_EVENT) {
                 FD_SET(i->first, &data_->reads_);
                 if (i->first > max_fd) {
                     max_fd = i->first;
                 }
             }
 
-            if (i->second.channel->get_events() & Channel::WRITE_EVENT) {
+            if (i->second->get_events() & Channel::WRITE_EVENT) {
                 FD_SET(i->first, &data_->writes_);
                 if (i->first > max_fd) {
                     max_fd = i->first;
                 }
             }
 
-            if (i->second.channel->get_events() & Channel::EXCEP_EVENT) {
+            if (i->second->get_events() & Channel::EXCEP_EVENT) {
                 FD_SET(i->first, &data_->excepts_);
                 if (i->first > max_fd) {
                     max_fd = i->first;
@@ -90,7 +84,7 @@ namespace yuan::net
         }
 
         for (auto j = data_->sockets_.begin(); j != data_->sockets_.end();) {
-            if (!j->second.channel) {
+            if (!j->second) {
                 j = data_->sockets_.erase(j);
                 continue;
             }
@@ -108,11 +102,11 @@ namespace yuan::net
                 ev |= Channel::EXCEP_EVENT;
             }
 
-            if (ev != Channel::NONE_EVENT && j->second.channel) {
+            if (ev != Channel::NONE_EVENT && j->second) {
                 PollEvent pe;
                 pe.fd = j->first;
                 pe.revents = ev;
-                pe.generation = j->second.generation;
+                pe.generation = j->second->generation();
                 events.push_back(pe);
             }
             
@@ -132,8 +126,7 @@ namespace yuan::net
             remove_channel(channel);
         } else {
             std::lock_guard<std::mutex> lock(data_->mutex_);
-            auto &entry = data_->sockets_[channel->get_fd()];
-            entry.channel = channel;
+            data_->sockets_[channel->get_fd()] = channel;
         }
     }
 

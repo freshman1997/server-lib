@@ -2,6 +2,7 @@
 #include "base/time.h"
 #include "content/types.h"
 #include "content_type.h"
+#include "coroutine/sync_wait.h"
 #include "header_key.h"
 #include "http_client.h"
 #include "request.h"
@@ -150,12 +151,13 @@ int main()
         return 1;
     }
 
-    auto *response = client->connect_async([](net::http::HttpRequest *req) {
+    net::NetworkRuntime runtime;
+    auto *response = yuan::coroutine::sync_wait(runtime.runtime_view(), client->connect_async(runtime.runtime_view(), [](net::http::HttpRequest *req) {
         req->set_raw_url("/p/CDN/x5client-trunk-pc/x5client-latest.zip");
         req->add_header("Connection", "close");
         req->add_header("Host", "192.168.1.71:5244");
         req->send();
-    }).execute();
+    }));
 
     const int exit_code = handle_response(response);
     delete client;

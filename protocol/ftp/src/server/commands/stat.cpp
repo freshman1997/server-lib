@@ -25,5 +25,3 @@ namespace yuan::net::ftp
     CommandType CommandStat::get_command_type() { return CommandType::cmd_stat; }
     std::string CommandStat::get_command_name() { return "STAT"; }
 }
-#include "server/command_support.h"
-#include <filesystem>

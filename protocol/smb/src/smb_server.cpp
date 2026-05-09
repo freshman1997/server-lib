@@ -70,19 +70,19 @@ namespace yuan::net::smb
                 co_await handle_connection(std::move(ctx));
             });
 
-        auto run_task = listener_.run_async();
-        run_task.resume();
-        run_task.detach();
+        accept_task_ = listener_.run_async();
+        accept_task_.resume();
 
         if (owned_runtime_) {
             owned_runtime_->event_loop()->loop();
         }
+
+        accept_task_ = {};
     }
 
     void SmbServer::stop()
     {
         running_.store(false);
-        session_mgr_.close_all();
         listener_.close();
         if (owned_runtime_) {
             owned_runtime_->event_loop()->quit();
@@ -340,14 +340,15 @@ namespace yuan::net::smb
     {
         for (const auto &share_cfg : config_.shares) {
             share_mgr_.add_share(share_cfg);
-            SmbShare *share = share_mgr_.find_share(share_cfg.name);
+            auto share_owner = share_mgr_.find_share_owner(share_cfg.name);
+            auto *share = share_owner ? const_cast<SmbShare *>(&*share_owner) : nullptr;
             if (share && share->type() == ShareType::DISK && !share_cfg.path.empty()) {
-                auto *fs = new LocalFileSystem(share_cfg.path);
-                share->set_file_system(fs);
+                auto fs = std::make_unique<LocalFileSystem>(share_cfg.path);
+                share->set_file_system(std::move(fs));
             }
         }
 
-        if (!share_mgr_.find_share("IPC$")) {
+        if (!share_mgr_.find_share_owner("IPC$")) {
             SmbShareConfig ipc;
             ipc.name = "IPC$";
             ipc.type = ShareType::PIPE;

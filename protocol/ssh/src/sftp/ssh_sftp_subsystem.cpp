@@ -42,6 +42,11 @@ namespace yuan::net::ssh
         return true;
     }
 
+    static void sftp_write_u64(ByteBuffer &buf, uint64_t value)
+    {
+        buf.append_u64(value);
+    }
+
     SshSftpSubsystem::SshSftpSubsystem(SshFileSystem * file_system)
         : file_system_(file_system)
     {
@@ -590,6 +595,124 @@ namespace yuan::net::ssh
 
     void SshSftpSubsystem::handle_extended(SshChannel * channel, const SftpPacket & packet)
     {
-        send_status(channel, packet.request_id, SftpStatus::SSH_FX_OP_UNSUPPORTED, "Extended operations not supported");
+        size_t offset = 0;
+        std::string extended_request;
+        if (!sftp_read_string(packet.payload.data(), packet.payload.size(), offset, extended_request)) {
+            send_status(channel, packet.request_id, SftpStatus::SSH_FX_BAD_MESSAGE, "Bad extended request");
+            return;
+        }
+
+        if (extended_request == "posix-rename@openssh.com") {
+            std::string old_path;
+            std::string new_path;
+            if (!sftp_read_string(packet.payload.data(), packet.payload.size(), offset, old_path) ||
+                !sftp_read_string(packet.payload.data(), packet.payload.size(), offset, new_path) ||
+                offset != packet.payload.size()) {
+                send_status(channel, packet.request_id, SftpStatus::SSH_FX_BAD_MESSAGE, "Bad posix-rename payload");
+                return;
+            }
+
+            const uint32_t rename_flags =
+                static_cast<uint32_t>(SftpRenameFlags::SSH_FXP_RENAME_OVERWRITE) |
+                static_cast<uint32_t>(SftpRenameFlags::SSH_FXP_RENAME_ATOMIC);
+            auto result = file_system_->rename(old_path, new_path, rename_flags);
+            send_status(channel, packet.request_id, result.status,
+                        result.success ? "OK" : result.status_message);
+            return;
+        }
+
+        if (extended_request == "hardlink@openssh.com") {
+            std::string old_path;
+            std::string new_path;
+            if (!sftp_read_string(packet.payload.data(), packet.payload.size(), offset, old_path) ||
+                !sftp_read_string(packet.payload.data(), packet.payload.size(), offset, new_path) ||
+                offset != packet.payload.size()) {
+                send_status(channel, packet.request_id, SftpStatus::SSH_FX_BAD_MESSAGE, "Bad hardlink payload");
+                return;
+            }
+
+            auto result = file_system_->hardlink(old_path, new_path);
+            send_status(channel, packet.request_id, result.status,
+                        result.success ? "OK" : result.status_message);
+            return;
+        }
+
+        if (extended_request == "statvfs@openssh.com") {
+            std::string path;
+            if (!sftp_read_string(packet.payload.data(), packet.payload.size(), offset, path) ||
+                offset != packet.payload.size()) {
+                send_status(channel, packet.request_id, SftpStatus::SSH_FX_BAD_MESSAGE, "Bad statvfs payload");
+                return;
+            }
+
+            auto result = file_system_->statvfs(path);
+            if (!result.success) {
+                send_status(channel, packet.request_id, result.status, result.status_message);
+                return;
+            }
+
+            ByteBuffer ext_reply_payload;
+            sftp_write_u64(ext_reply_payload, result.f_bsize);
+            sftp_write_u64(ext_reply_payload, result.f_frsize);
+            sftp_write_u64(ext_reply_payload, result.f_blocks);
+            sftp_write_u64(ext_reply_payload, result.f_bfree);
+            sftp_write_u64(ext_reply_payload, result.f_bavail);
+            sftp_write_u64(ext_reply_payload, result.f_files);
+            sftp_write_u64(ext_reply_payload, result.f_ffree);
+            sftp_write_u64(ext_reply_payload, result.f_favail);
+            sftp_write_u64(ext_reply_payload, result.f_fsid);
+            sftp_write_u64(ext_reply_payload, result.f_flag);
+            sftp_write_u64(ext_reply_payload, result.f_namemax);
+
+            SftpPacket reply;
+            reply.type = SftpPacketType::SSH_FXP_EXTENDED_REPLY;
+            reply.request_id = packet.request_id;
+            auto span = ext_reply_payload.readable_span();
+            reply.payload.assign(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+            send_data_on_channel(channel, SshSftpCodec::encode(reply));
+            return;
+        }
+
+        if (extended_request == "fstatvfs@openssh.com") {
+            std::string handle;
+            if (!sftp_read_string(packet.payload.data(), packet.payload.size(), offset, handle) ||
+                offset != packet.payload.size()) {
+                send_status(channel, packet.request_id, SftpStatus::SSH_FX_BAD_MESSAGE, "Bad fstatvfs payload");
+                return;
+            }
+
+            auto result = file_system_->fstatvfs(handle);
+            if (!result.success) {
+                send_status(channel, packet.request_id, result.status, result.status_message);
+                return;
+            }
+
+            ByteBuffer ext_reply_payload;
+            sftp_write_u64(ext_reply_payload, result.f_bsize);
+            sftp_write_u64(ext_reply_payload, result.f_frsize);
+            sftp_write_u64(ext_reply_payload, result.f_blocks);
+            sftp_write_u64(ext_reply_payload, result.f_bfree);
+            sftp_write_u64(ext_reply_payload, result.f_bavail);
+            sftp_write_u64(ext_reply_payload, result.f_files);
+            sftp_write_u64(ext_reply_payload, result.f_ffree);
+            sftp_write_u64(ext_reply_payload, result.f_favail);
+            sftp_write_u64(ext_reply_payload, result.f_fsid);
+            sftp_write_u64(ext_reply_payload, result.f_flag);
+            sftp_write_u64(ext_reply_payload, result.f_namemax);
+
+            SftpPacket reply;
+            reply.type = SftpPacketType::SSH_FXP_EXTENDED_REPLY;
+            reply.request_id = packet.request_id;
+            auto span = ext_reply_payload.readable_span();
+            reply.payload.assign(
+                reinterpret_cast<const uint8_t *>(span.data()),
+                reinterpret_cast<const uint8_t *>(span.data()) + span.size());
+            send_data_on_channel(channel, SshSftpCodec::encode(reply));
+            return;
+        }
+
+        send_status(channel, packet.request_id, SftpStatus::SSH_FX_OP_UNSUPPORTED, "Unsupported extended request");
     }
 }

@@ -1,6 +1,5 @@
 #include "coroutine/runtime.h"
 #include "net/connection/connection_handle.h"
-#include "net/connection/connection_ref.h"
 #include "net/handler/connection_handler.h"
 #include "net/socket/inet_address.h"
 
@@ -77,12 +76,6 @@ int main()
 
     if (connection.use_count() != initial_use_count + 1) {
         std::cerr << "connection handle should increase owner count\n";
-        return 1;
-    }
-
-    yuan::net::ConnectionRef promoted_ref(connection.get());
-    if (!promoted_ref.has_owner() || promoted_ref.owner() != connection) {
-        std::cerr << "connection ref raw constructor should promote shared-owned connections\n";
         return 1;
     }
 

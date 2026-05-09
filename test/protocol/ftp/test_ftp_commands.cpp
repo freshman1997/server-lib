@@ -275,7 +275,7 @@ int main()
     resp = factory->find_command("STRU")->execute(session, "F");
     require(resp.code_ == FtpResponseCode::__200__, "STRU F should be supported");
     resp = factory->find_command("PORT")->execute(session, "127,0,0,1,7,138");
-    require(resp.code_ == FtpResponseCode::__502__, "PORT should be explicitly unsupported");
+    require(resp.code_ == FtpResponseCode::__200__, "PORT should be accepted in active mode");
     resp = factory->find_command("HELP")->execute(session, "");
     require(resp.code_ == FtpResponseCode::__214__, "HELP should return supported command list");
 

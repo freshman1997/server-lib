@@ -11,11 +11,7 @@ namespace
 
 static std::string extract_filename(const std::string& path)
 {
-#ifdef _WIN32
     auto pos = path.find_last_of("\\/");
-#else
-    auto pos = path.rfind('/');
-#endif
     return (pos != std::string::npos) ? path.substr(pos + 1) : path;
 }
 

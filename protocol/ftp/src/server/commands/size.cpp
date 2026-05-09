@@ -23,5 +23,3 @@ namespace yuan::net::ftp
     CommandType CommandSize::get_command_type() { return CommandType::cmd_size; }
     std::string CommandSize::get_command_name() { return "SIZE"; }
 }
-#include "server/command_support.h"
-#include <filesystem>

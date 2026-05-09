@@ -15,7 +15,9 @@ namespace yuan::net::ftp
             return denied;
         }
         if (!session->get_passive_addr().has_value()) {
-            return { FtpResponseCode::__425__, "Use PASV before LIST." };
+            if (!session->get_active_addr().has_value()) {
+                return { FtpResponseCode::__425__, "Use PASV or PORT before LIST." };
+            }
         }
 
         const auto target = resolve_path(session, args);

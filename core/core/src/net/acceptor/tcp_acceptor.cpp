@@ -21,8 +21,8 @@
 #include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
 #include "net/handler/connection_handler.h"
-#include "net/secuity/ssl_handler.h"
-#include "net/secuity/ssl_module.h"
+#include "net/security/ssl_handler.h"
+#include "net/security/ssl_module.h"
 #include "event/event_loop.h"
 
 namespace yuan::net
@@ -93,13 +93,14 @@ namespace yuan::net
 
     void TcpAcceptor::close()
     {
+        notify_accept_waiters(std::shared_ptr<Connection>{});
         if (channel_) {
             channel_->disable_all();
             if (handler_) {
                 handler_->close_channel(ptr_of(channel_));
-                channel_->clear_handler();
                 handler_ = nullptr;
             }
+            channel_->clear_handler();
         }
         if (conn_handler_owner_) {
             conn_handler_owner_->on_close(std::shared_ptr<Connection>{});
@@ -117,7 +118,9 @@ namespace yuan::net
 
     void TcpAcceptor::on_read_event()
     {
-        assert(socket_);
+        if (!socket_) {
+            return;
+        }
 
         while (true) {
             sockaddr_storage peer_storage{};
@@ -178,6 +181,7 @@ namespace yuan::net
             if (conn_handler_owner_) {
                 conn_handler_owner_->on_connected(conn);
             }
+            notify_accept_waiters(conn);
         }
     }
 

@@ -45,6 +45,7 @@
 namespace
 {
     constexpr std::size_t kProxyStreamReadBufferBytes = 64 * 1024;
+    constexpr std::size_t kResponseProbeMaxBytes = 64 * 1024;
 
     void tune_proxy_stream_connection(const std::shared_ptr<yuan::net::Connection> &connection)
     {
@@ -789,7 +790,7 @@ namespace
                 }
             }
 
-            auto wr = co_await runtime.write(dst, read_result.data, idle_timeout_ms);
+            auto wr = co_await runtime.write(dst_handle, read_result.data, idle_timeout_ms);
             if (state->max_session_buffer_bytes > 0) {
                 state->pending_buffer_bytes.fetch_sub(bytes, std::memory_order_relaxed);
             }
@@ -1091,6 +1092,10 @@ namespace
                 on_state_change(ProxySessionState::established, method == "CONNECT" ? "connect_established" : "forward_established");
             }
 
+        uint64_t bytes_up = 0;
+        uint64_t bytes_down = 0;
+        std::string close_reason = "upstream_closed";
+
         if (method == "CONNECT") {
             const std::string established =
                 "HTTP/1.1 200 Connection Established\r\n"
@@ -1113,6 +1118,7 @@ namespace
                     co_return;
                 }
             }
+
         } else {
             const std::string forward_request = build_forward_request(method, version, connect_target.request_path, request, headers);
             if (!co_await write_text_async(upstream_ctx, forward_request, static_cast<uint32_t>(config.idle_timeout_ms))) {
@@ -1153,11 +1159,138 @@ namespace
 
             ::yuan::buffer::ByteBuffer first_chunk(first_byte_probe.data.readable_bytes());
             first_chunk.append(first_byte_probe.data.readable_span());
+            const auto first_chunk_size = static_cast<uint64_t>(first_byte_probe.data.readable_bytes());
             if (!co_await write_buffer_async(ctx, first_chunk, static_cast<uint32_t>(config.idle_timeout_ms))) {
                 upstream_ctx.close();
                 ctx.close();
                 co_return;
             }
+
+            bytes_down = first_chunk_size;
+            std::string response_probe;
+            bool response_length_known = false;
+            uint64_t expected_response_bytes = 0;
+            auto update_expected_response_bytes = [&]() {
+                if (response_length_known) {
+                    return;
+                }
+                const auto header_end = response_probe.find("\r\n\r\n");
+                if (header_end == std::string::npos) {
+                    return;
+                }
+                const auto response_headers = parse_header_map(response_probe);
+                auto len_it = response_headers.find("content-length");
+                if (len_it == response_headers.end()) {
+                    return;
+                }
+                try {
+                    expected_response_bytes = static_cast<uint64_t>(header_end + 4) + std::stoull(len_it->second);
+                    response_length_known = true;
+                } catch (...) {
+                }
+            };
+            {
+                const auto span = first_byte_probe.data.readable_span();
+                response_probe.append(span.data(), span.size());
+                update_expected_response_bytes();
+            }
+
+            while (true) {
+                if (response_length_known && bytes_down >= expected_response_bytes) {
+                    close_reason = "upstream_closed";
+                    break;
+                }
+
+                auto chunk_result = co_await upstream_ctx.read_async(static_cast<uint32_t>(config.idle_timeout_ms));
+                if (chunk_result.status != yuan::coroutine::IoStatus::success) {
+                    if (chunk_result.status == yuan::coroutine::IoStatus::timed_out) {
+                        close_reason = "idle_timeout";
+                        if (metrics) {
+                            metrics->idle_timeouts.fetch_add(1, std::memory_order_relaxed);
+                        }
+                    } else if (chunk_result.status == yuan::coroutine::IoStatus::connection_error) {
+                        close_reason = "upstream_error";
+                    } else {
+                        close_reason = "upstream_closed";
+                    }
+                    break;
+                }
+
+                const auto chunk_bytes = static_cast<uint64_t>(chunk_result.data.readable_bytes());
+                if (chunk_bytes == 0) {
+                    close_reason = "upstream_closed";
+                    break;
+                }
+
+                if (!co_await write_buffer_async(ctx, chunk_result.data, static_cast<uint32_t>(config.idle_timeout_ms))) {
+                    close_reason = "client_write_failed";
+                    break;
+                }
+
+                bytes_down += chunk_bytes;
+                if (!response_length_known && response_probe.size() < kResponseProbeMaxBytes) {
+                    const auto span = chunk_result.data.readable_span();
+                    response_probe.append(span.data(), span.size());
+                    update_expected_response_bytes();
+                }
+            }
+
+            ctx.close();
+            upstream_ctx.close();
+
+            if (on_state_change) {
+                on_state_change(ProxySessionState::closing, "relay_completed");
+                on_state_change(ProxySessionState::closed, "session_completed");
+            }
+            if (completed_sessions) {
+                completed_sessions->fetch_add(1, std::memory_order_relaxed);
+            }
+            if (host) {
+                yuan::server::ProxySessionCompletedEvent evt;
+                evt.session_id = session_id;
+                evt.service_name = "proxy";
+                evt.client_addr = peer_text;
+                evt.method = method;
+                evt.target_addr = connect_target.host + ":" + std::to_string(connect_target.port);
+                evt.duration_ms = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - started_at).count());
+                evt.bytes_up = bytes_up;
+                evt.bytes_down = bytes_down;
+                evt.close_reason = close_reason;
+                host->publish_custom(yuan::server::events::proxy_session_completed, std::move(evt));
+            }
+            increment_close_reason_counter(metrics, close_reason);
+            LOG_INFO("[ProxyService] session #{} client={} method={} target={} upstream={} relay finished close_reason={} bytes_up={} bytes_down={}",
+                     session_id,
+                     peer_text,
+                     method,
+                     connect_target.host + ":" + std::to_string(connect_target.port),
+                     upstream_peer_text,
+                     close_reason,
+                     bytes_up,
+                     bytes_down);
+            LOG_INFO("[ProxyService] session #{} client={} method={} target={} timing total_ms={} request_read_ms={} upstream_connect_ms={} relay_ms={}",
+                     session_id,
+                     peer_text,
+                     method,
+                     connect_target.host + ":" + std::to_string(connect_target.port),
+                     static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - started_at).count()),
+                     static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                         request_read_completed_at - started_at).count()),
+                     static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                         upstream_connected_at - request_read_completed_at).count()),
+                     static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - upstream_connected_at).count()));
+
+            lifecycle_completed = true;
+            LOG_INFO("[ProxyService] session #{} client={} method={} target={} upstream={} connection closed",
+                     session_id,
+                     peer_text,
+                     method,
+                     connect_target.host + ":" + std::to_string(connect_target.port),
+                     upstream_peer_text);
+            co_return;
         }
 
         auto relay_state = std::make_shared<RelaySharedState>();
@@ -1196,27 +1329,27 @@ namespace
             runtime.timer_manager(),
             static_cast<uint32_t>(config.idle_timeout_ms * 2 + config.drain_timeout_ms + 10000));
 
-        std::string close_reason;
+        std::string relay_close_reason;
         {
             std::lock_guard<std::mutex> lock(relay_state->reason_mutex);
-            close_reason = relay_state->close_reason;
+            relay_close_reason = relay_state->close_reason;
         }
 
         const uint64_t total_down = relay_state->bytes_down.load(std::memory_order_relaxed);
         const bool no_upstream_payload = total_down == 0;
         const bool upstream_failed_after_connect =
-            close_reason == "upstream_closed" ||
-            close_reason == "upstream_error" ||
-            close_reason == "upstream_write_timeout" ||
-            close_reason == "idle_timeout";
+            relay_close_reason == "upstream_closed" ||
+            relay_close_reason == "upstream_error" ||
+            relay_close_reason == "upstream_write_timeout" ||
+            relay_close_reason == "idle_timeout";
 
-        if (method != "CONNECT" && no_upstream_payload && upstream_failed_after_connect) {
+        if (no_upstream_payload && upstream_failed_after_connect) {
             note_relay_reason(relay_state, "upstream_no_response");
-            close_reason = "upstream_no_response";
+            relay_close_reason = "upstream_no_response";
         }
 
         const int mapped_status = proxy_http_status_for_failure(
-            close_reason,
+            relay_close_reason,
             method == "CONNECT",
             relay_state->bytes_down.load(std::memory_order_relaxed));
         (void)mapped_status;
@@ -1256,16 +1389,16 @@ namespace
         }
         {
             std::lock_guard<std::mutex> lock(relay_state->reason_mutex);
-            close_reason = relay_state->close_reason;
+            relay_close_reason = relay_state->close_reason;
         }
-        increment_close_reason_counter(metrics, close_reason);
+        increment_close_reason_counter(metrics, relay_close_reason);
         LOG_INFO("[ProxyService] session #{} client={} method={} target={} upstream={} relay finished close_reason={} bytes_up={} bytes_down={}",
                  session_id,
                  peer_text,
                  method,
                  connect_target.host + ":" + std::to_string(connect_target.port),
                  upstream_peer_text,
-                 close_reason,
+                 relay_close_reason,
                  relay_state->bytes_up.load(std::memory_order_relaxed),
                  relay_state->bytes_down.load(std::memory_order_relaxed));
         LOG_INFO("[ProxyService] session #{} client={} method={} target={} timing total_ms={} request_read_ms={} upstream_connect_ms={} relay_ms={}",

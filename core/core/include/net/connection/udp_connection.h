@@ -5,6 +5,7 @@
 #include "datagram_transport.h"
 #include "net/socket/inet_address.h"
 #include "timer/timer.h"
+#include "timer/timer_handle.h"
 #include "timer/timer_task.h"
 #include <memory>
 
@@ -95,7 +96,7 @@ namespace yuan::net
         std::shared_ptr<ConnectionHandler> connectionHandlerOwner_;
         EventHandler *eventHandler_;
         UdpInstance *instance_;
-        timer::Timer *alive_timer_;
+        timer::TimerHandle alive_timer_;
         bool cleanup_done_ = false;
         bool close_notified_ = false;
         ::yuan::buffer::BufferChain pending_output_buffer_;

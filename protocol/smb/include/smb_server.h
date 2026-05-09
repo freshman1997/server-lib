@@ -139,6 +139,7 @@ namespace yuan::net::smb
 
         AsyncListenerHost listener_;
         std::unique_ptr<NetworkRuntime> owned_runtime_;
+        coroutine::Task<void> accept_task_;
         SmbServerConfig config_;
         SmbShareManager share_mgr_;
         SmbLockManager lock_mgr_;

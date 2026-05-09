@@ -50,9 +50,20 @@ namespace yuan::net::ftp
 
     bool path_within_root(FtpSession *session, const fs::path &path)
     {
-        const auto root = session_root(session).generic_string();
-        const auto candidate = path.lexically_normal().generic_string();
-        return candidate.size() >= root.size() && candidate.compare(0, root.size(), root) == 0;
+        const fs::path normalized_root = session_root(session).lexically_normal();
+        const fs::path normalized_candidate = path.lexically_normal();
+
+        const fs::path relative = normalized_candidate.lexically_relative(normalized_root);
+        if (relative.empty()) {
+            return true;
+        }
+
+        for (const auto &part : relative) {
+            if (part == "..") {
+                return false;
+            }
+        }
+        return true;
     }
 
     std::string to_virtual_path(FtpSession *session, const fs::path &path)

@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+#include "timer_handle.h"
+
 namespace yuan::timer
 {
     class Timer;
@@ -18,6 +20,16 @@ namespace yuan::timer
         virtual Timer *timeout(uint32_t milliseconds, TimerTask *task) = 0;
 
         virtual Timer *interval(uint32_t timeout, uint32_t interval, TimerTask *task, int32_t period = 0) = 0;
+
+        virtual TimerHandle timeout_handle(uint32_t milliseconds, TimerTask *task)
+        {
+            return TimerHandle(timeout(milliseconds, task));
+        }
+
+        virtual TimerHandle interval_handle(uint32_t timeout, uint32_t interval, TimerTask *task, int32_t period = 0)
+        {
+            return TimerHandle(this->interval(timeout, interval, task, period));
+        }
 
         virtual bool schedule(Timer *timer) = 0;
 

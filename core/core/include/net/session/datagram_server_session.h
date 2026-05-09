@@ -11,6 +11,7 @@
 #include "net/runtime/network_runtime.h"
 #include "net/session/connection_context.h"
 #include "net/socket/socket.h"
+#include "timer/timer_handle.h"
 #include "timer/timer_manager.h"
 
 namespace yuan::net
@@ -60,12 +61,12 @@ namespace yuan::net
             return runtime_;
         }
 
-        timer::Timer *schedule(uint32_t delay_ms, std::function<void()> callback)
+        timer::TimerHandle schedule(uint32_t delay_ms, std::function<void()> callback)
         {
-            return runtime_ ? runtime_->schedule(delay_ms, std::move(callback)) : nullptr;
+            return runtime_ ? runtime_->schedule_handle(delay_ms, std::move(callback)) : timer::TimerHandle{};
         }
 
-        void cancel_timer(timer::Timer *timer)
+        void cancel_timer(const timer::TimerHandle &timer)
         {
             if (runtime_) {
                 runtime_->cancel_timer(timer);

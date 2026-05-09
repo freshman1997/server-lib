@@ -1,7 +1,8 @@
 #include "nas/nas_redis_webdav_lock_manager.h"
+#include "nas/nas_redis_metadata_store.h"
 
 #include <chrono>
-#include <random>
+#include <atomic>
 #include <sstream>
 
 namespace yuan::server::nas
@@ -21,6 +22,17 @@ namespace yuan::server::nas
                                                                   std::string owner,
                                                                   std::chrono::seconds timeout)
     {
+        auto make_failed_lock = [&](std::string failed_href) {
+            yuan::net::webdav::LockInfo info;
+            info.token.clear();
+            info.href = failed_href.empty() ? "/" : std::move(failed_href);
+            info.scope = scope;
+            info.depth = depth;
+            info.owner = owner;
+            info.expires_at = std::chrono::steady_clock::now();
+            return info;
+        };
+
         NasWebDavLockRecord record;
         record.token = make_token();
         record.scope = scope == yuan::net::webdav::LockScope::exclusive ? "exclusive" : "shared";
@@ -37,7 +49,18 @@ namespace yuan::server::nas
         }
 
         if (metadata_ && !record.share_id.empty()) {
-            (void)metadata_->upsert_webdav_lock(record);
+            bool created = false;
+            if (auto *redis_store = dynamic_cast<NasRedisMetadataStore *>(metadata_.get())) {
+                created = redis_store->try_create_webdav_lock(record);
+            } else {
+                created = metadata_->upsert_webdav_lock(record);
+            }
+
+            if (!created) {
+                return make_failed_lock(record.path);
+            }
+        } else if (metadata_) {
+            return make_failed_lock(href);
         }
         return to_lock_info(record);
     }
@@ -131,11 +154,12 @@ namespace yuan::server::nas
 
     std::string NasRedisWebDavLockManager::make_token()
     {
-        static std::random_device rd;
-        static std::mt19937_64 rng(rd());
-        std::uniform_int_distribution<unsigned long long> dist;
+        static std::atomic<uint64_t> seq{ 1 };
+        const auto id = seq.fetch_add(1, std::memory_order_relaxed);
+        const auto now = static_cast<uint64_t>(
+            std::chrono::steady_clock::now().time_since_epoch().count());
         std::ostringstream oss;
-        oss << "opaquelocktoken:" << std::hex << dist(rng) << dist(rng);
+        oss << "opaquelocktoken:" << std::hex << now << id;
         return oss.str();
     }
 

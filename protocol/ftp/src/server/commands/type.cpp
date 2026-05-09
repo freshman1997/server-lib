@@ -22,4 +22,3 @@ namespace yuan::net::ftp
     CommandType CommandTypeCmd::get_command_type() { return CommandType::cmd_type; }
     std::string CommandTypeCmd::get_command_name() { return "TYPE"; }
 }
-#include "common/response_code.h"

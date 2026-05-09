@@ -12,7 +12,8 @@
 #include "net/runtime/network_runtime.h"
 #include "net/session/connection_context.h"
 #include "net/socket/socket.h"
-#include "net/secuity/ssl_module.h"
+#include "net/security/ssl_module.h"
+#include "timer/timer_handle.h"
 #include "timer/timer_manager.h"
 
 namespace yuan::net
@@ -94,17 +95,17 @@ namespace yuan::net
             return runtime_;
         }
 
-        timer::Timer *schedule(uint32_t delay_ms, std::function<void()> callback)
+        timer::TimerHandle schedule(uint32_t delay_ms, std::function<void()> callback)
         {
-            return runtime_ ? runtime_->schedule(delay_ms, std::move(callback)) : nullptr;
+            return runtime_ ? runtime_->schedule_handle(delay_ms, std::move(callback)) : timer::TimerHandle{};
         }
 
-        timer::Timer *schedule_periodic(uint32_t delay_ms, uint32_t interval_ms, std::function<void()> callback, int repeat = 0)
+        timer::TimerHandle schedule_periodic(uint32_t delay_ms, uint32_t interval_ms, std::function<void()> callback, int repeat = 0)
         {
-            return runtime_ ? runtime_->schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat) : nullptr;
+            return runtime_ ? runtime_->schedule_periodic_handle(delay_ms, interval_ms, std::move(callback), repeat) : timer::TimerHandle{};
         }
 
-        void cancel_timer(timer::Timer *timer)
+        void cancel_timer(const timer::TimerHandle &timer)
         {
             if (runtime_) {
                 runtime_->cancel_timer(timer);

@@ -434,7 +434,8 @@ namespace yuan::net::mqtt
                     pub.properties.user_properties = rm.user_properties;
                 }
 
-                if (auto conn = session.connection()) {
+                auto conn = session.connection();
+                if (conn) {
                     auto pub_buf = MqttCodec::encode_publish(pub, session.protocol_level());
                     conn->write_and_flush(pub_buf);
                 }
@@ -542,7 +543,8 @@ namespace yuan::net::mqtt
             }
             if (!sub_session || sub_session->state() != MqttSessionState::connected)
                 continue;
-            if (!sub_session->connection())
+            auto sub_conn = sub_session->connection();
+            if (!sub_conn)
                 continue;
 
             MqttPublishPacket pub;
@@ -568,7 +570,7 @@ namespace yuan::net::mqtt
             }
 
             auto pub_buf = MqttCodec::encode_publish(pub, sub_session->protocol_level());
-            sub_session->connection()->write_and_flush(pub_buf);
+            sub_conn->write_and_flush(pub_buf);
         }
     }
 

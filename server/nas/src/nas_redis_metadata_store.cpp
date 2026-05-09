@@ -308,6 +308,41 @@ namespace yuan::server::nas
         return ok && !redis_error(client_->sadd(lock_index_key(lock.share_id), { lock.token }));
     }
 
+    bool NasRedisMetadataStore::try_create_webdav_lock(const NasWebDavLockRecord &lock)
+    {
+        if (!available() || lock.token.empty() || lock.share_id.empty()) {
+            return false;
+        }
+
+        auto set_res = client_->set(lock_guard_key(lock.token), "1", 60, 1);
+        auto set_text = redis_string(set_res);
+        if (!set_text || *set_text != "OK") {
+            return false;
+        }
+
+        const std::unordered_map<std::string, std::string> fields{
+            { "token", lock.token },
+            { "share_id", lock.share_id },
+            { "path", std::string(lock.path) },
+            { "scope", lock.scope },
+            { "depth", lock.depth },
+            { "owner", lock.owner },
+            { "expires_at_unix_ms", std::to_string(lock.expires_at_unix_ms) },
+        };
+        bool ok = true;
+        const auto lkey = lock_key(lock.token);
+        for (const auto &[field, value] : fields) {
+            ok = !redis_error(client_->hset(lkey, field, value)) && ok;
+        }
+        ok = ok && !redis_error(client_->sadd(lock_index_key(lock.share_id), { lock.token }));
+        if (!ok) {
+            (void)client_->del({ lock_guard_key(lock.token) });
+            (void)client_->del({ lkey });
+            (void)client_->srem(lock_index_key(lock.share_id), { lock.token });
+        }
+        return ok;
+    }
+
     std::optional<NasWebDavLockRecord> NasRedisMetadataStore::find_webdav_lock(std::string_view token) const
     {
         if (!available()) {
@@ -466,6 +501,11 @@ namespace yuan::server::nas
     std::string NasRedisMetadataStore::lock_key(std::string_view token) const
     {
         return key("webdav:lock:" + std::string(token));
+    }
+
+    std::string NasRedisMetadataStore::lock_guard_key(std::string_view token) const
+    {
+        return key("webdav:lock_guard:" + std::string(token));
     }
 
     std::string NasRedisMetadataStore::lock_index_key(std::string_view share_id) const

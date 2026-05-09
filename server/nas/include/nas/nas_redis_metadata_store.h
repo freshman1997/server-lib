@@ -44,6 +44,7 @@ namespace yuan::server::nas
                                   std::string_view name) override;
 
         bool upsert_webdav_lock(const NasWebDavLockRecord &lock) override;
+        bool try_create_webdav_lock(const NasWebDavLockRecord &lock);
         std::optional<NasWebDavLockRecord> find_webdav_lock(std::string_view token) const override;
         std::vector<NasWebDavLockRecord> list_webdav_locks(std::string_view share_id,
                                                            std::string_view path) const override;
@@ -62,6 +63,7 @@ namespace yuan::server::nas
         std::string acl_key(std::string_view share_id) const;
         std::string dead_property_key(std::string_view share_id, std::string_view path) const;
         std::string lock_key(std::string_view token) const;
+        std::string lock_guard_key(std::string_view token) const;
         std::string lock_index_key(std::string_view share_id) const;
         std::string admin_session_key(std::string_view session_id) const;
 

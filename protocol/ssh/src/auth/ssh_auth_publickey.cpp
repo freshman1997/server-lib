@@ -1,6 +1,8 @@
 #include "auth/ssh_auth_publickey.h"
 #include "protocol/ssh_message_codec.h"
 #include "ssh_session.h"
+#include "net/connection/connection.h"
+#include "net/socket/inet_address.h"
 
 #include "openssl/bn.h"
 #include "openssl/core_names.h"
@@ -43,6 +45,30 @@ namespace yuan::net::ssh
                 parts.push_back(std::move(token));
             }
             return parts;
+        }
+
+        std::vector<std::string> split_csv_respecting_quotes(const std::string &value)
+        {
+            std::vector<std::string> items;
+            std::string current;
+            bool in_quotes = false;
+            for (char ch : value) {
+                if (ch == '"') {
+                    in_quotes = !in_quotes;
+                    current.push_back(ch);
+                    continue;
+                }
+                if (ch == ',' && !in_quotes) {
+                    items.push_back(trim_copy(current));
+                    current.clear();
+                    continue;
+                }
+                current.push_back(ch);
+            }
+            if (!current.empty()) {
+                items.push_back(trim_copy(current));
+            }
+            return items;
         }
 
         bool is_key_type_token(const std::string &token)
@@ -126,8 +152,104 @@ namespace yuan::net::ssh
             return false;
         }
 
+        bool wildcard_match(const std::string &pattern, const std::string &value)
+        {
+            size_t p = 0;
+            size_t v = 0;
+            size_t star = std::string::npos;
+            size_t match = 0;
+
+            while (v < value.size()) {
+                if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == value[v])) {
+                    ++p;
+                    ++v;
+                } else if (p < pattern.size() && pattern[p] == '*') {
+                    star = p++;
+                    match = v;
+                } else if (star != std::string::npos) {
+                    p = star + 1;
+                    v = ++match;
+                } else {
+                    return false;
+                }
+            }
+
+            while (p < pattern.size() && pattern[p] == '*') {
+                ++p;
+            }
+            return p == pattern.size();
+        }
+
+        std::string trim_quotes(const std::string &value)
+        {
+            if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+                return value.substr(1, value.size() - 2);
+            }
+            return value;
+        }
+
+        std::string session_remote_ip(SshSession *session)
+        {
+            if (!session) {
+                return {};
+            }
+            auto conn = session->client_connection();
+            if (!conn) {
+                return {};
+            }
+            return conn->get_remote_address().get_ip();
+        }
+
+        bool from_option_allows_remote(const std::string &patterns_csv,
+                                       const std::string &remote_ip)
+        {
+            if (remote_ip.empty()) {
+                return false;
+            }
+
+            const auto patterns = split_csv_respecting_quotes(patterns_csv);
+            bool has_positive = false;
+            bool positive_match = false;
+
+            for (const auto &raw_pattern : patterns) {
+                if (raw_pattern.empty()) {
+                    continue;
+                }
+                bool negated = raw_pattern[0] == '!';
+                const std::string pattern = negated ? raw_pattern.substr(1) : raw_pattern;
+                if (pattern.empty()) {
+                    continue;
+                }
+                const bool matched = wildcard_match(pattern, remote_ip);
+                if (negated && matched) {
+                    return false;
+                }
+                if (!negated) {
+                    has_positive = true;
+                    if (matched) {
+                        positive_match = true;
+                    }
+                }
+            }
+
+            return has_positive ? positive_match : true;
+        }
+
+        struct AuthorizedKeyRestrictions
+        {
+            bool no_pty = false;
+            bool no_port_forwarding = false;
+            bool no_agent_forwarding = false;
+            bool no_x11_forwarding = false;
+            std::string forced_command;
+            std::vector<std::string> permitopen;
+            std::vector<std::string> permitlisten;
+        };
+
         bool key_is_authorized(const std::string &algorithm,
-                               const std::vector<uint8_t> &public_key_blob)
+                               const std::vector<uint8_t> &public_key_blob,
+                               SshSession *session,
+                               AuthorizedKeyRestrictions &restrictions_out)
         {
             const auto authorized_keys_path = resolve_authorized_keys_path();
             std::ifstream in(authorized_keys_path);
@@ -167,8 +289,56 @@ namespace yuan::net::ssh
                 }
 
                 if (decoded == public_key_blob) {
+                    AuthorizedKeyRestrictions restrictions;
+                    if (key_type_index > 0) {
+                        const auto options = split_csv_respecting_quotes(parts[0]);
+                        for (const auto &opt_raw : options) {
+                            const auto opt = trim_copy(opt_raw);
+                            constexpr std::string_view from_prefix = "from=";
+                            constexpr std::string_view command_prefix = "command=";
+                            constexpr std::string_view permitopen_prefix = "permitopen=";
+                            constexpr std::string_view permitlisten_prefix = "permitlisten=";
+                            if (opt.rfind(from_prefix, 0) == 0) {
+                                const std::string patterns = trim_quotes(opt.substr(from_prefix.size()));
+                                if (!from_option_allows_remote(patterns, session_remote_ip(session))) {
+                                    goto continue_scan;
+                                }
+                            } else if (opt == "restrict") {
+                                restrictions.no_pty = true;
+                                restrictions.no_port_forwarding = true;
+                                restrictions.no_agent_forwarding = true;
+                                restrictions.no_x11_forwarding = true;
+                            } else if (opt == "no-pty") {
+                                restrictions.no_pty = true;
+                            } else if (opt == "no-port-forwarding") {
+                                restrictions.no_port_forwarding = true;
+                            } else if (opt == "no-agent-forwarding") {
+                                restrictions.no_agent_forwarding = true;
+                            } else if (opt == "no-x11-forwarding") {
+                                restrictions.no_x11_forwarding = true;
+                            } else if (opt == "pty") {
+                                restrictions.no_pty = false;
+                            } else if (opt == "port-forwarding") {
+                                restrictions.no_port_forwarding = false;
+                            } else if (opt == "agent-forwarding") {
+                                restrictions.no_agent_forwarding = false;
+                            } else if (opt == "x11-forwarding") {
+                                restrictions.no_x11_forwarding = false;
+                            } else if (opt.rfind(command_prefix, 0) == 0) {
+                                restrictions.forced_command = trim_quotes(opt.substr(command_prefix.size()));
+                            } else if (opt.rfind(permitopen_prefix, 0) == 0) {
+                                restrictions.permitopen.push_back(trim_quotes(opt.substr(permitopen_prefix.size())));
+                            } else if (opt.rfind(permitlisten_prefix, 0) == 0) {
+                                restrictions.permitlisten.push_back(trim_quotes(opt.substr(permitlisten_prefix.size())));
+                            }
+                        }
+                    }
+                    restrictions_out = std::move(restrictions);
                     return true;
                 }
+
+            continue_scan:
+                continue;
             }
 
             return false;
@@ -329,8 +499,22 @@ namespace yuan::net::ssh
             return SshAuthResult::FAILURE;
         }
 
-        if (!key_is_authorized(credentials.public_key_algorithm, credentials.public_key_blob)) {
+        AuthorizedKeyRestrictions restrictions;
+        if (!key_is_authorized(credentials.public_key_algorithm,
+                               credentials.public_key_blob,
+                               session,
+                               restrictions)) {
             return SshAuthResult::FAILURE;
+        }
+
+        if (session) {
+            session->set_authorized_key_restrictions(restrictions.no_pty,
+                                                     restrictions.forced_command,
+                                                     restrictions.no_port_forwarding,
+                                                     restrictions.no_agent_forwarding,
+                                                     restrictions.no_x11_forwarding,
+                                                     restrictions.permitopen,
+                                                     restrictions.permitlisten);
         }
 
         if (!credentials.has_signature)

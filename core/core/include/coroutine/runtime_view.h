@@ -10,6 +10,7 @@
 #include "coroutine/event_loop_timeout_awaitable.h"
 #include "coroutine/queue_in_loop_awaitable.h"
 #include "timer/timer_util.hpp"
+#include "timer/timer_handle.h"
 
 namespace yuan::timer
 {
@@ -84,31 +85,22 @@ namespace yuan::coroutine
             return sleep_in_event_loop(event_loop_, timer_manager_, timeout_ms);
         }
 
-        AsyncReadAwaiter read(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncReadAwaiter read(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncReadAwaiter read(const net::ConnectionHandle &conn, uint32_t timeout_ms = 0) const noexcept;
-        AsyncReadAwaiter read(net::Connection *conn, uint32_t timeout_ms,
-                              bool forward_terminal_events_after_completion) const noexcept;
         AsyncReadAwaiter read(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms,
-                              bool forward_terminal_events_after_completion) const noexcept;
+                              bool complete_with_buffered_data_on_terminal_event) const noexcept;
         AsyncReadAwaiter read(const net::ConnectionHandle &conn, uint32_t timeout_ms,
-                              bool forward_terminal_events_after_completion) const noexcept;
-        AsyncWriteAwaiter write(net::Connection *conn, const ::yuan::buffer::ByteBuffer &buf,
-                                uint32_t timeout_ms = 0) const noexcept;
+                              bool complete_with_buffered_data_on_terminal_event) const noexcept;
         AsyncWriteAwaiter write(const std::shared_ptr<net::Connection> &conn, const ::yuan::buffer::ByteBuffer &buf,
                                 uint32_t timeout_ms = 0) const noexcept;
         AsyncWriteAwaiter write(const net::ConnectionHandle &conn, const ::yuan::buffer::ByteBuffer &buf,
                                 uint32_t timeout_ms = 0) const noexcept;
-        AsyncFlushAwaiter flush(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncFlushAwaiter flush(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncFlushAwaiter flush(const net::ConnectionHandle &conn, uint32_t timeout_ms = 0) const noexcept;
-        AsyncCloseAwaiter close(net::Connection *conn) const noexcept;
         AsyncCloseAwaiter close(const std::shared_ptr<net::Connection> &conn) const noexcept;
         AsyncCloseAwaiter close(const net::ConnectionHandle &conn) const noexcept;
-        AsyncSslHandshakeAwaiter ssl_handshake(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncSslHandshakeAwaiter ssl_handshake(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncSslHandshakeAwaiter ssl_handshake(const net::ConnectionHandle &conn, uint32_t timeout_ms = 0) const noexcept;
-        AsyncReceiveFromAwaiter receive_from(net::Connection *conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncReceiveFromAwaiter receive_from(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncReceiveFromAwaiter receive_from(const net::ConnectionHandle &conn, uint32_t timeout_ms = 0) const noexcept;
 
@@ -121,6 +113,11 @@ namespace yuan::coroutine
                                                          [cb = std::move(callback)](timer::Timer *) { cb(); });
         }
 
+        timer::TimerHandle schedule_handle(uint32_t delay_ms, std::function<void()> callback) const
+        {
+            return timer::TimerHandle(schedule(delay_ms, std::move(callback)));
+        }
+
         timer::Timer *schedule_periodic(uint32_t delay_ms, uint32_t interval_ms,
                                         std::function<void()> callback, int repeat = 0) const
         {
@@ -131,11 +128,22 @@ namespace yuan::coroutine
                                                         [cb = std::move(callback)](timer::Timer *) { cb(); }, repeat);
         }
 
+        timer::TimerHandle schedule_periodic_handle(uint32_t delay_ms, uint32_t interval_ms,
+                                                    std::function<void()> callback, int repeat = 0) const
+        {
+            return timer::TimerHandle(schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat));
+        }
+
         static void cancel_timer(timer::Timer *timer)
         {
             if (timer) {
                 timer->cancel();
             }
+        }
+
+        static void cancel_timer(const timer::TimerHandle &timer)
+        {
+            timer.cancel();
         }
 
         void register_connection(net::Connection *conn, std::shared_ptr<net::ConnectionHandler> handler) const;

@@ -8,10 +8,10 @@
 #include "context.h"
 #include "session.h"
 #include "response_code.h"
-#include "net/secuity/ssl_module.h"
+#include "net/security/ssl_module.h"
 
 #if defined(WS_USE_SSL)
-#include "net/secuity/openssl.h"
+#include "net/security/openssl.h"
 #endif
 
 #include <memory>

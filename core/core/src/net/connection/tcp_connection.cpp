@@ -6,7 +6,7 @@
 #include "net/handler/event_handler.h"
 #include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
-#include "net/secuity/ssl_handler.h"
+#include "net/security/ssl_handler.h"
 #include "logger.h"
 
 #include <cassert>
@@ -91,6 +91,8 @@ namespace yuan::net
         socket::set_keep_alive(socket_->get_fd(), true);
         socket::set_no_delay(socket_->get_fd(), true);
 
+        local_address_ = socket_->get_local_address();
+
         channel_ = std::make_unique<Channel>(socket_->get_fd());
         channel_->clear_handler();
         channel_->enable_read();
@@ -111,7 +113,7 @@ namespace yuan::net
         channel_->disable_all();
         channel_->clear_handler();
 
-        if (eventHandler_ && !cleanup_done_) {
+        if (eventHandler_ && !cleanup_done_ && channel_->has_handler()) {
             eventHandler_->close_channel(ptr_of(channel_));
             eventHandler_ = nullptr;
         }
@@ -150,7 +152,7 @@ namespace yuan::net
 
     const InetAddress &TcpConnection::get_local_address() const
     {
-        return *socket_->get_address();
+        return local_address_;
     }
 
     void TcpConnection::write(const ::yuan::buffer::ByteBuffer & buffer)
@@ -160,6 +162,7 @@ namespace yuan::net
         }
 
         if ((state_ != ConnectionState::connected && state_ != ConnectionState::closing) || output_shutdown_) {
+            LOG_WARN("write dropped: state={}, output_shutdown={}, fd={}", static_cast<int>(state_), output_shutdown_, channel_->get_fd());
             return;
         }
 
@@ -191,7 +194,10 @@ namespace yuan::net
 
     void TcpConnection::write_and_flush(const ::yuan::buffer::ByteBuffer & buffer)
     {
-        if (buffer.empty() || state_ != ConnectionState::connected) {
+        if (buffer.empty() || (state_ != ConnectionState::connected && state_ != ConnectionState::closing)) {
+            if (!buffer.empty()) {
+                LOG_WARN("write_and_flush dropped: state={}, fd={}", static_cast<int>(state_), channel_->get_fd());
+            }
             return;
         }
 
@@ -201,7 +207,7 @@ namespace yuan::net
 
     void TcpConnection::write_owned_and_flush(::yuan::buffer::ByteBuffer buffer)
     {
-        if (buffer.empty() || state_ != ConnectionState::connected) {
+        if (buffer.empty() || (state_ != ConnectionState::connected && state_ != ConnectionState::closing)) {
             return;
         }
 
@@ -218,6 +224,8 @@ namespace yuan::net
             return;
         }
 
+        LOG_DEBUG("flush: fd={}, output_chunks={}, first_chunk_readable={}", channel_->get_fd(), output_buffer_.size(), front->readable_bytes());
+
         const std::size_t sz = output_buffer_.size();
         for (std::size_t i = 0; i < sz;) {
             int ret;
@@ -233,6 +241,7 @@ namespace yuan::net
 #else
                 ret = ::send(channel_->get_fd(), front->read_ptr(), front->readable_bytes(), MSG_NOSIGNAL);
 #endif
+                LOG_DEBUG("flush send: fd={}, ret={}, readable={}, errno={}", channel_->get_fd(), ret, front->readable_bytes(), ret < 0 ? errno : 0);
             }
 
             if (ret > 0) {
@@ -256,6 +265,16 @@ namespace yuan::net
                     close();
                     return;
                 }
+
+#ifdef _WIN32
+                if (err == WSAEINTR) {
+                    continue;
+                }
+#else
+                if (errno == EINTR) {
+                    continue;
+                }
+#endif
 
                 channel_->enable_write();
                 if (eventHandler_) {
@@ -326,7 +345,11 @@ namespace yuan::net
         ConnectionState lastState = state_;
         state_ = ConnectionState::closing;
         auto *front = output_buffer_.front();
-        if (lastState == ConnectionState::connecting || (front && front->readable_bytes() > 0)) {
+        if (lastState == ConnectionState::connecting) {
+            do_close();
+            return;
+        }
+        if (front && front->readable_bytes() > 0) {
             channel_->disable_read();
             if (eventHandler_) {
                 eventHandler_->update_channel(ptr_of(channel_));
@@ -356,16 +379,21 @@ namespace yuan::net
         [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
         auto *handler = ptr_of(handler_owner);
 
-        if (state_ == ConnectionState::connecting && handler) {
+        if (state_ == ConnectionState::connecting) {
             if (!is_connect_completed(channel_->get_fd())) {
-                handler->on_error(shared_from_this());
                 notify_event_waiters(ConnectionEvent::error);
+                if (handler) {
+                    handler->on_error(shared_from_this());
+                }
                 close();
                 return;
             }
             state_ = ConnectionState::connected;
+            local_address_ = socket_->get_local_address();
             notify_event_waiters(ConnectionEvent::connected);
-            handler->on_connected(shared_from_this());
+            if (handler) {
+                handler->on_connected(shared_from_this());
+            }
         }
 
         if (ssl_handshaking_) {
@@ -405,11 +433,9 @@ namespace yuan::net
             bool read = false, close_flag = false;
             int bytes = 0;
 
-            input_buffer_.clear();
-
-            do {
+            for (;;) {
                 if (read && input_buffer_.writable_bytes() == 0) {
-                    if (grow_input_buffer()) {
+                    if (drain_grow_input_buffer()) {
                         continue;
                     }
                     break;
@@ -435,6 +461,7 @@ namespace yuan::net
                 if (bytes <= 0) {
                     if (bytes == 0) {
                         close_flag = true;
+                        break;
 #ifdef _WIN32
                     } else if (bytes == SOCKET_ERROR) {
                         const int err = WSAGetLastError();
@@ -463,6 +490,9 @@ namespace yuan::net
                             close_flag = true;
                             break;
                         }
+                        if (errno == EINTR) {
+                            continue;
+                        }
                         channel_->enable_read();
                         if (eventHandler_) {
                             eventHandler_->update_channel(ptr_of(channel_));
@@ -474,7 +504,7 @@ namespace yuan::net
                     read = true;
                     input_buffer_.commit(static_cast<std::size_t>(bytes));
                 }
-            } while (bytes > 0 && input_buffer_.writable_bytes() == 0);
+            }
 
             if (read && state_ == ConnectionState::connected) {
                 notify_event_waiters(ConnectionEvent::readable);
@@ -506,11 +536,9 @@ namespace yuan::net
             bool read = false, close_flag = false;
             int bytes = 0;
 
-            input_buffer_.clear();
-
-            do {
+            for (;;) {
                 if (read && input_buffer_.writable_bytes() == 0) {
-                    if (grow_input_buffer()) {
+                    if (drain_grow_input_buffer()) {
                         continue;
                     }
                     break;
@@ -532,6 +560,7 @@ namespace yuan::net
                 if (bytes <= 0) {
                     if (bytes == 0) {
                         close_flag = true;
+                        break;
                     } else if (bytes == -1) {
                         if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
                             LOG_ERROR("ssl read error: {}", errno);
@@ -541,6 +570,9 @@ namespace yuan::net
                             }
                             close_flag = true;
                             break;
+                        }
+                        if (errno == EINTR) {
+                            continue;
                         }
                         channel_->enable_read();
                         if (eventHandler_) {
@@ -552,7 +584,7 @@ namespace yuan::net
                     read = true;
                     input_buffer_.commit(static_cast<std::size_t>(bytes));
                 }
-            } while (bytes > 0 && input_buffer_.writable_bytes() == 0);
+            }
 
             if (read && state_ == ConnectionState::connected) {
                 notify_event_waiters(ConnectionEvent::readable);
@@ -588,16 +620,21 @@ namespace yuan::net
         [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
         auto *handler = ptr_of(handler_owner);
 
-        if (state_ == ConnectionState::connecting && handler) {
+        if (state_ == ConnectionState::connecting) {
             if (!is_connect_completed(channel_->get_fd())) {
-                handler->on_error(shared_from_this());
                 notify_event_waiters(ConnectionEvent::error);
+                if (handler) {
+                    handler->on_error(shared_from_this());
+                }
                 close();
                 return;
             }
             state_ = ConnectionState::connected;
+            local_address_ = socket_->get_local_address();
             notify_event_waiters(ConnectionEvent::connected);
-            handler->on_connected(shared_from_this());
+            if (handler) {
+                handler->on_connected(shared_from_this());
+            }
         }
 
         if (ssl_handshaking_) {
@@ -634,19 +671,18 @@ namespace yuan::net
         }
 
         if (state_ == ConnectionState::connected || state_ == ConnectionState::closing) {
-            if (handler) {
-                handler->on_write(shared_from_this());
-            }
-            if (state_ == ConnectionState::closing) {
-                flush();
-                if (output_readable_bytes() == 0) {
-                    do_close();
-                }
-                return;
-            }
             flush();
             if (output_readable_bytes() == 0) {
                 notify_event_waiters(ConnectionEvent::writable);
+                if (handler) {
+                    handler->on_write(shared_from_this());
+                }
+                if (output_readable_bytes() > 0) {
+                    flush();
+                }
+                if (state_ == ConnectionState::closing && output_readable_bytes() == 0) {
+                    do_close();
+                }
             }
         }
     }

@@ -16,7 +16,6 @@ namespace yuan::net
         conv = 0x23fedacd;
         kcp_ = nullptr;
         conn_ = nullptr;
-        updateTimer_ = nullptr;
     }
 
     KcpAdapter::~KcpAdapter()
@@ -26,10 +25,8 @@ namespace yuan::net
             kcp_ = nullptr;
         }
 
-        if (updateTimer_) {
-            updateTimer_->cancel();
-            updateTimer_ = nullptr;
-        }
+        updateTimer_.cancel();
+        updateTimer_.reset();
     }
 
     bool KcpAdapter::init(Connection * conn, timer::TimerManager * timerManager)
@@ -39,7 +36,7 @@ namespace yuan::net
         kcp_->output = &KcpAdapter::on_send;
         ikcp_wndsize(kcp_, 128, 128);
         ikcp_nodelay(kcp_, 1, 10, 1, 1);
-        updateTimer_ = timerManager->interval(0, timerManager->get_time_unit(), this, -1);
+        updateTimer_ = timerManager->interval_handle(0, timerManager->get_time_unit(), this, -1);
         return true;
     }
 

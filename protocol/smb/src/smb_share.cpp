@@ -8,7 +8,7 @@ namespace yuan::net::smb
     namespace
     {
         template <typename T>
-        T *ptr_of(const std::unique_ptr<T> &owner)
+        T *ptr_of(const std::shared_ptr<T> &owner)
         {
             return owner ? const_cast<T *>(&*owner) : nullptr;
         }
@@ -100,7 +100,7 @@ namespace yuan::net::smb
     void SmbShareManager::add_share(const SmbShareConfig & config)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto share = std::make_unique<SmbShare>(config);
+        auto share = std::make_shared<SmbShare>(config);
         shares_[config.name] = std::move(share);
     }
 
@@ -118,6 +118,16 @@ namespace yuan::net::smb
             return ptr_of(it->second);
         }
         return nullptr;
+    }
+
+    std::shared_ptr<SmbShare> SmbShareManager::find_share_owner(const std::string & name)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = shares_.find(name);
+        if (it != shares_.end()) {
+            return it->second;
+        }
+        return {};
     }
 
     std::vector<SmbShare *> SmbShareManager::list_shares()

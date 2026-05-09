@@ -5,6 +5,7 @@
 #include "request.h"
 #include "response.h"
 #include "response_code.h"
+#include "base/time.h"
 
 namespace yuan::net::http
 {
@@ -24,14 +25,14 @@ namespace yuan::net::http
     }
 
     HttpSessionContext::HttpSessionContext(Connection * conn)
-        : mode_(Mode::server), has_parsed_(false), conn_(conn)
+        : mode_(Mode::server), has_parsed_(false), request_start_ms_(0), conn_(conn)
     {
         request_ = std::make_unique<HttpRequest>(this);
         response_ = std::make_unique<HttpResponse>(this);
     }
 
     HttpSessionContext::HttpSessionContext(const std::shared_ptr<Connection> &conn)
-        : mode_(Mode::server), has_parsed_(false), conn_owner_(conn), conn_(ptr_of(conn))
+        : mode_(Mode::server), has_parsed_(false), request_start_ms_(0), conn_owner_(conn), conn_(ptr_of(conn))
     {
         request_ = std::make_unique<HttpRequest>(this);
         response_ = std::make_unique<HttpResponse>(this);
@@ -53,6 +54,7 @@ namespace yuan::net::http
         if (!is_downloading() && !has_parsed_) {
             reset();
             has_parsed_ = true;
+            request_start_ms_ = base::time::steady_now_ms();
         }
 
         auto pkt = get_packet();
@@ -65,6 +67,7 @@ namespace yuan::net::http
         if (!is_downloading() && !has_parsed_) {
             reset();
             has_parsed_ = true;
+            request_start_ms_ = base::time::steady_now_ms();
         }
 
         auto pkt = get_packet();
@@ -139,5 +142,14 @@ namespace yuan::net::http
     {
         const auto pkt = get_packet();
         return pkt->is_downloading() && pkt->is_task_prepared();
+    }
+
+    uint64_t HttpSessionContext::request_elapsed_ms() const
+    {
+        if (request_start_ms_ == 0) {
+            return 0;
+        }
+        const uint64_t now = base::time::steady_now_ms();
+        return now > request_start_ms_ ? (now - request_start_ms_) : 0;
     }
 }

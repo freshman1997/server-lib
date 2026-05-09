@@ -99,12 +99,12 @@ namespace yuan::net::smb
         {
             constexpr uint32_t bytes_per_sector = 4096;
             constexpr uint32_t sectors_per_unit = 1;
-            constexpr uint32_t fs_attrs = FILE_CASE_SENSITIVE_SEARCH |
-                                          FILE_CASE_PRESERVED_NAMES |
-                                          FILE_UNICODE_ON_DISK |
-                                          FILE_SUPPORTS_SPARSE_FILES |
-                                          FILE_SUPPORTS_REPARSE_POINTS |
-                                          FILE_SUPPORTS_EXTENDED_ATTRIBUTES;
+            constexpr uint32_t fs_attrs = SMB_FILE_CASE_SENSITIVE_SEARCH |
+                                          SMB_FILE_CASE_PRESERVED_NAMES |
+                                          SMB_FILE_UNICODE_ON_DISK |
+                                          SMB_FILE_SUPPORTS_SPARSE_FILES |
+                                          SMB_FILE_SUPPORTS_REPARSE_POINTS |
+                                          SMB_FILE_SUPPORTS_EXTENDED_ATTRIBUTES;
 
             std::error_code ec;
             auto space = std::filesystem::space(share.path().empty() ? "." : share.path(), ec);
@@ -134,7 +134,7 @@ namespace yuan::net::smb
                 Smb2Codec::write_le32(buf, bytes_per_sector);
                 return buffer_to_vector(buf);
             case FileInfoClass::FileFsDeviceInformation:
-                Smb2Codec::write_le32(buf, share.type() == ShareType::PIPE ? FILE_DEVICE_NAMED_PIPE : FILE_DEVICE_DISK);
+                Smb2Codec::write_le32(buf, share.type() == ShareType::PIPE ? SMB_FILE_DEVICE_NAMED_PIPE : SMB_FILE_DEVICE_DISK);
                 Smb2Codec::write_le32(buf, FILE_DEVICE_SECURE_OPEN);
                 return buffer_to_vector(buf);
             case FileInfoClass::FileFsAttributeInformation: {
@@ -559,7 +559,8 @@ namespace yuan::net::smb
             share_name = path;
         }
 
-        SmbShare *share = share_mgr_.find_share(share_name);
+        auto share_owner = share_mgr_.find_share_owner(share_name);
+        auto *share = share_owner ? const_cast<SmbShare *>(&*share_owner) : nullptr;
         if (!share) {
             auto referral = dfs_resolver_.resolve(path);
             if (referral) {
@@ -574,6 +575,7 @@ namespace yuan::net::smb
 
         TreeConnection tree;
         tree.share_name = share_name;
+        tree.share_owner = share_owner;
         tree.share = share;
         tree.is_dfs = (share->share_flags() & SMB2_SHAREFLAG_DFS) != 0;
         tree.is_ca = (share->capabilities() & SMB2_GLOBAL_CAP_PERSISTENT_HANDLES) != 0;

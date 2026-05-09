@@ -2,11 +2,13 @@
 #define __HTTP_SERVER_H__
 #include <cstdint>
 #include <ctime>
+#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <set>
 #include <string>
 #include <string_view>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -18,7 +20,7 @@
 #include "net/async/async_listener_host.h"
 #include "net/async/async_connection_context.h"
 #include "net/runtime/network_runtime.h"
-#include "net/secuity/ssl_module.h"
+#include "net/security/ssl_module.h"
 #include "request_dispatcher.h"
 #include "thread/thread_pool.h"
 
@@ -40,7 +42,26 @@ namespace yuan::net::http
         bool enable_http2 = false;
         bool enable_http3 = false;
         size_t max_body_size = 0;
+        int max_connections = 0;
+        int max_connections_per_ip = 0;
+        int max_inflight_requests_per_ip = 0;
         std::string server_name = "YuanServer/1.0";
+    };
+
+    struct HttpServerStats
+    {
+        uint64_t connection_rejected_total = 0;
+        uint64_t inflight_rejected_total = 0;
+        int active_http_connections = 0;
+        int active_inflight_requests = 0;
+    };
+
+    struct RouteRejectCounters
+    {
+        std::string route;
+        uint64_t rate_limit = 0;
+        uint64_t inflight = 0;
+        uint64_t conn_reject = 0;
     };
 
     struct StaticMountOptions
@@ -124,7 +145,19 @@ namespace yuan::net::http
             return config_;
         }
 
+        HttpServerStats snapshot_server_stats() const;
+        std::vector<RouteRejectCounters> snapshot_route_reject_counters() const;
+        void update_runtime_limits(int max_connections,
+                                   int max_connections_per_ip,
+                                   int max_inflight_requests_per_ip);
+
     private:
+        enum class RejectReason : uint8_t {
+            rate_limit,
+            inflight,
+            conn_reject
+        };
+
         bool init_ssl_if_needed();
         bool init_http_features();
         void refresh_h2_dispatch_paths();
@@ -135,6 +168,12 @@ namespace yuan::net::http
         bool parse_request(HttpSessionContext *context, const ::yuan::buffer::ByteBuffer &data);
         bool validate_request_version(HttpSessionContext *context);
         bool is_h2_dispatch_path(std::string_view path) const;
+        bool allow_new_connection(const net::Connection &conn);
+        void on_connection_closed(const net::Connection &conn);
+        bool try_acquire_inflight_request(const HttpRequest *request);
+        void release_inflight_request(const HttpRequest *request);
+        std::string reject_route_key(const HttpRequest *request) const;
+        void increment_reject_counter(std::string route_key, RejectReason reason);
         bool dispatch_h2_context(HttpSessionContext *context);
         bool dispatch_request(HttpSessionContext *context);
         void finalize_request(uint64_t session_id, HttpSession *session, HttpSessionContext *context);
@@ -224,6 +263,17 @@ namespace yuan::net::http
         HttpServerConfig config_;
         MiddlewarePipeline global_pipeline_;
         std::unordered_set<std::string> h2_dispatch_paths_;
+        mutable std::mutex conn_limit_mutex_;
+        std::unordered_map<uint32_t, int> active_conn_per_ip_;
+        mutable std::mutex inflight_mutex_;
+        std::unordered_map<uint32_t, int> inflight_req_per_ip_;
+        std::atomic<uint64_t> connection_rejected_total_{ 0 };
+        std::atomic<uint64_t> inflight_rejected_total_{ 0 };
+        std::atomic<int> max_connections_limit_{ 0 };
+        std::atomic<int> max_connections_per_ip_limit_{ 0 };
+        std::atomic<int> max_inflight_requests_per_ip_limit_{ 0 };
+        mutable std::mutex reject_counters_mutex_;
+        std::unordered_map<std::string, RouteRejectCounters> reject_counters_;
     };
 }
 #endif

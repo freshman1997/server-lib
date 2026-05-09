@@ -80,12 +80,12 @@ namespace yuan::net
 
         coroutine::Task<coroutine::ReadResult> read_async(
             uint32_t timeout_ms,
-            bool forward_terminal_events_after_completion)
+            bool complete_with_buffered_data_on_terminal_event)
         {
             if (!conn_handle_ || closed_) {
                 co_return coroutine::ReadResult::with_status(coroutine::IoStatus::invalid_state);
             }
-            co_return co_await runtime_.read(conn_handle_, timeout_ms, forward_terminal_events_after_completion);
+            co_return co_await runtime_.read(conn_handle_, timeout_ms, complete_with_buffered_data_on_terminal_event);
         }
 
         coroutine::Task<coroutine::WriteResult> write_async(const ::yuan::buffer::ByteBuffer &buffer, uint32_t timeout_ms = 0)
@@ -252,21 +252,21 @@ namespace yuan::net
             return runtime_;
         }
 
-        timer::Timer *schedule(uint32_t delay_ms, std::function<void()> callback)
+        timer::TimerHandle schedule(uint32_t delay_ms, std::function<void()> callback)
         {
-            return runtime_.schedule(delay_ms, std::move(callback));
+            return timer::TimerHandle(runtime_.schedule(delay_ms, std::move(callback)));
         }
 
-        timer::Timer *schedule_periodic(uint32_t delay_ms, uint32_t interval_ms,
-                                        std::function<void()> callback, int repeat = 0)
+        timer::TimerHandle schedule_periodic(uint32_t delay_ms, uint32_t interval_ms,
+                                             std::function<void()> callback, int repeat = 0)
         {
-            return runtime_.schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat);
+            return timer::TimerHandle(runtime_.schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat));
         }
 
-        void cancel_timer(timer::Timer *timer)
+        void cancel_timer(const timer::TimerHandle &timer)
         {
             if (timer) {
-                timer->cancel();
+                timer.cancel();
             }
         }
 
@@ -312,9 +312,7 @@ namespace yuan::net
             }
             void on_input_shutdown(const std::shared_ptr<Connection> &conn) override
             {
-                if (conn) {
-                    conn->close();
-                }
+                (void)conn;
             }
         };
 

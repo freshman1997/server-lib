@@ -9,6 +9,7 @@
 #include "coroutine/event_loop_timeout_awaitable.h"
 #include "coroutine/queue_in_loop_awaitable.h"
 #include "timer/timer.h"
+#include "timer/timer_handle.h"
 
 namespace yuan::timer
 {
@@ -56,9 +57,24 @@ namespace yuan::net
 
         timer::Timer *schedule(uint32_t delay_ms, std::function<void()> callback);
 
+        timer::TimerHandle schedule_handle(uint32_t delay_ms, std::function<void()> callback)
+        {
+            return timer::TimerHandle(schedule(delay_ms, std::move(callback)));
+        }
+
         timer::Timer *schedule_periodic(uint32_t delay_ms, uint32_t interval_ms, std::function<void()> callback, int repeat = 0);
 
+        timer::TimerHandle schedule_periodic_handle(uint32_t delay_ms, uint32_t interval_ms, std::function<void()> callback, int repeat = 0)
+        {
+            return timer::TimerHandle(schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat));
+        }
+
         void cancel_timer(timer::Timer *timer);
+
+        void cancel_timer(const timer::TimerHandle &timer)
+        {
+            timer.cancel();
+        }
 
         void dispatch(std::function<void()> callback);
 
@@ -155,35 +171,14 @@ namespace yuan::net
             return view_.sleep_for(timeout_ms);
         }
 
-        coroutine::AsyncReadAwaiter read(Connection *conn, uint32_t timeout_ms = 0) const noexcept
-        {
-            return view_.read(conn, timeout_ms);
-        }
-
-        coroutine::AsyncWriteAwaiter write(Connection *conn, const ::yuan::buffer::ByteBuffer &buf,
-                                           uint32_t timeout_ms = 0) const noexcept
-        {
-            return view_.write(conn, buf, timeout_ms);
-        }
-
-        coroutine::AsyncFlushAwaiter flush(Connection *conn, uint32_t timeout_ms = 0) const noexcept
-        {
-            return view_.flush(conn, timeout_ms);
-        }
-
-        coroutine::AsyncCloseAwaiter close(Connection *conn) const noexcept
-        {
-            return view_.close(conn);
-        }
-
-        coroutine::AsyncReceiveFromAwaiter receive_from(Connection *conn, uint32_t timeout_ms = 0) const noexcept
-        {
-            return view_.receive_from(conn, timeout_ms);
-        }
-
         timer::Timer *schedule(uint32_t delay_ms, std::function<void()> callback) const
         {
             return view_.schedule(delay_ms, std::move(callback));
+        }
+
+        timer::TimerHandle schedule_handle(uint32_t delay_ms, std::function<void()> callback) const
+        {
+            return timer::TimerHandle(schedule(delay_ms, std::move(callback)));
         }
 
         timer::Timer *schedule_periodic(uint32_t delay_ms, uint32_t interval_ms,
@@ -192,9 +187,20 @@ namespace yuan::net
             return view_.schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat);
         }
 
+        timer::TimerHandle schedule_periodic_handle(uint32_t delay_ms, uint32_t interval_ms,
+                                                    std::function<void()> callback, int repeat = 0) const
+        {
+            return timer::TimerHandle(schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat));
+        }
+
         static void cancel_timer(timer::Timer *timer)
         {
             coroutine::RuntimeView::cancel_timer(timer);
+        }
+
+        static void cancel_timer(const timer::TimerHandle &timer)
+        {
+            timer.cancel();
         }
 
         void register_connection(const std::shared_ptr<Connection> &conn, std::shared_ptr<ConnectionHandler> handler) const

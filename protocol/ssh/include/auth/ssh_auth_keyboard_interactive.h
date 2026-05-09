@@ -24,13 +24,8 @@ namespace yuan::net::ssh
         {
             (void)session;
             (void)username;
-            if (credentials.kb_interactive_responses.empty())
-                return SshAuthResult::NEED_MORE;
-            for (const auto &r : credentials.kb_interactive_responses) {
-                if (r.empty())
-                    return SshAuthResult::FAILURE;
-            }
-            return SshAuthResult::SUCCESS;
+            (void)credentials;
+            return SshAuthResult::NEED_MORE;
         }
 
         SshUserauthInfoRequestMessage build_challenge(SshSession *session,
@@ -55,13 +50,8 @@ namespace yuan::net::ssh
         {
             (void)session;
             (void)username;
-            if (responses.empty())
-                return SshAuthResult::FAILURE;
-            for (const auto &r : responses) {
-                if (r.empty())
-                    return SshAuthResult::FAILURE;
-            }
-            return SshAuthResult::SUCCESS;
+            (void)responses;
+            return SshAuthResult::FAILURE;
         }
     };
 }

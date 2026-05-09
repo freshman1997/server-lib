@@ -1,10 +1,22 @@
 #include "net/channel/channel.h"
 #include "net/handler/select_handler.h"
 
+#include <atomic>
+
 namespace yuan::net
 {
     namespace
     {
+        uint64_t allocate_channel_generation() noexcept
+        {
+            static std::atomic<uint64_t> next_generation{ 1 };
+            uint64_t generation = next_generation.fetch_add(1, std::memory_order_relaxed);
+            if (generation == 0) {
+                generation = next_generation.fetch_add(1, std::memory_order_relaxed);
+            }
+            return generation;
+        }
+
         template <typename T>
         T *ptr_of(const std::shared_ptr<T> &owner)
         {
@@ -16,7 +28,8 @@ namespace yuan::net
     {
     }
 
-    Channel::Channel(int fd) : fd_(fd), handler_(nullptr),events_(NONE_EVENT), revent_(NONE_EVENT), priority_(0)
+    Channel::Channel(int fd)
+        : fd_(fd), handler_(nullptr), events_(NONE_EVENT), revent_(NONE_EVENT), priority_(0), generation_(allocate_channel_generation())
     {
         disable_all();
     }

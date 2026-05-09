@@ -978,12 +978,18 @@ namespace yuan::net::smb
                 }
             }
 
+            const uint32_t next = ctx.next;
             contexts.push_back(std::move(ctx));
 
-            if (ctx.next == 0)
+            if (next == 0)
                 break;
-            offset += ctx.next;
-            offset = (offset + 7) & ~7u;
+
+            if (next < 16 || next > data.size() - offset) {
+                break;
+            }
+
+            offset += static_cast<size_t>(next);
+            offset = (offset + 7) & ~size_t(7);
         }
 
         return contexts;

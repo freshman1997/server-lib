@@ -15,7 +15,7 @@ namespace yuan::coroutine
     T sync_wait(RuntimeView runtime, Task<T> task)
     {
         if (!runtime.event_loop()) {
-            return task.execute();
+            return task.resume_once_and_get_result();
         }
 
         std::optional<T> result;
@@ -57,7 +57,7 @@ namespace yuan::coroutine
     inline void sync_wait(RuntimeView runtime, Task<void> task)
     {
         if (!runtime.event_loop()) {
-            task.execute();
+            task.resume_once_and_get_result();
             return;
         }
 

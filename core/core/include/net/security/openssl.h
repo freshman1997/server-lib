@@ -1,7 +1,7 @@
-#ifndef __NET_SECUITY_OPENSSL_HANDLER_H__
-#define __NET_SECUITY_OPENSSL_HANDLER_H__
-#include "net/secuity/ssl_module.h"
-#include "net/secuity/ssl_handler.h"
+#ifndef __NET_SECURITY_OPENSSL_HANDLER_H__
+#define __NET_SECURITY_OPENSSL_HANDLER_H__
+#include "net/security/ssl_module.h"
+#include "net/security/ssl_handler.h"
 #include <memory>
 
 namespace yuan::net

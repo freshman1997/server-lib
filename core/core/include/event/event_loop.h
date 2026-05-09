@@ -15,6 +15,7 @@ namespace yuan::timer
 
 namespace yuan::net 
 {
+    struct PollEvent;
     class Poller;
     class Socket;
     class Connection;
@@ -49,6 +50,8 @@ namespace yuan::net
 
         void post_coroutine(std::coroutine_handle<> handle) noexcept;
 
+        bool accepts_poll_event_for_test(const PollEvent &event) const;
+
     public:
         void wakeup();
 
@@ -58,4 +61,3 @@ namespace yuan::net
     };
 }
 #endif
-

@@ -4,6 +4,7 @@
 #include "connection.h"
 #include "stream_transport.h"
 #include "net/handler/select_handler.h"
+#include "net/socket/inet_address.h"
 #include <memory>
 #include <string>
 
@@ -92,6 +93,7 @@ namespace yuan::net
         ConnectionState state_;
         std::unique_ptr<Channel> channel_;
         std::unique_ptr<Socket> socket_;
+        InetAddress local_address_;
         std::shared_ptr<ConnectionHandler> connectionHandlerOwner_;
         EventHandler *eventHandler_;
         std::shared_ptr<SSLHandler> ssl_handler_;

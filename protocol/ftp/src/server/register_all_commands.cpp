@@ -6,6 +6,8 @@
 #include "server/commands/cdup.h"
 #include "server/commands/cwd.h"
 #include "server/commands/dele.h"
+#include "server/commands/eprt.h"
+#include "server/commands/epsv.h"
 #include "server/commands/help.h"
 #include "server/commands/list.h"
 #include "server/commands/mkd.h"
@@ -46,6 +48,8 @@ namespace yuan::net::ftp
             factory->register_command(new CommandCdup());
             factory->register_command(new CommandCwd());
             factory->register_command(new CommandDele());
+            factory->register_command(new CommandEprt());
+            factory->register_command(new CommandEpsv());
             factory->register_command(new CommandHelp());
             factory->register_command(new CommandList());
             factory->register_command(new CommandMkd());

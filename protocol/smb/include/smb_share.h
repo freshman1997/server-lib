@@ -66,11 +66,11 @@ namespace yuan::net::smb
         }
         SmbFileSystem *file_system() const
         {
-            return file_system_;
+            return file_system_.get();
         }
-        void set_file_system(SmbFileSystem *fs)
+        void set_file_system(std::unique_ptr<SmbFileSystem> fs)
         {
-            file_system_ = fs;
+            file_system_ = std::move(fs);
         }
 
         std::string resolve_path(const std::u16string &relative) const;
@@ -108,7 +108,7 @@ namespace yuan::net::smb
         uint32_t capabilities_;
         int max_uses_;
         int current_uses_ = 0;
-        SmbFileSystem *file_system_ = nullptr;
+        std::unique_ptr<SmbFileSystem> file_system_;
         mutable std::mutex files_mutex_;
         std::unordered_map<uint64_t, OpenFile> open_files_;
     };
@@ -119,12 +119,13 @@ namespace yuan::net::smb
         void add_share(const SmbShareConfig &config);
         void remove_share(const std::string &name);
         SmbShare *find_share(const std::string &name);
+        std::shared_ptr<SmbShare> find_share_owner(const std::string &name);
         std::vector<SmbShare *> list_shares();
         SmbShare *find_share_by_type(ShareType type);
 
     private:
         mutable std::mutex mutex_;
-        std::unordered_map<std::string, std::unique_ptr<SmbShare> > shares_;
+        std::unordered_map<std::string, std::shared_ptr<SmbShare> > shares_;
     };
 }
 #endif

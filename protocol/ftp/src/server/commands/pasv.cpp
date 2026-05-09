@@ -17,14 +17,15 @@ namespace yuan::net::ftp
         if (port <= 0) {
             return { FtpResponseCode::__425__, "No passive ports available." };
         }
-        InetAddress addr("", port);
+        auto *conn = session->get_connection();
+        std::string server_ip = conn ? conn->get_local_address().get_ip() : "127.0.0.1";
+        InetAddress addr(server_ip, port);
         if (!session->start_file_stream(addr, StreamMode::Receiver)) {
             ServerContext::get_instance()->remove_stream_port(port);
             return { FtpResponseCode::__425__, "Can't open passive data listener." };
         }
         session->set_passive_addr(addr);
-        auto *conn = session->get_connection();
-        std::string server_ip = conn ? conn->get_local_address().get_ip() : "127.0.0.1";
+        session->clear_active_addr();
         return { FtpResponseCode::__227__, build_pasv_response(server_ip, port) };
     }
     CommandType CommandPasv::get_command_type()

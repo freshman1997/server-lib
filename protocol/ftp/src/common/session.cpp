@@ -54,6 +54,7 @@ namespace yuan::net::ftp
         Connection *conn = conn_;
         conn_ = nullptr;
         passive_addr_.reset();
+        active_addr_.reset();
         if (app_) {
             auto *app = app_;
             app_ = nullptr;
@@ -107,6 +108,7 @@ namespace yuan::net::ftp
             context_.app_ = nullptr;
             context_.file_stream_.reset();
             context_.passive_addr_.reset();
+            context_.active_addr_.reset();
         } else {
             context_.close();
         }
@@ -181,6 +183,7 @@ namespace yuan::net::ftp
         context_.app_ = nullptr;
         context_.conn_ = nullptr;
         context_.passive_addr_.reset();
+        context_.active_addr_.reset();
         context_.file_stream_.reset();
         pending_file_stream_cleanup_.reset();
         if (app) {
@@ -293,6 +296,7 @@ namespace yuan::net::ftp
             context_.app_ = nullptr;
             context_.file_stream_.reset();
             context_.passive_addr_.reset();
+            context_.active_addr_.reset();
             return;
         }
 
@@ -306,6 +310,7 @@ namespace yuan::net::ftp
         context_.app_ = nullptr;
         context_.file_stream_.reset();
         context_.passive_addr_.reset();
+        context_.active_addr_.reset();
         pending_file_stream_cleanup_.reset();
 
         if (ffs) {
@@ -349,6 +354,16 @@ namespace yuan::net::ftp
         context_.user_.logined_ = false;
     }
 
+    const std::string &FtpSession::get_username() const
+    {
+        return context_.user_.username_;
+    }
+
+    const std::string &FtpSession::get_password() const
+    {
+        return context_.user_.password_;
+    }
+
     bool FtpSession::start_file_stream(const InetAddress & addr, StreamMode mode)
     {
         assert(context_.app_);
@@ -356,9 +371,12 @@ namespace yuan::net::ftp
             if (data_listener_) {
                 return true;
             }
-            data_listener_ = std::make_unique<net::AsyncListenerHost>();
-            auto *runtime = context_.app_->get_runtime();
-            if (!data_listener_->bind(addr.get_port(), *runtime)) {
+data_listener_ = std::make_unique<net::AsyncListenerHost>();
+        auto *runtime = context_.app_->get_runtime();
+        const auto &host = addr.get_ip();
+        bool bound = host.empty() ? data_listener_->bind(addr.get_port(), *runtime)
+                                  : data_listener_->bind(host, addr.get_port(), *runtime);
+        if (!bound) {
                 data_listener_.reset();
                 return false;
             }
@@ -382,6 +400,16 @@ namespace yuan::net::ftp
     void FtpSession::clear_passive_addr()
     {
         context_.passive_addr_.reset();
+    }
+
+    void FtpSession::set_active_addr(const InetAddress & addr)
+    {
+        context_.active_addr_ = addr;
+    }
+
+    void FtpSession::clear_active_addr()
+    {
+        context_.active_addr_.reset();
     }
 
     void FtpSession::check_file_stream(FtpFileStreamSession * fs)
@@ -436,6 +464,7 @@ namespace yuan::net::ftp
         context_.app_ = nullptr;
         context_.file_stream_.reset();
         context_.passive_addr_.reset();
+        context_.active_addr_.reset();
         data_listener_.reset();
         pending_file_info_ = nullptr;
     }

@@ -139,6 +139,78 @@ namespace yuan::net::smb
                    handle.directory_pattern == pattern &&
                    *handle.directory_info_class == info_class;
         }
+
+#ifndef _WIN32
+        static int open_with_eintr_retry(const char *path, int flags, mode_t mode, bool has_mode)
+        {
+            for (;;) {
+                const int fd = has_mode ? ::open(path, flags, mode) : ::open(path, flags);
+                if (fd >= 0 || errno != EINTR) {
+                    return fd;
+                }
+            }
+        }
+
+        static int fstat_with_eintr_retry(int fd, struct stat *st)
+        {
+            for (;;) {
+                const int ret = ::fstat(fd, st);
+                if (ret == 0 || errno != EINTR) {
+                    return ret;
+                }
+            }
+        }
+
+        static int close_with_eintr_retry(int fd)
+        {
+            for (;;) {
+                const int ret = ::close(fd);
+                if (ret == 0 || errno != EINTR) {
+                    return ret;
+                }
+            }
+        }
+
+        static ssize_t pread_with_eintr_retry(int fd, void *buf, size_t count, off_t offset)
+        {
+            for (;;) {
+                const ssize_t ret = ::pread(fd, buf, count, offset);
+                if (ret >= 0 || errno != EINTR) {
+                    return ret;
+                }
+            }
+        }
+
+        static ssize_t pwrite_with_eintr_retry(int fd, const void *buf, size_t count, off_t offset)
+        {
+            for (;;) {
+                const ssize_t ret = ::pwrite(fd, buf, count, offset);
+                if (ret >= 0 || errno != EINTR) {
+                    return ret;
+                }
+            }
+        }
+
+        static int fsync_with_eintr_retry(int fd)
+        {
+            for (;;) {
+                const int ret = ::fsync(fd);
+                if (ret == 0 || errno != EINTR) {
+                    return ret;
+                }
+            }
+        }
+
+        static int ftruncate_with_eintr_retry(int fd, off_t len)
+        {
+            for (;;) {
+                const int ret = ::ftruncate(fd, len);
+                if (ret == 0 || errno != EINTR) {
+                    return ret;
+                }
+            }
+        }
+#endif
     }
 
     LocalFileSystem::LocalFileSystem(const std::string &root_path)
@@ -193,12 +265,12 @@ namespace yuan::net::smb
     {
         uint32_t attrs = 0;
         if (mode & S_IFDIR) {
-            attrs |= FILE_ATTRIBUTE_DIRECTORY;
+            attrs |= SMB_FILE_ATTRIBUTE_DIRECTORY;
         } else {
-            attrs |= FILE_ATTRIBUTE_NORMAL;
+            attrs |= SMB_FILE_ATTRIBUTE_NORMAL;
         }
         if (!(mode & S_IWUSR)) {
-            attrs |= FILE_ATTRIBUTE_READONLY;
+            attrs |= SMB_FILE_ATTRIBUTE_READONLY;
         }
         return attrs;
     }
@@ -208,17 +280,17 @@ namespace yuan::net::smb
     {
         OpenResult result;
         std::string full_path = resolve(path);
-        auto *h = new LocalHandle();
+        auto holder = std::make_unique<LocalHandle>();
+        auto *h = holder.get();
         h->path = full_path;
-        h->is_directory = (create_options & FILE_DIRECTORY_FILE) != 0;
-        h->delete_on_close = (create_options & FILE_DELETE_ON_CLOSE) != 0;
+        h->is_directory = (create_options & SMB_FILE_DIRECTORY_FILE) != 0;
+        h->delete_on_close = (create_options & SMB_FILE_DELETE_ON_CLOSE) != 0;
 
         namespace fs = std::filesystem;
         std::error_code ec;
         const bool existed_before = fs::exists(full_path, ec);
         const bool is_existing_directory = existed_before && fs::is_directory(full_path, ec);
-        if ((create_options & FILE_NON_DIRECTORY_FILE) != 0 && is_existing_directory) {
-            delete h;
+        if ((create_options & SMB_FILE_NON_DIRECTORY_FILE) != 0 && is_existing_directory) {
             result.status = NtStatus::NOT_SUPPORTED;
             return result;
         }
@@ -266,7 +338,6 @@ namespace yuan::net::smb
                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                     nullptr, creation, attrs, nullptr);
         if (handle == INVALID_HANDLE_VALUE) {
-            delete h;
             result.success = false;
             switch (GetLastError()) {
             case ERROR_FILE_NOT_FOUND:
@@ -288,7 +359,7 @@ namespace yuan::net::smb
         }
 
         h->handle = handle;
-        result.handle = h;
+        result.handle = holder.release();
 
         BY_HANDLE_FILE_INFORMATION info{};
         if (GetFileInformationByHandle(handle, &info)) {
@@ -311,24 +382,20 @@ namespace yuan::net::smb
         if (h->is_directory || is_existing_directory) {
             if (!existed_before) {
                 if (create_disposition == SMB_FILE_OPEN) {
-                    delete h;
                     result.status = NtStatus::OBJECT_NAME_NOT_FOUND;
                     return result;
                 }
                 if (!fs::create_directories(full_path, ec) || ec) {
-                    delete h;
                     result.status = NtStatus::UNSUCCESSFUL;
                     return result;
                 }
-            } else if (create_disposition == FILE_CREATE) {
-                delete h;
+            } else if (create_disposition == SMB_FILE_CREATE) {
                 result.status = NtStatus::OBJECT_NAME_COLLISION;
                 return result;
             }
 
-            int fd = ::open(full_path.c_str(), O_RDONLY | O_DIRECTORY);
+            int fd = open_with_eintr_retry(full_path.c_str(), O_RDONLY | O_DIRECTORY, 0, false);
             if (fd < 0) {
-                delete h;
                 switch (errno) {
                 case ENOENT:
                     result.status = NtStatus::OBJECT_NAME_NOT_FOUND;
@@ -348,11 +415,11 @@ namespace yuan::net::smb
 
             h->fd = fd;
             h->is_directory = true;
-            result.handle = h;
+            result.handle = holder.release();
             result.is_directory = true;
 
             struct stat st{};
-            if (fstat(fd, &st) == 0) {
+            if (fstat_with_eintr_retry(fd, &st) == 0) {
                 result.allocation_size = 0;
                 result.end_of_file = 0;
                 result.file_attributes = posix_to_file_attributes(static_cast<unsigned int>(st.st_mode));
@@ -368,7 +435,7 @@ namespace yuan::net::smb
         }
 
         int flags = 0;
-        if (desired_access & (GENERIC_WRITE | FILE_WRITE_DATA)) {
+        if (desired_access & (SMB_GENERIC_WRITE | SMB_FILE_WRITE_DATA)) {
             if (desired_access & (SMB_GENERIC_READ | SMB_FILE_READ_DATA)) {
                 flags |= O_RDWR;
             } else {
@@ -380,11 +447,11 @@ namespace yuan::net::smb
 
         switch (create_disposition) {
         case SMB_FILE_SUPERSEDE:
-        case FILE_OVERWRITE:
-        case FILE_OVERWRITE_IF:
+        case SMB_FILE_OVERWRITE:
+        case SMB_FILE_OVERWRITE_IF:
             flags |= O_CREAT | O_TRUNC;
             break;
-        case FILE_CREATE:
+        case SMB_FILE_CREATE:
             flags |= O_CREAT | O_EXCL;
             break;
         case SMB_FILE_OPEN:
@@ -396,9 +463,8 @@ namespace yuan::net::smb
             break;
         }
 
-        int fd = ::open(full_path.c_str(), flags, 0644);
+        int fd = open_with_eintr_retry(full_path.c_str(), flags, 0644, true);
         if (fd < 0) {
-            delete h;
             result.success = false;
             switch (errno) {
             case ENOENT:
@@ -418,10 +484,10 @@ namespace yuan::net::smb
         }
 
         h->fd = fd;
-        result.handle = h;
+        result.handle = holder.release();
 
         struct stat st{};
-        if (fstat(fd, &st) == 0) {
+        if (fstat_with_eintr_retry(fd, &st) == 0) {
             result.is_directory = S_ISDIR(st.st_mode);
             result.allocation_size = static_cast<uint64_t>(st.st_blocks) * 512ULL;
             result.end_of_file = static_cast<uint64_t>(st.st_size);
@@ -451,7 +517,7 @@ namespace yuan::net::smb
         }
 #else
         if (h->fd >= 0) {
-            ::close(h->fd);
+            (void)close_with_eintr_retry(h->fd);
             h->fd = -1;
         }
 #endif
@@ -507,7 +573,7 @@ namespace yuan::net::smb
             result.status = NtStatus::INVALID_HANDLE;
             return result;
         }
-        ssize_t n = pread(h->fd, result.data.data(), length, static_cast<off_t>(offset));
+        ssize_t n = pread_with_eintr_retry(h->fd, result.data.data(), length, static_cast<off_t>(offset));
         if (n < 0) {
             result.data.clear();
             result.status = NtStatus::UNSUCCESSFUL;
@@ -556,7 +622,7 @@ namespace yuan::net::smb
             result.status = NtStatus::INVALID_HANDLE;
             return result;
         }
-        ssize_t n = pwrite(h->fd, data, length, static_cast<off_t>(offset));
+        ssize_t n = pwrite_with_eintr_retry(h->fd, data, length, static_cast<off_t>(offset));
         if (n < 0) {
             result.status = NtStatus::UNSUCCESSFUL;
             return result;
@@ -601,7 +667,7 @@ namespace yuan::net::smb
             return std::nullopt;
         }
         struct stat st{};
-        if (fstat(h->fd, &st) != 0) {
+        if (fstat_with_eintr_retry(h->fd, &st) != 0) {
             return std::nullopt;
         }
         const uint64_t ct = filetime_from_unix_time(st.st_ctime);
@@ -704,7 +770,7 @@ namespace yuan::net::smb
                 return NtStatus::UNSUCCESSFUL;
             }
 #else
-            if (h->fd < 0 || ftruncate(h->fd, static_cast<off_t>(new_size)) != 0) {
+            if (h->fd < 0 || ftruncate_with_eintr_retry(h->fd, static_cast<off_t>(new_size)) != 0) {
                 return NtStatus::UNSUCCESSFUL;
             }
 #endif
@@ -781,11 +847,11 @@ namespace yuan::net::smb
                 }
                 de.end_of_file = fsize;
                 de.allocation_size = fsize;
-                de.file_attributes = entry.is_directory(st_ec) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+                de.file_attributes = entry.is_directory(st_ec) ? SMB_FILE_ATTRIBUTE_DIRECTORY : SMB_FILE_ATTRIBUTE_NORMAL;
                 de.file_id.persistent = static_cast<uint64_t>(std::hash<std::string>{}(entry.path().string()));
                 de.file_id.volatile_id = de.file_id.persistent;
                 if (status.type() == fs::file_type::symlink) {
-                    de.file_attributes |= FILE_ATTRIBUTE_REPARSE_POINT;
+                    de.file_attributes |= SMB_FILE_ATTRIBUTE_REPARSE_POINT;
                 }
 
                 const uint64_t ft = filetime_now();
@@ -873,7 +939,7 @@ namespace yuan::net::smb
         if (h->fd < 0) {
             return NtStatus::INVALID_HANDLE;
         }
-        return (::fsync(h->fd) == 0) ? NtStatus::SUCCESS : NtStatus::UNSUCCESSFUL;
+        return (fsync_with_eintr_retry(h->fd) == 0) ? NtStatus::SUCCESS : NtStatus::UNSUCCESSFUL;
 #endif
     }
 

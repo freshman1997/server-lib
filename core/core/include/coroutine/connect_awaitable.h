@@ -4,7 +4,10 @@
 #include <coroutine>
 #include <memory>
 #include <string>
+#include <system_error>
+#include <vector>
 
+#include "coroutine/awaiter_timeout_state.h"
 #include "coroutine/connection_event_awaitable.h"
 #include "coroutine/runtime.h"
 #include "net/connection/connection.h"
@@ -63,6 +66,7 @@ namespace yuan::coroutine
                 return false;
             }
 
+            int connect_errno = 0;
             auto sock = std::make_unique<net::Socket>(addr.get_ip().c_str(), port_);
             if (!sock->valid()) {
                 result_.result = ConnectResult::socket_error;
@@ -71,6 +75,7 @@ namespace yuan::coroutine
 
             sock->set_none_block(true);
             if (!sock->connect()) {
+                connect_errno = sock->last_error();
                 result_.result = ConnectResult::connect_failed;
                 return false;
             }
@@ -81,13 +86,29 @@ namespace yuan::coroutine
                 return false;
             }
 
-            original_handler_ = conn_->get_connection_handler();
-            original_handler_owner_ = conn_->get_connection_handler_owner();
-            proxy_ = std::make_shared<ConnectProxyHandler>(*this, &*conn_,
-                                                           original_handler_,
-                                                           original_handler_owner_);
-            conn_->set_connection_handler(proxy_);
+            register_waiter(net::ConnectionEvent::connected, [this](const std::shared_ptr<net::Connection> &) {
+                if (!completed_) {
+                    result_.result = ConnectResult::success;
+                    resume();
+                }
+            });
+            register_waiter(net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
+                if (!completed_) {
+                    result_.result = ConnectResult::connection_error;
+                    resume();
+                }
+            });
+            register_waiter(net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
+                if (!completed_) {
+                    result_.result = ConnectResult::connection_error;
+                    resume();
+                }
+            });
             conn_->set_event_handler(runtime_.event_loop());
+
+            if (connect_errno != 0) {
+                result_.result = ConnectResult::connect_failed;
+            }
 
             if (auto *stream = dynamic_cast<net::StreamTransport *>(&*conn_)) {
                 if (auto *channel = stream->stream_channel()) {
@@ -96,22 +117,10 @@ namespace yuan::coroutine
             }
 
             if (timeout_ms_ > 0 && runtime_.timer_manager()) {
-                timeout_timer_ = timer::TimerUtil::build_timeout_timer(
-                    runtime_.timer_manager(),
-                    timeout_ms_,
-                    [this](timer::Timer *timer) {
-                        if (completed_)
-                        {
-                            return;
-                        }
-                        timed_out_ = true;
-                        timeout_timer_ = nullptr;
-                        if (timer)
-                        {
-                            timer->cancel();
-                        }
-                        resume();
-                    });
+                timeout_state_ = std::make_shared<detail::AwaiterTimeoutState>();
+                timeout_state_->loop = runtime_.event_loop();
+                timeout_state_->handle = handle;
+                detail::arm_awaiter_timeout(runtime_, timeout_ms_, timeout_state_);
             }
 
             return true;
@@ -119,15 +128,15 @@ namespace yuan::coroutine
 
         ConnectAwaitableResult await_resume() noexcept
         {
-            if (timeout_timer_) {
-                timeout_timer_->cancel();
-                timeout_timer_ = nullptr;
+            const bool timed_out = timeout_state_ && timeout_state_->timed_out && !completed_;
+            if (timed_out) {
+                completed_ = true;
             }
+            detail::cancel_awaiter_timeout(timeout_state_);
 
-            restore_handler_if_needed();
-            proxy_.reset();
+            cancel_waiters();
 
-            if (timed_out_) {
+            if (timed_out) {
                 if (conn_) {
                     conn_->abort();
                     conn_ = nullptr;
@@ -146,16 +155,24 @@ namespace yuan::coroutine
         }
 
     private:
-        void restore_handler_if_needed() noexcept
+        void register_waiter(net::ConnectionEvent event, net::Connection::EventWaiter waiter)
         {
-            if (handler_restored_ || !conn_) {
+            if (!conn_) {
                 return;
             }
+            waiter_ids_.push_back(conn_->add_event_waiter(event, std::move(waiter)));
+        }
 
-            if (proxy_ && conn_->get_connection_handler_owner() == proxy_) {
-                conn_->set_connection_handler(original_handler_owner_);
+        void cancel_waiters() noexcept
+        {
+            if (!conn_ || waiter_ids_.empty()) {
+                waiter_ids_.clear();
+                return;
             }
-            handler_restored_ = true;
+            for (const auto id : waiter_ids_) {
+                conn_->remove_event_waiter(id);
+            }
+            waiter_ids_.clear();
         }
 
         void resume() noexcept
@@ -164,88 +181,25 @@ namespace yuan::coroutine
                 return;
             }
             completed_ = true;
+            if (timeout_state_) {
+                timeout_state_->completed = true;
+            }
             if (runtime_.event_loop()) {
                 runtime_.event_loop()->post_coroutine(handle_);
             }
         }
-
-        class ConnectProxyHandler final : public net::ConnectionHandler
-        {
-        public:
-            ConnectProxyHandler(ConnectAwaitable &owner,
-                                net::Connection *conn,
-                                net::ConnectionHandler *next,
-                                std::shared_ptr<net::ConnectionHandler> next_owner) noexcept
-                : owner_(owner),
-                  conn_(conn),
-                  next_(next),
-                  next_owner_(std::move(next_owner))
-            {
-            }
-
-            void on_connected(const std::shared_ptr<net::Connection> &conn) override
-            {
-                if (!owner_.completed_) {
-                    owner_.result_.result = ConnectResult::success;
-                    owner_.resume();
-                }
-                if (next_) {
-                    next_->on_connected(conn);
-                }
-            }
-
-            void on_error(const std::shared_ptr<net::Connection> &conn) override
-            {
-                if (!owner_.completed_) {
-                    owner_.result_.result = ConnectResult::connection_error;
-                    owner_.resume();
-                }
-                if (next_) {
-                    next_->on_error(conn);
-                }
-            }
-
-            void on_read(const std::shared_ptr<net::Connection> &conn) override
-            {
-            }
-
-            void on_write(const std::shared_ptr<net::Connection> &conn) override
-            {
-            }
-
-            void on_close(const std::shared_ptr<net::Connection> &conn) override
-            {
-                if (!owner_.completed_) {
-                    owner_.result_.result = ConnectResult::connection_error;
-                    owner_.resume();
-                }
-                if (next_) {
-                    next_->on_close(conn);
-                }
-            }
-
-        private:
-            ConnectAwaitable &owner_;
-            net::Connection *conn_;
-            net::ConnectionHandler *next_ = nullptr;
-            std::shared_ptr<net::ConnectionHandler> next_owner_;
-        };
 
         RuntimeView runtime_{};
         std::string host_;
         uint16_t port_ = 0;
         uint32_t timeout_ms_ = 0;
         std::shared_ptr<net::Connection> conn_;
-        timer::Timer *timeout_timer_ = nullptr;
-        net::ConnectionHandler *original_handler_ = nullptr;
-        std::shared_ptr<net::ConnectionHandler> original_handler_owner_;
+        std::shared_ptr<detail::AwaiterTimeoutState> timeout_state_;
 
         std::coroutine_handle<> handle_{};
-        std::shared_ptr<ConnectProxyHandler> proxy_;
+        std::vector<uint64_t> waiter_ids_;
         ConnectAwaitableResult result_{};
         bool completed_ = false;
-        bool timed_out_ = false;
-        bool handler_restored_ = false;
     };
 
     inline ConnectAwaitable async_connect(

@@ -4,6 +4,11 @@
 #include "ssh_config.h"
 #include <algorithm>
 #include <cstring>
+#include "openssl/core_names.h"
+#include "openssl/evp.h"
+#include "openssl/params.h"
+#include "openssl/x509.h"
+#include <string_view>
 
 namespace yuan::net::ssh
 {
@@ -34,6 +39,233 @@ namespace yuan::net::ssh
                 }
             }
             return filtered;
+        }
+
+        std::vector<uint8_t> to_bytes(const std::string & value)
+        {
+            return std::vector<uint8_t>(
+                reinterpret_cast<const uint8_t *>(value.data()),
+                reinterpret_cast<const uint8_t *>(value.data()) + value.size());
+        }
+
+        bool parse_signature_blob(const std::vector<uint8_t> & signature_field,
+                                  std::string & signature_algorithm,
+                                  std::vector<uint8_t> & signature_blob)
+        {
+            size_t offset = 0;
+            auto sig_alg = SshMessageCodec::read_string(signature_field.data(), signature_field.size(), offset);
+            if (!sig_alg) {
+                return false;
+            }
+            auto sig_data = SshMessageCodec::read_string(signature_field.data(), signature_field.size(), offset);
+            if (!sig_data) {
+                return false;
+            }
+            if (offset != signature_field.size()) {
+                return false;
+            }
+
+            signature_algorithm = std::move(*sig_alg);
+            signature_blob = to_bytes(*sig_data);
+            return true;
+        }
+
+        bool signature_algorithm_matches_negotiated(std::string_view negotiated_host_key_name,
+                                                    std::string_view signature_algorithm)
+        {
+            if (negotiated_host_key_name.empty()) {
+                return true;
+            }
+
+            if (negotiated_host_key_name == signature_algorithm) {
+                return true;
+            }
+
+            if (negotiated_host_key_name == "ssh-rsa") {
+                return signature_algorithm == "ssh-rsa";
+            }
+
+            if ((negotiated_host_key_name == "rsa-sha2-256" || negotiated_host_key_name == "rsa-sha2-512") &&
+                (signature_algorithm == "rsa-sha2-256" || signature_algorithm == "rsa-sha2-512")) {
+                return true;
+            }
+
+            return false;
+        }
+
+        std::vector<uint8_t> build_rsa_public_key_der(const std::vector<uint8_t> & modulus,
+                                                      const std::vector<uint8_t> & exponent)
+        {
+            OSSL_PARAM params[3];
+            params[0] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_RSA_N,
+                                                const_cast<uint8_t *>(modulus.data()),
+                                                modulus.size());
+            params[1] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_RSA_E,
+                                                const_cast<uint8_t *>(exponent.data()),
+                                                exponent.size());
+            params[2] = OSSL_PARAM_construct_end();
+
+            EVP_PKEY_CTX * ctx = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
+            EVP_PKEY * pkey = nullptr;
+            std::vector<uint8_t> der;
+            if (ctx && EVP_PKEY_fromdata_init(ctx) > 0 &&
+                EVP_PKEY_fromdata(ctx, &pkey, EVP_PKEY_PUBLIC_KEY, params) > 0) {
+                uint8_t * out_der = nullptr;
+                const int out_len = i2d_PUBKEY(pkey, &out_der);
+                if (out_len > 0 && out_der) {
+                    der.assign(out_der, out_der + out_len);
+                    OPENSSL_free(out_der);
+                }
+            }
+
+            EVP_PKEY_free(pkey);
+            EVP_PKEY_CTX_free(ctx);
+            return der;
+        }
+
+        std::vector<uint8_t> build_ecdsa_public_key_der(const std::string & curve_name,
+                                                        const std::vector<uint8_t> & public_point,
+                                                        std::string & curve_out)
+        {
+            const char * group_name = nullptr;
+            if (curve_name == "nistp256") {
+                group_name = "prime256v1";
+                curve_out = "P-256";
+            } else if (curve_name == "nistp384") {
+                group_name = "secp384r1";
+                curve_out = "P-384";
+            } else if (curve_name == "nistp521") {
+                group_name = "secp521r1";
+                curve_out = "P-521";
+            } else {
+                return {};
+            }
+
+            OSSL_PARAM params[3];
+            params[0] = OSSL_PARAM_construct_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME,
+                                                         const_cast<char *>(group_name),
+                                                         0);
+            params[1] = OSSL_PARAM_construct_octet_string(OSSL_PKEY_PARAM_PUB_KEY,
+                                                          const_cast<uint8_t *>(public_point.data()),
+                                                          public_point.size());
+            params[2] = OSSL_PARAM_construct_end();
+
+            EVP_PKEY_CTX * ctx = EVP_PKEY_CTX_new_from_name(nullptr, "EC", nullptr);
+            EVP_PKEY * pkey = nullptr;
+            std::vector<uint8_t> der;
+            if (ctx && EVP_PKEY_fromdata_init(ctx) > 0 &&
+                EVP_PKEY_fromdata(ctx, &pkey, EVP_PKEY_PUBLIC_KEY, params) > 0) {
+                uint8_t * out_der = nullptr;
+                const int out_len = i2d_PUBKEY(pkey, &out_der);
+                if (out_len > 0 && out_der) {
+                    der.assign(out_der, out_der + out_len);
+                    OPENSSL_free(out_der);
+                }
+            }
+
+            EVP_PKEY_free(pkey);
+            EVP_PKEY_CTX_free(ctx);
+            return der;
+        }
+
+        bool verify_kex_reply_signature(SshCrypto * crypto,
+                                        const std::vector<uint8_t> & exchange_hash,
+                                        const std::vector<uint8_t> & host_key_blob,
+                                        const std::vector<uint8_t> & signature_field,
+                                        std::string_view negotiated_host_key_name)
+        {
+            if (!crypto) {
+                return false;
+            }
+
+            std::string signature_algorithm;
+            std::vector<uint8_t> signature_blob;
+            if (!parse_signature_blob(signature_field, signature_algorithm, signature_blob)) {
+                return false;
+            }
+
+            if (!signature_algorithm_matches_negotiated(negotiated_host_key_name, signature_algorithm)) {
+                return false;
+            }
+
+            size_t key_offset = 0;
+            auto key_type = SshMessageCodec::read_string(host_key_blob.data(), host_key_blob.size(), key_offset);
+            if (!key_type) {
+                return false;
+            }
+
+            if (signature_algorithm == "ssh-ed25519") {
+                if (*key_type != "ssh-ed25519") {
+                    return false;
+                }
+                auto raw_public_key = SshMessageCodec::read_string(host_key_blob.data(), host_key_blob.size(), key_offset);
+                if (!raw_public_key || key_offset != host_key_blob.size()) {
+                    return false;
+                }
+                auto key_bytes = to_bytes(*raw_public_key);
+                return crypto->ed25519_verify(
+                    key_bytes,
+                    exchange_hash.data(), exchange_hash.size(),
+                    signature_blob.data(), signature_blob.size());
+            }
+
+            if (signature_algorithm == "ssh-rsa" ||
+                signature_algorithm == "rsa-sha2-256" ||
+                signature_algorithm == "rsa-sha2-512") {
+                if (*key_type != "ssh-rsa") {
+                    return false;
+                }
+                auto exponent = SshMessageCodec::read_mpint(host_key_blob.data(), host_key_blob.size(), key_offset);
+                auto modulus = SshMessageCodec::read_mpint(host_key_blob.data(), host_key_blob.size(), key_offset);
+                if (!exponent || !modulus || key_offset != host_key_blob.size()) {
+                    return false;
+                }
+
+                auto public_key_der = build_rsa_public_key_der(*modulus, *exponent);
+                if (public_key_der.empty()) {
+                    return false;
+                }
+
+                std::string hash_alg;
+                if (signature_algorithm == "rsa-sha2-512") {
+                    hash_alg = "sha512";
+                } else if (signature_algorithm == "rsa-sha2-256") {
+                    hash_alg = "sha256";
+                } else {
+                    hash_alg = "sha1";
+                }
+
+                return crypto->rsa_verify(
+                    public_key_der,
+                    hash_alg,
+                    exchange_hash.data(), exchange_hash.size(),
+                    signature_blob.data(), signature_blob.size());
+            }
+
+            if (signature_algorithm.rfind("ecdsa-sha2-", 0) == 0) {
+                if (*key_type != signature_algorithm) {
+                    return false;
+                }
+                auto curve_name = SshMessageCodec::read_string(host_key_blob.data(), host_key_blob.size(), key_offset);
+                auto public_point = SshMessageCodec::read_string(host_key_blob.data(), host_key_blob.size(), key_offset);
+                if (!curve_name || !public_point || key_offset != host_key_blob.size()) {
+                    return false;
+                }
+
+                std::string curve;
+                auto public_key_der = build_ecdsa_public_key_der(*curve_name, to_bytes(*public_point), curve);
+                if (public_key_der.empty() || curve.empty()) {
+                    return false;
+                }
+
+                return crypto->ecdsa_verify(
+                    public_key_der,
+                    curve,
+                    exchange_hash.data(), exchange_hash.size(),
+                    signature_blob.data(), signature_blob.size());
+            }
+
+            return false;
         }
     }
 
@@ -286,6 +518,15 @@ namespace yuan::net::ssh
 
         if (session_id_.empty()) {
             session_id_ = SshKeyDerivation::derive_session_id(exchange_hash_);
+        }
+
+        if (!verify_kex_reply_signature(
+                crypto_,
+                exchange_hash_,
+                reply.host_key_blob,
+                reply.signature,
+                negotiated_.host_key_name)) {
+            return false;
         }
 
         state_ = SshTransportState::kex_in_progress;

@@ -19,9 +19,11 @@ namespace yuan::net::smb
     {
         if (len1 == 0 || len2 == 0)
             return false;
-        if (off1 >= off2 + len2)
+        const uint64_t end1 = off1 > UINT64_MAX - len1 ? UINT64_MAX : off1 + len1;
+        const uint64_t end2 = off2 > UINT64_MAX - len2 ? UINT64_MAX : off2 + len2;
+        if (off1 >= end2)
             return false;
-        if (off2 >= off1 + len1)
+        if (off2 >= end1)
             return false;
         return true;
     }

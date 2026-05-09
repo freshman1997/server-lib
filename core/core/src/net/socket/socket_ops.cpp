@@ -173,8 +173,17 @@ namespace yuan::net::socket
     {
 #ifndef _WIN32
         int optval = on ? 1 : 0;
-        return ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
-                            &optval, static_cast<socklen_t>(sizeof optval));
+        if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+                         &optval, static_cast<socklen_t>(sizeof optval)) != 0) {
+            return false;
+        }
+#ifdef SO_REUSEPORT
+        if (on) {
+            (void)::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT,
+                               &optval, static_cast<socklen_t>(sizeof optval));
+        }
+#endif
+        return true;
 #else
         u_long optval = on ? 1 : 0;
         if (!exclude) {

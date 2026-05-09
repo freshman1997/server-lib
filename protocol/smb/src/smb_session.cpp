@@ -31,10 +31,18 @@ namespace yuan::net::smb
 
     uint16_t SmbSession::consume_credits(uint16_t n)
     {
-        uint16_t available = credits_available_.load();
-        uint16_t to_consume = std::min(n, available);
-        credits_available_ -= to_consume;
-        return to_consume;
+        uint16_t available = credits_available_.load(std::memory_order_relaxed);
+        for (;;) {
+            uint16_t to_consume = std::min(n, available);
+            const uint16_t remaining = static_cast<uint16_t>(available - to_consume);
+            if (credits_available_.compare_exchange_weak(
+                    available,
+                    remaining,
+                    std::memory_order_acq_rel,
+                    std::memory_order_relaxed)) {
+                return to_consume;
+            }
+        }
     }
 
     uint32_t SmbSession::add_tree_connection(TreeConnection tree)

@@ -44,7 +44,6 @@ namespace yuan::net
         std::mutex m;
         std::condition_variable cond;
         std::unordered_map<int, Channel *> channels_;
-        std::unordered_map<int, uint64_t> channel_generations_;
         std::unordered_set<int> tombstoned_fds_;
         std::queue<std::function<void()>> pending_callbacks_;
         std::queue<std::coroutine_handle<>> pending_coroutines_;
@@ -60,7 +59,24 @@ namespace yuan::net
         data_->is_waiting_ = false;
     }
 
-    EventLoop::~EventLoop() = default;
+    EventLoop::~EventLoop()
+    {
+        std::unordered_map<int, std::shared_ptr<Connection>> connections;
+        {
+            std::lock_guard<std::mutex> lock(data_->m);
+            connections.swap(data_->connections_);
+            data_->channels_.clear();
+            data_->tombstoned_fds_.clear();
+            data_->pending_callbacks_ = {};
+            data_->pending_coroutines_ = {};
+        }
+
+        for (auto &entry : connections) {
+            if (entry.second) {
+                entry.second->abort();
+            }
+        }
+    }
 
     EventLoopExitReason EventLoop::loop()
     {
@@ -128,11 +144,8 @@ namespace yuan::net
                             continue;
                         }
 
-                        auto gen_it = data_->channel_generations_.find(event.fd);
-                        if (event.generation != 0) {
-                            if (gen_it == data_->channel_generations_.end() || gen_it->second != event.generation) {
-                                continue;
-                            }
+                        if (event.generation == 0 || it->second->generation() != event.generation) {
+                            continue;
                         }
                         channel = it->second;
                     }
@@ -209,9 +222,6 @@ namespace yuan::net
             std::lock_guard<std::mutex> lock(data_->m);
             data_->poller_->update_channel(channel);
             data_->channels_[channel->get_fd()] = channel;
-            if (data_->channel_generations_[channel->get_fd()] == 0) {
-                data_->channel_generations_[channel->get_fd()] = 1;
-            }
             data_->tombstoned_fds_.erase(channel->get_fd());
         }
     }
@@ -229,17 +239,17 @@ namespace yuan::net
         }
 
         std::lock_guard<std::mutex> lock(data_->m);
-        auto conn_it = data_->connections_.find(channel->get_fd());
-        if (conn_it != data_->connections_.end()) {
-            data_->connections_.erase(conn_it);
-        }
         auto it = data_->channels_.find(channel->get_fd());
         if (it != data_->channels_.end()) {
             LOG_INFO("channel closed, fd: {}", channel->get_fd());
             data_->poller_->remove_channel(channel);
             data_->channels_.erase(it);
             data_->tombstoned_fds_.insert(channel->get_fd());
-            data_->channel_generations_[channel->get_fd()] += 1;
+            channel->bump_generation();
+            auto conn_it = data_->connections_.find(channel->get_fd());
+            if (conn_it != data_->connections_.end()) {
+                data_->connections_.erase(conn_it);
+            }
         } else {
             LOG_WARN("channel not found, fd: {}", channel->get_fd());
         }
@@ -250,9 +260,6 @@ namespace yuan::net
         if (channel) {
             std::lock_guard<std::mutex> lock(data_->m);
             data_->channels_[channel->get_fd()] = channel;
-            if (data_->channel_generations_[channel->get_fd()] == 0) {
-                data_->channel_generations_[channel->get_fd()] = 1;
-            }
             data_->tombstoned_fds_.erase(channel->get_fd());
             data_->poller_->update_channel(channel);
         }
@@ -290,5 +297,12 @@ namespace yuan::net
         }
         wakeup();
     }
-}
 
+    bool EventLoop::accepts_poll_event_for_test(const PollEvent &event) const
+    {
+        std::lock_guard<std::mutex> lock(data_->m);
+        auto it = data_->channels_.find(event.fd);
+        return it != data_->channels_.end() && event.generation != 0 &&
+               it->second && it->second->generation() == event.generation;
+    }
+}

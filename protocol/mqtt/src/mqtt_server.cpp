@@ -1,7 +1,9 @@
 #include "mqtt_server.h"
 #include "mqtt_codec.h"
 #include "mqtt_packet.h"
+#include "net/channel/channel.h"
 #include "net/connection/tcp_connection.h"
+#include "logger.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -98,6 +100,7 @@ namespace yuan::net::mqtt
         auto session_owner = session_mgr_.create_session_owner(tcp_conn);
         auto &session = *session_owner;
         session.set_state(MqttSessionState::connecting);
+        LOG_DEBUG("[mqtt] session {} start fd={}", session.session_id(), tcp_conn->stream_channel() ? tcp_conn->stream_channel()->get_fd() : -1);
 
         bool cleaned_up = false;
         bool ever_connected = false;
@@ -121,6 +124,7 @@ namespace yuan::net::mqtt
             uint32_t timeout_ms = config_.idle_timeout_ms;
             auto read_result = co_await ctx.read_async(timeout_ms);
             if (read_result.status != coroutine::IoStatus::success) {
+                LOG_DEBUG("[mqtt] session {} read end status={}", session.session_id(), static_cast<int>(read_result.status));
                 break;
             }
 
@@ -153,6 +157,12 @@ namespace yuan::net::mqtt
                     type,
                     pkt_len
                 ] = *decoded;
+                LOG_DEBUG("[mqtt] session {} packet type={} len={} first={} in_readable={}",
+                          session.session_id(),
+                          static_cast<int>(type),
+                          pkt_len,
+                          first_packet ? 1 : 0,
+                          read_result.data.readable_bytes());
 
                 if (pkt_len > config_.max_packet_size) {
                     if (session.protocol_level() == ProtocolLevel::V5_0) {
@@ -186,14 +196,22 @@ namespace yuan::net::mqtt
 
                 auto response = dispatcher_.dispatch(session,
                                                      reinterpret_cast<const uint8_t *>(recv_buf.read_ptr()), pkt_len);
+                LOG_DEBUG("[mqtt] session {} response bytes={} state={}", session.session_id(), response.readable_bytes(), static_cast<int>(session.state()));
                 if (session.state() == MqttSessionState::connected) {
                     ever_connected = true;
+                }
+
+                if (first_packet) {
+                    first_packet = false;
                 }
 
                 recv_buf.consume(pkt_len);
 
                 if (response.readable_bytes() > 0) {
-                    co_await ctx.write_async(std::move(response));
+                    int write_fd = tcp_conn->stream_channel() ? tcp_conn->stream_channel()->get_fd() : -1;
+                    LOG_DEBUG("[mqtt] session {} write_async fd={} bytes={}", session.session_id(), write_fd, response.readable_bytes());
+                    auto wr = co_await ctx.write_async(std::move(response));
+                    LOG_DEBUG("[mqtt] session {} write status={} fd={}", session.session_id(), static_cast<int>(wr.status), write_fd);
                 }
 
                 if (session.state() == MqttSessionState::disconnected ||
@@ -212,6 +230,7 @@ namespace yuan::net::mqtt
         }
 
         cleanup_session();
+        LOG_DEBUG("[mqtt] session {} cleanup done", session.session_id());
         ctx.close();
         co_return;
     }

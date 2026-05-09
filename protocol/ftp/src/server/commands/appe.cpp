@@ -13,7 +13,9 @@ namespace yuan::net::ftp
             return denied;
         }
         if (!session->get_passive_addr().has_value()) {
-            return {FtpResponseCode::__425__, "Use PASV before APPE."};
+            if (!session->get_active_addr().has_value()) {
+                return {FtpResponseCode::__425__, "Use PASV or PORT before APPE."};
+            }
         }
 
         const auto path = resolve_path(session, args);
@@ -32,6 +34,7 @@ namespace yuan::net::ftp
         info.origin_name_ = path.generic_string();
         info.dest_name_ = path.generic_string();
         info.append_mode_ = true;
+        info.file_size_ = static_cast<std::size_t>(session->get_item_value<int32_t>("upload_file_size"));
         info.ready_ = true;
 
         session->get_file_manager()->reset();
@@ -41,11 +44,10 @@ namespace yuan::net::ftp
             session->clear_passive_addr();
             return {FtpResponseCode::__425__, "Passive data connection is not ready."};
         }
-
+        session->remove_item("upload_file_size");
         return {FtpResponseCode::__150__, "Opening binary mode data connection for append."};
     }
 
     CommandType CommandAppe::get_command_type() { return CommandType::cmd_appe; }
     std::string CommandAppe::get_command_name() { return "APPE"; }
 }
-#include <filesystem>

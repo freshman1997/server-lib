@@ -16,32 +16,33 @@
 
 | 编号 | 模块 | 场景 | 当前覆盖 | 目标测试 | 优先级 |
 | --- | --- | --- | --- | --- | --- |
-| C01 | ConnectionHandle | shared owner 跨 await 后仍有效 | 已补 `connection_handle` | 后续补 await 跨挂起版本 | P1 |
-| C02 | ConnectionView | view 不可跨 await 保存 | 无 | 编译/API 约束或文档测试 | P1 |
-| C03 | RuntimeView | `Connection*` async API 内部转 shared owner | 部分 | 增加 shared_from_this 路径测试 | P1 |
+| C01 | ConnectionHandle | shared owner 跨 await 后仍有效 | 已补 `connection_handle` + `async_facades` await 回归 | 后续补更多 close/error 竞争 | P1 |
+| C02 | ConnectionView | view 不可跨 await 保存 | 已删除 `ConnectionRef`，仅保留 handle/view 语义 | 后续补更严格 API 约束 | P1 |
+| C03 | RuntimeView | `Connection*` async API 内部转 shared owner | 已删除 coroutine I/O 裸指针重载 | 保持协议层迁移到 shared/handle | P1 |
 | C04 | AsyncRead | 挂起后 close 恢复 closed | 部分 | `async_read_close_resume` | P1/P2 |
-| C05 | AsyncRead | timeout 后 read 事件不再恢复第二次 | 无 | `async_read_timeout_then_event` | P2 |
+| C05 | AsyncRead | timeout 后 read 事件不再恢复第二次 | 已补 `async_facades` late event 回归 | 扩展到 close/error 竞争 | P2 |
 | C06 | AsyncRead | read 事件和 timeout 同轮竞争 | 无 | fake timer 或短 timeout race | P2 |
 | C07 | AsyncWrite | 小包立即写完不挂起 | 部分 | loopback immediate completion | P2/P3 |
-| C08 | AsyncWrite | 写入 pending 后 close 不丢尾包 | 无 | `write_then_close_drains` | P5 |
+| C08 | AsyncWrite | 写入 pending 后 close 不丢尾包 | 已补 `tcp_close_semantics` 大 payload drain | 后续补更强 backpressure 场景 | P5 |
 | C09 | AsyncFlush | output drain 后恢复 | 部分 | `async_flush_drain` | P3 |
 | C10 | AsyncClose | close 已完成时立即返回 | 部分 | closed state fast path | P2 |
 | C11 | SSL Handshake | timeout 后 callback 不访问 awaiter | 无 | fake SSL handler | P2 |
 | C12 | Datagram | receive timeout 后 packet 到达不二次恢复 | 无 | UDP fake instance | P2/P3 |
-| C13 | Handler | 业务 handler 不被 awaiter 替换 | 无 | await 前后 owner 不变 | P3 |
-| C14 | Handler | 两个 read waiter 同时等待行为明确 | 无 | reject/FIFO 测试 | P3 |
+| C13 | Handler | 业务 handler 不被 awaiter 替换 | 已补 `async_facades` read/flush/close/connect/accept 回归 | 后续补协议层 smoke | P3 |
+| C14 | Handler | 两个 read waiter 同时等待行为明确 | 已补 `async_facades` reject-second 回归 | 后续扩展 write waiter 策略 | P3 |
 | C15 | EventLoop | `post_coroutine` 不导致长期 loop 非预期退出 | 部分 | run mode 分离后新增 | P4 |
 | C16 | EventLoop | queue callback 异常被捕获并继续运行 | 部分 | callback throw regression | P4 |
-| C17 | Poller | stale fd event 被丢弃 | 无 | fake poller token mismatch | P4 |
-| C18 | Poller | close/remove/update 重复调用安全 | 无 | fake channel lifecycle | P4 |
-| C19 | TcpConnection | `get_local_address()` 返回真实 local | 无 | loopback getsockname | P5 |
-| C20 | TcpConnection | peer half-close 后仍可写响应 | 无 | socketpair/loopback | P5 |
-| C21 | TcpConnection | close twice / abort then close 幂等 | 部分 | lifecycle regression | P5 |
-| C22 | Task | `execute()` 不伪装 run-to-completion | 无 | API cleanup 后测试 | P6 |
-| C23 | Task | detached exception 有 sink | 无 | logger/error hook 测试 | P6 |
-| C24 | Timer | cancel 后 callback 不触达已销毁 state | 无 | weak operation state 测试 | P2 |
+| C17 | Poller | stale fd event 被丢弃 | 已补 `event_token` generation mismatch | 后续扩展 fd reuse socket 级测试 | P4 |
+| C18 | Poller | close/remove/update 重复调用安全 | 已补 `event_token` close 后旧事件拒绝 | 后续扩展重复 close/remove | P4 |
+| C19 | TcpConnection | `get_local_address()` 返回真实 local | 已补 `async_facades` + `tcp_close_semantics` | 后续补 accepted server connection local port | P5 |
+| C20 | TcpConnection | peer half-close 后仍可写响应 | 已补 `tcp_close_semantics` loopback 回归 | 后续补协议层 handler 场景 | P5 |
+| C21 | TcpConnection / UdpConnection | close twice / abort then close 幂等 | 已补 `tcp_close_semantics` lifecycle + connecting close 回归，并补 UDP close/abort/idle 语义回归 | 后续补协议层 UDP smoke | P5 |
+| C22 | Task | `execute()` 不伪装 run-to-completion | 已改名 `resume_once_and_get_result` 并补异常回归 | 后续补 suspended task 语义测试 | P6 |
+| C23 | Task | detached exception 有 sink | 已补 `coroutine_runtime` detached exception sink 回归 | 后续可接 logger/error hook | P6 |
+| C24 | Timer | cancel 后 callback 不触达已销毁 state | coroutine timeout 已迁移 weak state | 后续补 coroutine frame destroy 专项 | P2 |
 | C25 | Buffer | append/copy/consume/compact 基础行为 | 有 | 保持现有 `buffer_model` | P0 |
-| C26 | Timer | one-shot timer 触发释放后外部 cancel 不崩溃 | 已补 `timer_lifecycle` | 安全 timer token 或明确 API 约束 | P2 |
+| C26 | Timer | one-shot timer 触发释放后外部 cancel 不崩溃 | 已补 `timer_lifecycle` + `TimerHandle` API，legacy session 已迁移 | 后续移除 raw Timer* schedule 兼容 API | P2 |
+| C27 | API Cleanup | `net/secuity` 拼写修正为 `net/security` | 已迁移实现和 include，兼容 wrapper 已删除 | 后续仅保留新路径 | P6 |
 
 ## 阶段验收测试集
 
@@ -51,7 +52,7 @@
 
 ```bash
 cd build
-ctest -R "coroutine_runtime|connection_handle|event_bus|buffer_model|byte_buffer_reader|time_api|timer_lifecycle|async_facades|ipv6_dual_stack|base64" --output-on-failure
+ctest -R "coroutine_runtime|connection_handle|event_bus|buffer_model|byte_buffer_reader|time_api|timer_lifecycle|async_facades|ipv6_dual_stack|base64|event_token|tcp_close_semantics" --output-on-failure
 cd ..
 ./build/test/benchmark/core_runtime_benchmark
 ```

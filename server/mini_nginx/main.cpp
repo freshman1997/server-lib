@@ -104,6 +104,14 @@ namespace
         bool access_log_json = true;
         std::string access_log_path = "server/mini_nginx/access.log";
         int reload_check_interval_ms = 1000;
+        bool rate_limit_enabled = false;
+        int rate_limit_rps = 100;
+        int rate_limit_burst = 50;
+        int max_connections = 0;
+        int max_connections_per_ip = 0;
+        int max_inflight_requests_per_ip = 0;
+        int max_concurrent_requests_per_ip = 0;
+        bool expose_stats = true;
         std::vector<yuan::net::http::StaticMount> static_mounts;
         std::vector<nlohmann::json> routes;
     };
@@ -187,7 +195,12 @@ namespace
 
     bool parse_server_config(const nlohmann::json &json, MiniNginxConfig &cfg)
     {
-        if (json.contains("server") && json["server"].is_object()) {
+        if (json.contains("server")) {
+            if (!json["server"].is_object()) {
+                std::cerr << "config 'server' must be an object\n";
+                return false;
+            }
+
             const auto &server = json["server"];
             if (server.contains("listen") && server["listen"].is_number_integer()) {
                 cfg.listen_port = server["listen"].get<int>();
@@ -210,29 +223,18 @@ namespace
             if (server.contains("enable_http2") && server["enable_http2"].is_boolean()) {
                 cfg.server_config.enable_http2 = server["enable_http2"].get<bool>();
             }
-            return true;
-        }
-
-        if (json.contains("listen") && json["listen"].is_number_integer()) {
-            cfg.listen_port = json["listen"].get<int>();
-        }
-        if (json.contains("server_name") && json["server_name"].is_string()) {
-            cfg.server_config.server_name = json["server_name"].get<std::string>();
-        }
-        if (json.contains("thread_pool_size") && json["thread_pool_size"].is_number_integer()) {
-            cfg.server_config.thread_pool_size = json["thread_pool_size"].get<int>();
-        }
-        if (json.contains("enable_keep_alive") && json["enable_keep_alive"].is_boolean()) {
-            cfg.server_config.enable_keep_alive = json["enable_keep_alive"].get<bool>();
-        }
-        if (json.contains("enable_cors") && json["enable_cors"].is_boolean()) {
-            cfg.server_config.enable_cors = json["enable_cors"].get<bool>();
-        }
-        if (json.contains("max_body_size") && json["max_body_size"].is_number_unsigned()) {
-            cfg.server_config.max_body_size = json["max_body_size"].get<size_t>();
-        }
-        if (json.contains("enable_http2") && json["enable_http2"].is_boolean()) {
-            cfg.server_config.enable_http2 = json["enable_http2"].get<bool>();
+            if (server.contains("max_connections") && server["max_connections"].is_number_integer()) {
+                cfg.server_config.max_connections = server["max_connections"].get<int>();
+            }
+            if (server.contains("max_connections_per_ip") && server["max_connections_per_ip"].is_number_integer()) {
+                cfg.server_config.max_connections_per_ip = server["max_connections_per_ip"].get<int>();
+            }
+            if (server.contains("max_inflight_requests_per_ip") && server["max_inflight_requests_per_ip"].is_number_integer()) {
+                cfg.server_config.max_inflight_requests_per_ip = server["max_inflight_requests_per_ip"].get<int>();
+            }
+            if (server.contains("max_concurrent_requests_per_ip") && server["max_concurrent_requests_per_ip"].is_number_integer()) {
+                cfg.server_config.max_inflight_requests_per_ip = server["max_concurrent_requests_per_ip"].get<int>();
+            }
         }
 
         if (json.contains("access_log") && json["access_log"].is_object()) {
@@ -252,34 +254,27 @@ namespace
             cfg.reload_check_interval_ms = json["reload_check_interval_ms"].get<int>();
         }
 
-        return true;
-    }
-
-    bool build_routes_from_legacy_proxies(const nlohmann::json &json, std::vector<nlohmann::json> &routes)
-    {
-        if (!json.contains("proxies")) {
-            return true;
-        }
-        if (!json["proxies"].is_array()) {
-            std::cerr << "config 'proxies' must be an array\n";
-            return false;
-        }
-
-        for (const auto &route : json["proxies"]) {
-            std::string error;
-            if (!validate_route(route, error)) {
-                std::cerr << "invalid route in proxies: " << error << '\n';
-                return false;
+        if (json.contains("rate_limit") && json["rate_limit"].is_object()) {
+            const auto &rate_limit = json["rate_limit"];
+            if (rate_limit.contains("enabled") && rate_limit["enabled"].is_boolean()) {
+                cfg.rate_limit_enabled = rate_limit["enabled"].get<bool>();
             }
-            routes.push_back(route);
+            if (rate_limit.contains("requests_per_second") && rate_limit["requests_per_second"].is_number_integer()) {
+                cfg.rate_limit_rps = rate_limit["requests_per_second"].get<int>();
+            }
+            if (rate_limit.contains("burst") && rate_limit["burst"].is_number_integer()) {
+                cfg.rate_limit_burst = rate_limit["burst"].get<int>();
+            }
         }
+
         return true;
     }
 
     bool build_routes_from_upstreams(const nlohmann::json &json, std::vector<nlohmann::json> &routes)
     {
         if (!json.contains("routes")) {
-            return true;
+            std::cerr << "config 'routes' is required\n";
+            return false;
         }
         if (!json.contains("upstreams") || !json["upstreams"].is_object()) {
             std::cerr << "config with 'routes' must provide object 'upstreams'\n";
@@ -328,10 +323,15 @@ namespace
                     std::cerr << "upstream server requires host(string) and port(unsigned)\n";
                     return false;
                 }
+                const auto port = server["port"].get<uint64_t>();
+                if (port == 0 || port > 65535) {
+                    std::cerr << "upstream server port must be in range [1, 65535]\n";
+                    return false;
+                }
 
                 nlohmann::json target = nlohmann::json::array();
                 target.push_back(server["host"].get<std::string>());
-                target.push_back(server["port"].get<uint16_t>());
+                target.push_back(static_cast<uint16_t>(port));
                 if (server.contains("weight") && server["weight"].is_number_integer()) {
                     target.push_back(server["weight"].get<int>());
                 }
@@ -353,6 +353,8 @@ namespace
             copy_if_present("read_timeout");
             copy_if_present("write_timeout");
             copy_if_present("max_retries");
+            copy_if_present("failure_threshold");
+            copy_if_present("unhealthy_cooldown_ms");
             copy_if_present("pool_size");
             copy_if_present("idle_timeout");
 
@@ -388,9 +390,6 @@ namespace
         }
 
         cfg.routes.clear();
-        if (!build_routes_from_legacy_proxies(json, cfg.routes)) {
-            return false;
-        }
         if (!build_routes_from_upstreams(json, cfg.routes)) {
             return false;
         }
@@ -400,7 +399,7 @@ namespace
         }
 
         if (cfg.routes.empty()) {
-            std::cerr << "at least one route is required (proxies[] or routes[] with upstreams{})\n";
+            std::cerr << "at least one route is required (routes[] with upstreams{})\n";
             return false;
         }
 
@@ -488,6 +487,12 @@ namespace
             if (route_json.contains("max_retries") && route_json["max_retries"].is_number_integer()) {
                 route.max_retries = route_json["max_retries"].get<int>();
             }
+            if (route_json.contains("failure_threshold") && route_json["failure_threshold"].is_number_integer()) {
+                route.failure_threshold = route_json["failure_threshold"].get<int>();
+            }
+            if (route_json.contains("unhealthy_cooldown_ms") && route_json["unhealthy_cooldown_ms"].is_number_integer()) {
+                route.unhealthy_cooldown_ms = route_json["unhealthy_cooldown_ms"].get<int>();
+            }
             if (route_json.contains("pool_size") && route_json["pool_size"].is_number_unsigned()) {
                 route.max_pool_size_per_target = route_json["pool_size"].get<size_t>();
             }
@@ -497,6 +502,18 @@ namespace
 
             proxy->add_route(route);
         }
+    }
+
+    void install_protection_middlewares(yuan::server::HttpService &http_service, const MiniNginxConfig &cfg)
+    {
+        if (!cfg.rate_limit_enabled) {
+            return;
+        }
+
+        const int rps = cfg.rate_limit_rps > 0 ? cfg.rate_limit_rps : 100;
+        const int burst = cfg.rate_limit_burst >= 0 ? cfg.rate_limit_burst : 50;
+        http_service.server().use(yuan::net::http::middlewares::rate_limit(rps, burst));
+        std::cout << "rate limit enabled: rps=" << rps << " burst=" << burst << '\n';
     }
 
     std::string now_iso8601_local()
@@ -553,6 +570,11 @@ namespace
                 upstream = *host;
             }
 
+            uint64_t latency_ms = 0;
+            if (const auto *ctx = req->get_context()) {
+                latency_ms = ctx->request_elapsed_ms();
+            }
+
             std::lock_guard<std::mutex> guard(*lock);
             if (json_format) {
                 nlohmann::json line;
@@ -562,7 +584,7 @@ namespace
                 line["url"] = url.empty() ? "/" : url;
                 line["status"] = status;
                 line["upstream"] = upstream;
-                line["latency_ms"] = 0;
+                line["latency_ms"] = latency_ms;
                 (*stream) << line.dump() << '\n';
             } else {
                 (*stream) << ts
@@ -571,7 +593,7 @@ namespace
                           << " url=" << (url.empty() ? "/" : url)
                           << " status=" << status
                           << " upstream=" << upstream
-                          << " latency_ms=0"
+                          << " latency_ms=" << latency_ms
                           << '\n';
             }
             stream->flush();
@@ -582,6 +604,7 @@ namespace
 
     bool reload_routes(yuan::net::http::HttpProxyHandler *proxy,
                        const std::string &config_path,
+                       yuan::net::http::HttpServer &server,
                        MiniNginxConfig &active_cfg)
     {
         MiniNginxConfig next_cfg = active_cfg;
@@ -601,8 +624,14 @@ namespace
 
         proxy->clear_routes();
         install_routes(proxy, next_cfg.routes);
+        server.update_runtime_limits(next_cfg.server_config.max_connections,
+                                     next_cfg.server_config.max_connections_per_ip,
+                                     next_cfg.server_config.max_inflight_requests_per_ip);
         active_cfg.routes = std::move(next_cfg.routes);
         active_cfg.reload_check_interval_ms = next_cfg.reload_check_interval_ms;
+        active_cfg.server_config.max_connections = next_cfg.server_config.max_connections;
+        active_cfg.server_config.max_connections_per_ip = next_cfg.server_config.max_connections_per_ip;
+        active_cfg.server_config.max_inflight_requests_per_ip = next_cfg.server_config.max_inflight_requests_per_ip;
 
         std::cout << "reload success: routes=" << active_cfg.routes.size() << '\n';
         return true;
@@ -639,6 +668,7 @@ int main(int argc, char **argv)
 
     yuan::app::Application application(context);
     auto http_service = std::make_shared<yuan::server::HttpService>(cfg.listen_port, cfg.server_config);
+    install_protection_middlewares(*http_service, cfg);
     install_access_log(*http_service, cfg);
     if (!application.add_typed_service<yuan::server::HttpService>("http", http_service, "server.http", 1)) {
         std::cerr << "failed to register http service\n";
@@ -690,7 +720,7 @@ int main(int argc, char **argv)
         }
 
         if (g_reload_requested.exchange(false, std::memory_order_relaxed)) {
-            (void)reload_routes(proxy, config_path, cfg);
+            (void)reload_routes(proxy, config_path, http_service->server(), cfg);
         }
 
         if (bootstrap.process_role() == yuan::app::ProcessRole::supervisor &&

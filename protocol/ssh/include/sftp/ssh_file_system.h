@@ -78,6 +78,24 @@ namespace yuan::net::ssh
         std::string status_message;
     };
 
+    struct SshFsStatVfsResult
+    {
+        bool success = false;
+        uint64_t f_bsize = 0;
+        uint64_t f_frsize = 0;
+        uint64_t f_blocks = 0;
+        uint64_t f_bfree = 0;
+        uint64_t f_bavail = 0;
+        uint64_t f_files = 0;
+        uint64_t f_ffree = 0;
+        uint64_t f_favail = 0;
+        uint64_t f_fsid = 0;
+        uint64_t f_flag = 0;
+        uint64_t f_namemax = 255;
+        SftpStatus status = SftpStatus::SSH_FX_FAILURE;
+        std::string status_message;
+    };
+
     class SshFileSystem
     {
     public:
@@ -101,6 +119,9 @@ namespace yuan::net::ssh
         virtual SshFsSimpleResult rename(const std::string &old_path, const std::string &new_path, uint32_t flags) = 0;
         virtual SshFsReadLinkResult readlink(const std::string &path) = 0;
         virtual SshFsSimpleResult symlink(const std::string &link_path, const std::string &target_path) = 0;
+        virtual SshFsSimpleResult hardlink(const std::string &old_path, const std::string &new_path) = 0;
+        virtual SshFsStatVfsResult statvfs(const std::string &path) = 0;
+        virtual SshFsStatVfsResult fstatvfs(const std::string &handle) = 0;
     };
 
     class SshLocalFileSystem : public SshFileSystem
@@ -127,6 +148,9 @@ namespace yuan::net::ssh
         SshFsSimpleResult rename(const std::string &old_path, const std::string &new_path, uint32_t flags) override;
         SshFsReadLinkResult readlink(const std::string &path) override;
         SshFsSimpleResult symlink(const std::string &link_path, const std::string &target_path) override;
+        SshFsSimpleResult hardlink(const std::string &old_path, const std::string &new_path) override;
+        SshFsStatVfsResult statvfs(const std::string &path) override;
+        SshFsStatVfsResult fstatvfs(const std::string &handle) override;
 
     private:
         struct FileHandleState
@@ -140,6 +164,7 @@ namespace yuan::net::ssh
         {
             std::vector<SftpNameEntry> entries;
             size_t cursor = 0;
+            std::filesystem::path path;
         };
 
         std::string resolve_path(const std::string &path) const;

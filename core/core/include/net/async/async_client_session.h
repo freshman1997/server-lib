@@ -58,6 +58,13 @@ namespace yuan::net
             co_return result;
         }
 
+        coroutine::Task<coroutine::ReadResult> read_async(uint32_t timeout_ms,
+                                                          bool complete_with_buffered_data_on_terminal_event)
+        {
+            auto result = co_await ctx_.read_async(timeout_ms, complete_with_buffered_data_on_terminal_event);
+            co_return result;
+        }
+
         coroutine::Task<coroutine::WriteResult> write_async(const ::yuan::buffer::ByteBuffer &buffer,
                                                             uint32_t timeout_ms = 0)
         {
@@ -117,18 +124,18 @@ namespace yuan::net
             return ctx_.runtime_view();
         }
 
-        timer::Timer *schedule(uint32_t delay_ms, std::function<void()> callback)
+        timer::TimerHandle schedule(uint32_t delay_ms, std::function<void()> callback)
         {
             return ctx_.schedule(delay_ms, std::move(callback));
         }
 
-        timer::Timer *schedule_periodic(uint32_t delay_ms, uint32_t interval_ms,
-                                        std::function<void()> callback, int repeat = 0)
+        timer::TimerHandle schedule_periodic(uint32_t delay_ms, uint32_t interval_ms,
+                                             std::function<void()> callback, int repeat = 0)
         {
             return ctx_.schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat);
         }
 
-        void cancel_timer(timer::Timer *timer)
+        void cancel_timer(const timer::TimerHandle &timer)
         {
             ctx_.cancel_timer(timer);
         }

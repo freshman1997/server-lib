@@ -1,8 +1,20 @@
 #include "smb_change_notifier.h"
 #include <algorithm>
+#include <vector>
 
 namespace yuan::net::smb
 {
+    namespace
+    {
+        bool matches_completion_filter(uint32_t completion_filter, uint32_t action)
+        {
+            if (completion_filter == 0) {
+                return true;
+            }
+            return (completion_filter & action) != 0;
+        }
+    }
+
     uint64_t SmbChangeNotifier::register_watch(const FileId & file_id, uint32_t completion_filter, NotifyCallback callback)
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -24,16 +36,25 @@ namespace yuan::net::smb
 
     void SmbChangeNotifier::notify_change(const FileId & file_id, uint32_t action)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (auto & [
-                        id,
-                        entry
-                    ] : watches_) {
-            if (entry.file_id.persistent == file_id.persistent) {
-                if (entry.callback) {
-                    entry.callback(file_id, action);
+        std::vector<NotifyCallback> callbacks;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            callbacks.reserve(watches_.size());
+            for (auto & [
+                            id,
+                            entry
+                        ] : watches_) {
+                (void)id;
+                if (entry.file_id.persistent == file_id.persistent &&
+                    matches_completion_filter(entry.completion_filter, action) &&
+                    entry.callback) {
+                    callbacks.push_back(entry.callback);
                 }
             }
+        }
+
+        for (auto &callback : callbacks) {
+            callback(file_id, action);
         }
     }
 
