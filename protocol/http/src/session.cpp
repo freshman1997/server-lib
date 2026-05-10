@@ -10,7 +10,7 @@ namespace yuan::net::http
     {
         context_->set_session(this);
 
-        if (config::close_idle_connection) {
+        if (config::close_idle_connection && config::connection_idle_timeout > 0) {
             conn_timer_ = runtime_.schedule(config::connection_idle_timeout, [this]() { on_idle_timeout(); });
         }
     }
@@ -102,7 +102,7 @@ namespace yuan::net::http
 
     void HttpSession::reset_timer()
     {
-        if (!alive_ || !conn_timer_ || !config::close_idle_connection) {
+        if (!alive_ || !conn_timer_ || !config::close_idle_connection || config::connection_idle_timeout <= 0) {
             return;
         }
         conn_timer_.cancel();

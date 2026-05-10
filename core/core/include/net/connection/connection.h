@@ -320,6 +320,12 @@ namespace yuan::net
             }
         }
 
+        void clear_event_waiters()
+        {
+            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            waiters_.clear();
+        }
+
         size_t max_packet_size_;
         ::yuan::buffer::ByteBuffer input_buffer_;
         ::yuan::buffer::BufferChain output_buffer_;

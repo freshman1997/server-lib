@@ -72,7 +72,13 @@ set(ZLIB_INSTALL OFF CACHE BOOL "Disable zlib install" FORCE)
 add_subdirectory(third_party/zlib)
 
 if (YUAN_FORCE_STATIC_LINK AND MINGW)
-    string(APPEND CMAKE_EXE_LINKER_FLAGS " -static -static-libgcc -static-libstdc++")
+    if (NOT YUAN_BUILD_TESTS)
+        string(APPEND CMAKE_EXE_LINKER_FLAGS " -static -static-libgcc -static-libstdc++")
+    endif()
+endif()
+
+if (MINGW AND YUAN_BUILD_TESTS)
+    string(APPEND CMAKE_EXE_LINKER_FLAGS " -Wl,--exclude-all-symbols")
 endif()
 
 add_subdirectory(core/base)

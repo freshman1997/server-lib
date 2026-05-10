@@ -31,9 +31,11 @@ namespace yuan::net::http
     };
 
     // SSE 连接管理 - 管理一个活跃的SSE连接
-    class SseConnection
+    class SseConnection : public std::enable_shared_from_this<SseConnection>
     {
     public:
+        static std::shared_ptr<SseConnection> create(HttpRequest *req, HttpResponse *resp);
+
         SseConnection(HttpRequest *req, HttpResponse *resp);
         ~SseConnection();
 
@@ -67,8 +69,9 @@ namespace yuan::net::http
 
         HttpRequest *req_;
         HttpResponse *resp_;
-        Connection *conn_;
-        uint64_t conn_id_;
+        std::weak_ptr<Connection> conn_owner_;
+        Connection *conn_ = nullptr;
+        uint64_t conn_id_ = 0;
         std::atomic<bool> active_{false};
         mutable std::mutex mutex_;
     };
@@ -81,6 +84,7 @@ namespace yuan::net::http
         ~SseChannel();
 
         // 订阅此频道
+        bool subscribe(const std::shared_ptr<SseConnection> &conn);
         bool subscribe(SseConnection *conn);
 
         // 取消订阅
@@ -99,7 +103,7 @@ namespace yuan::net::http
         std::string name_;
         size_t max_clients_;
         mutable std::mutex mutex_;
-        std::unordered_map<uint64_t, SseConnection*> subscribers_;
+        std::unordered_map<uint64_t, std::weak_ptr<SseConnection>> subscribers_;
     };
 
     // SSE 管理器 - 全局管理所有SseChannel

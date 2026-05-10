@@ -155,8 +155,6 @@ namespace yuan::net::http
         }
         
         // 清理空目录
-        { std::error_code ec; std::filesystem::remove(".upload_tmp", ec); }
-
         LOG_INFO("[Upload] merged {} chunks -> ./uploads/{}", session_->total_chunks, safe_name);
     }
 

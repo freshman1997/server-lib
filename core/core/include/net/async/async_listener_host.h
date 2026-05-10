@@ -82,6 +82,7 @@ namespace yuan::net
         coroutine::Task<void> run_async()
         {
             if (acceptor_) {
+                acceptor_->set_queue_pending_connections(false);
                 acceptor_->set_connection_handler(dispatch_handler_holder_);
             }
             co_return;

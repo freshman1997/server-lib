@@ -775,6 +775,15 @@ namespace yuan::net::http
         pending_requests_.erase(conn_ptr);
     }
 
+    bool HttpProxy::has_client_mapping(Connection *conn) const
+    {
+        if (!conn) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(mapping_mutex_);
+        return cs_mapping_.find(conn) != cs_mapping_.end();
+    }
+
     HttpProxyStats HttpProxy::snapshot_stats() const
     {
         HttpProxyStats out;

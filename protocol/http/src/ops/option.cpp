@@ -10,8 +10,8 @@ namespace yuan::net::http::config
         constexpr int kDefaultConnectionIdleTimeout = 30 * 1000;
         constexpr uint32_t kDefaultMaxHeaderLength = 1024 * 1024;
         constexpr uint32_t kDefaultClientMaxContentLength = 1024 * 1024 * 5;
-        constexpr bool kDefaultCloseIdleConnection = false;
-        constexpr bool kDefaultFormDataUploadSave = false;
+        constexpr bool kDefaultCloseIdleConnection = true;
+        constexpr bool kDefaultFormDataUploadSave = true;
         constexpr bool kDefaultEnableHttp2 = false;
         constexpr bool kDefaultEnableHttp3 = false;
 
@@ -72,7 +72,7 @@ namespace yuan::net::http::config
         connection_idle_timeout = cfgManager->get_uint_property(KEY_TO_STRING(connection_idle_timeout), connection_idle_timeout);
         client_max_content_length = cfgManager->get_uint_property(KEY_TO_STRING(max_content_length), client_max_content_length);
         max_header_length = cfgManager->get_uint_property(KEY_TO_STRING(max_header_length), max_header_length);
-        close_idle_connection = cfgManager->get_uint_property(KEY_TO_STRING(close_idle_connection), close_idle_connection);
+        close_idle_connection = cfgManager->get_bool_property(KEY_TO_STRING(close_idle_connection), close_idle_connection);
         form_data_upload_save = cfgManager->get_bool_property(KEY_TO_STRING(form_data_upload_save), form_data_upload_save);
         enable_http2 = cfgManager->get_bool_property(KEY_TO_STRING(enable_http2), enable_http2);
         enable_http3 = cfgManager->get_bool_property(KEY_TO_STRING(enable_http3), enable_http3);

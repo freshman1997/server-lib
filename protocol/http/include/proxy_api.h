@@ -106,6 +106,7 @@ namespace yuan::net::http
         virtual void serve_proxy(HttpRequest *req, HttpResponse *resp) = 0;
         virtual yuan::coroutine::Task<void> serve_proxy_async(HttpRequest *req, HttpResponse *resp) = 0;
         virtual void handle_websocket_upgrade_by_url(HttpRequest *req, HttpResponse *resp, const std::string &route_key) = 0;
+        virtual bool has_client_mapping(Connection *conn) const = 0;
         virtual void on_client_close(const std::shared_ptr<Connection> &conn) = 0;
 
         virtual HttpProxyStats snapshot_stats() const = 0;
@@ -237,6 +238,7 @@ namespace yuan::net::http
         void serve_proxy(HttpRequest *req, HttpResponse *resp) override;
         yuan::coroutine::Task<void> serve_proxy_async(HttpRequest *req, HttpResponse *resp) override;
         void handle_websocket_upgrade_by_url(HttpRequest *req, HttpResponse *resp, const std::string &route_key) override;
+        bool has_client_mapping(Connection *conn) const override;
         void on_client_close(const std::shared_ptr<Connection> &conn) override;
 
         void cleanup_idle_connections();

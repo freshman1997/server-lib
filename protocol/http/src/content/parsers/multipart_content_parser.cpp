@@ -8,9 +8,13 @@
 #include "header_key.h"
 #include "ops/option.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <memory>
+#include <string_view>
 
 namespace yuan::net::http 
 {
@@ -174,16 +178,49 @@ MultipartFormDataParser::parse_text_part(const char *begin, const char *end)
 // ============================================================
 
 namespace {
+    inline std::string sanitize_tmp_component(std::string_view value, std::size_t max_len = 48)
+    {
+        std::string out;
+        out.reserve((std::min)(value.size(), max_len));
+        for (unsigned char ch : value) {
+            if (out.size() >= max_len) {
+                break;
+            }
+            if (std::isalnum(ch) != 0 || ch == '.' || ch == '_' || ch == '-') {
+                out.push_back(static_cast<char>(ch));
+            } else if (!out.empty() && out.back() != '_') {
+                out.push_back('_');
+            }
+        }
+        if (out.empty() || out == "." || out == "..") {
+            return "file";
+        }
+        return out;
+    }
+
     inline std::string gen_tmp_filename(const std::string &origin)
     {
+        std::string safe_origin = origin;
+        auto slash = safe_origin.find_last_of("/\\");
+        if (slash != std::string::npos) {
+            safe_origin = safe_origin.substr(slash + 1);
+        }
+
         std::string ext;
-        auto dot = origin.rfind('.');
-        if (dot != std::string::npos) ext = origin.substr(dot);
+        auto dot = safe_origin.rfind('.');
+        if (dot != std::string::npos && safe_origin.size() - dot <= 16) {
+            ext = sanitize_tmp_component(std::string_view(safe_origin).substr(dot), 16);
+        }
+        const std::string stem = sanitize_tmp_component(
+            dot == std::string::npos ? std::string_view(safe_origin)
+                                     : std::string_view(safe_origin).substr(0, dot));
         auto now = static_cast<time_t>(yuan::base::time::system_now_seconds());
         unsigned int rnd = static_cast<unsigned int>(rand());
-        auto b64 = base::util::base64_encode(origin);
-        return "upload_" + std::to_string(now) + "_" +
-               std::to_string(rnd) + "_" + b64.substr(0, 8) + ext;
+        const auto dir = std::filesystem::path(".upload_tmp") / "form";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        return (dir / ("upload_" + std::to_string(now) + "_" +
+                       std::to_string(rnd) + "_" + stem + ext)).string();
     }
 }
 

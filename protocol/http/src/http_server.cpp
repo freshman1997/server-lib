@@ -70,6 +70,7 @@ namespace yuan::net::http
         constexpr uint64_t kUploadCleanupIntervalMs = 30000;
         constexpr uint64_t kUploadSessionTtlMs = 10 * 60 * 1000;
         constexpr uint64_t kUploadTmpFileTtlMs = 30 * 60 * 1000;
+        constexpr std::size_t kStaticCompressionBufferLimit = 2 * 1024 * 1024;
 
         bool parse_upload_tmp_upload_id(const std::string &file_name, std::string &upload_id)
         {
@@ -231,6 +232,56 @@ namespace yuan::net::http
                 --end;
             }
             return std::string(sv.substr(begin, end - begin));
+        }
+
+        bool header_has_token(const std::string *value, std::string_view token)
+        {
+            if (!value) {
+                return false;
+            }
+
+            std::size_t pos = 0;
+            while (pos <= value->size()) {
+                const std::size_t comma = value->find(',', pos);
+                const std::size_t end = comma == std::string::npos ? value->size() : comma;
+                if (iequals_ascii(trim_ascii(std::string_view(*value).substr(pos, end - pos)), token)) {
+                    return true;
+                }
+                if (comma == std::string::npos) {
+                    break;
+                }
+                pos = comma + 1;
+            }
+            return false;
+        }
+
+        uint32_t keep_alive_idle_timeout_ms()
+        {
+            return config::connection_idle_timeout > 0
+                ? static_cast<uint32_t>(config::connection_idle_timeout)
+                : uint32_t{30000};
+        }
+
+        bool should_close_http1_connection(HttpRequest *req, HttpResponse *resp, bool keep_alive_enabled)
+        {
+            if (!req || !resp) {
+                return true;
+            }
+            if (resp->is_sse()) {
+                return false;
+            }
+            if (!keep_alive_enabled) {
+                return true;
+            }
+            if (header_has_token(resp->get_header(http_header_key::connection), "close") ||
+                header_has_token(req->get_header(http_header_key::connection), "close")) {
+                return true;
+            }
+            if (req->get_version() == HttpVersion::v_1_0 &&
+                !header_has_token(req->get_header(http_header_key::connection), "keep-alive")) {
+                return true;
+            }
+            return false;
         }
 
         constexpr std::string_view kHttp2ConnectionPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
@@ -1570,6 +1621,7 @@ namespace yuan::net::http
         ::yuan::buffer::ByteBuffer h2_preface_data;
         std::shared_ptr<http2::Session> http2_session;
         std::chrono::steady_clock::time_point settings_sent_at;
+        bool http1_long_lived_response = false;
 
         auto enter_h2_mode = [&](bool expect_client_preface) {
             auto h2_streams = std::make_shared<std::unordered_map<std::uint32_t, Http2AssembledStream>>();
@@ -1602,7 +1654,14 @@ namespace yuan::net::http
         }
 
         while (ctx.is_connected()) {
-            auto read_result = co_await ctx.read_async();
+            const uint32_t read_timeout_ms = (!http2_mode && !http1_long_lived_response)
+                ? keep_alive_idle_timeout_ms()
+                : uint32_t{0};
+            auto read_result = co_await ctx.read_async(read_timeout_ms);
+            if (read_result.status == coroutine::IoStatus::timed_out) {
+                LOG_DEBUG("HTTP/1 idle read timeout from {}", conn->get_remote_address().to_address_key());
+                break;
+            }
             if (read_result.status != coroutine::IoStatus::success) {
                 break;
             }
@@ -1701,6 +1760,12 @@ namespace yuan::net::http
                 (void)dispatch_request(context);
                 if (proxy_ && proxy_->is_proxy_url(context->get_request()->get_raw_url())) {
                     co_await proxy_->serve_proxy_async(context->get_request(), context->get_response());
+                    if (proxy_->has_client_mapping(conn.get())) {
+                        release_inflight_request(context->get_request());
+                        release_connection_count();
+                        sessions_.erase(sessionId);
+                        co_return;
+                    }
                 }
 
                 if (context->ws_handoff_ && ws_proxy_handler_) {
@@ -1722,12 +1787,21 @@ namespace yuan::net::http
                 finalize_request(sessionId, session_ptr, context);
                 release_inflight_request(context->get_request());
 
+                const bool close_after_response = should_close_http1_connection(
+                    context->get_request(), context->get_response(), config_.enable_keep_alive);
+                http1_long_lived_response = context->get_response()->is_sse();
+
                 while (context->get_response()->is_uploading()) {
                     auto flush_result = co_await ctx.flush_async();
                     if (flush_result.status != coroutine::IoStatus::success) {
                         break;
                     }
                     context->write();
+                }
+
+                if (close_after_response && ctx.is_connected()) {
+                    ctx.close();
+                    break;
                 }
             }
             catch (const fmt::format_error &e)
@@ -1758,6 +1832,10 @@ namespace yuan::net::http
 
         if (http2_session) {
             http2_session->close_gracefully();
+        }
+
+        if (ctx.is_connected()) {
+            ctx.close();
         }
 
         if (proxy_ && conn) {
@@ -1993,6 +2071,14 @@ namespace yuan::net::http
             return false;
         }
 
+        if (source_length > kStaticCompressionBufferLimit) {
+            return false;
+        }
+
+        if (!is_textual_content_type(content_type)) {
+            return false;
+        }
+
         const auto preferred = parse_accept_encoding_preferred(*accept_encoding);
         if (!preferred.has_value()) {
             return false;
@@ -2013,16 +2099,12 @@ namespace yuan::net::http
             return true;
         }
 
+        if (source_length < 256) {
+            return false;
+        }
+
         const std::string plain = read_file_to_string(source_path);
         if (plain.empty()) {
-            return false;
-        }
-
-        if (source_length < 256 || source_length > 2 * 1024 * 1024) {
-            return false;
-        }
-
-        if (!is_textual_content_type(content_type)) {
             return false;
         }
 
@@ -2174,7 +2256,7 @@ namespace yuan::net::http
         }
 
         const auto length = static_cast<std::size_t>(file_size);
-        const std::string &content_type = get_content_type(ext);
+        const std::string content_type = get_content_type(ext);
         if (content_type.empty()) {
             resp->process_error(ResponseCode::bad_request);
             return;
@@ -2248,16 +2330,44 @@ namespace yuan::net::http
         resp->add_header("X-Content-Type-Options", "nosniff");
         resp->add_header("Cache-Control", "no-cache");
 
-        stream.clear();
-        stream.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        stream.close();
 
-        resp->reserve_body_buffer(sz);
+        if (req && req->get_method() == HttpMethod::head_) {
+            resp->add_header("Content-Length", std::to_string(sz));
+            resp->send();
+            return;
+        }
 
-        stream.read(resp->body_write_ptr(), static_cast<std::streamsize>(sz));
-        resp->commit_body_bytes(static_cast<size_t>(stream.gcount()));
+        if (!has_range && maybe_compress_static_response(req, resp, content_type, path, sz)) {
+            resp->add_header("Content-Length", std::to_string(resp->body_buffer_size()));
+            resp->send();
+            return;
+        }
 
-        (void)maybe_compress_static_response(req, resp, content_type, path, sz);
-        resp->add_header("Content-Length", std::to_string(resp->body_buffer_size()));
+        resp->add_header("Content-Length", std::to_string(sz));
+        if (sz == 0) {
+            resp->send();
+            return;
+        }
+
+        auto task = std::make_unique<net::http::HttpUploadFileTask>([resp]() {
+            resp->set_upload_file(false);
+        });
+
+        const auto attachment_info = std::make_shared<net::http::AttachmentInfo>();
+        attachment_info->origin_file_name_ = path;
+        attachment_info->source_offset_ = static_cast<std::size_t>(offset);
+        attachment_info->offset_ = 0;
+        attachment_info->length_ = sz;
+        task->set_attachment_info(attachment_info);
+
+        if (!task->init()) {
+            resp->process_error(ResponseCode::internal_server_error);
+            return;
+        }
+
+        resp->set_task(task.release());
+        resp->set_upload_file(true);
         resp->send();
     }
 
@@ -2436,6 +2546,8 @@ namespace yuan::net::http
 
         const auto attachment_info = std::make_shared<net::http::AttachmentInfo>();
         attachment_info->origin_file_name_ = filePath;
+        attachment_info->source_offset_ = 0;
+        attachment_info->offset_ = 0;
         attachment_info->length_ = sz;
         task->set_attachment_info(attachment_info);
 

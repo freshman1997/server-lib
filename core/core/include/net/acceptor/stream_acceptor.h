@@ -49,7 +49,7 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (accept_waiters_.empty()) {
-                if (conn) {
+                if (conn && queue_pending_connections_) {
                     pending_connections_.push(conn);
                 }
                 return;
@@ -70,6 +70,16 @@ public:
         pending_connections_.push(std::move(conn));
     }
 
+    void set_queue_pending_connections(bool enabled)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        queue_pending_connections_ = enabled;
+        if (!enabled) {
+            std::queue<std::shared_ptr<Connection>> empty;
+            pending_connections_.swap(empty);
+        }
+    }
+
     std::shared_ptr<Connection> dequeue_pending_connection()
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -87,6 +97,7 @@ public:
 
 private:
     std::queue<std::shared_ptr<Connection>> pending_connections_;
+    bool queue_pending_connections_ = true;
     mutable std::mutex mutex_;
     std::unordered_map<uint64_t, AcceptWaiter> accept_waiters_;
     uint64_t next_waiter_id_ = 1;

@@ -34,7 +34,10 @@ namespace yuan::net::http
         
         // 检查文件大小是否合法
         std::error_code ec;
-        if (const auto file_size = std::filesystem::file_size(file_path, ec); ec || file_size > attachment_info_->length_) {
+        const auto file_size = std::filesystem::file_size(file_path, ec);
+        if (ec ||
+            attachment_info_->source_offset_ > file_size ||
+            attachment_info_->length_ > file_size - attachment_info_->source_offset_) {
             return false;
         }
         
@@ -43,7 +46,8 @@ namespace yuan::net::http
             return false;
         }
 
-        file_stream_.seekg(0, std::ios::beg);
+        attachment_info_->offset_ = 0;
+        file_stream_.seekg(static_cast<std::streamoff>(attachment_info_->source_offset_), std::ios::beg);
         return file_stream_.good();
     }
 
@@ -60,10 +64,6 @@ namespace yuan::net::http
         }
 
         // 检查缓冲区大小
-        if (buf->writable_bytes() == 0) {
-            return false;
-        }
-
         // 检查文件流状态
         if (!file_stream_.is_open() || !file_stream_.good()) {
             return false;
@@ -74,10 +74,10 @@ namespace yuan::net::http
             // and update the offset
             std::size_t bytes_to_write = std::min<std::size_t>(buf->writable_bytes(), attachment_info_->length_ - attachment_info_->offset_);
             if (bytes_to_write == 0) {
-                return false;
+                bytes_to_write = std::min<std::size_t>(256 * 1024, attachment_info_->length_ - attachment_info_->offset_);
+                buf->ensure_writable(bytes_to_write);
             }
             
-            buf->ensure_writable(bytes_to_write);
             file_stream_.read(buf->write_ptr(), bytes_to_write);
             
             std::size_t read_bytes = file_stream_.gcount();

@@ -10,6 +10,11 @@
 
 namespace yuan::net::http
 {
+    std::shared_ptr<SseConnection> SseConnection::create(HttpRequest *req, HttpResponse *resp)
+    {
+        return std::make_shared<SseConnection>(req, resp);
+    }
+
     std::string SseEvent::serialize() const
     {
         std::ostringstream oss;
@@ -49,7 +54,12 @@ namespace yuan::net::http
         if (!ctx) {
             return;
         }
-        conn_ = ctx->get_connection();
+        if (auto owner = ctx->connection()) {
+            conn_owner_ = owner;
+            conn_ = owner.get();
+        } else {
+            conn_ = ctx->get_connection();
+        }
         if (!conn_) {
             return;
         }
@@ -113,8 +123,10 @@ namespace yuan::net::http
 
     std::string SseConnection::get_peer_ip() const
     {
-        if (conn_)
-            return conn_->get_remote_address().get_ip();
+        auto owner = conn_owner_.lock();
+        auto *conn = owner ? owner.get() : conn_;
+        if (conn)
+            return conn->get_remote_address().get_ip();
         return {};
     }
 
@@ -122,13 +134,15 @@ namespace yuan::net::http
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        if (!active_.load() || !conn_ || !conn_->is_connected()) {
+        auto owner = conn_owner_.lock();
+        auto *conn = owner ? owner.get() : conn_;
+        if (!active_.load() || !conn || !conn->is_connected()) {
             active_.store(false);
             return;
         }
 
-        conn_->append_output(payload);
-        conn_->flush();
+        conn->append_output(payload);
+        conn->flush();
     }
 
     SseChannel::SseChannel(const std::string & name, size_t max_clients)
@@ -143,13 +157,15 @@ namespace yuan::net::http
                         id,
                         conn
                     ] : subscribers_) {
-            if (conn)
-                conn->close();
+            (void)id;
+            if (auto owner = conn.lock()) {
+                owner->close();
+            }
         }
         subscribers_.clear();
     }
 
-    bool SseChannel::subscribe(SseConnection * conn)
+    bool SseChannel::subscribe(const std::shared_ptr<SseConnection> & conn)
     {
         if (!conn)
             return false;
@@ -163,6 +179,18 @@ namespace yuan::net::http
         return true;
     }
 
+    bool SseChannel::subscribe(SseConnection * conn)
+    {
+        if (!conn) {
+            return false;
+        }
+        try {
+            return subscribe(conn->shared_from_this());
+        } catch (const std::bad_weak_ptr &) {
+            return false;
+        }
+    }
+
     void SseChannel::unsubscribe(uint64_t conn_id)
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -171,12 +199,13 @@ namespace yuan::net::http
 
     void SseChannel::broadcast(const SseEvent & event)
     {
-        std::vector<SseConnection *> active;
+        std::vector<std::shared_ptr<SseConnection>> active;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             for (auto it = subscribers_.begin(); it != subscribers_.end();) {
-                if (it->second && it->second->is_active()) {
-                    active.push_back(it->second);
+                auto conn = it->second.lock();
+                if (conn && conn->is_active()) {
+                    active.push_back(std::move(conn));
                     ++it;
                 } else {
                     it = subscribers_.erase(it);
@@ -184,7 +213,7 @@ namespace yuan::net::http
             }
         }
 
-        for (auto *conn : active) {
+        for (const auto &conn : active) {
             conn->send(event);
         }
     }
@@ -200,7 +229,8 @@ namespace yuan::net::http
         size_t count = 0;
         for (const auto &[id, conn] : subscribers_) {
             (void)id;
-            if (conn && conn->is_active()) {
+            auto owner = conn.lock();
+            if (owner && owner->is_active()) {
                 ++count;
             }
         }

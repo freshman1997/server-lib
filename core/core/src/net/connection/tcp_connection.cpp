@@ -731,6 +731,7 @@ namespace yuan::net
             if (handler) {
                 handler->on_close(shared_from_this());
             }
+            clear_event_waiters();
         }
 
         if (eventHandler_ && channel_) {
