@@ -3,7 +3,6 @@
 #include "value/array_value.h"
 #include "value/int_value.h"
 #include "value/string_value.h"
-#include <iostream>
 
 namespace yuan::redis
 {
@@ -36,13 +35,7 @@ namespace yuan::redis
             return -1;
         }
 
-        if (!messages_.empty()) {
-            pending_messages_.push_back(messages_);
-        }
-
-        if (!pmessages_.empty()) {
-            pending_pmessages_.push_back(pmessages_);
-        }
+        enqueue_messages();
 
         return ret;
     }
@@ -132,36 +125,91 @@ namespace yuan::redis
         }
 
         const auto target = values[1] ? values[1]->as<StringValue>() : nullptr;
-        if (kind == "subscribe" || kind == "psubscribe") {
+        server_subscription_count_ = count->get_value();
+
+        if (kind == "subscribe") {
             if (target && !target->get_value().empty()) {
                 channels_.insert(target->get_value());
             }
-            is_subcribe_ = count->get_value() > 0;
-        } else {
+        } else if (kind == "psubscribe") {
+            if (target && !target->get_value().empty()) {
+                patterns_.insert(target->get_value());
+            }
+        } else if (kind == "unsubscribe") {
             if (target && !target->get_value().empty()) {
                 channels_.erase(target->get_value());
             } else {
                 channels_.clear();
             }
-            is_subcribe_ = count->get_value() > 0 && !channels_.empty();
+        } else if (kind == "punsubscribe") {
+            if (target && !target->get_value().empty()) {
+                patterns_.erase(target->get_value());
+            } else {
+                patterns_.clear();
+            }
+        }
+
+        is_subcribe_ = server_subscription_count_ > 0;
+        if (!is_subcribe_) {
+            channels_.clear();
+            patterns_.clear();
         }
 
         result_ = frame;
         return 0;
     }
 
-    void SubcribeCmd::exec_callback()
+    template <typename T>
+    void SubcribeCmd::trim_pending_queue(std::deque<std::vector<T> > & queue)
     {
-        if (!pending_messages_.empty() && msg_callback_) {
-            auto messages = std::move(pending_messages_.front());
-            pending_messages_.pop_front();
-            msg_callback_(messages);
+        while (pending_message_count_ > max_pending_messages_ && !queue.empty()) {
+            const auto batch_size = queue.front().size();
+            pending_message_count_ = pending_message_count_ >= batch_size
+                ? pending_message_count_ - batch_size
+                : 0;
+            queue.pop_front();
+            ++dropped_message_batches_;
+        }
+    }
+
+    void SubcribeCmd::enqueue_messages()
+    {
+        if (!messages_.empty()) {
+            pending_message_count_ += messages_.size();
+            pending_messages_.push_back(messages_);
         }
 
-        if (!pending_pmessages_.empty() && pmsg_callback_) {
+        if (!pmessages_.empty()) {
+            pending_message_count_ += pmessages_.size();
+            pending_pmessages_.push_back(pmessages_);
+        }
+
+        trim_pending_queue(pending_messages_);
+        trim_pending_queue(pending_pmessages_);
+    }
+
+    void SubcribeCmd::exec_callback()
+    {
+        if (!pending_messages_.empty()) {
+            auto messages = std::move(pending_messages_.front());
+            pending_message_count_ = pending_message_count_ >= messages.size()
+                ? pending_message_count_ - messages.size()
+                : 0;
+            pending_messages_.pop_front();
+            if (msg_callback_) {
+                msg_callback_(messages);
+            }
+        }
+
+        if (!pending_pmessages_.empty()) {
             auto messages = std::move(pending_pmessages_.front());
+            pending_message_count_ = pending_message_count_ >= messages.size()
+                ? pending_message_count_ - messages.size()
+                : 0;
             pending_pmessages_.pop_front();
-            pmsg_callback_(messages);
+            if (pmsg_callback_) {
+                pmsg_callback_(messages);
+            }
         }
     }
 }

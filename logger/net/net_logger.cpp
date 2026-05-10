@@ -9,7 +9,7 @@
 #include "net/handler/connector_handler.h"
 #include "net/poller/select_poller.h"
 #include "net/socket/inet_address.h"
-#include "timer/timer.h"
+#include "timer/timer_handle.h"
 #include "timer/timer_util.hpp"
 #include "timer/wheel_timer_manager.h"
 
@@ -169,7 +169,7 @@ private:
     bool connecting_ = false;
     bool connected_ = false;
     bool shutting_down_ = false;
-    yuan::timer::Timer* reconnect_timer_ = nullptr;
+    yuan::timer::TimerHandle reconnect_timer_;
     int reconnect_attempts_ = 0;
 };
 
@@ -283,10 +283,8 @@ bool NetLogger::Impl::schedule_connect_locked()
 
     void NetLogger::Impl::cancel_reconnect_timer_locked()
 {
-    if (reconnect_timer_) {
-        reconnect_timer_->cancel();
-        reconnect_timer_ = nullptr;
-    }
+    reconnect_timer_.cancel();
+    reconnect_timer_.reset();
 }
 
 bool NetLogger::Impl::schedule_reconnect_locked()
@@ -303,16 +301,15 @@ bool NetLogger::Impl::schedule_reconnect_locked()
         return false;
     }
 
-    reconnect_timer_ = yuan::timer::TimerUtil::build_timeout_timer(
+    reconnect_timer_ = yuan::timer::TimerUtil::build_timeout_handle(
         timer_manager_, static_cast<uint32_t>(cfg_.net_reconnect_delay_ms),
-        [this](yuan::timer::Timer* timer) {
-            (void)timer;
+        [this]() {
             std::lock_guard<std::mutex> lock(mutex_);
-            reconnect_timer_ = nullptr;
+            reconnect_timer_.reset();
             ++reconnect_attempts_;
             schedule_connect_locked();
         });
-    return reconnect_timer_ != nullptr;
+    return static_cast<bool>(reconnect_timer_);
 }
 
 void NetLogger::Impl::enqueue_pending_locked(std::string data)

@@ -254,13 +254,13 @@ namespace yuan::net
 
         timer::TimerHandle schedule(uint32_t delay_ms, std::function<void()> callback)
         {
-            return timer::TimerHandle(runtime_.schedule(delay_ms, std::move(callback)));
+            return runtime_.schedule(delay_ms, std::move(callback));
         }
 
         timer::TimerHandle schedule_periodic(uint32_t delay_ms, uint32_t interval_ms,
                                              std::function<void()> callback, int repeat = 0)
         {
-            return timer::TimerHandle(runtime_.schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat));
+            return runtime_.schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat);
         }
 
         void cancel_timer(const timer::TimerHandle &timer)

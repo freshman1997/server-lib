@@ -7,7 +7,7 @@
 
 #include "common.h"
 #include "coroutine/runtime.h"
-#include "timer/timer.h"
+#include "timer/timer_handle.h"
 
 namespace yuan::net::http
 {
@@ -197,7 +197,7 @@ namespace yuan::net::http
         std::unordered_map<std::string, SessionItem> session_items_;
         std::unique_ptr<HttpSessionContext> context_;
         coroutine::RuntimeView runtime_;
-        timer::Timer *conn_timer_;
+        timer::TimerHandle conn_timer_;
         close_callback close_cb_;
         bool alive_ = true;
     };

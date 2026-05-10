@@ -99,8 +99,8 @@ namespace yuan::server
     void Socks5Service::stop()
     {
         if (snapshot_timer_) {
-            snapshot_timer_->cancel();
-            snapshot_timer_ = nullptr;
+            snapshot_timer_.cancel();
+            snapshot_timer_.reset();
         }
         host_.stop([this]() { server_->stop(); });
     }

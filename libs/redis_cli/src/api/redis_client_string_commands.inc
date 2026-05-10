@@ -1,0 +1,12 @@
+std::shared_ptr<RedisValue> get(std::string key);
+std::shared_ptr<RedisValue> mget(const std::vector<std::string> &keys);
+std::shared_ptr<RedisValue> set(std::string key, std::string value);
+std::shared_ptr<RedisValue> mset(const std::unordered_map<std::string, std::string> &key_values);
+std::shared_ptr<RedisValue> msetnx(const std::unordered_map<std::string, std::string> &key_values);
+std::shared_ptr<RedisValue> set(std::string key, std::string value, int expire);
+std::shared_ptr<RedisValue> set(std::string key, std::string value, int expire, int nx);
+std::shared_ptr<RedisValue> set(std::string key, std::string value, int expire, int nx, int xx);
+std::shared_ptr<RedisValue> incr(std::string key);
+std::shared_ptr<RedisValue> decr(std::string key);
+std::shared_ptr<RedisValue> incrby(std::string key, int64_t increment);
+std::shared_ptr<RedisValue> decrby(std::string key, int64_t decrement);

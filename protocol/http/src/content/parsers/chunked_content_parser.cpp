@@ -2,6 +2,7 @@
 
 #include "base/time.h"
 #include "content/types.h"
+#include "ops/option.h"
 #include "packet.h"
 
 #include <algorithm>
@@ -73,7 +74,7 @@ namespace yuan::net::http
             } else {
                 packet->replace_body_buffer(mem_buffer_.copy_readable());
             }
-            packet->set_chunked_checksum(std::move(trailer_checksum_));
+            packet->set_chunked_checksum(trailer_checksum_);
         } else if (state == ChunkState::internal_error_ || state == ChunkState::invalid_chunk_) {
             if (file_stream_) {
                 file_stream_->close();
@@ -160,6 +161,13 @@ namespace yuan::net::http
                     mem_buffer_.append(pos, to_read);
                 }
 
+                if (to_read > 0 &&
+                    (to_read > config::client_max_content_length ||
+                     total_bytes_ > config::client_max_content_length - to_read)) {
+                    phase_ = ParsePhase::error;
+                    break;
+                }
+
                 total_bytes_ += to_read;
                 remain_bytes_ -= to_read;
                 pos += to_read;
@@ -169,9 +177,12 @@ namespace yuan::net::http
                 }
 
                 if (!file_stream_ && total_bytes_ > disk_spill_size_ && exceed_save_file_) {
-                    tmp_file_path_ = "/tmp/http_chunk_" + std::to_string(yuan::base::time::now()) + "_" + std::to_string(reinterpret_cast<uintptr_t>(this));
+                    const auto tmp_path = std::filesystem::temp_directory_path() /
+                        ("yuan_http_chunk_" + std::to_string(yuan::base::time::now()) + "_" +
+                         std::to_string(reinterpret_cast<uintptr_t>(this)) + ".tmp");
+                    tmp_file_path_ = tmp_path.string();
                     file_stream_ = std::make_unique<std::fstream>(
-                        tmp_file_path_,
+                        tmp_path,
                         std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
 
                     if (!file_stream_->is_open() || !file_stream_->good()) {

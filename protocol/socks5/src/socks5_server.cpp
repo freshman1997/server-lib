@@ -351,7 +351,7 @@ namespace yuan::net::socks5
                     ] : udp_associations_) {
             if (assoc) {
                 if (assoc->idle_timer) {
-                    assoc->idle_timer->cancel();
+                    assoc->idle_timer.cancel();
                 }
                 if (assoc->udp_acceptor) {
                     assoc->udp_acceptor->close();
@@ -411,8 +411,8 @@ namespace yuan::net::socks5
         listener_.close();
 
         if (idle_sweep_timer_) {
-            idle_sweep_timer_->cancel();
-            idle_sweep_timer_ = nullptr;
+            idle_sweep_timer_.cancel();
+            idle_sweep_timer_.reset();
         }
 
         if (ssl_module_) {
@@ -545,8 +545,8 @@ namespace yuan::net::socks5
         listener_.close();
 
         if (idle_sweep_timer_) {
-            idle_sweep_timer_->cancel();
-            idle_sweep_timer_ = nullptr;
+            idle_sweep_timer_.cancel();
+            idle_sweep_timer_.reset();
         }
 
         const auto drain_ms = std::max(static_cast<uint32_t>(config_.drain_timeout_ms), uint32_t(0));
@@ -1055,7 +1055,7 @@ namespace yuan::net::socks5
             assoc->client_conn = client_conn;
             assoc->udp_endpoint = udp_acceptor ? &*udp_acceptor : nullptr;
             assoc->udp_acceptor = std::move(udp_acceptor);
-            assoc->idle_timer = nullptr;
+            assoc->idle_timer.reset();
             assoc->client_ip = client_ip;
 
             if (session.target_host().empty() || session.target_port() == 0) {
@@ -1306,7 +1306,7 @@ namespace yuan::net::socks5
         assoc->bytes_up += payload.readable_bytes();
 
         if (assoc->idle_timer && config_.udp_idle_timeout_ms > 0) {
-            assoc->idle_timer->cancel();
+            assoc->idle_timer.cancel();
             auto *runtime = listener_.runtime();
             if (runtime) {
                 Connection *client_conn_raw = &*assoc->client_conn;
@@ -1356,7 +1356,7 @@ namespace yuan::net::socks5
         assoc->bytes_down += payload.readable_bytes();
 
         if (assoc->idle_timer && config_.udp_idle_timeout_ms > 0) {
-            assoc->idle_timer->cancel();
+            assoc->idle_timer.cancel();
             auto *runtime = listener_.runtime();
             if (runtime) {
                 Connection *client_conn_raw = &*assoc->client_conn;
@@ -1385,7 +1385,7 @@ namespace yuan::net::socks5
         auto &assoc = it->second;
         if (assoc) {
             if (assoc->idle_timer) {
-                assoc->idle_timer->cancel();
+                assoc->idle_timer.cancel();
             }
             if (assoc->udp_acceptor) {
                 assoc->udp_acceptor->close();

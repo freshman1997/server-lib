@@ -16,7 +16,7 @@ namespace yuan::net::ftp
     {
         state_ = FileStreamState::init;
         current_file_info_ = nullptr;
-        conn_timer_ = nullptr;
+        conn_timer_.reset();
         conn_owner_.reset();
         conn_ = nullptr;
         remote_addr_ = InetAddress{};
@@ -31,8 +31,8 @@ namespace yuan::net::ftp
     FtpFileStreamSession::~FtpFileStreamSession()
     {
         if (conn_timer_) {
-            conn_timer_->cancel();
-            conn_timer_ = nullptr;
+            conn_timer_.cancel();
+            conn_timer_.reset();
         }
         // Do not notify session here: session notification is performed by quit()
         // to avoid recursive removal/delete cycles.
@@ -270,8 +270,8 @@ namespace yuan::net::ftp
         state_ = FileStreamState::disconnected;
         // stop timer and close connection; ownership removal is delegated to FtpFileStream via session->on_closed
         if (conn_timer_) {
-            conn_timer_->cancel();
-            conn_timer_ = nullptr;
+            conn_timer_.cancel();
+            conn_timer_.reset();
         }
         if (auto c = conn_owner_.lock()) {
             c->close();

@@ -273,7 +273,7 @@ namespace yuan::net::bit_torrent
 
         PeerCallback peer_callback_;
         NodeCallback node_cb_;
-        timer::Timer *refresh_timer_ = nullptr;
+        timer::TimerHandle refresh_timer_;
     };
 
 } // namespace yuan::net::bit_torrent

@@ -3,41 +3,38 @@
 
 #include "timer.h"
 
+#include <utility>
+
 namespace yuan::timer
 {
     class TimerHandle
     {
     public:
         TimerHandle() = default;
-        explicit TimerHandle(Timer *timer) noexcept
-            : timer_(timer)
+        explicit TimerHandle(std::shared_ptr<TimerHandleState> state) noexcept
+            : state_(std::move(state))
         {
-        }
-
-        Timer *get() const noexcept
-        {
-            return timer_;
         }
 
         explicit operator bool() const noexcept
         {
-            return timer_ != nullptr;
+            return state_ && state_->active();
         }
 
-        void reset(Timer *timer = nullptr) noexcept
+        void reset(TimerHandle timer = {}) noexcept
         {
-            timer_ = timer;
+            state_ = std::move(timer.state_);
         }
 
         void cancel() const
         {
-            if (timer_) {
-                timer_->cancel();
+            if (state_) {
+                state_->cancel();
             }
         }
 
     private:
-        Timer *timer_ = nullptr;
+        std::shared_ptr<TimerHandleState> state_;
     };
 }
 

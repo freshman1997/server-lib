@@ -5,7 +5,7 @@
 #include "server_runtime_host.h"
 #include "service.h"
 #include "server_service_custom_events.h"
-#include "timer/timer_util.hpp"
+#include "timer/timer_handle.h"
 
 #include <memory>
 
@@ -39,7 +39,7 @@ namespace yuan::server
         yuan::net::socks5::Socks5Handler *handler_ = nullptr;
         ServerRuntimeHost host_;
         yuan::net::NetworkRuntime *shared_runtime_ = nullptr;
-        yuan::timer::Timer *snapshot_timer_ = nullptr;
+        yuan::timer::TimerHandle snapshot_timer_;
     };
 
 } // namespace yuan::server

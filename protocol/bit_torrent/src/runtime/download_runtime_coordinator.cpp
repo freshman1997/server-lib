@@ -48,8 +48,8 @@ namespace yuan::net::bit_torrent
     void DownloadRuntimeCoordinator::stop()
     {
         if (stats_timer_) {
-            stats_timer_->cancel();
-            stats_timer_ = nullptr;
+            stats_timer_.cancel();
+            stats_timer_.reset();
         }
 
         if (tracker_session_) {

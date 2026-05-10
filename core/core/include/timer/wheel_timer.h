@@ -78,6 +78,7 @@ namespace yuan::timer
         virtual bool is_done() const override;
         virtual bool is_cancel() const override;
         TimerTask *get_task() const override;
+        std::shared_ptr<TimerHandleState> handle_state() const override;
 
     public:
         WheelTimer *get_prev() const;
@@ -100,6 +101,7 @@ namespace yuan::timer
         uint64_t remain_;
         TimerTask *task_;
         std::unique_ptr<TimerTask> owned_task_;
+        std::shared_ptr<TimerHandleState> handle_state_;
         WheelTimer *prev_;
         WheelTimer *next_;
         WheelTimerItem *item_;

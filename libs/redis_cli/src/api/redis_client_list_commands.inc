@@ -1,0 +1,14 @@
+std::shared_ptr<RedisValue> lpush(std::string key, const std::vector<std::string> &values);
+std::shared_ptr<RedisValue> rpush(std::string key, const std::vector<std::string> &values);
+std::shared_ptr<RedisValue> lpop(std::string key);
+std::shared_ptr<RedisValue> rpop(std::string key);
+std::shared_ptr<RedisValue> lrange(std::string key, int64_t start, int64_t stop);
+std::shared_ptr<RedisValue> lindex(std::string key, int64_t index);
+std::shared_ptr<RedisValue> llen(std::string key);
+std::shared_ptr<RedisValue> lset(std::string key, int64_t index, std::string value);
+std::shared_ptr<RedisValue> lrem(std::string key, int64_t count, std::string value);
+std::shared_ptr<RedisValue> ltrim(std::string key, int64_t start, int64_t stop);
+std::shared_ptr<RedisValue> linsert(std::string key, std::string pivot, std::string value, bool before);
+std::shared_ptr<RedisValue> linsert(std::string key, std::string pivot, const std::vector<std::string> &values, bool before);
+std::shared_ptr<RedisValue> rpoplpush(std::string source, std::string destination);
+std::shared_ptr<RedisValue> brpoplpush(std::string source, std::string destination, int timeout);

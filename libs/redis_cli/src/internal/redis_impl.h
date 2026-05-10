@@ -9,9 +9,9 @@
 #include "redis_client.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
-#include "timer/timer_task.h"
 
 #include <memory>
+#include <mutex>
 
 namespace yuan::redis
 {
@@ -22,7 +22,7 @@ namespace yuan::redis
         disconnecting = 5,
         closed = 6,
     };
-    class RedisClient::Impl final : public net::ConnectionHandler, public timer::TimerTask
+    class RedisClient::Impl final : public net::ConnectionHandler
     {
         friend class Psub;
 
@@ -34,7 +34,7 @@ namespace yuan::redis
 
         Impl(const Impl &) = delete;
         Impl &operator=(const Impl &) = delete;
-        ~Impl() override = default;
+        ~Impl() override;
 
     public:
         void on_connected(const std::shared_ptr<net::Connection> &conn) override;
@@ -47,9 +47,6 @@ namespace yuan::redis
         void on_write(const std::shared_ptr<net::Connection> &conn) override;
 
         void on_close(const std::shared_ptr<net::Connection> &conn) override;
-
-    public:
-        void on_timer(timer::Timer *timer) override;
 
     public:
         void on_do_connect(std::shared_ptr<net::Connection> conn);
@@ -98,8 +95,6 @@ namespace yuan::redis
             return mask_ & 1 << static_cast<uint8_t>(RedisState::timeout);
         }
 
-        void check_timeout();
-
         std::shared_ptr<RedisValue> execute_command(std::shared_ptr<Command> cmd);
 
         buffer::ByteBufferReader *get_reader()
@@ -118,9 +113,9 @@ namespace yuan::redis
         std::shared_ptr<MultiCmd> multi_cmd_;
         std::shared_ptr<SubcribeCmd> subcribe_cmd;
         std::shared_ptr<RedisValue> last_error_;
-        time_t last_check_time_ = 0;
         buffer::ByteBufferReader reader_;
         yuan::coroutine::CompletionEvent completion_event_;
+        std::recursive_mutex operation_mutex_;
     };
 }
 

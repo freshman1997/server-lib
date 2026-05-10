@@ -23,9 +23,13 @@ namespace yuan::net::http
         }
         
         // 验证文件路径安全性，确保不会写入到不安全的位置
-        const auto tmp_path = std::filesystem::path(std::filesystem::u8path(attachment_info_->tmp_file_name_));
-        if (tmp_path.is_relative() || tmp_path.string().find("..") != std::string::npos) {
+        auto tmp_path = std::filesystem::path(std::filesystem::u8path(attachment_info_->tmp_file_name_));
+        if (tmp_path.string().find("..") != std::string::npos) {
             return false;
+        }
+        if (tmp_path.is_relative()) {
+            tmp_path = std::filesystem::temp_directory_path() / tmp_path.filename();
+            attachment_info_->tmp_file_name_ = tmp_path.string();
         }
 
         file_stream_.open(tmp_path, std::ios::out | std::ios::binary);
@@ -74,6 +78,9 @@ namespace yuan::net::http
 
     void HttpDownloadFileTask::on_connection_close()
     {
+        if (!attachment_info_) {
+            return;
+        }
         if (attachment_info_->offset_ < attachment_info_->length_) {
             LOG_WARN("Download interrupted, closing file stream.");
             if (file_stream_.is_open()) {

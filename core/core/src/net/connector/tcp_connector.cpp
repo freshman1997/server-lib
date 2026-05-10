@@ -215,7 +215,7 @@ namespace yuan::net
             data_->event_handler_->on_new_connection(conn);
         }
         data_->conn_ = conn;
-        data_->conn_timer_ = timer::TimerHandle(timer::TimerUtil::build_timeout_timer(data_->timer_manager_, data_->timeout_, this, &TcpConnector::on_connect_timeout));
+        data_->conn_timer_ = timer::TimerUtil::build_timeout_handle(data_->timer_manager_, data_->timeout_, [this]() { on_connect_timeout(); });
 
         return true;
     }
@@ -249,7 +249,7 @@ namespace yuan::net
         }
     }
 
-    void TcpConnector::on_connect_timeout(timer::Timer * timer)
+    void TcpConnector::on_connect_timeout()
     {
         data_->cancel_timer();
         if (data_->retry_count_ > 0) {
@@ -279,7 +279,7 @@ namespace yuan::net
             data_->conn_ = conn;
             data_->connected_ = false;
             data_->suppress_failure_callback_ = false;
-            data_->conn_timer_ = timer::TimerHandle(timer::TimerUtil::build_timeout_timer(data_->timer_manager_, data_->timeout_, this, &TcpConnector::on_connect_timeout));
+            data_->conn_timer_ = timer::TimerUtil::build_timeout_handle(data_->timer_manager_, data_->timeout_, [this]() { on_connect_timeout(); });
         } else {
             auto timed_out_conn = data_->conn_;
             if (data_->conn_) {

@@ -15,6 +15,7 @@
 #include "net/security/ssl_module.h"
 #include "net/auth_rate_limiter.h"
 #include "net/handler/connection_handler.h"
+#include "timer/timer_handle.h"
 #include "timer/timer_util.hpp"
 
 #include <memory>
@@ -66,7 +67,7 @@ namespace yuan::net::socks5
         DatagramAcceptor *udp_endpoint = nullptr;
         InetAddress client_udp_addr;
         InetAddress target_addr;
-        timer::Timer *idle_timer;
+        timer::TimerHandle idle_timer;
         std::string client_ip;
         uint64_t bytes_up = 0;
         uint64_t bytes_down = 0;
@@ -214,7 +215,7 @@ namespace yuan::net::socks5
         SessionStateCallback session_state_cb_;
         RelayHandler relay_handler_;
         UdpRelayHandler udp_relay_handler_;
-        timer::Timer *idle_sweep_timer_ = nullptr;
+        timer::TimerHandle idle_sweep_timer_;
         std::atomic_bool stop_requested_{ false };
         AuthRateLimiter auth_rate_limiter_;
     };

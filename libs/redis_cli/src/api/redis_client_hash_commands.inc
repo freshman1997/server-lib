@@ -1,0 +1,15 @@
+std::shared_ptr<RedisValue> hget(std::string key, std::string field);
+std::shared_ptr<RedisValue> hset(std::string key, std::string field, std::string value);
+std::shared_ptr<RedisValue> hset(std::string key, const std::unordered_map<std::string, std::string> &field_values);
+std::shared_ptr<RedisValue> hmset(std::string key, const std::unordered_map<std::string, std::string> &field_values);
+std::shared_ptr<RedisValue> hmget(std::string key, const std::vector<std::string> &fields);
+std::shared_ptr<RedisValue> hgetall(std::string key);
+std::shared_ptr<RedisValue> hdel(std::string key, const std::vector<std::string> &fields);
+std::shared_ptr<RedisValue> hlen(std::string key);
+std::shared_ptr<RedisValue> hkeys(std::string key);
+std::shared_ptr<RedisValue> hvals(std::string key);
+std::shared_ptr<RedisValue> hincrby(std::string key, std::string field, int64_t increment);
+std::shared_ptr<RedisValue> hincrbyfloat(std::string key, std::string field, double increment);
+std::shared_ptr<RedisValue> hexists(std::string key, std::string field);
+std::shared_ptr<RedisValue> hscan(std::string key, int64_t cursor, const std::string &match_pattern = "", int64_t count = 10);
+std::shared_ptr<RedisValue> hscan(std::string key, int64_t cursor, const std::vector<std::string> &match_patterns, int64_t count = 10);

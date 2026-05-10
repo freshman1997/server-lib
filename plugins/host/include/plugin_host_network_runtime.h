@@ -6,8 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <functional>
-#include <unordered_map>
-#include <mutex>
+#include <memory>
 
 namespace yuan::net
 {
@@ -21,6 +20,7 @@ namespace yuan::app
     {
     public:
         explicit PluginHostNetworkRuntime(net::NetworkRuntime *runtime);
+        ~PluginHostNetworkRuntime() override;
 
         bool is_available() const override;
 
@@ -38,10 +38,11 @@ namespace yuan::app
         const char *runtime_name() const override;
 
     private:
+        struct TimerRegistry;
+
         net::NetworkRuntime *runtime_;
         std::atomic<plugin::HostTimerId> next_id_{ 1 };
-        mutable std::mutex mutex_;
-        std::unordered_map<plugin::HostTimerId, void *> timer_handles_;
+        std::shared_ptr<TimerRegistry> timer_registry_;
     };
 
 } // namespace yuan::app

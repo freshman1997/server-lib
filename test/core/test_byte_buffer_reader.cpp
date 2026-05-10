@@ -46,6 +46,16 @@ int main()
         return 1;
     }
 
+    yuan::buffer::ByteBuffer partial_line;
+    partial_line.append(std::string_view("partial"));
+    yuan::buffer::ByteBufferReader partial_reader;
+    partial_reader.add_buffer(partial_line);
+    std::string partial;
+    if (partial_reader.read_line(partial) != -2) {
+        std::cerr << "partial line should request more bytes\n";
+        return 1;
+    }
+
     std::cout << "byte buffer reader test passed\n";
     return 0;
 }

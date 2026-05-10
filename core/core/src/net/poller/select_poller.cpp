@@ -44,6 +44,7 @@ namespace yuan::net
         FD_ZERO(&data_->excepts_);
 
         int max_fd = 0;
+        bool has_fd = false;
         for (auto i = data_->sockets_.begin(); i != data_->sockets_.end(); ++i) {
             if (!i->second) {
                 continue;
@@ -51,6 +52,7 @@ namespace yuan::net
 
             if (i->second->get_events() & Channel::READ_EVENT) {
                 FD_SET(i->first, &data_->reads_);
+                has_fd = true;
                 if (i->first > max_fd) {
                     max_fd = i->first;
                 }
@@ -58,6 +60,8 @@ namespace yuan::net
 
             if (i->second->get_events() & Channel::WRITE_EVENT) {
                 FD_SET(i->first, &data_->writes_);
+                FD_SET(i->first, &data_->excepts_);
+                has_fd = true;
                 if (i->first > max_fd) {
                     max_fd = i->first;
                 }
@@ -65,10 +69,15 @@ namespace yuan::net
 
             if (i->second->get_events() & Channel::EXCEP_EVENT) {
                 FD_SET(i->first, &data_->excepts_);
+                has_fd = true;
                 if (i->first > max_fd) {
                     max_fd = i->first;
                 }
             }
+        }
+
+        if (!has_fd) {
+            return tm;
         }
 
         timeval tv{};
@@ -99,7 +108,7 @@ namespace yuan::net
             }
 
             if (FD_ISSET(j->first, &data_->excepts_)) {
-                ev |= Channel::EXCEP_EVENT;
+                ev |= (j->second->get_events() & Channel::WRITE_EVENT) ? Channel::WRITE_EVENT : Channel::EXCEP_EVENT;
             }
 
             if (ev != Channel::NONE_EVENT && j->second) {

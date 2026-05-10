@@ -3,6 +3,7 @@
 #include "net/handler/connection_handler.h"
 #include "net/socket/inet_address.h"
 #include "net/runtime/network_runtime.h"
+#include "timer/timer_handle.h"
 #include "def.h"
 
 namespace yuan::net
@@ -69,7 +70,7 @@ namespace yuan::net::ftp
         std::weak_ptr<Connection> conn_owner_;
         Connection *conn_ = nullptr;
         InetAddress remote_addr_;
-        timer::Timer *conn_timer_;
+        timer::TimerHandle conn_timer_;
         FtpSession *session_;
     };
 }

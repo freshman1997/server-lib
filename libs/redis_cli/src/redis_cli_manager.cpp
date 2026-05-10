@@ -9,11 +9,12 @@ namespace yuan::redis
     {
         std::lock_guard<std::mutex> lock(m_mutex_);
         m_redis_cli_map.clear();
+        m_redis_cli_idx_.store(0);
     }
 
     int RedisCliManager::init(const std::vector<Option> & options)
     {
-        std::lock_guard<std::mutex> lock(m_mutex_);
+        std::vector<std::pair<Option, std::shared_ptr<RedisClient> > > connected_clients;
         for (const auto &opt : options) {
             auto redis_client = std::make_shared<RedisClient>(opt);
             auto res = redis_client->ping();
@@ -21,10 +22,13 @@ namespace yuan::redis
                 continue;
             }
 
-            m_redis_cli_map.emplace_back(opt, redis_client);
+            connected_clients.emplace_back(opt, redis_client);
         }
 
-        return 0;
+        std::lock_guard<std::mutex> lock(m_mutex_);
+        m_redis_cli_map = std::move(connected_clients);
+        m_redis_cli_idx_.store(0);
+        return m_redis_cli_map.empty() ? -1 : 0;
     }
 
     std::shared_ptr<RedisClient> RedisCliManager::get_random_redis_client()
@@ -46,7 +50,7 @@ namespace yuan::redis
             return nullptr;
         }
 
-        int idx = m_redis_cli_idx_.fetch_add(1) % static_cast<int>(m_redis_cli_map.size());
+        const auto idx = m_redis_cli_idx_.fetch_add(1) % m_redis_cli_map.size();
         return m_redis_cli_map[idx].second;
     }
 }

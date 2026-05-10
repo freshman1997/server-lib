@@ -8,6 +8,7 @@
 #include "coroutine/runtime_view.h"
 #include "event/event_loop.h"
 #include "timer/timer.h"
+#include "timer/timer_handle.h"
 #include "timer/timer_util.hpp"
 
 namespace yuan::coroutine::detail
@@ -15,34 +16,31 @@ namespace yuan::coroutine::detail
     struct AwaiterTimeoutState
     {
         net::EventLoop *loop = nullptr;
-        timer::Timer *timer = nullptr;
+        timer::TimerHandle timer;
         std::coroutine_handle<> handle{};
         bool timed_out = false;
         bool completed = false;
         bool cancelled = false;
     };
 
-    inline timer::Timer *arm_awaiter_timeout(RuntimeView runtime,
-                                             uint32_t timeout_ms,
-                                             const std::shared_ptr<AwaiterTimeoutState> &state) noexcept
+    inline timer::TimerHandle arm_awaiter_timeout(RuntimeView runtime,
+                                                  uint32_t timeout_ms,
+                                                  const std::shared_ptr<AwaiterTimeoutState> &state) noexcept
     {
         if (!state || timeout_ms == 0 || !runtime.timer_manager()) {
-            return nullptr;
+            return {};
         }
 
-        state->timer = timer::TimerUtil::build_timeout_timer(
+        state->timer = timer::TimerUtil::build_timeout_handle(
             runtime.timer_manager(),
             timeout_ms,
-            [weak_state = std::weak_ptr<AwaiterTimeoutState>(state)](timer::Timer *timer) {
+            [weak_state = std::weak_ptr<AwaiterTimeoutState>(state)]() {
                 auto state = weak_state.lock();
                 if (!state || state->cancelled || state->completed) {
                     return;
                 }
                 state->timed_out = true;
-                state->timer = nullptr;
-                if (timer) {
-                    timer->cancel();
-                }
+                state->timer.reset();
                 if (state->loop && state->handle) {
                     state->loop->post_coroutine(state->handle);
                 }
@@ -56,10 +54,8 @@ namespace yuan::coroutine::detail
             return;
         }
         state->cancelled = true;
-        if (state->timer) {
-            state->timer->cancel();
-            state->timer = nullptr;
-        }
+        state->timer.cancel();
+        state->timer.reset();
     }
 }
 

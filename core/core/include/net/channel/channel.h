@@ -69,7 +69,7 @@ namespace yuan::net
 
         bool has_handler() const noexcept
         {
-            return handler_ != nullptr || !handler_owner_.expired();
+            return uses_handler_owner_ ? !handler_owner_.expired() : handler_ != nullptr;
         }
 
         void set_revent(int revent)
@@ -119,6 +119,7 @@ namespace yuan::net
         uint64_t generation_;
         SelectHandler *handler_;
         std::weak_ptr<SelectHandler> handler_owner_;
+        bool uses_handler_owner_;
     };
 }
 

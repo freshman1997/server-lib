@@ -8,6 +8,8 @@ namespace yuan::redis
 {
     bool RedisClient::multi()
     {
+        std::lock_guard<std::recursive_mutex> lock(impl_->operation_mutex_);
+
         if (impl_->multi_cmd_) {
             return false;
         }
@@ -22,6 +24,8 @@ namespace yuan::redis
 
     std::shared_ptr<RedisValue> RedisClient::exec()
     {
+        std::lock_guard<std::recursive_mutex> lock(impl_->operation_mutex_);
+
         if (!impl_->multi_cmd_) {
             return ErrorValue::from_string("ERR: EXEC without MULTI");
         }

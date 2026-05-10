@@ -24,7 +24,6 @@
 #include <atomic>
 
 #ifdef _WIN32
-#include <arpa/inet.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
@@ -106,6 +105,15 @@ namespace
         ::closesocket(fd);
 #else
         ::close(fd);
+#endif
+    }
+
+    void shutdown_send(int fd)
+    {
+#ifdef _WIN32
+        (void)::shutdown(fd, SD_SEND);
+#else
+        (void)::shutdown(fd, SHUT_WR);
 #endif
     }
 
@@ -201,7 +209,7 @@ namespace
             addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             addr.sin_port = htons(port);
             if (::bind(listen_fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
-                ::close(listen_fd);
+                close_fd(listen_fd);
                 return;
             }
             ::listen(listen_fd, 1);
@@ -219,10 +227,10 @@ namespace
                 if (n > 0) {
                     ::send(client_fd, buf, n, 0);
                 }
-                ::shutdown(client_fd, SHUT_WR);
-                ::close(client_fd);
+                shutdown_send(client_fd);
+                close_fd(client_fd);
             }
-            ::close(listen_fd);
+            close_fd(listen_fd);
         });
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -373,7 +381,7 @@ namespace
             set_recv_timeout(client_fd, 5);
             const char request[] = "request";
             (void)::send(client_fd, request, sizeof(request) - 1, 0);
-            (void)::shutdown(client_fd, SHUT_WR);
+            shutdown_send(client_fd);
             std::string response;
             const bool got_response = recv_exact(client_fd, response, 8);
             check(got_response, "server should receive response after half-close");

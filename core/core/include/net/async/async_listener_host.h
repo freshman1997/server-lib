@@ -53,6 +53,7 @@ namespace yuan::net
             }
             if (acceptor_) {
                 acceptor_->close();
+                acceptor_.reset();
             }
             runtime_ = nullptr;
         }

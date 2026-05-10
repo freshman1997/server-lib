@@ -29,7 +29,13 @@ namespace yuan::net
     }
 
     Channel::Channel(int fd)
-        : fd_(fd), handler_(nullptr), events_(NONE_EVENT), revent_(NONE_EVENT), priority_(0), generation_(allocate_channel_generation())
+        : events_(NONE_EVENT),
+          fd_(fd),
+          revent_(NONE_EVENT),
+          priority_(0),
+          generation_(allocate_channel_generation()),
+          handler_(nullptr),
+          uses_handler_owner_(false)
     {
         disable_all();
     }
@@ -38,11 +44,13 @@ namespace yuan::net
     {
         handler_ = handler;
         handler_owner_.reset();
+        uses_handler_owner_ = false;
     }
 
     void Channel::set_handler(const std::weak_ptr<SelectHandler> &handler)
     {
         handler_owner_ = handler;
+        uses_handler_owner_ = true;
         auto locked = handler_owner_.lock();
         handler_ = ptr_of(locked);
     }
@@ -51,15 +59,19 @@ namespace yuan::net
     {
         handler_ = nullptr;
         handler_owner_.reset();
+        uses_handler_owner_ = false;
     }
 
     void Channel::on_event()
     {
         SelectHandler *handler = handler_;
-        if (!handler_owner_.expired()) {
+        if (uses_handler_owner_) {
             auto locked = handler_owner_.lock();
             handler = ptr_of(locked);
             handler_ = handler;
+            if (!handler) {
+                return;
+            }
         }
 
         if (!handler) {

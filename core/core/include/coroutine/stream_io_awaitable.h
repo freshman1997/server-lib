@@ -275,11 +275,6 @@ namespace yuan::coroutine
                     complete(IoStatus::connection_closed);
                 }
             });
-            register_waiter(connection, net::ConnectionEvent::input_shutdown, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    complete(IoStatus::connection_closed);
-                }
-            });
             connection->write_and_flush(buffer_);
 
             if (completed_) {
@@ -430,11 +425,6 @@ namespace yuan::coroutine
                 }
             });
             register_waiter(connection, net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    complete(IoStatus::connection_closed);
-                }
-            });
-            register_waiter(connection, net::ConnectionEvent::input_shutdown, [this](const std::shared_ptr<net::Connection> &) {
                 if (!completed_) {
                     complete(IoStatus::connection_closed);
                 }

@@ -120,7 +120,7 @@ namespace yuan::net::websocket
         std::string url_;
         std::weak_ptr<Connection> conn_owner_;
         Connection *conn_;
-        timer::Timer *heartbeat_timer_;
+        timer::TimerHandle heartbeat_timer_;
         WebSocketHandshaker handshaker_;
         WebSocketPacketParser pkt_parser_;
         WebSocketConfigManager *config_;

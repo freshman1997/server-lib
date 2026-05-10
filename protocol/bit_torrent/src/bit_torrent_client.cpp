@@ -341,8 +341,8 @@ namespace yuan::net::bit_torrent
     void BitTorrentClient::stop_download_runtime()
     {
         if (unchoke_timer_) {
-            unchoke_timer_->cancel();
-            unchoke_timer_ = nullptr;
+            unchoke_timer_.cancel();
+            unchoke_timer_.reset();
         }
         if (runtime_coordinator_) {
             runtime_coordinator_->stop();

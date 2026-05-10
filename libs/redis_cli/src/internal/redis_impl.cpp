@@ -1,15 +1,12 @@
 #include "redis_impl.h"
-#include "base/time.h"
 #include "buffer/byte_buffer.h"
 #include "coroutine.h"
 #include "coroutine/sync_wait.h"
 #include "def.h"
 #include "event/event_loop.h"
 #include "internal/redis_registry.h"
-#include "timer/timer.h"
 #include "timer/timer_manager.h"
 #include "value/error_value.h"
-#include "timer/timer_util.hpp"
 
 #include <cassert>
 
@@ -23,6 +20,12 @@ namespace yuan::redis
         }
     }
 
+    RedisClient::Impl::~Impl()
+    {
+        close();
+        client_ = nullptr;
+    }
+
     void RedisClient::Impl::on_connected(const std::shared_ptr<net::Connection> &conn)
     {
         conn_ = conn;
@@ -34,13 +37,13 @@ namespace yuan::redis
     {
         (void)conn;
         conn_.reset();
-        set_mask(RedisState::closed);
+        set_mask(RedisState::closed, true);
         completion_event_.notify();
     }
 
     void RedisClient::Impl::close()
     {
-        if (!conn_ || is_closed()) {
+        if (!conn_ && is_closed()) {
             return;
         }
 
@@ -49,6 +52,8 @@ namespace yuan::redis
             conn_->close();
             conn_.reset();
         }
+        last_cmd_ = nullptr;
+        reader_.just_clear();
         completion_event_.notify();
     }
 
@@ -61,8 +66,13 @@ namespace yuan::redis
             return;
         }
 
-        last_check_time_ = base::time::now();
         reader_.add_buffer(conn->take_input_byte_buffer());
+        if (option_.max_buffered_response_bytes_ > 0 &&
+            reader_.get_remain_bytes() > option_.max_buffered_response_bytes_) {
+            last_error_ = ErrorValue::from_string("response buffer exceeds limit");
+            close();
+            return;
+        }
 
         const auto cmd = last_cmd_ ? last_cmd_ : subcribe_cmd;
         if (const int ret = cmd->unpack(reader_); ret < 0) {
@@ -90,11 +100,11 @@ namespace yuan::redis
             }
         }
 
-        reader_.just_clear();
-        if (is_timeout() && !is_closed()) {
-            close();
+        if (reader_.get_remain_bytes() > 0) {
+            reader_.discard_read_bytes();
+        } else {
+            reader_.just_clear();
         }
-
         if (!last_cmd_ || cmd->get_result() || last_error_ ||
             (subcribe_cmd && subcribe_cmd->has_pending_messages())) {
             completion_event_.notify();
@@ -116,6 +126,13 @@ namespace yuan::redis
 
     std::shared_ptr<RedisValue> RedisClient::Impl::execute_command(std::shared_ptr<Command> cmd)
     {
+        std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
+
+        if (!cmd) {
+            last_error_ = ErrorValue::from_string("command is null");
+            return nullptr;
+        }
+
         if (is_closed()) {
             return nullptr;
         }
@@ -144,15 +161,6 @@ namespace yuan::redis
             return nullptr;
         }
 
-        check_timeout();
-
-        if (is_timeout()) {
-            if (!is_closed()) {
-                close();
-            }
-            return nullptr;
-        }
-
         if (last_cmd_) {
             last_error_ = ErrorValue::from_string("executing");
             return nullptr;
@@ -173,11 +181,16 @@ namespace yuan::redis
         conn_->write(::yuan::buffer::ByteBuffer(std::string_view(cmdStr.data(), cmdStr.size())));
 
         const auto runtime = RedisRegistry::get_instance()->get_coroutine_runtime();
-        auto res = yuan::coroutine::sync_wait(runtime, [
-                                                           this,
-                                                           cmd
-                                                       ]()->SimpleTask<std::shared_ptr<RedisValue> > {
-            co_await completion_event_.wait();
+        auto res = yuan::coroutine::sync_wait(runtime, [this, cmd]()->SimpleTask<std::shared_ptr<RedisValue> > {
+            const auto timeout_ms = option_.timeout_ms_ > 0 ? static_cast<uint32_t>(option_.timeout_ms_) : 0;
+            const bool timed_out = co_await completion_event_.wait_for(
+                RedisRegistry::get_instance()->get_timer_manager(),
+                timeout_ms);
+            if (timed_out) {
+                last_error_ = ErrorValue::from_string(option_.name_ + " command timeout");
+                close();
+                co_return nullptr;
+            }
             if (client_ && client_->is_closed()) {
                 client_->set_last_error(ErrorValue::from_string("connection closed"));
             }
@@ -194,36 +207,12 @@ namespace yuan::redis
         set_mask(RedisState::connecting);
         conn_ = std::move(conn);
 
-        if (option_.timeout_ms_ > 0) {
-            last_check_time_ = base::time::now();
-            RedisRegistry::get_instance()->get_timer_manager()->interval(0, 1000, this, -1);
-        }
-    }
-
-    void RedisClient::Impl::on_timer(timer::Timer * timer)
-    {
-        check_timeout();
-
-        if (is_timeout() || is_closed()) {
-            timer->cancel();
-            close();
-        }
-    }
-
-    void RedisClient::Impl::check_timeout()
-    {
-        if (option_.timeout_ms_ == 0 || is_closed()) {
-            return;
-        }
-
-        if (const auto now = base::time::now(); now - last_check_time_ > option_.timeout_ms_) {
-            set_mask(RedisState::timeout);
-            last_error_ = ErrorValue::from_string("connection time out");
-        }
     }
 
     int RedisClient::Impl::fetch_next_message(int timeout)
     {
+        std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
+
         if (is_closed()) {
             last_error_ = ErrorValue::from_string("connection closed");
             return -1;

@@ -2,6 +2,7 @@
 #define __YUAN_REDIS_ARRAY_VALUE_H__
 #include "internal/def.h"
 #include "redis_value.h"
+#include <cstddef>
 #include <vector>
 #include <memory>
 #include <sstream>
@@ -41,9 +42,14 @@ namespace yuan::redis
         }
 
     public:
-        const std::vector<std::shared_ptr<RedisValue>> & get_values()
+        const std::vector<std::shared_ptr<RedisValue>> & get_values() const
         {
             return values_;
+        }
+
+        std::size_t size() const
+        {
+            return values_.size();
         }
 
         void set_values(const std::vector<std::shared_ptr<RedisValue>> &values)

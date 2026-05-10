@@ -3,7 +3,11 @@ project(PluginHost)
 
 file(GLOB_RECURSE PLUGIN_HOST_SRC CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
-add_library(PluginHost ${PLUGIN_HOST_SRC})
+if(YUAN_FORCE_STATIC_LINK AND MINGW)
+    add_library(PluginHost STATIC ${PLUGIN_HOST_SRC})
+else()
+    add_library(PluginHost ${PLUGIN_HOST_SRC})
+endif()
 target_compile_features(PluginHost PUBLIC cxx_std_20)
 target_link_libraries(PluginHost PUBLIC App PluginCore Logger redisCli PluginLua PluginTypeScript)
 target_include_directories(PluginHost PUBLIC

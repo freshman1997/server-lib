@@ -3,7 +3,7 @@
 #include "handshake.h"
 #include "net/connection/connection.h"
 #include "net/runtime/network_runtime.h"
-#include "timer/timer.h"
+#include "timer/timer_handle.h"
 #include "websocket_config.h"
 #include "websocket_packet_parser.h"
 #include "websocket_protocol.h"
@@ -23,15 +23,15 @@ namespace yuan::net::websocket
     }
 
     WebSocketConnection::WebSocketConnection(WorkMode mode)
-        : mode_(mode), state_(State::connecting_), conn_(nullptr), heartbeat_timer_(nullptr), config_(nullptr), last_active_time_(0)
+        : mode_(mode), state_(State::connecting_), conn_(nullptr), config_(nullptr), last_active_time_(0)
     {
     }
 
     WebSocketConnection::~WebSocketConnection()
     {
         if (heartbeat_timer_) {
-            heartbeat_timer_->cancel();
-            heartbeat_timer_ = nullptr;
+            heartbeat_timer_.cancel();
+            heartbeat_timer_.reset();
         }
     }
 

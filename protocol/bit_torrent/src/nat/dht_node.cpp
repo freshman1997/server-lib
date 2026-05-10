@@ -130,7 +130,6 @@ namespace yuan::net::bit_torrent
           port_(0),
           acceptor_(nullptr),
           runtime_(nullptr),
-          refresh_timer_(nullptr),
           next_transaction_id_(0)
     {
         init_routing_table();
@@ -209,8 +208,8 @@ namespace yuan::net::bit_torrent
         running_ = false;
 
         if (refresh_timer_) {
-            refresh_timer_->cancel();
-            refresh_timer_ = nullptr;
+            refresh_timer_.cancel();
+            refresh_timer_.reset();
         }
 
         if (acceptor_) {

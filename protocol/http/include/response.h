@@ -66,6 +66,7 @@ namespace yuan::net::http
     private:
         ResponseCode respCode_ = ResponseCode::bad_request;
         bool is_sse_ = false;
+        bool headers_sent_ = false;
         uint64_t sse_event_count_ = 0;
     };
 }

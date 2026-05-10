@@ -6,7 +6,7 @@
 #include "tracker/http_tracker.h"
 #include "tracker/udp_tracker.h"
 #include "net/runtime/network_runtime.h"
-#include "timer/timer.h"
+#include "timer/timer_handle.h"
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -79,7 +79,7 @@ namespace yuan::net::bit_torrent
 
     private:
         net::NetworkRuntime *runtime_ = nullptr;
-        timer::Timer *announce_timer_ = nullptr;
+        timer::TimerHandle announce_timer_;
         TrackerPeerListHandler peer_list_handler_;
         TrackerContextProvider context_provider_;
         int32_t announce_interval_ = 0;

@@ -5,6 +5,7 @@
 #include "timer.h"
 #include "timer_manager.h"
 #include <functional>
+#include <utility>
 
 namespace yuan::timer
 {
@@ -14,35 +15,28 @@ namespace yuan::timer
     class TimerUtil
     {
     public:
-        template <typename T>
-        static Timer *build_period_timer(TimerManager *manager, uint32_t timeout, uint32_t interval, T *object, void (T::*func)(Timer *), int period = -1);
+        inline static TimerHandle build_period_handle(TimerManager *manager, uint32_t timeout, uint32_t interval, std::function<void()> func, int period = 0);
 
-        template <typename T>
-        static Timer *build_timeout_timer(TimerManager *manager, uint32_t timeout, T *object, void (T::*func)(Timer *));
-
-        inline static Timer *build_period_timer(TimerManager *manager, uint32_t timeout, uint32_t interval, std::function<void(Timer *)> func, int period = 0);
-
-        inline static Timer *build_timeout_timer(TimerManager *manager, uint32_t timeout, std::function<void(Timer *)> func);
+        inline static TimerHandle build_timeout_handle(TimerManager *manager, uint32_t timeout, std::function<void()> func);
     };
 
-    template <class T>
-    class DefaultTimerTask : public TimerTask
+    class SimpleTimerTask : public TimerTask
     {
     public:
-        DefaultTimerTask(T *obj, void (T::*func)(Timer *timer))
-            : object_(obj), func_(func)
+        explicit SimpleTimerTask(std::function<void()> func)
+            : func_(std::move(func))
         {
         }
 
         virtual void on_timer(Timer *timer)
         {
-            if (object_ && func_) {
-                (object_->*func_)(timer);
-            }
+            (void)timer;
+            func_();
         }
 
         virtual void on_finished(Timer *timer)
         {
+            (void)timer;
         }
 
         virtual bool need_free() const override
@@ -51,56 +45,23 @@ namespace yuan::timer
         }
 
     private:
-        T *object_;
-        void (T::*func_)(Timer *timer);
+        std::function<void()> func_;
     };
 
-    class NoObjectTimerTask : public TimerTask
+    inline TimerHandle TimerUtil::build_timeout_handle(TimerManager *manager, uint32_t timeout, std::function<void()> func)
     {
-    public:
-        NoObjectTimerTask(std::function<void(Timer *)> func)
-            : func_(func)
-        {
+        if (!manager) {
+            return {};
         }
-
-        virtual void on_timer(Timer *timer)
-        {
-            func_(timer);
-        }
-
-        virtual void on_finished(Timer *timer)
-        {
-        }
-
-        virtual bool need_free() const override
-        {
-            return true;
-        }
-
-    private:
-        std::function<void(Timer *)> func_;
-    };
-
-    template <typename T>
-    Timer *TimerUtil::build_period_timer(TimerManager * manager, uint32_t timeout, uint32_t interval, T * object, void (T::*func)(Timer *), int period)
-    {
-        return manager->interval(timeout, interval, new DefaultTimerTask<T>(object, func), period);
+        return manager->timeout_handle(timeout, new SimpleTimerTask(std::move(func)));
     }
 
-    template <typename T>
-    Timer *TimerUtil::build_timeout_timer(TimerManager * manager, uint32_t timeout, T * object, void (T::*func)(Timer *))
+    inline TimerHandle TimerUtil::build_period_handle(TimerManager *manager, uint32_t timeout, uint32_t interval, std::function<void()> func, int period)
     {
-        return manager->timeout(timeout, new DefaultTimerTask<T>(object, func));
-    }
-
-    Timer *TimerUtil::build_timeout_timer(TimerManager * manager, uint32_t timeout, std::function<void(Timer *)> func)
-    {
-        return manager->timeout(timeout, new NoObjectTimerTask(func));
-    }
-
-    Timer *TimerUtil::build_period_timer(TimerManager * manager, uint32_t timeout, uint32_t interval, std::function<void(Timer *)> func, int period)
-    {
-        return manager->interval(timeout, interval, new NoObjectTimerTask(func), period);
+        if (!manager) {
+            return {};
+        }
+        return manager->interval_handle(timeout, interval, new SimpleTimerTask(std::move(func)), period);
     }
 }
 

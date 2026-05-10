@@ -6,7 +6,7 @@
 namespace yuan::net::http
 {
     HttpSession::HttpSession(uint64_t id, std::unique_ptr<HttpSessionContext> context, coroutine::RuntimeView runtime)
-        : session_id_(id), context_(std::move(context)), runtime_(runtime), conn_timer_(nullptr), close_cb_(nullptr)
+        : session_id_(id), context_(std::move(context)), runtime_(runtime), close_cb_(nullptr)
     {
         context_->set_session(this);
 
@@ -25,8 +25,8 @@ namespace yuan::net::http
         }
 
         if (conn_timer_) {
-            conn_timer_->cancel();
-            conn_timer_ = nullptr;
+            conn_timer_.cancel();
+            conn_timer_.reset();
         }
 
         session_items_.clear();
@@ -105,7 +105,7 @@ namespace yuan::net::http
         if (!alive_ || !conn_timer_ || !config::close_idle_connection) {
             return;
         }
-        conn_timer_->cancel();
+        conn_timer_.cancel();
         conn_timer_ = runtime_.schedule(config::connection_idle_timeout, [this]() { on_idle_timeout(); });
     }
 }

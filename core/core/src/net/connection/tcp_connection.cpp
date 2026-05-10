@@ -110,13 +110,14 @@ namespace yuan::net
     {
         state_ = ConnectionState::closed;
         assert(channel_);
+        const bool had_handler = channel_->has_handler();
         channel_->disable_all();
-        channel_->clear_handler();
 
-        if (eventHandler_ && !cleanup_done_ && channel_->has_handler()) {
+        if (eventHandler_ && !cleanup_done_ && had_handler) {
             eventHandler_->close_channel(ptr_of(channel_));
             eventHandler_ = nullptr;
         }
+        channel_->clear_handler();
 
         if (connectionHandlerOwner_ && !close_notified_) {
             LOG_WARN("tcp connection destroyed without close notification, ip: {}, port: {}, fd: {}",
@@ -258,11 +259,11 @@ namespace yuan::net
 #else
                 if (EAGAIN != errno && EWOULDBLOCK != errno && EINTR != errno) {
 #endif
-                if (connectionHandlerOwner_) {
-                    notify_event_waiters(ConnectionEvent::error);
-                    connectionHandlerOwner_->on_error(shared_from_this());
-                }
-                    close();
+                    if (connectionHandlerOwner_) {
+                        notify_event_waiters(ConnectionEvent::error);
+                        connectionHandlerOwner_->on_error(shared_from_this());
+                    }
+                    do_close();
                     return;
                 }
 

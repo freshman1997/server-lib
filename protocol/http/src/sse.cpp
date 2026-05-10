@@ -41,12 +41,23 @@ namespace yuan::net::http
     SseConnection::SseConnection(HttpRequest * req, HttpResponse * resp)
         : req_(req), resp_(resp)
     {
-        auto *ctx = req->get_context();
+        if (!req_ || !resp_) {
+            return;
+        }
+
+        auto *ctx = req_->get_context();
+        if (!ctx) {
+            return;
+        }
         conn_ = ctx->get_connection();
+        if (!conn_) {
+            return;
+        }
         conn_id_ = reinterpret_cast<uint64_t>(conn_);
         active_.store(true);
 
         // Configure SSE response headers.
+        resp_->set_sse();
         resp_->set_response_code(ResponseCode::ok_);
         resp_->add_header("Content-Type", "text/event-stream");
         resp_->add_header("Cache-Control", "no-cache, no-transform");
@@ -111,8 +122,10 @@ namespace yuan::net::http
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        if (!active_.load() || !conn_)
+        if (!active_.load() || !conn_ || !conn_->is_connected()) {
+            active_.store(false);
             return;
+        }
 
         conn_->append_output(payload);
         conn_->flush();
@@ -158,14 +171,21 @@ namespace yuan::net::http
 
     void SseChannel::broadcast(const SseEvent & event)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (auto it = subscribers_.begin(); it != subscribers_.end();) {
-            if (it->second && it->second->is_active()) {
-                it->second->send(event);
-                ++it;
-            } else {
-                it = subscribers_.erase(it);
+        std::vector<SseConnection *> active;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (auto it = subscribers_.begin(); it != subscribers_.end();) {
+                if (it->second && it->second->is_active()) {
+                    active.push_back(it->second);
+                    ++it;
+                } else {
+                    it = subscribers_.erase(it);
+                }
             }
+        }
+
+        for (auto *conn : active) {
+            conn->send(event);
         }
     }
 
@@ -177,7 +197,14 @@ namespace yuan::net::http
     size_t SseChannel::active_count() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        return subscribers_.size();
+        size_t count = 0;
+        for (const auto &[id, conn] : subscribers_) {
+            (void)id;
+            if (conn && conn->is_active()) {
+                ++count;
+            }
+        }
+        return count;
     }
 
     SseManager &SseManager::instance()

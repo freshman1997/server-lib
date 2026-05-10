@@ -14,6 +14,7 @@
 #include "net/ip_policy.h"
 #include "net/runtime/network_runtime.h"
 #include "server_service_custom_events.h"
+#include "timer/timer_handle.h"
 
 #include <algorithm>
 #include <atomic>
@@ -1468,7 +1469,7 @@ namespace yuan::server
         yuan::net::AsyncListenerHost listener;
         std::unique_ptr<yuan::net::NetworkRuntime> owned_runtime;
         yuan::coroutine::Task<void> accept_task;
-        yuan::timer::Timer *session_sweep_timer = nullptr;
+        yuan::timer::TimerHandle session_sweep_timer;
         uint64_t session_sweep_ticks = 0;
         std::mutex mutex;
         std::vector<std::shared_ptr<SessionContext>> sessions;
@@ -1537,7 +1538,7 @@ namespace yuan::server
         }
 
         data_->accept_task = {};
-        data_->session_sweep_timer = nullptr;
+        data_->session_sweep_timer.reset();
         data_->session_sweep_ticks = 0;
         data_->listener.close();
         data_->owned_runtime = shared_runtime_ ? nullptr : std::make_unique<yuan::net::NetworkRuntime>();
@@ -1559,7 +1560,8 @@ namespace yuan::server
     {
         stop_requested_.store(true, std::memory_order_relaxed);
         data_->listener.close();
-        data_->session_sweep_timer = nullptr;
+        data_->session_sweep_timer.cancel();
+        data_->session_sweep_timer.reset();
 
         std::vector<std::shared_ptr<ProxyServiceData::SessionContext>> sessions;
         {

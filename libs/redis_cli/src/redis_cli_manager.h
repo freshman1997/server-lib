@@ -25,7 +25,7 @@ namespace yuan::redis
         void release_all();
 
     private:
-        std::atomic<int> m_redis_cli_idx_{ 0 };
+        std::atomic<std::size_t> m_redis_cli_idx_{ 0 };
         std::mutex m_mutex_;
         std::vector<std::pair<Option, std::shared_ptr<RedisClient> > > m_redis_cli_map;
     };

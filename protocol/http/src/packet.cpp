@@ -11,7 +11,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <filesystem>
+#include <string_view>
 
 namespace yuan::net::http
 {
@@ -35,6 +37,58 @@ namespace yuan::net::http
             const auto id = g_body_spool_counter.fetch_add(1, std::memory_order_relaxed);
             return std::filesystem::temp_directory_path() /
                    ("yuan_http_body_" + std::to_string(now) + "_" + std::to_string(id) + ".tmp");
+        }
+
+        bool has_complete_http_header(const ::yuan::buffer::ByteBuffer &buffer)
+        {
+            const auto size = buffer.readable_bytes();
+            if (size < 4) {
+                return false;
+            }
+
+            const char *data = buffer.read_ptr();
+            for (std::size_t i = 0; i + 3 < size; ++i) {
+                if (data[i] == '\r' && data[i + 1] == '\n' && data[i + 2] == '\r' && data[i + 3] == '\n') {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool token_equals_ci(std::string_view token, std::string_view expected)
+        {
+            if (token.size() != expected.size()) {
+                return false;
+            }
+            for (std::size_t i = 0; i < token.size(); ++i) {
+                if (std::tolower(static_cast<unsigned char>(token[i])) != expected[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        bool transfer_encoding_has_chunked(std::string_view value)
+        {
+            std::size_t pos = 0;
+            while (pos < value.size()) {
+                const auto comma = value.find(',', pos);
+                auto end = comma == std::string_view::npos ? value.size() : comma;
+                while (pos < end && std::isspace(static_cast<unsigned char>(value[pos]))) {
+                    ++pos;
+                }
+                while (end > pos && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+                    --end;
+                }
+                if (token_equals_ci(value.substr(pos, end - pos), "chunked")) {
+                    return true;
+                }
+                if (comma == std::string_view::npos) {
+                    break;
+                }
+                pos = comma + 1;
+            }
+            return false;
         }
     }
 
@@ -429,6 +483,16 @@ namespace yuan::net::http
 
         if (input_cache_.readable_bytes() > get_max_packet_size()) {
             LOG_ERROR("too large packet!");
+            is_good_ = false;
+            return false;
+        }
+
+        if (parser_ && !parser_->header_done() && !has_complete_http_header(input_cache_)) {
+            if (input_cache_.readable_bytes() > config::max_header_length) {
+                is_good_ = false;
+                return false;
+            }
+            is_good_ = true;
             return false;
         }
 
@@ -436,6 +500,7 @@ namespace yuan::net::http
         input_cache_.compact();
 
         if (res < 0) {
+            error_code_ = res == -2 ? ResponseCode::payload_too_large : ResponseCode::bad_request;
             is_good_ = false;
             return false;
         }
@@ -474,7 +539,7 @@ namespace yuan::net::http
     {
         auto it = headers_.find(http_header_key::transfer_encoding);
         if (it != headers_.end()) {
-            return it->second == "chunked";
+            return transfer_encoding_has_chunked(it->second);
         }
 
         return false;

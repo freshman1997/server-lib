@@ -4,11 +4,20 @@
 #include <sstream>
 #include <cstdint>
 #include <iomanip>
+#include <cmath>
 
 namespace yuan::redis
 {
     std::string serializeDouble(double value) 
     {
+        if (std::isnan(value)) {
+            return "nan";
+        }
+        
+        if (std::isinf(value)) {
+            return value < 0 ? "-inf" : "inf";
+        }
+
         std::ostringstream oss;
         
         // 检查是否为整数

@@ -1,0 +1,16 @@
+bool multi();
+std::shared_ptr<RedisValue> exec();
+std::shared_ptr<RedisValue> discard();
+std::shared_ptr<RedisValue> watch(const std::vector<std::string> &keys);
+std::shared_ptr<RedisValue> unwatch();
+std::shared_ptr<RedisValue> multi_exec(const std::vector<std::string> &commands);
+std::shared_ptr<RedisValue> multi_exec(const std::vector<std::string> &commands, const std::vector<std::string> &keys);
+std::shared_ptr<RedisValue> multi_exec(const std::vector<std::string> &commands, const std::vector<std::string> &keys, const std::vector<std::string> &unwatch_keys);
+std::shared_ptr<RedisValue> eval(std::string script, const std::vector<std::string> &keys, const std::vector<std::string> &args);
+std::shared_ptr<RedisValue> evalsha(std::string sha1, const std::vector<std::string> &keys, const std::vector<std::string> &args);
+std::shared_ptr<RedisValue> script_load(std::string script);
+std::shared_ptr<RedisValue> script_exists(const std::string &sha1s);
+std::shared_ptr<RedisValue> script_exists(const std::vector<std::string> &sha1s);
+std::shared_ptr<RedisValue> script_flush();
+std::shared_ptr<RedisValue> script_kill();
+std::shared_ptr<RedisValue> script_flush_with_args(const std::vector<std::string> &args);

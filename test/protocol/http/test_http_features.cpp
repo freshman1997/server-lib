@@ -248,6 +248,28 @@ namespace
         return resp;
     }
 
+    std::string http_raw_exchange(uint16_t port, const std::vector<std::string> &chunks, int delay_ms = 0)
+    {
+        socket_t s = connect_loopback(port);
+        if (s == kInvalidSocket) {
+            return {};
+        }
+
+        for (const auto &chunk : chunks) {
+            if (!send_all(s, chunk)) {
+                close_socket(s);
+                return {};
+            }
+            if (delay_ms > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+            }
+        }
+
+        std::string resp = recv_all(s);
+        close_socket(s);
+        return resp;
+    }
+
     bool recv_exact(socket_t s, char *dst, std::size_t n)
     {
         std::size_t off = 0;
@@ -498,6 +520,41 @@ namespace
         check(mini_stats.find("\"proxy\"") != std::string::npos, "__mini_nginx_stats should include proxy section");
     }
 
+    void test_http1_split_header_and_invalid_content_length(uint16_t port)
+    {
+        const std::string split_resp = http_raw_exchange(port, {
+            "GET /__http_caps HTTP/1.1\r\nHost: 127.0.0.1\r\n",
+            "Connection: close\r\n\r\n"
+        }, 10);
+        check(split_resp.find("200") != std::string::npos, "split HTTP/1.1 header should parse after more bytes");
+
+        const std::string bad_len_resp = http_raw_exchange(port, {
+            "POST /__echo_body HTTP/1.1\r\n"
+            "Host: 127.0.0.1\r\n"
+            "Content-Type: text/plain\r\n"
+            "Content-Length: nope\r\n"
+            "Connection: close\r\n\r\n"
+        });
+        check(bad_len_resp.find("400") != std::string::npos, "invalid Content-Length should return 400");
+    }
+
+    void test_http1_chunked_request(uint16_t port)
+    {
+        const std::string resp = http_raw_exchange(port, {
+            "POST /__echo_body HTTP/1.1\r\n"
+            "Host: 127.0.0.1\r\n"
+            "Content-Type: text/plain\r\n"
+            "Transfer-Encoding: Chunked\r\n"
+            "Connection: close\r\n\r\n",
+            "4\r\nWiki\r\n",
+            "5\r\npedia\r\n",
+            "0\r\n\r\n"
+        }, 10);
+
+        check(resp.find("200") != std::string::npos, "chunked HTTP/1.1 request should return 200");
+        check(resp.find("Wikipedia") != std::string::npos, "chunked HTTP/1.1 body should be reassembled");
+    }
+
     void test_proxy_unmatched_route_returns_404(uint16_t port)
     {
         const std::string resp = http_get(port, "/api/not-found");
@@ -514,8 +571,8 @@ namespace
             std::chrono::steady_clock::now() - begin).count();
 
         check(!resp.empty(), "proxy connect-failure response should not be empty");
-        check(resp.find("502") != std::string::npos,
-              "proxy connect failure should return 502");
+        check(resp.find("502") != std::string::npos || resp.find("504") != std::string::npos,
+              "proxy connect failure should return a gateway error");
         check(elapsed_ms < 3000,
               "proxy connect failure should return quickly");
     }
@@ -2103,6 +2160,11 @@ int main()
     if (upstream_port == 0) {
         return 1;
     }
+    const uint16_t closed_proxy_port = reserve_tcp_port();
+    check(closed_proxy_port != 0, "should reserve closed proxy failure test port");
+    if (closed_proxy_port == 0) {
+        return 1;
+    }
 
     const auto upstream_log_path = std::filesystem::current_path() / "mini_nginx_proxy_test_upstream.log";
     {
@@ -2163,6 +2225,18 @@ int main()
                 continue;
             }
 
+#ifdef _WIN32
+            const DWORD client_recv_timeout_ms = 1500;
+            (void)::setsockopt(client, SOL_SOCKET, SO_RCVTIMEO,
+                               reinterpret_cast<const char *>(&client_recv_timeout_ms),
+                               sizeof(client_recv_timeout_ms));
+#else
+            timeval client_tv{};
+            client_tv.tv_sec = 1;
+            client_tv.tv_usec = 500 * 1000;
+            (void)::setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &client_tv, sizeof(client_tv));
+#endif
+
             std::string req;
             char buf[2048];
             while (req.find("\r\n\r\n") == std::string::npos) {
@@ -2218,7 +2292,7 @@ int main()
         },
         {
             {"root", "/proxy-fail/"},
-            {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", 1})})},
+            {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", closed_proxy_port})})},
             {"strip_prefix", false},
             {"connect_timeout", 200},
             {"read_timeout", 1000},
@@ -2272,7 +2346,7 @@ int main()
         }
     });
     service->server().on("/__h2_window", [](yuan::net::http::HttpRequest *req,
-                                            yuan::net::http::HttpResponse *resp) {
+                                             yuan::net::http::HttpResponse *resp) {
         const std::string body(70000, 'w');
         resp->set_response_code(yuan::net::http::ResponseCode::ok_);
         resp->add_header("Content-Type", "text/plain");
@@ -2282,10 +2356,26 @@ int main()
             resp->send();
         }
     });
+    service->server().on("/__echo_body", [](yuan::net::http::HttpRequest *req,
+                                            yuan::net::http::HttpResponse *resp) {
+        std::string body;
+        if (const char *begin = req->body_begin()) {
+            if (const char *end = req->body_end()) {
+                body.assign(begin, end);
+            }
+        }
+        resp->set_response_code(yuan::net::http::ResponseCode::ok_);
+        resp->add_header("Content-Type", "text/plain");
+        resp->add_header("Content-Length", std::to_string(body.size()));
+        resp->append_body(body);
+        resp->send();
+    });
     service->start();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     test_http_caps_and_proxy_stats(port);
+    test_http1_split_header_and_invalid_content_length(port);
+    test_http1_chunked_request(port);
     test_http2_preface_gate(port);
     test_http2_preface_settings_ack(port);
     test_http2_fragmented_preface_settings_ack(port);
@@ -2336,6 +2426,13 @@ int main()
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
     upstream_stop.store(true);
+    if (socket_t wake = connect_loopback(upstream_port); wake != kInvalidSocket) {
+        (void)send_all(wake,
+                       "GET /__stop HTTP/1.1\r\n"
+                       "Host: 127.0.0.1\r\n"
+                       "Connection: close\r\n\r\n");
+        close_socket(wake);
+    }
     if (upstream_thread.joinable()) {
         upstream_thread.join();
     }

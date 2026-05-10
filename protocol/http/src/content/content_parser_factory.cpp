@@ -75,11 +75,10 @@ namespace yuan::net::http
             }
 
             if (!chunked_parser->parse(packet)) {
+                if (packet->get_body_state() == BodyState::partial) {
+                    return true;
+                }
                 return false;
-            }
-
-            if (packet->get_body_state() == BodyState::partial) {
-                return true;
             }
 
             packet->set_body_length(chunked_parser->get_content_length());

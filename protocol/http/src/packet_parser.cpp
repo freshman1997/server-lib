@@ -16,6 +16,13 @@ namespace yuan::net::http
     {
         constexpr uint32_t kBodyFileSpoolThreshold = 64u * 1024u;
 
+        enum class ContentLengthParseState
+        {
+            missing,
+            valid,
+            invalid
+        };
+
         bool should_spool_request_body(HttpPacket *packet, uint32_t length)
         {
             if (!packet || packet->get_packet_type() != PacketType::request || length <= kBodyFileSpoolThreshold) {
@@ -24,46 +31,56 @@ namespace yuan::net::http
             auto *req = static_cast<HttpRequest *>(packet);
             return req->get_method() == HttpMethod::put_;
         }
+
+        ContentLengthParseState parse_content_length_header(const HttpPacket *packet, uint32_t &result)
+        {
+            result = 0;
+            if (!packet) {
+                return ContentLengthParseState::missing;
+            }
+
+            const std::string *length = packet->get_header(http_header_key::content_length);
+            if (!length) {
+                return ContentLengthParseState::missing;
+            }
+
+            const char *start = length->data();
+            const char *end = start + length->size();
+
+            while (start < end && (*start == ' ' || *start == '\t')) {
+                ++start;
+            }
+
+            while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
+                --end;
+            }
+
+            if (start == end) {
+                return ContentLengthParseState::invalid;
+            }
+
+            for (const char *p = start; p < end; ++p) {
+                if (*p < '0' || *p > '9') {
+                    return ContentLengthParseState::invalid;
+                }
+            }
+
+            auto[
+                ptr,
+                ec
+            ] = std::from_chars(start, end, result);
+            if (ec != std::errc{} || ptr != end) {
+                return ContentLengthParseState::invalid;
+            }
+
+            return ContentLengthParseState::valid;
+        }
     }
 
     uint32_t HttpPacketParser::get_body_length()
     {
-        const std::string *length = packet_->get_header(http_header_key::content_length);
-        if (!length) {
-            return 0;
-        }
-
-        const char *start = length->data();
-        const char *end = start + length->size();
-
-        while (start < end && (*start == ' ' || *start == '\t')) {
-            ++start;
-        }
-
-        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
-            --end;
-        }
-
-        if (start == end) {
-            return 0;
-        }
-
-        for (const char *p = start; p < end; ++p) {
-            if (*p < '0' || *p > '9') {
-                return 0;
-            }
-        }
-
         uint32_t result = 0;
-        auto[
-            ptr,
-            ec
-        ] = std::from_chars(start, end, result);
-        if (ec != std::errc{} || ptr != end) {
-            return 0;
-        }
-
-        return result;
+        return parse_content_length_header(packet_, result) == ContentLengthParseState::valid ? result : 0;
     }
 
     bool HttpPacketParser::parse_version(::yuan::buffer::ByteBuffer & buff, char ending, char next)
@@ -244,12 +261,27 @@ namespace yuan::net::http
                 return -1;
             }
 
-            uint32_t length = packet_->get_body_length() ? packet_->get_body_length() : get_body_length();
-            if (length > 0) {
-                if (packet_->get_body_length() == 0) {
+            if (has_transfer_encoding) {
+                if (!packet_->is_chunked()) {
+                    return -1;
+                }
+                body_state = BodyState::empty;
+                return 1;
+            }
+
+            uint32_t length = packet_->get_body_length();
+            if (packet_->get_body_length() == 0) {
+                uint32_t parsed_length = 0;
+                const auto length_state = parse_content_length_header(packet_, parsed_length);
+                if (length_state == ContentLengthParseState::invalid) {
+                    return -1;
+                }
+                if (length_state == ContentLengthParseState::valid) {
+                    length = parsed_length;
                     packet_->set_body_length(length);
                 }
-
+            }
+            if (length > 0) {
                 if (should_spool_request_body(packet_, length)) {
                     if (!packet_->begin_body_file_spool(length)) {
                         body_state = BodyState::too_long;

@@ -9,7 +9,7 @@
 #include "net/connection/connection.h"
 #include "net/socket/inet_address.h"
 #include "net/runtime/network_runtime.h"
-#include "timer/timer.h"
+#include "timer/timer_handle.h"
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -46,7 +46,6 @@ namespace yuan::net::bit_torrent
           rtt_var_us_(200000),
           cwnd_(1024),
           bytes_in_flight_(0),
-          retransmit_timer_(nullptr),
           runtime_(runtime),
           acceptor_(acceptor)
     {
@@ -155,8 +154,8 @@ namespace yuan::net::bit_torrent
         state_ = State::closed;
 
         if (retransmit_timer_) {
-            retransmit_timer_->cancel();
-            retransmit_timer_ = nullptr;
+            retransmit_timer_.cancel();
+            retransmit_timer_.reset();
         }
 
         sent_packets_.clear();
@@ -402,8 +401,8 @@ namespace yuan::net::bit_torrent
         state_ = State::closed;
 
         if (retransmit_timer_) {
-            retransmit_timer_->cancel();
-            retransmit_timer_ = nullptr;
+            retransmit_timer_.cancel();
+            retransmit_timer_.reset();
         }
 
         if (state_change_handler_)
@@ -415,8 +414,8 @@ namespace yuan::net::bit_torrent
         state_ = State::closed;
 
         if (retransmit_timer_) {
-            retransmit_timer_->cancel();
-            retransmit_timer_ = nullptr;
+            retransmit_timer_.cancel();
+            retransmit_timer_.reset();
         }
 
         if (state_change_handler_)

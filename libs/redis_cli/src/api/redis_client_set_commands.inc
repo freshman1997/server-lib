@@ -1,0 +1,18 @@
+std::shared_ptr<RedisValue> sadd(std::string key, const std::vector<std::string> &members);
+std::shared_ptr<RedisValue> srem(std::string key, const std::vector<std::string> &members);
+std::shared_ptr<RedisValue> smembers(std::string key);
+std::shared_ptr<RedisValue> sismember(std::string key, std::string member);
+std::shared_ptr<RedisValue> scard(std::string key);
+std::shared_ptr<RedisValue> srandmember(std::string key);
+std::shared_ptr<RedisValue> srandmember(std::string key, int count);
+std::shared_ptr<RedisValue> spop(std::string key);
+std::shared_ptr<RedisValue> spop(std::string key, int count);
+std::shared_ptr<RedisValue> smove(std::string source, std::string destination, std::string member);
+std::shared_ptr<RedisValue> sscan(std::string key, int64_t cursor, const std::string &match_pattern = "", int64_t count = 10);
+std::shared_ptr<RedisValue> sscan(std::string key, int64_t cursor, const std::vector<std::string> &match_patterns, int64_t count = 10);
+std::shared_ptr<RedisValue> sdiff(const std::vector<std::string> &keys);
+std::shared_ptr<RedisValue> sdiffstore(std::string destination, const std::vector<std::string> &keys);
+std::shared_ptr<RedisValue> sinter(const std::vector<std::string> &keys);
+std::shared_ptr<RedisValue> sinterstore(std::string destination, const std::vector<std::string> &keys);
+std::shared_ptr<RedisValue> sunion(const std::vector<std::string> &keys);
+std::shared_ptr<RedisValue> sunionstore(std::string destination, const std::vector<std::string> &keys);

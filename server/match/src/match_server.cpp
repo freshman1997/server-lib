@@ -85,20 +85,20 @@ namespace match
 
         timer::WheelTimerManager timer_manager;
 
-        timer::TimerUtil::build_period_timer(
+        timer::TimerUtil::build_period_handle(
             &timer_manager,
             match_interval_ms_,
             match_interval_ms_,
-            [this](timer::Timer *) {
+            [this]() {
                 on_match_tick();
             },
             -1);
 
-        timer::TimerUtil::build_period_timer(
+        timer::TimerUtil::build_period_handle(
             &timer_manager,
             monitor_interval_ms_,
             monitor_interval_ms_,
-            [this](timer::Timer *) {
+            [this]() {
                 on_monitor_tick();
             },
             -1);
@@ -110,7 +110,7 @@ namespace match
         while (running_.load())
         {
             timer_manager.tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(timer_manager.get_poll_timeout_ms(50, 1)));
         }
     }
 

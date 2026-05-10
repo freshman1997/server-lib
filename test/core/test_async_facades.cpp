@@ -1083,7 +1083,7 @@ namespace
 
         const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
         check(result == 0, "read handle ownership regression test should return 0");
-        check(!weak_conn.expired(), "connection should remain alive while runtime timer storage is alive");
+        check(weak_conn.expired(), "completed timer callbacks should release captured connection ownership");
     }
 
     void test_async_read_timeout_then_late_event()

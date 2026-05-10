@@ -240,7 +240,7 @@ namespace yuan::net::bit_torrent
         uint32_t cwnd_ = 1024;         // congestion window (bytes)
         uint32_t bytes_in_flight_ = 0;
 
-        timer::Timer *retransmit_timer_ = nullptr;
+        timer::TimerHandle retransmit_timer_;
         net::NetworkRuntime *runtime_;
         net::DatagramEndpoint *acceptor_;
 

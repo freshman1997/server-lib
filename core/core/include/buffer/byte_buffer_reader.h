@@ -173,19 +173,22 @@ namespace yuan::buffer
 
                 if (ch == '\r') {
                     read_char();
+                    if (remaining_bytes() == 0) {
+                        return -2;
+                    }
                     if (peek_char() == '\n') {
                         read_char();
                         completed = true;
                         break;
                     }
-                    return -2;
+                    return -1;
                 }
 
                 line.push_back(ch);
                 read_char();
             }
 
-            return completed ? 0 : -1;
+            return completed ? 0 : -2;
         }
 
         std::uint64_t write(std::ofstream &out)
@@ -217,6 +220,25 @@ namespace yuan::buffer
         void just_clear() noexcept
         {
             reset();
+        }
+
+        void discard_read_bytes()
+        {
+            if (current_offset_ == 0) {
+                return;
+            }
+
+            if (current_offset_ >= total_bytes_) {
+                reset();
+                return;
+            }
+
+            const auto bytes = remaining_bytes();
+            std::vector<char> remaining(bytes);
+            read(remaining.data(), bytes);
+
+            reset();
+            add_buffer(ByteBuffer(std::span<const char>(remaining.data(), remaining.size())));
         }
 
     private:

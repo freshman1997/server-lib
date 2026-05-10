@@ -18,7 +18,6 @@
 #include "net/socket/inet_address.h"
 #include "net/acceptor/acceptor.h"
 #include "net/acceptor/stream_listener.h"
-#include "base/time.h"
 
 #ifdef _WIN32
 #include <io.h>
@@ -28,6 +27,12 @@
 
 namespace yuan::net 
 {
+    namespace
+    {
+        constexpr uint32_t kIdlePollTimeoutMs = 50;
+        constexpr uint32_t kRegisteredChannelPollTimeoutMs = 2;
+    }
+
     class EventLoop::HelperData
     {
     public:
@@ -91,10 +96,12 @@ namespace yuan::net
                 callbacks.swap(data_->pending_callbacks_);
             }
 
+            bool processed = false;
             while (!callbacks.empty()) {
                 auto cb = std::move(callbacks.front());
                 callbacks.pop();
                 if (cb) {
+                    processed = true;
                     try {
                         cb();
                     } catch (const std::exception& e) {
@@ -104,6 +111,7 @@ namespace yuan::net
                     }
                 }
             }
+            return processed;
         };
         auto drain_coroutines = [this]() {
             std::queue<std::coroutine_handle<>> coroutines;
@@ -112,10 +120,12 @@ namespace yuan::net
                 coroutines.swap(data_->pending_coroutines_);
             }
 
+            bool processed = false;
             while (!coroutines.empty()) {
                 auto handle = coroutines.front();
                 coroutines.pop();
                 if (handle && !handle.done()) {
+                    processed = true;
                     try {
                         handle.resume();
                     } catch (const std::exception& e) {
@@ -125,15 +135,54 @@ namespace yuan::net
                     }
                 }
             }
+            return processed;
         };
         
-        uint64_t from = base::time::get_tick_count();
         std::vector<PollEvent> events;
         events.reserve(4096);
+        auto has_channels = [this]() {
+            std::lock_guard<std::mutex> lock(data_->m);
+            return !data_->channels_.empty();
+        };
+        auto poll_timeout = [this](const bool has_registered_channels, const bool processed_work) {
+            if (processed_work) {
+                return 0U;
+            }
+
+            const auto idle_timeout = has_registered_channels
+                ? kRegisteredChannelPollTimeoutMs
+                : kIdlePollTimeoutMs;
+            if (!data_->timer_manager_) {
+                return idle_timeout;
+            }
+
+            return data_->timer_manager_->get_poll_timeout_ms(
+                idle_timeout,
+                kRegisteredChannelPollTimeoutMs);
+        };
         while (!data_->quit_.load(std::memory_order_acquire) &&
                !data_->resume_coroutine_requested_.load(std::memory_order_acquire)) {
+            if (data_->timer_manager_) {
+                data_->timer_manager_->tick();
+            }
+
+            bool processed_work = drain_callbacks();
+            processed_work = drain_coroutines() || processed_work;
+
             events.clear();
-            const uint64_t to = data_->poller_->poll(2, events);
+            const bool has_registered_channels = has_channels();
+            const uint32_t timeout_ms = poll_timeout(has_registered_channels, processed_work);
+            if (!has_registered_channels) {
+                if (timeout_ms > 0) {
+                    std::unique_lock<std::mutex> lock(data_->m);
+                    data_->is_waiting_.store(true, std::memory_order_release);
+                    data_->cond.wait_for(lock, std::chrono::milliseconds(timeout_ms));
+                    data_->is_waiting_.store(false, std::memory_order_release);
+                }
+                continue;
+            }
+
+            data_->poller_->poll(timeout_ms, events);
             if (!events.empty()) {
                 for (const auto &event : events) {
                     Channel *channel = nullptr;
@@ -147,10 +196,15 @@ namespace yuan::net
                         if (event.generation == 0 || it->second->generation() != event.generation) {
                             continue;
                         }
+                        if (!it->second->has_events() ||
+                            (it->second->get_events() & event.revents) == Channel::NONE_EVENT) {
+                            continue;
+                        }
                         channel = it->second;
                     }
 
                     if (channel) {
+                        processed_work = true;
                         try {
                             channel->set_revent(event.revents);
                             channel->on_event();
@@ -163,19 +217,10 @@ namespace yuan::net
                 }
             }
 
-            drain_callbacks();
-            drain_coroutines();
+            processed_work = drain_callbacks() || processed_work;
+            processed_work = drain_coroutines() || processed_work;
 
-            if (to - from < data_->timer_manager_->get_time_unit()) {
-                std::unique_lock<std::mutex> lock(data_->m);
-                data_->is_waiting_.store(true, std::memory_order_release);
-                data_->cond.wait_for(lock, std::chrono::milliseconds(data_->timer_manager_->get_time_unit() - (to - from)));
-                data_->is_waiting_.store(false, std::memory_order_release);
-            }
-
-            auto now = base::time::get_tick_count();
-            if (now - from >= data_->timer_manager_->get_time_unit()) {
-                from = now;
+            if (data_->timer_manager_) {
                 data_->timer_manager_->tick();
             }
         }
@@ -257,12 +302,23 @@ namespace yuan::net
 
     void EventLoop::update_channel(Channel *channel)
     {
-        if (channel) {
-            std::lock_guard<std::mutex> lock(data_->m);
-            data_->channels_[channel->get_fd()] = channel;
-            data_->tombstoned_fds_.erase(channel->get_fd());
-            data_->poller_->update_channel(channel);
+        if (!channel) {
+            return;
         }
+
+        std::lock_guard<std::mutex> lock(data_->m);
+        const int fd = channel->get_fd();
+        if (!channel->has_events()) {
+            data_->poller_->remove_channel(channel);
+            data_->channels_.erase(fd);
+            data_->tombstoned_fds_.insert(fd);
+            channel->bump_generation();
+            return;
+        }
+
+        data_->channels_[fd] = channel;
+        data_->tombstoned_fds_.erase(fd);
+        data_->poller_->update_channel(channel);
     }
 
     void EventLoop::wakeup()
@@ -303,6 +359,8 @@ namespace yuan::net
         std::lock_guard<std::mutex> lock(data_->m);
         auto it = data_->channels_.find(event.fd);
         return it != data_->channels_.end() && event.generation != 0 &&
-               it->second && it->second->generation() == event.generation;
+               it->second && it->second->has_events() &&
+               it->second->generation() == event.generation &&
+               (it->second->get_events() & event.revents) != Channel::NONE_EVENT;
     }
 }

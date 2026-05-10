@@ -15,6 +15,12 @@
 
 namespace yuan::redis
 {
+    RedisClient::RedisClient()
+    {
+        impl_ = std::make_unique<Impl>();
+        impl_->client_ = this;
+    }
+
     RedisClient::RedisClient(const Option & opt)
     {
         impl_ = std::make_unique<Impl>();
@@ -30,6 +36,10 @@ namespace yuan::redis
     int RedisClient::connect()
     {
         using namespace yuan::net;
+
+        if (is_connected()) {
+            return 0;
+        }
 
         const InetAddress addr{ impl_->option_.host_, impl_->option_.port_ };
         if (addr.get_port() <= 0 || addr.get_port() > 65535) {
@@ -67,12 +77,13 @@ namespace yuan::redis
                 impl_->last_error_ = ErrorValue::from_string("stream channel is invalid");
                 return -1;
             }
-            loop->update_channel(channel);
         } else {
             conn->close();
             impl_->last_error_ = ErrorValue::from_string("connection is not a stream transport");
             return -1;
         }
+
+        loop->on_new_connection(conn);
 
         impl_->on_do_connect(conn);
         impl_->completion_event_.reset(loop);
@@ -96,8 +107,11 @@ namespace yuan::redis
 
         impl_->clear_mask(RedisState::connecting);
 
-        if (!impl_->option_.password_.empty()) {
-            if (const auto auth_result = auth(impl_->option_.password_); !auth_result) {
+        if (!impl_->option_.username_.empty() || !impl_->option_.password_.empty()) {
+            const auto auth_result = impl_->option_.username_.empty()
+                ? auth(impl_->option_.password_)
+                : auth(impl_->option_.username_, impl_->option_.password_);
+            if (!auth_result) {
                 impl_->last_error_ = ErrorValue::from_string("auth failed");
                 close();
                 return -1;
@@ -137,11 +151,10 @@ namespace yuan::redis
 
     void RedisClient::close()
     {
-        if (!is_connected()) {
+        if (!impl_) {
             return;
         }
 
-        impl_->set_mask(RedisState::closed);
         impl_->close();
     }
 
@@ -162,6 +175,8 @@ namespace yuan::redis
 
     void RedisClient::unsubscribe_channel(const std::string & channel)
     {
+        std::lock_guard<std::recursive_mutex> lock(impl_->operation_mutex_);
+
         if (impl_->subcribe_cmd) {
             impl_->subcribe_cmd->unsubcribe(channel);
             if (!impl_->subcribe_cmd->is_subcribe()) {

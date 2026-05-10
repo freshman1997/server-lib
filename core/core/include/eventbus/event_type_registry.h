@@ -2,6 +2,7 @@
 #define __YUAN_EVENTBUS_EVENT_TYPE_REGISTRY_H__
 
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -47,11 +48,14 @@ namespace yuan::eventbus
             });
         }
 
-        const EventDescriptor *find(const std::string &name) const
+        std::optional<EventDescriptor> find(const std::string &name) const
         {
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = types_.find(name);
-            return it != types_.end() ? &it->second : nullptr;
+            if (it == types_.end()) {
+                return std::nullopt;
+            }
+            return it->second;
         }
 
         bool has(const std::string &name) const

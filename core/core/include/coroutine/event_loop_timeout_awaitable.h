@@ -43,15 +43,12 @@ public:
             return true;
         }
 
-        state_->timer = timer::TimerUtil::build_timeout_timer(
+        state_->timer = timer::TimerUtil::build_timeout_handle(
             timer_manager_,
             timeout_ms_,
-            [state = state_](timer::Timer *timer) {
+            [state = state_]() {
                 state->timed_out = true;
-                state->timer = nullptr;
-                if (timer) {
-                    timer->cancel();
-                }
+                state->timer.reset();
                 if (state->loop && state->handle) {
                     state->loop->post_coroutine(state->handle);
                 }
@@ -69,7 +66,7 @@ private:
     struct State
     {
         net::EventLoop *loop = nullptr;
-        timer::Timer *timer = nullptr;
+        timer::TimerHandle timer;
         std::coroutine_handle<> handle{};
         bool timed_out = false;
     };

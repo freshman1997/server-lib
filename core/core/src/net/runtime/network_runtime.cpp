@@ -103,32 +103,25 @@ namespace yuan::net
         }
     }
 
-    timer::Timer *NetworkRuntime::schedule(uint32_t delay_ms, std::function<void()> callback)
+    timer::TimerHandle NetworkRuntime::schedule(uint32_t delay_ms, std::function<void()> callback)
     {
         if (!timer_manager_ || !callback) {
-            return nullptr;
+            return {};
         }
-        return timer::TimerUtil::build_timeout_timer(timer_manager_, delay_ms, [cb = std::move(callback)](timer::Timer *) {
+        return timer::TimerUtil::build_timeout_handle(timer_manager_, delay_ms, [cb = std::move(callback)]() {
             cb();
         });
     }
 
-    timer::Timer *NetworkRuntime::schedule_periodic(uint32_t delay_ms, uint32_t interval_ms, std::function<void()> callback, int repeat)
+    timer::TimerHandle NetworkRuntime::schedule_periodic(uint32_t delay_ms, uint32_t interval_ms, std::function<void()> callback, int repeat)
     {
         if (!timer_manager_ || !callback) {
-            return nullptr;
+            return {};
         }
-        return timer::TimerUtil::build_period_timer(timer_manager_, delay_ms, interval_ms, [cb = std::move(callback)](timer::Timer *) {
+        return timer::TimerUtil::build_period_handle(timer_manager_, delay_ms, interval_ms, [cb = std::move(callback)]() {
             cb();
                                                                                            },
                                                     repeat);
-    }
-
-    void NetworkRuntime::cancel_timer(timer::Timer * timer)
-    {
-        if (timer) {
-            timer->cancel();
-        }
     }
 
     void NetworkRuntime::dispatch(std::function<void()> callback)

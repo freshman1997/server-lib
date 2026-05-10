@@ -156,6 +156,10 @@ namespace yuan::timer
         remain_ = timeout;
         task_ = nullptr;
         bind_task(task);
+        handle_state_ = std::make_shared<TimerHandleState>();
+        handle_state_->bind([this]() {
+            cancel();
+        });
         prev_ = nullptr;
         next_ = nullptr;
         item_ = nullptr;
@@ -163,6 +167,10 @@ namespace yuan::timer
 
     WheelTimer::~WheelTimer()
     {
+        if (handle_state_) {
+            handle_state_->clear();
+        }
+
         if (task_) {
             task_->on_finished(this);
             task_ = nullptr;
@@ -182,6 +190,9 @@ namespace yuan::timer
     void WheelTimer::cancel()
     {
         state_ = TimerState::cancal;
+        if (handle_state_) {
+            handle_state_->clear();
+        }
         if (item_) {
             item_->on_delete(this);
             item_ = nullptr;
@@ -272,6 +283,9 @@ namespace yuan::timer
                 if (period_ > 0) {
                     ++period_counter_;
                     if (period_counter_ == period_) {
+                        if (handle_state_) {
+                            handle_state_->clear();
+                        }
                         return;
                     }
                     state_ = TimerState::init;
@@ -280,11 +294,20 @@ namespace yuan::timer
                 }
             }
         }
+
+        if (state_ == TimerState::done && handle_state_) {
+            handle_state_->clear();
+        }
     }
 
     TimerTask *WheelTimer::get_task() const
     {
         return task_;
+    }
+
+    std::shared_ptr<TimerHandleState> WheelTimer::handle_state() const
+    {
+        return handle_state_;
     }
 
     void WheelTimer::bind_task(TimerTask * task)

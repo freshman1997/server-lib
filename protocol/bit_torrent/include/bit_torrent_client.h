@@ -7,7 +7,7 @@
 #include "stats/download_stats_tracker.h"
 #include "state/piece_download_state.h"
 #include "net/runtime/network_runtime.h"
-#include "timer/timer.h"
+#include "timer/timer_handle.h"
 
 #include <string>
 #include <vector>
@@ -218,7 +218,7 @@ namespace yuan::net::bit_torrent
         std::unique_ptr<DownloadRuntimeCoordinator> runtime_coordinator_;
 
         int32_t upload_slots_ = 4;
-        timer::Timer *unchoke_timer_ = nullptr;
+        timer::TimerHandle unchoke_timer_;
         bool torrent_completed_emitted_ = false;
         int32_t download_limit_kbps_ = 0;
         int32_t upload_limit_kbps_ = 0;

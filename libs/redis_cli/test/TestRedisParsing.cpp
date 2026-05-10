@@ -3,13 +3,21 @@
 #include "cmd/default_cmd.h"
 #include "cmd/subcribe_cmd.h"
 #include "value/int_value.h"
-#include "value/error_value.h"
 #include "value/string_value.h"
 
 #include <cassert>
 #include <iostream>
 #include <string>
 #include <vector>
+
+#undef assert
+#define assert(expr)                                                                                                   \
+    do {                                                                                                               \
+        if (!(expr)) {                                                                                                 \
+            std::cerr << "assertion failed: " << #expr << " at " << __FILE__ << ":" << __LINE__ << std::endl;          \
+            std::abort();                                                                                              \
+        }                                                                                                              \
+    } while (false)
 
 namespace
 {
@@ -41,8 +49,64 @@ int main()
         fill_reader(null_reader, "$-1\r\n");
         assert(cmd.unpack(null_reader) == 0);
         assert(cmd.get_result() != nullptr);
-        assert(cmd.get_result()->get_type() == resp_error);
+        assert(cmd.get_result()->get_type() == resp_null);
         assert(cmd.get_result()->to_string() == "null");
+    }
+
+    {
+        DefaultCmd cmd;
+        cmd.set_args("exec", {});
+
+        yuan::buffer::ByteBufferReader null_array_reader;
+        fill_reader(null_array_reader, "*-1\r\n");
+        assert(cmd.unpack(null_array_reader) == 0);
+        assert(cmd.get_result() != nullptr);
+        assert(cmd.get_result()->get_type() == resp_null);
+    }
+
+    {
+        DefaultCmd cmd;
+        cmd.set_args("get", {StringValue::from_string("invalid-length")});
+
+        yuan::buffer::ByteBufferReader invalid_reader;
+        fill_reader(invalid_reader, "$5abc\r\nhello\r\n");
+        assert(cmd.unpack(invalid_reader) == UnpackCode::format_error);
+    }
+
+    {
+        DefaultCmd cmd;
+        cmd.set_args("incr", {StringValue::from_string("invalid-int")});
+
+        yuan::buffer::ByteBufferReader valid_reader;
+        fill_reader(valid_reader, ":1\r\n");
+        assert(cmd.unpack(valid_reader) == 0);
+        assert(cmd.get_result() != nullptr);
+
+        yuan::buffer::ByteBufferReader invalid_reader;
+        fill_reader(invalid_reader, ":1abc\r\n");
+        assert(cmd.unpack(invalid_reader) == UnpackCode::format_error);
+        assert(cmd.get_result() == nullptr);
+    }
+
+    {
+        DefaultCmd cmd;
+        cmd.set_args("bigint", {});
+
+        yuan::buffer::ByteBufferReader bigint_reader;
+        fill_reader(bigint_reader, "(123456789012345678901234567890\r\n");
+        assert(cmd.unpack(bigint_reader) == 0);
+        assert(cmd.get_result() != nullptr);
+        assert(cmd.get_result()->get_type() == resp_string);
+        assert(cmd.get_result()->to_string() == "123456789012345678901234567890");
+    }
+
+    {
+        DefaultCmd cmd;
+        cmd.set_args("bigint", {});
+
+        yuan::buffer::ByteBufferReader invalid_bigint_reader;
+        fill_reader(invalid_bigint_reader, "(12abc\r\n");
+        assert(cmd.unpack(invalid_bigint_reader) == UnpackCode::format_error);
     }
 
     {
@@ -59,6 +123,27 @@ int main()
         assert(cmd.get_result() != nullptr);
         assert(cmd.get_result()->get_type() == resp_string);
         assert(cmd.get_result()->to_string() == "hello");
+    }
+
+    {
+        DefaultCmd cmd;
+        cmd.set_args("get", {StringValue::from_string("multi-partial")});
+
+        const std::string partial_second = "$5\r\nwor";
+        yuan::buffer::ByteBufferReader multi_reader;
+        fill_reader(multi_reader, "$5\r\nhello\r\n" + partial_second);
+        assert(cmd.unpack(multi_reader) == 0);
+        assert(cmd.get_result() != nullptr);
+        assert(cmd.get_result()->get_type() == resp_string);
+        assert(cmd.get_result()->to_string() == "hello");
+        assert(multi_reader.get_remain_bytes() == partial_second.size());
+
+        multi_reader.discard_read_bytes();
+        fill_reader(multi_reader, "ld\r\n");
+        assert(cmd.unpack(multi_reader) == 0);
+        assert(cmd.get_result() != nullptr);
+        assert(cmd.get_result()->get_type() == resp_string);
+        assert(cmd.get_result()->to_string() == "world");
     }
 
     {
@@ -335,7 +420,7 @@ int main()
 
     SubcribeCmd psubscribe_cmd;
     psubscribe_cmd.set_args("psubscribe", {});
-    psubscribe_cmd.set_channels({"test*"});
+    psubscribe_cmd.add_patterns({"test*"});
 
     yuan::buffer::ByteBufferReader psubscribe_reader;
     fill_reader(psubscribe_reader, "*3\r\n$10\r\npsubscribe\r\n$5\r\ntest*\r\n:1\r\n");
@@ -368,6 +453,56 @@ int main()
     psubscribe_cmd.exec_callback();
     assert(received_pmessages.size() == 2);
     assert(received_pmessages[1] == "test*:test2:one");
+
+    SubcribeCmd mixed_subscription_cmd;
+    yuan::buffer::ByteBufferReader mixed_subscription_reader;
+    fill_reader(mixed_subscription_reader,
+        "*3\r\n$9\r\nsubscribe\r\n$5\r\nchan1\r\n:1\r\n"
+        "*3\r\n$10\r\npsubscribe\r\n$5\r\ntest*\r\n:2\r\n");
+    assert(mixed_subscription_cmd.unpack(mixed_subscription_reader) == 0);
+    assert(mixed_subscription_cmd.is_subcribe());
+    mixed_subscription_cmd.unsubcribe(std::vector<std::string>{});
+    assert(mixed_subscription_cmd.is_subcribe());
+    mixed_subscription_cmd.punsubcribe(std::vector<std::string>{});
+    assert(!mixed_subscription_cmd.is_subcribe());
+
+    SubcribeCmd limited_queue_cmd;
+    limited_queue_cmd.set_max_pending_messages(1);
+    yuan::buffer::ByteBufferReader limited_subscribe_reader;
+    fill_reader(limited_subscribe_reader, "*3\r\n$9\r\nsubscribe\r\n$4\r\ntrim\r\n:1\r\n");
+    assert(limited_queue_cmd.unpack(limited_subscribe_reader) == 0);
+
+    yuan::buffer::ByteBufferReader first_limited_message_reader;
+    fill_reader(first_limited_message_reader, "*3\r\n$7\r\nmessage\r\n$4\r\ntrim\r\n$5\r\nfirst\r\n");
+    assert(limited_queue_cmd.unpack(first_limited_message_reader) == 0);
+    assert(limited_queue_cmd.has_pending_messages());
+
+    yuan::buffer::ByteBufferReader second_limited_message_reader;
+    fill_reader(second_limited_message_reader, "*3\r\n$7\r\nmessage\r\n$4\r\ntrim\r\n$6\r\nsecond\r\n");
+    assert(limited_queue_cmd.unpack(second_limited_message_reader) == 0);
+    assert(limited_queue_cmd.dropped_message_batches() == 1);
+
+    std::vector<std::string> limited_messages;
+    limited_queue_cmd.set_msg_callback([&limited_messages](const std::vector<SubMessage> &messages) {
+        for (const auto &message : messages) {
+            limited_messages.push_back(message.message->to_string());
+        }
+    });
+    limited_queue_cmd.exec_callback();
+    assert(limited_messages.size() == 1);
+    assert(limited_messages[0] == "second");
+    assert(!limited_queue_cmd.has_pending_messages());
+
+    SubcribeCmd no_callback_cmd;
+    yuan::buffer::ByteBufferReader no_callback_subscribe_reader;
+    fill_reader(no_callback_subscribe_reader, "*3\r\n$9\r\nsubscribe\r\n$8\r\nnocbchan\r\n:1\r\n");
+    assert(no_callback_cmd.unpack(no_callback_subscribe_reader) == 0);
+    yuan::buffer::ByteBufferReader no_callback_message_reader;
+    fill_reader(no_callback_message_reader, "*3\r\n$7\r\nmessage\r\n$8\r\nnocbchan\r\n$5\r\nhello\r\n");
+    assert(no_callback_cmd.unpack(no_callback_message_reader) == 0);
+    assert(no_callback_cmd.has_pending_messages());
+    no_callback_cmd.exec_callback();
+    assert(!no_callback_cmd.has_pending_messages());
 
     return 0;
 }

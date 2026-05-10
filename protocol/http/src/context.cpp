@@ -99,7 +99,10 @@ namespace yuan::net::http
             return false;
 
         if (get_packet()->is_ok()) {
-            has_parsed_ = false;
+            auto *packet = get_packet();
+            if (!packet->is_chunked() || packet->get_body_state() == BodyState::fully) {
+                has_parsed_ = false;
+            }
             return true;
         }
 

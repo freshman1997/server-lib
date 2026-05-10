@@ -7,7 +7,7 @@
 #include "buffer/byte_buffer.h"
 #include "net/handler/connection_handler.h"
 #include "net/runtime/network_runtime.h"
-#include "timer/timer.h"
+#include "timer/timer_handle.h"
 #include <string>
 #include <functional>
 #include <vector>
@@ -276,7 +276,7 @@ namespace yuan::net::bit_torrent
         net::Connection *conn_;
         std::shared_ptr<net::Connection> conn_owner_;
         net::NetworkRuntime *runtime_;
-        timer::Timer *keepalive_timer_;
+        timer::TimerHandle keepalive_timer_;
         std::unique_ptr<net::InetAddress> pending_addr_;
         std::unique_ptr<net::TcpConnector> pending_connector_;
         std::shared_ptr<PeerConnectorHandler> connector_handler_;

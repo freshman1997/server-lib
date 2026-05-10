@@ -90,6 +90,16 @@ namespace yuan::net::http
             return !upload_id.empty();
         }
 
+        bool is_safe_upload_id(const std::string &upload_id)
+        {
+            if (upload_id.empty() || upload_id.size() > 128) {
+                return false;
+            }
+            return std::all_of(upload_id.begin(), upload_id.end(), [](unsigned char ch) {
+                return std::isalnum(ch) != 0 || ch == '_' || ch == '-' || ch == '.';
+            });
+        }
+
         uint64_t file_age_ms(const std::filesystem::path &path)
         {
             std::error_code ec;
@@ -899,6 +909,7 @@ namespace yuan::net::http
 
     void HttpServer::cleanup_stale_upload_sessions()
     {
+        std::lock_guard<std::mutex> upload_lock(upload_mutex_);
         const uint64_t now_ms = yuan::base::time::steady_now_ms();
         if (upload_cleanup_last_ms_ != 0 && now_ms < upload_cleanup_last_ms_ + kUploadCleanupIntervalMs) {
             return;
@@ -1251,17 +1262,13 @@ namespace yuan::net::http
 
     void HttpServer::stop()
     {
-        if (thread_pool_) {
-            thread_pool_->shutdown();
-        }
-
         for (auto &[id, session] : sessions_) {
             if (session) {
                 auto *ctx = session->get_context();
                 if (ctx) {
                     auto *conn = ctx->get_connection();
                     if (conn && conn->is_connected()) {
-                        conn->close();
+                        conn->abort();
                     }
                 }
             }
@@ -1270,6 +1277,10 @@ namespace yuan::net::http
         listener_.close();
         if (owned_runtime_) {
             owned_runtime_->stop();
+        }
+
+        if (thread_pool_) {
+            thread_pool_->shutdown();
         }
 
         sessions_.clear();
@@ -1520,11 +1531,19 @@ namespace yuan::net::http
             conn->close();
             co_return;
         }
+        bool connection_counted = true;
+        auto release_connection_count = [&]() {
+            if (connection_counted && conn) {
+                on_connection_closed(*conn);
+                connection_counted = false;
+            }
+        };
 
         bool alpn_h2 = false;
         if (conn->is_ssl_handshaking()) {
             auto hs_result = co_await ctx.ssl_handshake_async();
             if (hs_result != coroutine::SslHandshakeResult::success) {
+                release_connection_count();
                 co_return;
             }
 
@@ -1572,10 +1591,12 @@ namespace yuan::net::http
         if (alpn_h2) {
             if (!config::enable_http2) {
                 LOG_WARN("ALPN selected h2 but enable_http2=false from {}", conn->get_remote_address().to_address_key());
+                release_connection_count();
                 co_return;
             }
             LOG_INFO("HTTP/2 via ALPN from {}", conn->get_remote_address().to_address_key());
             if (!enter_h2_mode(true)) {
+                release_connection_count();
                 co_return;
             }
         }
@@ -1688,12 +1709,13 @@ namespace yuan::net::http
                     std::string client_key = std::move(context->ws_client_key_);
                     std::string subproto = std::move(context->ws_subproto_);
                     auto leftover = context->take_leftover_buffer();
+                    release_inflight_request(context->get_request());
+                    release_connection_count();
                     sessions_.erase(sessionId);
 
                     auto proxy_task = ws_proxy_handler_(std::move(ctx), raw_url, route_key, client_key, subproto, std::move(leftover));
                     proxy_task.resume();
                     proxy_task.detach();
-                    release_inflight_request(context->get_request());
                     co_return;
                 }
 
@@ -1741,7 +1763,7 @@ namespace yuan::net::http
         if (proxy_ && conn) {
             proxy_->on_client_close(conn);
         }
-        on_connection_closed(*conn);
+        release_connection_count();
         sessions_.erase(sessionId);
 
         co_return;
@@ -2146,7 +2168,7 @@ namespace yuan::net::http
 
         stream.seekg(0, std::ios_base::end);
         const auto file_size = stream.tellg();
-        if (file_size <= 0) {
+        if (file_size < 0) {
             resp->process_error(ResponseCode::bad_request);
             return;
         }
@@ -2159,6 +2181,8 @@ namespace yuan::net::http
         }
 
         uint64_t offset = 0;
+        uint64_t range_end = 0;
+        bool has_explicit_range_end = false;
         bool has_range = false;
         if (mount.options.enable_range) {
             if (const std::string *range = req->get_header(http_header_key::range)) {
@@ -2166,6 +2190,10 @@ namespace yuan::net::http
             const auto &ranges = helper::parse_range(*range, ret);
             if (ret == 0 && !ranges.empty()) {
                 offset = ranges[0].first;
+                if (ranges[0].second >= offset) {
+                    range_end = ranges[0].second;
+                    has_explicit_range_end = true;
+                }
                 if (offset >= length) {
                     resp->add_header("Content-Range", "bytes */" + std::to_string(length));
                     resp->set_response_code(ResponseCode::range_not_satisfiable);
@@ -2178,7 +2206,10 @@ namespace yuan::net::http
             }
         }
 
-        const auto sz = length - static_cast<std::size_t>(offset);
+        const uint64_t effective_end = has_explicit_range_end
+            ? (std::min)(range_end, static_cast<uint64_t>(length - 1))
+            : static_cast<uint64_t>(length == 0 ? 0 : length - 1);
+        const auto sz = length == 0 ? std::size_t{0} : static_cast<std::size_t>(effective_end - offset + 1);
 
         std::error_code stat_ec;
         const auto write_time = std::filesystem::last_write_time(std::filesystem::path(std::u8string(path.begin(), path.end())), stat_ec);
@@ -2201,10 +2232,9 @@ namespace yuan::net::http
         }
 
         if (has_range) {
-            const auto end_pos = length - 1;
             resp->add_header("Content-Range",
                              "bytes " + std::to_string(offset) + "-" +
-                                  std::to_string(end_pos) + "/" + std::to_string(length));
+                                  std::to_string(effective_end) + "/" + std::to_string(length));
             resp->set_response_code(ResponseCode::partial_content);
         } else {
             resp->set_response_code(ResponseCode::ok_);
@@ -2227,7 +2257,7 @@ namespace yuan::net::http
         resp->commit_body_bytes(static_cast<size_t>(stream.gcount()));
 
         (void)maybe_compress_static_response(req, resp, content_type, path, sz);
-        resp->add_header("Content-length", std::to_string(resp->body_buffer_size()));
+        resp->add_header("Content-Length", std::to_string(resp->body_buffer_size()));
         resp->send();
     }
 
@@ -2607,6 +2637,13 @@ namespace yuan::net::http
             resp->send();
             return false;
         }
+        if (!is_safe_upload_id(upload_id)) {
+            nlohmann::json err;
+            err["error"] = "invalid uploadid";
+            resp->json(err.dump(), ResponseCode::bad_request);
+            resp->send();
+            return false;
+        }
 
         try
         {
@@ -2771,6 +2808,14 @@ namespace yuan::net::http
 
         std::error_code create_dir_ec;
         std::filesystem::create_directories(".upload_tmp", create_dir_ec);
+        if (create_dir_ec) {
+            session.received.erase(chunk_index);
+            nlohmann::json err;
+            err["error"] = "failed to prepare upload temp directory";
+            resp->json(err.dump(), ResponseCode::internal_server_error);
+            resp->send();
+            return false;
+        }
 
         if (!file_item->is_in_memory()) {
             std::error_code copy_ec;
@@ -2780,6 +2825,38 @@ namespace yuan::net::http
                 std::filesystem::copy_options::overwrite_existing,
                 copy_ec);
             if (copy_ec) {
+                session.received.erase(chunk_index);
+                nlohmann::json err;
+                err["error"] = "failed to persist upload chunk";
+                resp->json(err.dump(), ResponseCode::internal_server_error);
+                resp->send();
+                return false;
+            }
+        } else {
+            const char *data = file_item->data_begin;
+            const auto data_size = file_item->data_end > file_item->data_begin
+                ? static_cast<std::size_t>(file_item->data_end - file_item->data_begin)
+                : 0;
+            if (!data || data_size == 0) {
+                session.received.erase(chunk_index);
+                nlohmann::json err;
+                err["error"] = "missing upload chunk data";
+                resp->json(err.dump(), ResponseCode::bad_request);
+                resp->send();
+                return false;
+            }
+
+            std::ofstream out(std::filesystem::path(chunk.tmp_path), std::ios::binary | std::ios::trunc);
+            if (!out.good()) {
+                session.received.erase(chunk_index);
+                nlohmann::json err;
+                err["error"] = "failed to persist upload chunk";
+                resp->json(err.dump(), ResponseCode::internal_server_error);
+                resp->send();
+                return false;
+            }
+            out.write(data, static_cast<std::streamsize>(data_size));
+            if (!out.good()) {
                 session.received.erase(chunk_index);
                 nlohmann::json err;
                 err["error"] = "failed to persist upload chunk";
@@ -2801,27 +2878,10 @@ namespace yuan::net::http
         const UploadSession & session_snapshot,
         int received_count)
     {
+        (void)req;
+        (void)chunk_index;
+        (void)file_item;
         const bool is_complete = session_snapshot.total_chunks > 0 && received_count == session_snapshot.total_chunks;
-
-        if (file_item->is_in_memory()) {
-            UploadTmpChunk tmp_chunk;
-            tmp_chunk.chunk_ = session_snapshot.received.at(chunk_index);
-            tmp_chunk.raw_buffer = req->get_context()->get_connection()->take_input_byte_buffer();
-            if (file_item->data_begin && file_item->data_end > file_item->data_begin) {
-                tmp_chunk.data_.assign(file_item->data_begin, file_item->data_end);
-                tmp_chunk.begin_ = tmp_chunk.data_.data();
-                tmp_chunk.end_ = tmp_chunk.begin_ + tmp_chunk.data_.size();
-            }
-
-            auto task = std::make_unique<SaveUploadTempChunkTask>(std::move(tmp_chunk));
-            if (is_complete) {
-                task->set_session(std::make_shared<UploadSession>(session_snapshot));
-                uploaded_chunks_.erase(session_snapshot.upload_id);
-                LOG_INFO("[Upload] complete: {} size={}", session_snapshot.filename, session_snapshot.total_size);
-            }
-            thread_pool_->push_task(std::move(task));
-            return;
-        }
 
         if (is_complete) {
             auto task = std::make_unique<SaveUploadTempChunkTask>();
@@ -2858,33 +2918,36 @@ namespace yuan::net::http
         }
 
         std::unordered_map<std::string, UploadFileMapping>::iterator session_it;
-        if (!find_or_create_upload_session(
-                 upload_id,
-                 chunk_index,
-                 filename,
-                 total_chunks,
-                 file_size,
-                 resp,
-                 session_it)) {
-            return;
-        }
-
         UploadSession session_snapshot;
         int received_count = 0;
-        if (!store_upload_chunk(
-                 req,
-                 resp,
-                 upload_id,
-                 chunk_index,
-                 file_item,
-                 chunk_size,
-                 session_it->second,
-                 session_snapshot,
-                 received_count)) {
-            return;
-        }
+        {
+            std::lock_guard<std::mutex> upload_lock(upload_mutex_);
+            if (!find_or_create_upload_session(
+                     upload_id,
+                     chunk_index,
+                     filename,
+                     total_chunks,
+                     file_size,
+                     resp,
+                     session_it)) {
+                return;
+            }
 
-        finalize_upload_chunk(req, chunk_index, file_item, session_snapshot, received_count);
+            if (!store_upload_chunk(
+                     req,
+                     resp,
+                     upload_id,
+                     chunk_index,
+                     file_item,
+                     chunk_size,
+                     session_it->second,
+                     session_snapshot,
+                     received_count)) {
+                return;
+            }
+
+            finalize_upload_chunk(req, chunk_index, file_item, session_snapshot, received_count);
+        }
 
         nlohmann::json result;
         result["uploaded"] = true;

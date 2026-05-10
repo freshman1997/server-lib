@@ -84,6 +84,11 @@ namespace yuan::net::http
             return body_state;
         }
 
+        bool header_done() const
+        {
+            return is_header_done();
+        }
+
     protected:
         bool parse_version(::yuan::buffer::ByteBuffer &buff, char ending = '\r', char next = '\n');
 

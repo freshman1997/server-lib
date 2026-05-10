@@ -4,7 +4,7 @@
 #include "net/socket/inet_address.h"
 #include "net/connection/connection.h"
 #include "net/handler/connector_handler.h"
-#include "timer/timer.h"
+#include "timer/timer_handle.h"
 
 #include <algorithm>
 #include <cstring>
@@ -62,7 +62,6 @@ namespace yuan::net::bit_torrent
           peer_port_(0),
           conn_(nullptr),
           runtime_(nullptr),
-          keepalive_timer_(nullptr),
           inbound_buffer_(HandshakeMessage::HANDSHAKE_SIZE * 2),
           total_pieces_(0),
           default_request_size_(16 * 1024),
@@ -232,8 +231,8 @@ namespace yuan::net::bit_torrent
         state_ = State::closed;
 
         if (keepalive_timer_) {
-            keepalive_timer_->cancel();
-            keepalive_timer_ = nullptr;
+            keepalive_timer_.cancel();
+            keepalive_timer_.reset();
         }
 
         if (conn_) {

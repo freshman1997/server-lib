@@ -28,7 +28,7 @@ namespace yuan::net
         virtual void cancel();
 
     public:
-        void on_connect_timeout(timer::Timer *timer);
+        void on_connect_timeout();
 
     private:
         class TcpConnectorData;

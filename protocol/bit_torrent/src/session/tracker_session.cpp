@@ -34,8 +34,8 @@ namespace yuan::net::bit_torrent
         consecutive_failures_ = 0;
 
         if (announce_timer_) {
-            announce_timer_->cancel();
-            announce_timer_ = nullptr;
+            announce_timer_.cancel();
+            announce_timer_.reset();
         }
 
         if (announcing_.load()) {
@@ -237,8 +237,8 @@ namespace yuan::net::bit_torrent
         }
 
         if (announce_timer_) {
-            announce_timer_->cancel();
-            announce_timer_ = nullptr;
+            announce_timer_.cancel();
+            announce_timer_.reset();
         }
 
         announce_timer_ = runtime_->schedule(

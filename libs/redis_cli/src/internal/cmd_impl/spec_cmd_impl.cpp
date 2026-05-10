@@ -10,6 +10,11 @@ namespace yuan::redis
         return impl_->execute_command(make_cmd("auth", password));
     }
 
+    std::shared_ptr<RedisValue> RedisClient::auth(std::string username, std::string password)
+    {
+        return impl_->execute_command(make_cmd("auth", username, password));
+    }
+
     // info
     std::shared_ptr<RedisValue> RedisClient::info(std::string section /*= ""*/)
     {

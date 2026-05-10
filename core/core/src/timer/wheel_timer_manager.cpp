@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <algorithm>
 
 #include "base/time.h"
 #include "timer/wheel_timer_manager.h"
@@ -18,7 +19,7 @@ namespace yuan::timer
     WheelTimerManager::WheelTimerManager()
     {
         count_ = 1000;
-        time_unit_ = 10;
+        time_unit_ = 1;
         helper_item_ = std::make_unique<WheelTimerItem>();
 
         base::time::init_time(time_unit_);
@@ -128,10 +129,45 @@ namespace yuan::timer
                 }
             }
         }
+
+        cleanup_finished_timers();
     }
 
     uint32_t WheelTimerManager::get_time_unit() const
     {
         return time_unit_;
+    }
+
+    uint32_t WheelTimerManager::get_poll_timeout_ms(uint32_t idle_timeout_ms, uint32_t active_timeout_cap_ms)
+    {
+        cleanup_finished_timers();
+        if (!has_active_timers()) {
+            return idle_timeout_ms;
+        }
+
+        const auto active_timeout = std::max<uint32_t>(1, time_unit_);
+        return std::min(active_timeout, active_timeout_cap_ms == 0 ? active_timeout : active_timeout_cap_ms);
+    }
+
+    void WheelTimerManager::cleanup_finished_timers()
+    {
+        timers_.erase(
+            std::remove_if(
+                timers_.begin(),
+                timers_.end(),
+                [](const std::unique_ptr<WheelTimer> &timer) {
+                    return !timer || timer->is_done() || timer->is_cancel();
+                }),
+            timers_.end());
+    }
+
+    bool WheelTimerManager::has_active_timers() const
+    {
+        return std::any_of(
+            timers_.begin(),
+            timers_.end(),
+            [](const std::unique_ptr<WheelTimer> &timer) {
+                return timer && !timer->is_done() && !timer->is_cancel();
+            });
     }
 }

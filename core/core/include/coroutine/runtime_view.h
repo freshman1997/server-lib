@@ -104,41 +104,34 @@ namespace yuan::coroutine
         AsyncReceiveFromAwaiter receive_from(const std::shared_ptr<net::Connection> &conn, uint32_t timeout_ms = 0) const noexcept;
         AsyncReceiveFromAwaiter receive_from(const net::ConnectionHandle &conn, uint32_t timeout_ms = 0) const noexcept;
 
-        timer::Timer *schedule(uint32_t delay_ms, std::function<void()> callback) const
+        timer::TimerHandle schedule(uint32_t delay_ms, std::function<void()> callback) const
         {
             if (!timer_manager_ || !callback) {
-                return nullptr;
+                return {};
             }
-            return timer::TimerUtil::build_timeout_timer(timer_manager_, delay_ms,
-                                                         [cb = std::move(callback)](timer::Timer *) { cb(); });
+            return timer::TimerUtil::build_timeout_handle(timer_manager_, delay_ms,
+                                                          [cb = std::move(callback)]() { cb(); });
         }
 
         timer::TimerHandle schedule_handle(uint32_t delay_ms, std::function<void()> callback) const
         {
-            return timer::TimerHandle(schedule(delay_ms, std::move(callback)));
+            return schedule(delay_ms, std::move(callback));
         }
 
-        timer::Timer *schedule_periodic(uint32_t delay_ms, uint32_t interval_ms,
-                                        std::function<void()> callback, int repeat = 0) const
+        timer::TimerHandle schedule_periodic(uint32_t delay_ms, uint32_t interval_ms,
+                                             std::function<void()> callback, int repeat = 0) const
         {
             if (!timer_manager_ || !callback) {
-                return nullptr;
+                return {};
             }
-            return timer::TimerUtil::build_period_timer(timer_manager_, delay_ms, interval_ms,
-                                                        [cb = std::move(callback)](timer::Timer *) { cb(); }, repeat);
+            return timer::TimerUtil::build_period_handle(timer_manager_, delay_ms, interval_ms,
+                                                         [cb = std::move(callback)]() { cb(); }, repeat);
         }
 
         timer::TimerHandle schedule_periodic_handle(uint32_t delay_ms, uint32_t interval_ms,
                                                     std::function<void()> callback, int repeat = 0) const
         {
-            return timer::TimerHandle(schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat));
-        }
-
-        static void cancel_timer(timer::Timer *timer)
-        {
-            if (timer) {
-                timer->cancel();
-            }
+            return schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat);
         }
 
         static void cancel_timer(const timer::TimerHandle &timer)

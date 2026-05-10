@@ -20,7 +20,7 @@ public:
     {
         net::EventLoop *loop = nullptr;
         std::coroutine_handle<> waiter{};
-        timer::Timer *timer = nullptr;
+        timer::TimerHandle timer;
         bool completed = false;
         bool timed_out = false;
         bool resumed = false;
@@ -45,10 +45,8 @@ public:
         ensure_state();
 
         state_->completed = true;
-        if (state_->timer) {
-            state_->timer->cancel();
-            state_->timer = nullptr;
-        }
+        state_->timer.cancel();
+        state_->timer.reset();
 
         resume_waiter_if_needed();
     }
@@ -116,22 +114,16 @@ public:
             }
 
             if (timeout_ms_ > 0 && timer_manager_) {
-                state_->timer = timer::TimerUtil::build_timeout_timer(
+                state_->timer = timer::TimerUtil::build_timeout_handle(
                     timer_manager_,
                     timeout_ms_,
-                    [state = state_](timer::Timer *timer) {
+                    [state = state_]() {
                         if (!state || state->completed || state->resumed) {
-                            if (timer) {
-                                timer->cancel();
-                            }
                             return;
                         }
 
                         state->timed_out = true;
-                        state->timer = nullptr;
-                        if (timer) {
-                            timer->cancel();
-                        }
+                        state->timer.reset();
 
                         if (state->loop && state->waiter) {
                             state->resumed = true;

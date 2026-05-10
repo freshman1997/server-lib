@@ -11,6 +11,9 @@
 #include "value/null_value.h"
 #include "internal/utils.h"
 
+#include <charconv>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -26,6 +29,64 @@ namespace yuan::redis
             out.append("\r\n");
             out.append(value.data(), value.size());
             out.append("\r\n");
+        }
+
+        bool parse_resp_length(const std::string &value, int64_t &length)
+        {
+            if (value.empty()) {
+                return false;
+            }
+
+            int64_t parsed = 0;
+            const auto *begin = value.data();
+            const auto *end = value.data() + value.size();
+            const auto [ptr, ec] = std::from_chars(begin, end, parsed);
+            if (ec != std::errc() || ptr != end) {
+                return false;
+            }
+
+            length = parsed;
+            return true;
+        }
+
+        bool parse_resp_int64(const std::string &value, int64_t &number)
+        {
+            if (value.empty()) {
+                return false;
+            }
+
+            int64_t parsed = 0;
+            const auto *begin = value.data();
+            const auto *end = value.data() + value.size();
+            const auto [ptr, ec] = std::from_chars(begin, end, parsed);
+            if (ec != std::errc() || ptr != end) {
+                return false;
+            }
+
+            number = parsed;
+            return true;
+        }
+
+        bool is_integer_literal(const std::string &value)
+        {
+            if (value.empty()) {
+                return false;
+            }
+
+            std::size_t offset = 0;
+            if (value[0] == '+' || value[0] == '-') {
+                offset = 1;
+            }
+            if (offset == value.size()) {
+                return false;
+            }
+
+            for (std::size_t i = offset; i < value.size(); ++i) {
+                if (value[i] < '0' || value[i] > '9') {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 
@@ -73,6 +134,7 @@ namespace yuan::redis
 
     int DefaultCmd::unpack(buffer::ByteBufferReader & reader)
     {
+        result_ = nullptr;
         int ret = DefaultCmd::unpack_result(result_, reader, unpack_to_map_);
         if (ret >= 0) {
             if (reader.get_remain_bytes() <= 0) {
@@ -82,8 +144,13 @@ namespace yuan::redis
             const auto arr = std::make_shared<ArrayValue>();
             arr->add_value(result_);
             while (reader.get_remain_bytes() > 0) {
+                const auto checkpoint = reader.position();
                 std::shared_ptr<RedisValue> result;
                 ret = unpack_result(result, reader, unpack_to_map_);
+                if (ret == UnpackCode::need_more_bytes) {
+                    reader.restore(checkpoint);
+                    break;
+                }
                 if (ret < 0) {
                     return ret;
                 }
@@ -91,7 +158,9 @@ namespace yuan::redis
                 arr->add_value(result);
             }
 
-            result_ = arr;
+            if (arr->size() > 1) {
+                result_ = arr;
+            }
 
             return 0;
         }
@@ -144,10 +213,16 @@ namespace yuan::redis
                 return ret;
             }
 
-            int len = std::atoi(str_value.c_str());
+            int64_t len = 0;
+            if (!parse_resp_length(str_value, len)) {
+                return UnpackCode::format_error;
+            }
             if (len < 0) {
                 result = std::make_shared<NullValue>();
                 return 0;
+            }
+            if (static_cast<uint64_t>(len) > std::numeric_limits<std::size_t>::max()) {
+                return UnpackCode::format_error;
             }
             if (reader.get_remain_bytes() < static_cast<std::size_t>(len) + 2) {
                 return UnpackCode::need_more_bytes;
@@ -177,15 +252,12 @@ namespace yuan::redis
                 return ret;
             }
 
-            try
-            {
-                auto intResult = std::make_shared<IntValue>(std::stoll(str_value));
-                result = intResult;
-            }
-            catch (const std::exception &ignore)
-            {
+            int64_t parsed = 0;
+            if (!parse_resp_int64(str_value, parsed)) {
                 return UnpackCode::format_error;
             }
+            auto intResult = std::make_shared<IntValue>(parsed);
+            result = intResult;
 
             return 0;
         }
@@ -201,8 +273,15 @@ namespace yuan::redis
                 return ret;
             }
 
-            result = std::make_shared<FloatValue>(RedisDoubleConverter::convertSafe(str_value));
-            result->set_raw_str(str_value);
+            try
+            {
+                result = std::make_shared<FloatValue>(RedisDoubleConverter::convert(str_value));
+                result->set_raw_str(str_value);
+            }
+            catch (const std::exception &)
+            {
+                return UnpackCode::format_error;
+            }
 
             return 0;
         }
@@ -228,10 +307,16 @@ namespace yuan::redis
                 return ret;
             }
 
-            int len = std::atoi(str_value.c_str());
+            int64_t len = 0;
+            if (!parse_resp_length(str_value, len)) {
+                return UnpackCode::format_error;
+            }
             if (len < 0) {
                 result = std::make_shared<NullValue>();
                 return 0;
+            }
+            if (static_cast<uint64_t>(len) > std::numeric_limits<std::size_t>::max()) {
+                return UnpackCode::format_error;
             }
             if (reader.get_remain_bytes() < static_cast<std::size_t>(len) + 2) {
                 return UnpackCode::need_more_bytes;
@@ -260,10 +345,16 @@ namespace yuan::redis
                 return ret;
             }
 
-            int len = std::atoi(str_value.c_str());
+            int64_t len = 0;
+            if (!parse_resp_length(str_value, len)) {
+                return UnpackCode::format_error;
+            }
             if (len < 0) {
                 result = std::make_shared<NullValue>();
                 return 0;
+            }
+            if (static_cast<uint64_t>(len) > std::numeric_limits<std::size_t>::max()) {
+                return UnpackCode::format_error;
             }
             if (reader.get_remain_bytes() < static_cast<std::size_t>(len) + 2) {
                 return UnpackCode::need_more_bytes;
@@ -299,13 +390,14 @@ namespace yuan::redis
                 return ret;
             }
 
-            try
-            {
-                auto intResult = std::make_shared<IntValue>(std::stoll(str_value));
+            int64_t parsed = 0;
+            if (parse_resp_int64(str_value, parsed)) {
+                auto intResult = std::make_shared<IntValue>(parsed);
                 result = intResult;
-            }
-            catch (const std::exception &)
-            {
+            } else {
+                if (!is_integer_literal(str_value)) {
+                    return UnpackCode::format_error;
+                }
                 auto pstr = std::make_shared<StringValue>(str_value);
                 result = pstr;
             }
@@ -321,13 +413,20 @@ namespace yuan::redis
                 return ret;
             }
 
-            int len = std::atoi(str_value.c_str());
+            int64_t len = 0;
+            if (!parse_resp_length(str_value, len)) {
+                return UnpackCode::format_error;
+            }
             if (len < 0) {
+                result = std::make_shared<NullValue>();
+                return 0;
+            }
+            if (len > std::numeric_limits<int>::max()) {
                 return UnpackCode::format_error;
             }
 
             auto arrResult = std::make_shared<ArrayValue>();
-            for (int i = 0; i < len; ++i) {
+            for (int64_t i = 0; i < len; ++i) {
                 std::shared_ptr<RedisValue> res = nullptr;
                 int ret = DefaultCmd::unpack_result(res, reader, toMap);
                 if (ret < 0) {
@@ -347,13 +446,20 @@ namespace yuan::redis
                 return ret;
             }
 
-            int len = std::atoi(str_value.c_str());
+            int64_t len = 0;
+            if (!parse_resp_length(str_value, len)) {
+                return UnpackCode::format_error;
+            }
             if (len < 0) {
+                result = std::make_shared<NullValue>();
+                return 0;
+            }
+            if (len > std::numeric_limits<int>::max()) {
                 return UnpackCode::format_error;
             }
 
             auto arrResult = std::make_shared<ArrayValue>();
-            for (int i = 0; i < len; ++i) {
+            for (int64_t i = 0; i < len; ++i) {
                 std::shared_ptr<RedisValue> res = nullptr;
                 int ret = DefaultCmd::unpack_result(res, reader, toMap);
                 if (ret < 0) {
@@ -374,12 +480,18 @@ namespace yuan::redis
                 return ret;
             }
 
-            int len = std::atoi(str_value.c_str());
+            int64_t len = 0;
+            if (!parse_resp_length(str_value, len)) {
+                return UnpackCode::format_error;
+            }
             if (len < 0) {
                 return UnpackCode::format_error;
             }
+            if (len > std::numeric_limits<int64_t>::max() / 2) {
+                return UnpackCode::format_error;
+            }
 
-            for (int i = 0; i < len * 2; ++i) {
+            for (int64_t i = 0; i < len * 2; ++i) {
                 std::shared_ptr<RedisValue> ignored = nullptr;
                 ret = DefaultCmd::unpack_result(ignored, reader, false);
                 if (ret < 0) {
@@ -396,7 +508,10 @@ namespace yuan::redis
                 return ret;
             }
 
-            int len = std::atoi(str_value.c_str());
+            int64_t len = 0;
+            if (!parse_resp_length(str_value, len)) {
+                return UnpackCode::format_error;
+            }
             if (len < 0) {
                 return UnpackCode::format_error;
             }
@@ -405,9 +520,9 @@ namespace yuan::redis
                 return UnpackCode::format_error;
             }
 
-            const int pair_count = array_as_map ? len / 2 : len;
+            const int64_t pair_count = array_as_map ? len / 2 : len;
             std::unordered_map<std::string, std::shared_ptr<RedisValue> > res;
-            for (int i = 0; i < pair_count; ++i) {
+            for (int64_t i = 0; i < pair_count; ++i) {
                 if (reader.get_remain_bytes() <= 0) {
                     return UnpackCode::need_more_bytes;
                 }

@@ -64,7 +64,7 @@ namespace yuan::net::bit_torrent
 
     private:
         DownloadRuntimeConfig config_;
-        timer::Timer *stats_timer_ = nullptr;
+        timer::TimerHandle stats_timer_;
         std::unique_ptr<NatManager> nat_manager_;
         std::shared_ptr<TrackerSession> tracker_session_;
         std::unique_ptr<PeerSession> peer_session_;

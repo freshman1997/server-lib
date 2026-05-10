@@ -83,18 +83,14 @@ namespace yuan::net::http
                 url.push_back(ch);
             }
 
-            if (buff.read_offset() > config::client_max_content_length) {
+            if (buff.read_offset() > config::max_header_length) {
                 header_state = HeaderState::too_long;
                 return false;
             }
         }
 
         size_t query_pos = url.find_first_of('?');
-        if (query_pos != std::string::npos) {
-            req->url_ = url::url_decode(url.substr(0, query_pos));
-        } else {
-            req->url_ = url::url_decode(url);
-        }
+        req->url_ = url::url_decode(url);
 
         if (!url::decode_url_domain(req->url_, req->url_domain_)) {
             return false;
