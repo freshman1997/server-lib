@@ -226,7 +226,7 @@ namespace yuan::server
         while (static_cast<int32_t>(active_clients_.size()) < max_concurrent_downloads_) {
             ManagedTask *next = nullptr;
             for (auto &task : tasks_) {
-                if (task.status == "queued") {
+            if (task.status == "queued" || task.status == "paused") {
                     next = &task;
                     break;
                 }
@@ -535,6 +535,13 @@ namespace yuan::server
             return true;
         }
 
+        if (task->status == "completed") {
+            if (error) {
+                *error = "task_completed";
+            }
+            return false;
+        }
+
         if (static_cast<int32_t>(active_clients_.size()) >= max_concurrent_downloads_) {
             if (error) {
                 *error = "max_concurrent_reached (" + std::to_string(active_clients_.size()) + "/" + std::to_string(max_concurrent_downloads_) + ")";
@@ -628,6 +635,50 @@ namespace yuan::server
             t.detach();
         }
         return true;
+    }
+
+    bool BitTorrentService::pause_task(int64_t task_id, std::string *error)
+    {
+        std::shared_ptr<yuan::net::bit_torrent::BitTorrentClient> client_to_stop;
+        uint16_t port = 0;
+        {
+            std::lock_guard<std::mutex> lock(tasks_mutex_);
+            auto it = active_clients_.find(task_id);
+            if (it == active_clients_.end()) {
+                if (error) {
+                    *error = "task_not_active";
+                }
+                return false;
+            }
+
+            remove_nat_port_mapping_for_client(*it->second);
+            port = static_cast<uint16_t>(it->second->get_listen_port());
+            client_to_stop = std::move(it->second);
+            active_clients_.erase(it);
+
+            if (auto *task = find_task_nolock(task_id)) {
+                task->status = "paused";
+                task->updated_at_ms = now_ms();
+                task->last_error.clear();
+            }
+
+            try_start_queued_tasks_nolock();
+            persist_tasks_to_disk_nolock();
+        }
+
+        release_listen_port(port);
+        if (client_to_stop) {
+            std::thread t([client = std::move(client_to_stop)]() {
+                client->stop();
+            });
+            t.detach();
+        }
+        return true;
+    }
+
+    bool BitTorrentService::resume_task(int64_t task_id, std::string *error)
+    {
+        return start_task(task_id, error);
     }
 
     bool BitTorrentService::remove_task(int64_t task_id)
@@ -792,6 +843,16 @@ namespace yuan::server
     {
         std::lock_guard<std::mutex> lock(tasks_mutex_);
         return active_clients_;
+    }
+
+    bool BitTorrentService::shared_dht_running() const
+    {
+        return shared_dht_node_ && shared_dht_node_->is_running();
+    }
+
+    size_t BitTorrentService::shared_dht_routing_table_size() const
+    {
+        return shared_dht_node_ ? shared_dht_node_->routing_table_size() : 0;
     }
 
     std::shared_ptr<yuan::net::bit_torrent::BitTorrentClient> BitTorrentService::get_client_by_task_id(int64_t task_id)

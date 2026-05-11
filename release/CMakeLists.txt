@@ -3,6 +3,10 @@ project(release_targets)
 
 add_subdirectory(filesync)
 
+if (TARGET FtpProto)
+    add_subdirectory(ftp)
+endif()
+
 if (TARGET SshProto)
     add_subdirectory(ssh)
 endif()

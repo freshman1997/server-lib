@@ -223,6 +223,27 @@ namespace yuan::net::http
         broadcast(SseEvent{ "", event, data });
     }
 
+    void SseChannel::heartbeat()
+    {
+        std::vector<std::shared_ptr<SseConnection>> active;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (auto it = subscribers_.begin(); it != subscribers_.end();) {
+                auto conn = it->second.lock();
+                if (conn && conn->is_active()) {
+                    active.push_back(std::move(conn));
+                    ++it;
+                } else {
+                    it = subscribers_.erase(it);
+                }
+            }
+        }
+
+        for (const auto &conn : active) {
+            conn->heartbeat();
+        }
+    }
+
     size_t SseChannel::active_count() const
     {
         std::lock_guard<std::mutex> lock(mutex_);

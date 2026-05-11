@@ -5,6 +5,7 @@
 #include "server_runtime_host.h"
 #include "service.h"
 #include "eventbus/event_bus.h"
+#include "timer/timer_handle.h"
 
 #include <memory>
 #include <mutex>
@@ -34,6 +35,9 @@ namespace yuan::server
         void install_admin_dashboard_routes();
         void subscribe_dashboard_events();
         void unsubscribe_dashboard_events();
+        void start_dashboard_push_timer();
+        void stop_dashboard_push_timer();
+        void publish_dashboard_snapshot();
         bool authorize_admin(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) const;
 
     private:
@@ -70,6 +74,7 @@ namespace yuan::server
         std::unordered_map<std::string, bool> service_states_;
         std::deque<DashboardEvent> recent_events_;
         std::vector<yuan::eventbus::SubscriptionToken> event_tokens_;
+        yuan::timer::TimerHandle dashboard_push_timer_;
     };
 
 } // namespace yuan::server

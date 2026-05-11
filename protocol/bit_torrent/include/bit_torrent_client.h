@@ -24,6 +24,7 @@ namespace yuan::net::bit_torrent
     class PeerConnection;
     class PieceStorage;
     class DownloadRuntimeCoordinator;
+    struct TrackerAnnounceStatus;
 
     class BitTorrentClient
     {
@@ -59,6 +60,9 @@ namespace yuan::net::bit_torrent
         void set_nat_config(const NatConfig &config)
         {
             nat_config_ = config;
+            if (config.listen_port > 0) {
+                listen_port_ = config.listen_port;
+            }
         }
 
         const NatConfig &get_nat_config() const
@@ -175,6 +179,7 @@ namespace yuan::net::bit_torrent
         {
             return piece_state_.remaining_piece_count();
         }
+        std::vector<TrackerAnnounceStatus> get_tracker_statuses() const;
 
     private:
         void preload_existing_pieces();

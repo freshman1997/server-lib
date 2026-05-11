@@ -62,13 +62,13 @@ inline std::uint64_t fnv1a_file_hash(const std::filesystem::path& path) {
 
 inline std::string quote_token(const std::string& value) {
     std::ostringstream out;
-    out << std::hex;
     for (unsigned char ch : value) {
         if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' ||
             ch == '_' || ch == '.' || ch == '/') {
             out << static_cast<char>(ch);
         } else {
-            out << '%' << static_cast<int>(ch >> 4) << static_cast<int>(ch & 0x0f);
+            static constexpr char digits[] = "0123456789ABCDEF";
+            out << '%' << digits[ch >> 4] << digits[ch & 0x0f];
         }
     }
     return out.str();

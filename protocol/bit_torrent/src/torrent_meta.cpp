@@ -7,68 +7,111 @@
 namespace yuan::net::bit_torrent
 {
 
-    // Extract the info dictionary's raw bencoded bytes from torrent data
-    static std::string extract_info_bencode(const char * data, size_t len)
+    static const char *skip_bencode_value(const char *p, const char *end)
     {
-        // Find "info" key in the top-level dictionary
-        // Format: d...4:info<info_dict>...e
-        const std::string key = "4:info";
-        auto pos = std::search(data, data + len, key.begin(), key.end());
-        if (pos == data + len)
-            return "";
-
-        const char *info_start = pos + key.size();
-
-        // Recursively find the matching 'e' for the info dict/list
-        int depth = 0;
-        const char *p = info_start;
-        while (p < data + len) {
-            char ch = *p;
-            if (ch == 'd' || ch == 'l') {
-                depth++;
-                p++;
-                continue;
-            }
-            if (ch == 'i') {
-                p++; // skip 'i'
-                while (p < data + len && *p != 'e')
-                    p++;
-                p++; // skip 'e'
-                continue;
-            }
-            if (ch == 'e') {
-                if (depth == 0)
-                    break;
-                depth--;
-                p++;
-                continue;
-            }
-            if (std::isdigit(static_cast<unsigned char>(ch))) {
-                // bencode string: <digits>:<data>
-                const char *digit_start = p;
-                while (p < data + len && std::isdigit(static_cast<unsigned char>(*p)))
-                    p++;
-                if (p >= data + len || *p != ':')
-                    return "";
-                p++; // skip ':'
-
-                std::string len_str(digit_start, p - 1);
-                int64_t str_len = 0;
-                try
-                {
-                    str_len = std::stoll(len_str);
-                }
-                catch (...)
-                {
-                    return "";
-                }
-                p += str_len;
-                continue;
-            }
-            p++;
+        if (!p || p >= end) {
+            return nullptr;
         }
 
-        return std::string(info_start, p - info_start);
+        if (*p == 'i') {
+            ++p;
+            while (p < end && *p != 'e') {
+                ++p;
+            }
+            return p < end ? p + 1 : nullptr;
+        }
+
+        if (*p == 'l' || *p == 'd') {
+            ++p;
+            while (p < end && *p != 'e') {
+                p = skip_bencode_value(p, end);
+                if (!p) {
+                    return nullptr;
+                }
+            }
+            return p < end ? p + 1 : nullptr;
+        }
+
+        if (std::isdigit(static_cast<unsigned char>(*p))) {
+            const char *digit_start = p;
+            while (p < end && std::isdigit(static_cast<unsigned char>(*p))) {
+                ++p;
+            }
+            if (p >= end || *p != ':') {
+                return nullptr;
+            }
+
+            int64_t str_len = 0;
+            try {
+                str_len = std::stoll(std::string(digit_start, p - digit_start));
+            } catch (...) {
+                return nullptr;
+            }
+            if (str_len < 0 || end - (p + 1) < str_len) {
+                return nullptr;
+            }
+            return p + 1 + str_len;
+        }
+
+        return nullptr;
+    }
+
+    // Extract the top-level info dictionary's exact raw bencoded bytes.
+    static std::string extract_info_bencode(const char *data, size_t len)
+    {
+        const char *p = data;
+        const char *end = data + len;
+        if (p >= end || *p != 'd') {
+            return "";
+        }
+
+        ++p;
+        while (p < end && *p != 'e') {
+            if (!std::isdigit(static_cast<unsigned char>(*p))) {
+                return "";
+            }
+
+            const char *key_start = p;
+            const char *key_end = skip_bencode_value(p, end);
+            if (!key_end) {
+                return "";
+            }
+
+            std::string key_bencode(key_start, key_end - key_start);
+            auto *key_node = BencodingDataConverter::parse(key_bencode);
+            if (!key_node || key_node->type_ != DataType::string_) {
+                delete key_node;
+                return "";
+            }
+            const auto key = static_cast<StringData *>(key_node)->get_data();
+            delete key_node;
+
+            const char *value_start = key_end;
+            const char *value_end = skip_bencode_value(value_start, end);
+            if (!value_end) {
+                return "";
+            }
+
+            if (key == "info") {
+                return std::string(value_start, value_end - value_start);
+            }
+
+            p = value_end;
+        }
+
+        return "";
+    }
+
+    static bool validate_info(TorrentInfo &info)
+    {
+        if (info.piece_length_ <= 0 || info.total_length_ <= 0) {
+            return false;
+        }
+        const auto count = info.piece_count();
+        if (count <= 0 || info.pieces_.size() != static_cast<size_t>(count) * 20U) {
+            return false;
+        }
+        return true;
     }
 
     TorrentMeta TorrentMeta::parse(const std::string & torrent_data)
@@ -197,6 +240,11 @@ namespace yuan::net::bit_torrent
         // Fallback: if no announce-list, build one from announce
         if (meta.announce_list_.empty() && !meta.announce_.empty())
             meta.announce_list_.push_back({ meta.announce_ });
+
+        if (!validate_info(meta.info)) {
+            meta.info_hash_.clear();
+            meta.info_hash_hex_.clear();
+        }
 
         delete root;
         return meta;

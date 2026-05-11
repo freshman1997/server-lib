@@ -21,6 +21,7 @@ namespace yuan::net::bit_torrent
     struct TrackerAnnounceContext
     {
         const TorrentMeta *meta_ = nullptr;
+        const std::string *peer_id_ = nullptr;
         int32_t listen_port_ = 0;
         int64_t uploaded_ = 0;
         int64_t downloaded_ = 0;
@@ -36,6 +37,17 @@ namespace yuan::net::bit_torrent
         net::NetworkRuntime *runtime_ = nullptr;
         TrackerPeerListHandler peer_list_handler_;
         TrackerContextProvider context_provider_;
+    };
+
+    struct TrackerAnnounceStatus
+    {
+        std::string url_;
+        bool success_ = false;
+        bool is_error_ = false;
+        int32_t interval_ = 0;
+        int32_t peer_count_ = 0;
+        uint64_t last_announce_ms_ = 0;
+        std::string error_message_;
     };
 
     class TrackerSession : public std::enable_shared_from_this<TrackerSession>
@@ -66,6 +78,7 @@ namespace yuan::net::bit_torrent
         {
             return running_;
         }
+        std::vector<TrackerAnnounceStatus> announce_statuses() const;
 
     private:
         void announce_from_context(const TrackerAnnounceContext &ctx);
@@ -90,6 +103,8 @@ namespace yuan::net::bit_torrent
         bool completed_sent_ = false;
         std::vector<std::thread> workers_;
         std::mutex worker_mutex_;
+        mutable std::mutex status_mutex_;
+        std::vector<TrackerAnnounceStatus> announce_statuses_;
 
         static constexpr int32_t RETRY_BASE_INTERVAL = 5;
         static constexpr int32_t RETRY_MAX_INTERVAL = 600;

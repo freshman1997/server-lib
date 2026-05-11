@@ -50,7 +50,8 @@ namespace yuan::net::bit_torrent
                       int64_t downloaded = 0,
                       int64_t left = -1,
                       TrackerAnnounceEvent event = TrackerAnnounceEvent::started,
-                      TrackerResponse *out = nullptr);
+                      TrackerResponse *out = nullptr,
+                      const std::string &peer_id = "");
 
         void announce_async(const std::string &tracker_url,
                             const TorrentMeta &meta,
@@ -76,7 +77,8 @@ namespace yuan::net::bit_torrent
                                        int64_t uploaded,
                                        int64_t downloaded,
                                        int64_t left,
-                                       TrackerAnnounceEvent event);
+                                       TrackerAnnounceEvent event,
+                                       const std::string &peer_id);
 
         std::string build_scrape_url(const std::string &tracker_url,
                                      const TorrentMeta &meta);

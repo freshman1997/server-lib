@@ -96,6 +96,11 @@ namespace yuan::net::bit_torrent
         return peer_session_ ? peer_session_->get_active_peer_count() : 0;
     }
 
+    std::vector<TrackerAnnounceStatus> DownloadRuntimeCoordinator::tracker_statuses() const
+    {
+        return tracker_session_ ? tracker_session_->announce_statuses() : std::vector<TrackerAnnounceStatus>{};
+    }
+
     void DownloadRuntimeCoordinator::ensure_sessions()
     {
         if (!tracker_session_) {
@@ -115,7 +120,7 @@ namespace yuan::net::bit_torrent
         peer_config.meta_ = config_.meta_;
         peer_config.peer_id_ = config_.peer_id_;
         peer_config.pieces_have_ = config_.pieces_have_;
-        peer_config.max_peers_ = config_.nat_config_.max_active_connections;
+        peer_config.max_peers_ = config_.max_peers_ > 0 ? config_.max_peers_ : config_.nat_config_.max_active_connections;
         peer_config.allow_loopback_peers_ = config_.nat_config_.allow_loopback_peers;
         peer_config.piece_data_handler_ = config_.piece_data_handler_;
         peer_config.piece_request_handler_ = config_.piece_request_handler_;
@@ -139,7 +144,9 @@ namespace yuan::net::bit_torrent
         };
         tracker_config.context_provider_ = [this]()->TrackerAnnounceContext
         {
-            return config_.stats_tracker_->make_tracker_context(*config_.meta_, *config_.listen_port_);
+            auto ctx = config_.stats_tracker_->make_tracker_context(*config_.meta_, *config_.listen_port_);
+            ctx.peer_id_ = config_.peer_id_;
+            return ctx;
         };
         tracker_session_->configure(std::move(tracker_config));
     }
@@ -147,7 +154,8 @@ namespace yuan::net::bit_torrent
     void DownloadRuntimeCoordinator::start_nat_runtime()
     {
         const auto &cfg = config_.nat_config_;
-        if (!cfg.enable_upnp && !cfg.enable_nat_pmp && !cfg.enable_dht) {
+        if (!cfg.enable_inbound_listen && !cfg.enable_upnp && !cfg.enable_nat_pmp &&
+            !cfg.enable_utp && !cfg.enable_dht && !cfg.enable_pex) {
             return;
         }
 

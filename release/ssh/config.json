@@ -9,6 +9,7 @@
   "password": "yuan",
   "enable_publickey_auth": true,
   "enable_password_auth": true,
+  "auth_failure_delay_ms": 250,
   "enable_sftp": true,
   "enable_port_forwarding": true
 }

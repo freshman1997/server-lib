@@ -201,6 +201,34 @@ static std::string build_single_file_torrent_without_announce(const std::string 
     + "e";
 }
 
+static std::string build_multi_file_torrent_with_path(const std::string &name,
+                                                      const std::string &file_path,
+                                                      const std::string &content,
+                                                      int64_t piece_length)
+{
+    std::string pieces;
+    for (size_t offset = 0; offset < content.size(); offset += static_cast<size_t>(piece_length))
+    {
+        const auto len = std::min<size_t>(static_cast<size_t>(piece_length), content.size() - offset);
+        const auto hash = sha1_hash(reinterpret_cast<const uint8_t *>(content.data() + offset), len);
+        pieces.append(reinterpret_cast<const char *>(hash.data()), hash.size());
+    }
+
+    return "d"
+        + bencode_str("info") + "d"
+            + bencode_str("name") + bencode_str(name)
+            + bencode_str("piece length") + bencode_int(piece_length)
+            + bencode_str("pieces") + bencode_str(pieces)
+            + bencode_str("files") + "l"
+                "d"
+                    + bencode_str("length") + bencode_int(static_cast<int64_t>(content.size()))
+                    + bencode_str("path") + "l" + bencode_str(file_path) + "e"
+                + "e"
+            + "e"
+        + "e"
+    + "e";
+}
+
 static std::filesystem::path make_bt_test_dir(const std::string &name)
 {
     std::error_code ec;
@@ -737,6 +765,7 @@ void test_torrent_meta_parse()
     printf("\n=== TorrentMeta: parse ===\n");
 
     std::string fake_piece_hash(20, '\x42');
+    std::string fake_piece_hashes(80, '\x42');
     std::string tracker_url = "http://tracker.example.com/announce";
 
     std::string torrent = "d"
@@ -747,7 +776,7 @@ void test_torrent_meta_parse()
         + bencode_str("info") + "d"
             + bencode_str("name") + bencode_str("test.txt")
             + bencode_str("piece length") + bencode_int(262144)
-            + bencode_str("pieces") + bencode_str(fake_piece_hash)
+            + bencode_str("pieces") + bencode_str(fake_piece_hashes)
             + bencode_str("length") + bencode_int(1048576)
         + "e"
     + "e";
@@ -897,6 +926,36 @@ void test_torrent_meta_parse()
         auto meta = TorrentMeta::parse(torrent_no_list);
         CHECK(meta.announce_list_.size() == 1, "should build announce_list from announce");
         CHECK(meta.announce_list_[0][0] == "http://tracker2.com/announce", "fallback URL");
+    }
+
+    TEST("info_hash ignores non-info string containing marker");
+    {
+        const std::string base = build_single_file_torrent_without_announce("marker.bin", "abcdefghijklmnop", 8);
+        const std::string with_marker = "d"
+            + bencode_str("comment") + bencode_str("prefix 4:info garbage")
+            + bencode_str("info") + base.substr(7, base.size() - 8)
+            + "e";
+
+        auto meta1 = TorrentMeta::parse(base);
+        auto meta2 = TorrentMeta::parse(with_marker);
+        CHECK(!meta1.info_hash_.empty() && meta1.info_hash_ == meta2.info_hash_,
+              "info_hash should be based on top-level info value only");
+    }
+
+    TEST("invalid pieces length rejects torrent");
+    {
+        std::string bad_pieces(19, '\x42');
+        std::string torrent_bad = "d"
+            + bencode_str("info") + "d"
+                + bencode_str("name") + bencode_str("bad")
+                + bencode_str("piece length") + bencode_int(16)
+                + bencode_str("pieces") + bencode_str(bad_pieces)
+                + bencode_str("length") + bencode_int(16)
+            + "e"
+        + "e";
+
+        auto meta = TorrentMeta::parse(torrent_bad);
+        CHECK(meta.info_hash_.empty(), "torrent with malformed pieces length should be rejected");
     }
 }
 
@@ -1920,9 +1979,25 @@ void test_tracker_session_lifecycle_events()
         meta.announce_ = "http://127.0.0.1:" + std::to_string(port) + "/announce";
         meta.announce_list_ = {{meta.announce_}};
 
+        yuan::net::SelectPoller poller;
+        yuan::timer::WheelTimerManager timer_manager;
+        yuan::net::EventLoop loop(&poller, &timer_manager);
+        yuan::net::NetworkRuntime runtime(&loop, &timer_manager);
+        std::thread loop_thread([&]() {
+            loop.loop();
+        });
+
+        auto wait_handled = [&](int expected) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            while (handled.load() < expected && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        };
+
         int announce_count = 0;
-        TrackerSession session;
+        auto session = std::make_shared<TrackerSession>();
         TrackerSessionConfig config;
+        config.runtime_ = &runtime;
         config.context_provider_ = [&]() -> TrackerAnnounceContext {
             TrackerAnnounceContext ctx;
             ctx.meta_ = &meta;
@@ -1932,12 +2007,18 @@ void test_tracker_session_lifecycle_events()
             ++announce_count;
             return ctx;
         };
-        session.configure(std::move(config));
-        session.start();
-        session.announce_now();
-        session.announce_now();
-        session.announce_now();
-        session.stop();
+        session->configure(std::move(config));
+        session->start();
+        session->announce_now();
+        wait_handled(1);
+        session->announce_now();
+        wait_handled(2);
+        session->announce_now();
+        wait_handled(3);
+        session->stop();
+        wait_handled(4);
+        loop.quit();
+        if (loop_thread.joinable()) loop_thread.join();
         server_thread.join();
 
         const bool passed = handled.load() == 4 &&
@@ -2053,6 +2134,28 @@ void test_piece_storage_committed_verification()
               "verified full partial files should be committed during restore");
 
         restored_storage.close_all();
+        fs::remove_all(temp_dir);
+    }
+
+    TEST("unsafe torrent paths are rejected");
+    {
+        namespace fs = std::filesystem;
+
+        const std::string content = "abcdefghijklmnop";
+        const auto torrent = TorrentMeta::parse(build_multi_file_torrent_with_path("safe_root", "../escape.bin", content, 8));
+        auto temp_dir = make_bt_test_dir("bt_piece_unsafe_path");
+
+        PieceStorage storage;
+        storage.configure(&torrent, temp_dir.string());
+        const bool wrote = storage.write_piece(0, 0,
+                                               reinterpret_cast<const uint8_t *>(content.data()),
+                                               8);
+        const bool committed = wrote && storage.commit_piece(0);
+
+        CHECK(wrote && !committed && !fs::exists(temp_dir.parent_path() / "escape.bin"),
+              "unsafe path component should not write outside save path");
+
+        storage.close_all();
         fs::remove_all(temp_dir);
     }
 }
@@ -2404,7 +2507,7 @@ void test_local_seed_download_e2e()
         const bool seeder_started = seeder_loaded && seeder.start();
 
         std::thread seeder_loop_thread([&]() {
-            seeder_loop.loop();
+            seeder_runtime.run();
         });
 
         if (seeder_started)
@@ -2430,7 +2533,7 @@ void test_local_seed_download_e2e()
         const bool downloader_started = downloader_loaded && downloader.start();
 
         std::thread downloader_loop_thread([&]() {
-            downloader_loop.loop();
+            downloader_runtime.run();
         });
 
         const auto deadline = std::chrono::steady_clock::now() + 8s;
@@ -2457,8 +2560,8 @@ void test_local_seed_download_e2e()
         downloader.stop();
         seeder.stop();
         std::this_thread::sleep_for(100ms);
-        downloader_loop.quit();
-        seeder_loop.quit();
+        downloader_runtime.stop();
+        seeder_runtime.stop();
         if (downloader_loop_thread.joinable()) downloader_loop_thread.join();
         if (seeder_loop_thread.joinable()) seeder_loop_thread.join();
         tracker_stop = true;

@@ -53,7 +53,8 @@ namespace yuan::net::bit_torrent
 
     yuan::buffer::ByteBuffer UdpTracker::build_announce_request(
         int64_t uploaded, int64_t downloaded, int64_t left,
-        int32_t local_port, TrackerAnnounceEvent event)
+        int32_t local_port, TrackerAnnounceEvent event,
+        const std::string &peer_id)
     {
         transaction_id_ = next_transaction_id();
 
@@ -64,7 +65,8 @@ namespace yuan::net::bit_torrent
         buffer.append_i32(1);
         buffer.append_i32(static_cast<int32_t>(transaction_id_));
         buffer.append(reinterpret_cast<const char *>(info_hash_.data()), 20);
-        buffer.append(peer_id_.data(), 20);
+        const auto &announce_peer_id = peer_id.size() == 20 ? peer_id : peer_id_;
+        buffer.append(announce_peer_id.data(), 20);
         buffer.append_i64(downloaded);
         buffer.append_i64(left);
         buffer.append_i64(uploaded);
@@ -261,7 +263,8 @@ namespace yuan::net::bit_torrent
         int64_t uploaded,
         int64_t downloaded,
         int64_t left,
-        TrackerAnnounceEvent event)
+        TrackerAnnounceEvent event,
+        const std::string &peer_id)
     {
         UdpTrackerResponse error_resp;
 
@@ -297,7 +300,7 @@ namespace yuan::net::bit_torrent
             co_return error_resp;
         }
 
-        auto announce_send = client_.send(build_announce_request(uploaded, downloaded, left, local_port, event));
+        auto announce_send = client_.send(build_announce_request(uploaded, downloaded, left, local_port, event, peer_id));
         if (announce_send.status != coroutine::IoStatus::success) {
             error_resp.is_error = true;
             error_resp.error_message_ = "failed to send announce request";
@@ -326,7 +329,8 @@ namespace yuan::net::bit_torrent
                               int64_t downloaded,
                               int64_t left,
                               TrackerAnnounceEvent event,
-                              UdpTrackerResponse * out)
+                              UdpTrackerResponse * out,
+                              const std::string &peer_id)
     {
         owned_runtime_ = std::make_unique<NetworkRuntime>();
         auto runtime = owned_runtime_->runtime_view();
@@ -334,7 +338,7 @@ namespace yuan::net::bit_torrent
         auto response = yuan::coroutine::sync_wait(
             runtime,
             announce_async(runtime, tracker_host, tracker_port, meta, local_port,
-                           uploaded, downloaded, left, event));
+                           uploaded, downloaded, left, event, peer_id));
 
         owned_runtime_->stop();
 

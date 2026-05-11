@@ -9,6 +9,7 @@
 #include "server_service_custom_events.h"
 #include "content/types.h"
 #include "peer_wire/peer_connection.h"
+#include "sse.h"
 #include "utils.h"
 
 #include <chrono>
@@ -227,20 +228,40 @@ namespace yuan::server
                 item["progress"] = stats.progress_;
                 item["peer_count"] = client->get_peer_count();
                 item["download_speed"] = stats.download_speed_;
+                item["upload_speed"] = stats.upload_speed_;
                 item["downloaded_bytes"] = stats.downloaded_bytes_;
                 item["uploaded_bytes"] = stats.uploaded_bytes_;
+                item["ratio"] = stats.downloaded_bytes_ > 0
+                    ? static_cast<double>(stats.uploaded_bytes_) / static_cast<double>(stats.downloaded_bytes_)
+                    : 0.0;
                 item["pieces_downloaded"] = stats.pieces_downloaded_;
                 item["pieces_total"] = stats.total_pieces_;
             } else {
                 item["progress"] = 0.0f;
                 item["peer_count"] = 0;
                 item["download_speed"] = 0.0f;
+                item["upload_speed"] = 0.0f;
                 item["downloaded_bytes"] = 0;
                 item["uploaded_bytes"] = 0;
+                item["ratio"] = 0.0;
                 item["pieces_downloaded"] = 0;
                 item["pieces_total"] = 0;
             }
             return item;
+        }
+
+        std::shared_ptr<yuan::net::http::SseChannel> bt_events_channel()
+        {
+            return yuan::net::http::SseManager::instance().get_or_create_channel("bt_dashboard", 128);
+        }
+
+        void publish_bt_dashboard_snapshot(const nlohmann::json &snapshot)
+        {
+            auto channel = bt_events_channel();
+            if (!channel || channel->active_count() == 0) {
+                return;
+            }
+            channel->broadcast(snapshot.dump(), "overview");
         }
     }
 
@@ -279,6 +300,7 @@ namespace yuan::server
             load_bt_task_history_from_file();
             install_admin_dashboard_routes();
             subscribe_dashboard_events();
+            start_dashboard_push_timer();
         }
 
         return ok;
@@ -298,6 +320,7 @@ namespace yuan::server
 
     void HttpService::stop()
     {
+        stop_dashboard_push_timer();
         unsubscribe_dashboard_events();
         host_.stop([this]() { server_->stop(); });
     }
@@ -310,6 +333,197 @@ namespace yuan::server
     const yuan::net::http::HttpServer &HttpService::server() const
     {
         return *server_;
+    }
+
+    void HttpService::start_dashboard_push_timer()
+    {
+        if (!shared_runtime_ || dashboard_push_timer_) {
+            return;
+        }
+        auto heartbeat_counter = std::make_shared<int>(0);
+        dashboard_push_timer_ = shared_runtime_->schedule_periodic(1000, 1000, [this, heartbeat_counter]() {
+            ++(*heartbeat_counter);
+            if (*heartbeat_counter % 15 == 0) {
+                auto channel = bt_events_channel();
+                if (channel && channel->active_count() > 0) {
+                    channel->heartbeat();
+                }
+            }
+            publish_dashboard_snapshot();
+        }, -1);
+    }
+
+    void HttpService::stop_dashboard_push_timer()
+    {
+        if (dashboard_push_timer_) {
+            dashboard_push_timer_.cancel();
+            dashboard_push_timer_.reset();
+        }
+    }
+
+    void HttpService::publish_dashboard_snapshot()
+    {
+        auto channel = bt_events_channel();
+        if (!channel || channel->active_count() == 0) {
+            return;
+        }
+
+        nlohmann::json out;
+        out["app_name"] = runtime_context_.app_name;
+        out["worker_index"] = runtime_context_.worker_index;
+        out["service_count"] = runtime_context_.service_registry ? runtime_context_.service_registry->list_services().size() : 0;
+
+        {
+            std::lock_guard<std::mutex> lock(dashboard_mutex_);
+            out["last_event_ms"] = dashboard_snapshot_.last_event_ms;
+            out["event_counters"] = event_counters_;
+            out["service_states"] = service_states_;
+            nlohmann::json recent = nlohmann::json::array();
+            for (const auto &evt : recent_events_) {
+                nlohmann::json item;
+                item["ts"] = evt.timestamp_ms;
+                item["name"] = evt.name;
+                item["detail"] = evt.detail;
+                recent.push_back(std::move(item));
+            }
+            out["recent_events"] = std::move(recent);
+        }
+
+        nlohmann::json bt;
+        bt["running"] = false;
+        bt["complete"] = false;
+        bt["peer_count"] = 0;
+        bt["downloaded_bytes"] = 0;
+        bt["uploaded_bytes"] = 0;
+        bt["pieces_downloaded"] = 0;
+        bt["pieces_total"] = 0;
+        bt["progress"] = 0.0;
+        bt["download_speed"] = 0.0;
+        bt["upload_speed"] = 0.0;
+        bt["ratio"] = 0.0;
+        bt["dht_running"] = false;
+        bt["dht_nodes"] = 0;
+        bt["nat_igd_discovered"] = false;
+        bt["nat_mapped"] = false;
+        bt["nat_external_ip"] = "";
+        bt["nat_mapped_port"] = 0;
+
+        if (runtime_context_.service_registry) {
+            auto bt_service = runtime_context_.service_registry->find_service_as<BitTorrentService>("bittorrent");
+            if (!bt_service) {
+                bt_service = runtime_context_.service_registry->find_service_as<BitTorrentService>("bt");
+            }
+            if (bt_service) {
+                const auto clients = bt_service->active_clients();
+                int32_t total_peers = 0;
+                int64_t total_downloaded = 0;
+                int64_t total_uploaded = 0;
+                double total_speed = 0.0;
+                double total_upload_speed = 0.0;
+                bool any_running = false;
+                bool any_complete = false;
+                double sum_progress = 0.0;
+                int32_t running_count = 0;
+                int32_t total_pieces_downloaded = 0;
+                int32_t total_pieces_total = 0;
+
+                for (const auto &pair : clients) {
+                    auto &client = pair.second;
+                    if (!client) continue;
+                    const auto stats = client->get_stats();
+                    total_peers += client->get_peer_count();
+                    total_downloaded += stats.downloaded_bytes_;
+                    total_uploaded += stats.uploaded_bytes_;
+                    total_speed += stats.download_speed_;
+                    total_upload_speed += stats.upload_speed_;
+                    total_pieces_downloaded += stats.pieces_downloaded_;
+                    total_pieces_total += stats.total_pieces_;
+                    if (client->is_running()) any_running = true;
+                    if (client->is_complete()) any_complete = true;
+                    sum_progress += stats.progress_;
+                    ++running_count;
+                }
+
+                bt["running"] = any_running;
+                bt["complete"] = any_complete;
+                bt["peer_count"] = total_peers;
+                bt["downloaded_bytes"] = total_downloaded;
+                bt["uploaded_bytes"] = total_uploaded;
+                bt["download_speed"] = total_speed;
+                bt["upload_speed"] = total_upload_speed;
+                bt["pieces_downloaded"] = total_pieces_downloaded;
+                bt["pieces_total"] = total_pieces_total;
+                bt["progress"] = running_count > 0 ? (sum_progress / running_count) : 0.0;
+                bt["active_count"] = running_count;
+                bt["max_concurrent"] = bt_service->max_concurrent_downloads();
+                bt["ratio"] = total_downloaded > 0 ? static_cast<double>(total_uploaded) / static_cast<double>(total_downloaded) : 0.0;
+
+                if (!clients.empty()) {
+                    auto &first_client = clients.begin()->second;
+                    bt["max_peers"] = first_client->get_max_peers();
+                    bt["listen_port"] = first_client->get_listen_port();
+                    bt["listen_port_end"] = bt_service->default_listen_port_end();
+                    bt["download_limit_kbps"] = first_client->get_download_limit_kbps();
+                    bt["upload_limit_kbps"] = first_client->get_upload_limit_kbps();
+                    bt["download_limit_active"] = first_client->get_download_limit_kbps() > 0;
+                    bt["upload_limit_active"] = first_client->get_upload_limit_kbps() > 0;
+                    const auto &nat_cfg = first_client->get_nat_config();
+                    bt["enable_dht"] = nat_cfg.enable_dht;
+                    bt["enable_pex"] = nat_cfg.enable_pex;
+                    bt["enable_upnp"] = nat_cfg.enable_upnp;
+                    bt["metadata_mode"] = first_client->is_metadata_mode();
+                } else {
+                    bt["max_peers"] = bt_service->default_max_peers();
+                    bt["listen_port"] = bt_service->default_listen_port();
+                    bt["listen_port_end"] = bt_service->default_listen_port_end();
+                    bt["download_limit_kbps"] = bt_service->default_download_limit_kbps();
+                    bt["upload_limit_kbps"] = bt_service->default_upload_limit_kbps();
+                    bt["download_limit_active"] = bt_service->default_download_limit_kbps() > 0;
+                    bt["upload_limit_active"] = bt_service->default_upload_limit_kbps() > 0;
+                    const auto &nat_cfg = bt_service->default_nat_config();
+                    bt["enable_dht"] = nat_cfg.enable_dht;
+                    bt["enable_pex"] = nat_cfg.enable_pex;
+                    bt["enable_upnp"] = nat_cfg.enable_upnp;
+                    bt["metadata_mode"] = false;
+                }
+
+                bt["dht_running"] = bt_service->shared_dht_running();
+                bt["dht_nodes"] = static_cast<int64_t>(bt_service->shared_dht_routing_table_size());
+                if (auto *nat = bt_service->nat_manager()) {
+                    bt["nat_igd_discovered"] = nat->is_igd_discovered();
+                    bt["nat_mapped"] = nat->is_mapped();
+                    bt["nat_external_ip"] = nat->get_external_ip();
+                    bt["nat_mapped_port"] = nat->get_mapped_port();
+                }
+
+                nlohmann::json tasks = nlohmann::json::array();
+                for (const auto &task : bt_service->list_tasks()) {
+                    auto client = bt_service->get_client_by_task_id(task.id);
+                    tasks.push_back(build_task_stats_json(task, client.get()));
+                }
+                bt["tasks"] = std::move(tasks);
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(dashboard_mutex_);
+            bt["peer_connected_total"] = dashboard_snapshot_.bt_peer_connected_total;
+            bt["piece_completed_total"] = dashboard_snapshot_.bt_piece_completed_total;
+            bt["piece_completed_bytes"] = dashboard_snapshot_.bt_piece_completed_bytes;
+            bt["torrent_completed_total"] = dashboard_snapshot_.bt_torrent_completed_total;
+            bt["last_info_hash"] = dashboard_snapshot_.bt_last_info_hash;
+            bt["last_torrent_name"] = dashboard_snapshot_.bt_last_torrent_name;
+            double avg_download = 0.0;
+            if (dashboard_snapshot_.bt_speed_samples > 0) {
+                avg_download = dashboard_snapshot_.bt_speed_download_sum / static_cast<double>(dashboard_snapshot_.bt_speed_samples);
+            }
+            bt["avg_download_speed"] = avg_download;
+            bt["avg_upload_speed"] = 0.0;
+        }
+
+        out["bt"] = std::move(bt);
+        out["bt_task_history"] = build_bt_task_history_json();
+        publish_bt_dashboard_snapshot(out);
     }
 
     void HttpService::install_admin_dashboard_routes()
@@ -415,6 +629,15 @@ namespace yuan::server
             bt["pieces_downloaded"] = 0;
             bt["pieces_total"] = 0;
             bt["progress"] = 0.0;
+            bt["download_speed"] = 0.0;
+            bt["upload_speed"] = 0.0;
+            bt["ratio"] = 0.0;
+            bt["dht_running"] = false;
+            bt["dht_nodes"] = 0;
+            bt["nat_igd_discovered"] = false;
+            bt["nat_mapped"] = false;
+            bt["nat_external_ip"] = "";
+            bt["nat_mapped_port"] = 0;
 
             if (runtime_context_.service_registry) {
                 auto bt_service = runtime_context_.service_registry->find_service_as<BitTorrentService>("bittorrent");
@@ -428,6 +651,7 @@ namespace yuan::server
                     int64_t total_downloaded = 0;
                     int64_t total_uploaded = 0;
                     double total_speed = 0.0;
+                    double total_upload_speed = 0.0;
                     bool any_running = false;
                     bool any_complete = false;
                     double sum_progress = 0.0;
@@ -443,6 +667,7 @@ namespace yuan::server
                         total_downloaded += stats.downloaded_bytes_;
                         total_uploaded += stats.uploaded_bytes_;
                         total_speed += stats.download_speed_;
+                        total_upload_speed += stats.upload_speed_;
                         total_pieces_downloaded += stats.pieces_downloaded_;
                         total_pieces_total += stats.total_pieces_;
                         if (client->is_running()) any_running = true;
@@ -463,6 +688,7 @@ namespace yuan::server
                     bt["downloaded_bytes"] = total_downloaded;
                     bt["uploaded_bytes"] = total_uploaded;
                     bt["download_speed"] = total_speed;
+                    bt["upload_speed"] = total_upload_speed;
                     bt["pieces_downloaded"] = total_pieces_downloaded;
                     bt["pieces_total"] = total_pieces_total;
                     bt["progress"] = running_count > 0 ? (sum_progress / running_count) : 0.0;
@@ -483,6 +709,7 @@ namespace yuan::server
                         bt["enable_pex"] = nat_cfg.enable_pex;
                         bt["enable_upnp"] = nat_cfg.enable_upnp;
                         bt["metadata_mode"] = first_client->is_metadata_mode();
+                        bt["ratio"] = total_downloaded > 0 ? static_cast<double>(total_uploaded) / static_cast<double>(total_downloaded) : 0.0;
                     } else {
                         bt["max_peers"] = bt_service->default_max_peers();
                         bt["listen_port"] = bt_service->default_listen_port();
@@ -496,6 +723,21 @@ namespace yuan::server
                         bt["enable_pex"] = nat_cfg.enable_pex;
                         bt["enable_upnp"] = nat_cfg.enable_upnp;
                         bt["metadata_mode"] = false;
+                        bt["ratio"] = 0.0;
+                    }
+
+                    bt["dht_running"] = bt_service->shared_dht_running();
+                    bt["dht_nodes"] = static_cast<int64_t>(bt_service->shared_dht_routing_table_size());
+                    if (auto *nat = bt_service->nat_manager()) {
+                        bt["nat_igd_discovered"] = nat->is_igd_discovered();
+                        bt["nat_mapped"] = nat->is_mapped();
+                        bt["nat_external_ip"] = nat->get_external_ip();
+                        bt["nat_mapped_port"] = nat->get_mapped_port();
+                    } else {
+                        bt["nat_igd_discovered"] = false;
+                        bt["nat_mapped"] = false;
+                        bt["nat_external_ip"] = "";
+                        bt["nat_mapped_port"] = 0;
                     }
 
                     nlohmann::json tasks = nlohmann::json::array();
@@ -529,6 +771,35 @@ namespace yuan::server
             out["bt_task_history"] = build_bt_task_history_json();
             resp->json(out.dump(), yuan::net::http::ResponseCode::ok_);
             resp->send();
+        });
+
+        server_->on("/admin/api/bt/events", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
+            if (!req || req->get_method() != yuan::net::http::HttpMethod::get_) {
+                resp->json("{\"error\":\"method_not_allowed\"}", yuan::net::http::ResponseCode::method_not_allowed);
+                resp->send();
+                return;
+            }
+
+            if (!authorize_admin(req, resp)) {
+                return;
+            }
+
+            auto conn = yuan::net::http::SseConnection::create(req, resp);
+            if (!conn || !conn->is_active()) {
+                resp->json("{\"error\":\"sse_connection_failed\"}", yuan::net::http::ResponseCode::internal_server_error);
+                resp->send();
+                return;
+            }
+
+            auto channel = bt_events_channel();
+            if (!channel->subscribe(conn)) {
+                conn->close();
+                return;
+            }
+            conn->send("{\"ok\":true}", "ready");
+            yuan::net::http::SseEvent retry_evt;
+            retry_evt.retry = 2000;
+            conn->send(retry_evt);
         });
 
         server_->on("/admin/api/bt/settings", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
@@ -838,7 +1109,7 @@ namespace yuan::server
             if (action == "start") {
                 int64_t start_id = 0;
                 for (const auto &t : bt_service->list_tasks()) {
-                    if (t.status == "stopped" || t.status == "queued" || t.status == "error") {
+                    if (t.status == "stopped" || t.status == "paused" || t.status == "queued" || t.status == "error") {
                         start_id = t.id;
                         break;
                     }
@@ -1319,6 +1590,122 @@ namespace yuan::server
             }
         });
 
+        server_->on("/admin/api/bt/tasks/pause", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
+            if (!req || req->get_method() != yuan::net::http::HttpMethod::post_) {
+                resp->json("{\"error\":\"method_not_allowed\"}", yuan::net::http::ResponseCode::method_not_allowed);
+                resp->send();
+                return;
+            }
+            if (!authorize_admin(req, resp)) {
+                return;
+            }
+            if (!runtime_context_.service_registry) {
+                resp->json("{\"error\":\"service_registry_unavailable\"}", yuan::net::http::ResponseCode::service_unavailable);
+                resp->send();
+                return;
+            }
+
+            auto bt_service = runtime_context_.service_registry->find_service_as<BitTorrentService>("bittorrent");
+            if (!bt_service) {
+                bt_service = runtime_context_.service_registry->find_service_as<BitTorrentService>("bt");
+            }
+            if (!bt_service) {
+                resp->json("{\"error\":\"bittorrent_service_not_found\"}", yuan::net::http::ResponseCode::not_found);
+                resp->send();
+                return;
+            }
+
+            nlohmann::json input;
+            try {
+                input = nlohmann::json::parse(request_body(req));
+            } catch (...) {
+                resp->json("{\"error\":\"invalid_json\"}", yuan::net::http::ResponseCode::bad_request);
+                resp->send();
+                return;
+            }
+
+            const auto task_id = input.value("task_id", static_cast<int64_t>(0));
+            if (task_id == 0) {
+                resp->json("{\"error\":\"task_id_required\"}", yuan::net::http::ResponseCode::bad_request);
+                resp->send();
+                return;
+            }
+
+            std::string err;
+            if (!bt_service->pause_task(task_id, &err)) {
+                nlohmann::json out;
+                out["error"] = err.empty() ? "pause_task_failed" : err;
+                resp->json(out.dump(), yuan::net::http::ResponseCode::bad_request);
+                resp->send();
+                return;
+            }
+
+            nlohmann::json out;
+            out["ok"] = true;
+            out["task_id"] = task_id;
+            out["message"] = "task paused";
+            resp->json(out.dump(), yuan::net::http::ResponseCode::ok_);
+            resp->send();
+        });
+
+        server_->on("/admin/api/bt/tasks/resume", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
+            if (!req || req->get_method() != yuan::net::http::HttpMethod::post_) {
+                resp->json("{\"error\":\"method_not_allowed\"}", yuan::net::http::ResponseCode::method_not_allowed);
+                resp->send();
+                return;
+            }
+            if (!authorize_admin(req, resp)) {
+                return;
+            }
+            if (!runtime_context_.service_registry) {
+                resp->json("{\"error\":\"service_registry_unavailable\"}", yuan::net::http::ResponseCode::service_unavailable);
+                resp->send();
+                return;
+            }
+
+            auto bt_service = runtime_context_.service_registry->find_service_as<BitTorrentService>("bittorrent");
+            if (!bt_service) {
+                bt_service = runtime_context_.service_registry->find_service_as<BitTorrentService>("bt");
+            }
+            if (!bt_service) {
+                resp->json("{\"error\":\"bittorrent_service_not_found\"}", yuan::net::http::ResponseCode::not_found);
+                resp->send();
+                return;
+            }
+
+            nlohmann::json input;
+            try {
+                input = nlohmann::json::parse(request_body(req));
+            } catch (...) {
+                resp->json("{\"error\":\"invalid_json\"}", yuan::net::http::ResponseCode::bad_request);
+                resp->send();
+                return;
+            }
+
+            const auto task_id = input.value("task_id", static_cast<int64_t>(0));
+            if (task_id == 0) {
+                resp->json("{\"error\":\"task_id_required\"}", yuan::net::http::ResponseCode::bad_request);
+                resp->send();
+                return;
+            }
+
+            std::string err;
+            if (!bt_service->resume_task(task_id, &err)) {
+                nlohmann::json out;
+                out["error"] = err.empty() ? "resume_task_failed" : err;
+                resp->json(out.dump(), yuan::net::http::ResponseCode::bad_request);
+                resp->send();
+                return;
+            }
+
+            nlohmann::json out;
+            out["ok"] = true;
+            out["task_id"] = task_id;
+            out["message"] = "task resumed";
+            resp->json(out.dump(), yuan::net::http::ResponseCode::ok_);
+            resp->send();
+        });
+
         server_->on("/admin/api/bt/tasks/remove", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
             if (!req || req->get_method() != yuan::net::http::HttpMethod::post_) {
                 resp->json("{\"error\":\"method_not_allowed\"}", yuan::net::http::ResponseCode::method_not_allowed);
@@ -1482,11 +1869,32 @@ namespace yuan::server
 
             nlohmann::json trackers = nlohmann::json::array();
             if (is_active && client->has_loaded_torrent()) {
+                std::unordered_map<std::string, yuan::net::bit_torrent::TrackerAnnounceStatus> tracker_statuses;
+                for (const auto &status : client->get_tracker_statuses()) {
+                    tracker_statuses[status.url_] = status;
+                }
+                auto attach_status = [&tracker_statuses](nlohmann::json &t, const std::string &url) {
+                    auto it = tracker_statuses.find(url);
+                    if (it == tracker_statuses.end()) {
+                        t["last_success"] = false;
+                        t["last_announce_ms"] = 0;
+                        t["interval"] = 0;
+                        t["peers"] = 0;
+                        t["error"] = "";
+                        return;
+                    }
+                    t["last_success"] = it->second.success_;
+                    t["last_announce_ms"] = it->second.last_announce_ms_;
+                    t["interval"] = it->second.interval_;
+                    t["peers"] = it->second.peer_count_;
+                    t["error"] = it->second.error_message_;
+                };
                 const auto &meta = client->get_meta();
                 if (!meta.announce_.empty()) {
                     nlohmann::json t;
                     t["url"] = meta.announce_;
                     t["tier"] = -1;
+                    attach_status(t, meta.announce_);
                     trackers.push_back(std::move(t));
                 }
                 for (size_t tier = 0; tier < meta.announce_list_.size(); ++tier) {
@@ -1494,6 +1902,7 @@ namespace yuan::server
                         nlohmann::json t;
                         t["url"] = url;
                         t["tier"] = static_cast<int32_t>(tier);
+                        attach_status(t, url);
                         trackers.push_back(std::move(t));
                     }
                 }
@@ -1503,6 +1912,7 @@ namespace yuan::server
                     t["url"] = url;
                     t["tier"] = -2;
                     t["source"] = "magnet";
+                    attach_status(t, url);
                     trackers.push_back(std::move(t));
                 }
             }

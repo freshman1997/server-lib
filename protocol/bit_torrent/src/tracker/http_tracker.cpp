@@ -22,6 +22,11 @@ namespace yuan::net::bit_torrent
                 return false;
             }
 
+            const auto scheme = url.substr(0, scheme_pos);
+            if (scheme != "http" && scheme != "https") {
+                return false;
+            }
+
             const auto authority_begin = scheme_pos + 3;
             const auto path_pos = url.find('/', authority_begin);
             if (path_pos == std::string::npos) {
@@ -75,10 +80,11 @@ namespace yuan::net::bit_torrent
     std::string HttpTracker::build_announce_url(const std::string & tracker_url,
                                                 const TorrentMeta & meta,
                                                 int32_t port,
-                                                int64_t uploaded,
-                                                int64_t downloaded,
-                                                int64_t left,
-                                                TrackerAnnounceEvent event)
+                                               int64_t uploaded,
+                                               int64_t downloaded,
+                                               int64_t left,
+                                               TrackerAnnounceEvent event,
+                                               const std::string &peer_id)
     {
         // info_hash: each byte URL-encoded (%XX)
         std::string info_hash_encoded;
@@ -89,7 +95,7 @@ namespace yuan::net::bit_torrent
             info_hash_encoded += buf;
         }
 
-        std::string peer_id_encoded = url_encode(peer_id_);
+        std::string peer_id_encoded = url_encode(peer_id.empty() ? peer_id_ : peer_id);
 
         // left = -1 means unknown
         std::string left_str = (left < 0) ? "0" : std::to_string(left);
@@ -209,9 +215,10 @@ namespace yuan::net::bit_torrent
                                int64_t downloaded,
                                int64_t left,
                                TrackerAnnounceEvent event,
-                               TrackerResponse * out)
+                               TrackerResponse * out,
+                               const std::string &peer_id)
     {
-        const std::string url = build_announce_url(tracker_url, meta, port, uploaded, downloaded, left, event);
+        const std::string url = build_announce_url(tracker_url, meta, port, uploaded, downloaded, left, event, peer_id);
 
         std::string authority;
         std::string request_target;

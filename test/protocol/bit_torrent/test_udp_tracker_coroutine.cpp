@@ -109,7 +109,7 @@ void append_u16_be(std::vector<char> &buffer, uint16_t value)
     buffer.insert(buffer.end(), ptr, ptr + sizeof(network));
 }
 
-void run_mock_udp_tracker(uint16_t port, std::atomic_bool &served_announce)
+void run_mock_udp_tracker(uint16_t port, std::atomic_bool &served_announce, std::string *announced_peer_id = nullptr)
 {
 #ifdef _WIN32
     SOCKET sock = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -176,6 +176,9 @@ void run_mock_udp_tracker(uint16_t port, std::atomic_bool &served_announce)
         reinterpret_cast<sockaddr *>(&client_addr),
         &client_len);
     require(announce_bytes >= 98, "mock udp tracker should receive announce request");
+    if (announced_peer_id) {
+        announced_peer_id->assign(request.data() + 36, 20);
+    }
 
     const uint32_t announce_tid = ntohl(*reinterpret_cast<const uint32_t *>(request.data() + 12));
     std::vector<char> announce_response;
@@ -250,6 +253,39 @@ void test_udp_tracker_runtime_announce_async()
     require(served_announce.load(), "mock udp tracker should serve announce response");
 }
 
+void test_udp_tracker_uses_supplied_peer_id()
+{
+    using namespace yuan::net::bit_torrent;
+
+    const uint16_t port = reserve_udp_port();
+    require(port != 0, "udp tracker peer_id regression should reserve a local port");
+
+    std::atomic_bool served_announce {false};
+    std::string announced_peer_id;
+    std::thread tracker_thread([&]() {
+        run_mock_udp_tracker(port, served_announce, &announced_peer_id);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    TorrentMeta meta;
+    meta.info_hash_.assign(20, 0x42);
+
+    const std::string peer_id = "-YZ0001-UDPPEERID123";
+    UdpTracker tracker;
+    UdpTrackerResponse response;
+    const bool ok = tracker.announce("127.0.0.1", port, meta, 6881,
+                                     0, 0, -1, TrackerAnnounceEvent::started,
+                                     &response, peer_id);
+
+    if (tracker_thread.joinable()) {
+        tracker_thread.join();
+    }
+
+    require(ok && !response.is_error, "udp tracker announce with supplied peer_id should succeed");
+    require(announced_peer_id == peer_id, "udp tracker should send supplied client peer_id");
+}
+
 } // namespace
 
 int main()
@@ -257,6 +293,7 @@ int main()
     
 
     test_udp_tracker_runtime_announce_async();
+    test_udp_tracker_uses_supplied_peer_id();
 
     std::cout << "udp tracker coroutine test passed\n";
     return 0;

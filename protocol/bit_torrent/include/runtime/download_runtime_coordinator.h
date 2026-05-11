@@ -15,6 +15,7 @@ namespace yuan::net::bit_torrent
 {
 
     class NatManager;
+    struct TrackerAnnounceStatus;
 
     struct DownloadRuntimeConfig
     {
@@ -52,6 +53,7 @@ namespace yuan::net::bit_torrent
         std::vector<std::shared_ptr<PeerConnection> > get_active_peers() const;
         int32_t get_peer_count() const;
         int32_t get_active_peer_count() const;
+        std::vector<TrackerAnnounceStatus> tracker_statuses() const;
 
     private:
         void ensure_sessions();

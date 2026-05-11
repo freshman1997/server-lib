@@ -53,6 +53,8 @@ namespace yuan::server
         int64_t add_magnet_task(const std::string &magnet_uri, const std::string &save_path, bool auto_start, std::string *error = nullptr);
         bool start_task(int64_t task_id, std::string *error = nullptr);
         bool stop_task(int64_t task_id);
+        bool pause_task(int64_t task_id, std::string *error = nullptr);
+        bool resume_task(int64_t task_id, std::string *error = nullptr);
         bool remove_task(int64_t task_id);
         std::vector<ManagedTask> list_tasks() const;
         int32_t active_task_count() const;
@@ -73,6 +75,8 @@ namespace yuan::server
         const yuan::net::bit_torrent::NatConfig &default_nat_config() const { return default_nat_config_; }
         std::unordered_map<int64_t, std::shared_ptr<yuan::net::bit_torrent::BitTorrentClient>> active_clients() const;
         yuan::net::bit_torrent::UpnpManager *nat_manager() { return nat_manager_.get(); }
+        bool shared_dht_running() const;
+        size_t shared_dht_routing_table_size() const;
 
     private:
         ManagedTask *find_task_nolock(int64_t task_id);

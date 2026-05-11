@@ -1,6 +1,8 @@
 #include "hostkey/ssh_host_key_provider.h"
 #include "ssh_server.h"
 #include "ssh_handler.h"
+#include "net/acceptor/acceptor_factory.h"
+#include "net/socket/socket.h"
 
 #include "nlohmann/json.hpp"
 
@@ -11,9 +13,11 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <system_error>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 namespace
 {
@@ -73,6 +77,7 @@ namespace
         bool enable_password_auth = true;
         bool enable_sftp = true;
         bool enable_port_forwarding = true;
+        int auth_failure_delay_ms = 0;
     };
 
     void print_usage(const char *program)
@@ -94,13 +99,15 @@ namespace
             << "      --publickey-auth <bool> Enable publickey auth\n"
             << "      --sftp <bool>           Enable SFTP subsystem\n"
             << "      --port-forward <bool>   Enable port forwarding\n"
+            << "      --auth-failure-delay-ms <ms> Delay before auth failure reply\n"
             << "      --version               Print version\n"
             << "  -h, --help                  Show this help\n\n"
             << "env overrides:\n"
             << "  YUAN_SSH_CONFIG, YUAN_SSH_PORT, YUAN_SSH_HOST_KEY, YUAN_SSH_USER,\n"
             << "  YUAN_SSH_PASSWORD, YUAN_SSH_BANNER, YUAN_SSH_SFTP_ROOT,\n"
             << "  YUAN_SSH_ENABLE_PUBLICKEY_AUTH, YUAN_SSH_ENABLE_PASSWORD_AUTH,\n"
-            << "  YUAN_SSH_ENABLE_SFTP, YUAN_SSH_ENABLE_PORT_FORWARD\n";
+            << "  YUAN_SSH_ENABLE_SFTP, YUAN_SSH_ENABLE_PORT_FORWARD,\n"
+            << "  YUAN_SSH_AUTH_FAILURE_DELAY_MS\n";
     }
 
     bool parse_bool_value(const std::string &raw, bool &out)
@@ -183,6 +190,9 @@ namespace
         if (json.contains("enable_port_forwarding") && json["enable_port_forwarding"].is_boolean()) {
             config.enable_port_forwarding = json["enable_port_forwarding"].get<bool>();
         }
+        if (json.contains("auth_failure_delay_ms") && json["auth_failure_delay_ms"].is_number_integer()) {
+            config.auth_failure_delay_ms = json["auth_failure_delay_ms"].get<int>();
+        }
 
         return true;
     }
@@ -216,6 +226,7 @@ namespace
         bool has_publickey_auth = false;
         bool has_sftp = false;
         bool has_port_forward = false;
+        bool has_auth_failure_delay = false;
         bool help = false;
         bool version = false;
     };
@@ -277,6 +288,14 @@ namespace
                 if (!args.has_sftp_root) {
                     return false;
                 }
+            } else if (opt == "--auth-failure-delay-ms") {
+                const auto value = need_value(opt);
+                if (value.empty() || !parse_int_value(value, args.overrides.auth_failure_delay_ms) ||
+                    args.overrides.auth_failure_delay_ms < 0) {
+                    std::cerr << "invalid auth failure delay: " << value << '\n';
+                    return false;
+                }
+                args.has_auth_failure_delay = true;
             } else if (opt == "--password-auth" || opt == "--publickey-auth" ||
                        opt == "--sftp" || opt == "--port-forward") {
                 const auto value = need_value(opt);
@@ -347,6 +366,9 @@ namespace
         if (args.has_port_forward) {
             config.enable_port_forwarding = args.overrides.enable_port_forwarding;
         }
+        if (args.has_auth_failure_delay) {
+            config.auth_failure_delay_ms = args.overrides.auth_failure_delay_ms;
+        }
     }
 
     std::filesystem::path resolve_path_with_base(const std::string &raw_path,
@@ -371,8 +393,14 @@ namespace
     class StaticCredentialSshHandler final : public yuan::net::ssh::SshHandler
     {
     public:
-        StaticCredentialSshHandler(std::string username, std::string password, bool enable_password_auth)
-            : username_(std::move(username)), password_(std::move(password)), enable_password_auth_(enable_password_auth)
+        StaticCredentialSshHandler(std::string username,
+                                   std::string password,
+                                   bool enable_password_auth,
+                                   bool enable_port_forwarding)
+            : username_(std::move(username)),
+              password_(std::move(password)),
+              enable_password_auth_(enable_password_auth),
+              enable_port_forwarding_(enable_port_forwarding)
         {
         }
 
@@ -421,10 +449,99 @@ namespace
             return true;
         }
 
+        uint16_t on_tcpip_forward(yuan::net::ssh::SshSession *session,
+                                  const std::string &bind_addr,
+                                  uint16_t bind_port) override
+        {
+            if (!enable_port_forwarding_ || !session || !session->server()) {
+                return 0;
+            }
+
+            auto *runtime = session->server()->runtime();
+            if (!runtime || !runtime->event_loop()) {
+                return 0;
+            }
+
+            auto socket = std::make_unique<yuan::net::Socket>(bind_addr, bind_port);
+            if (!socket->valid()) {
+                return 0;
+            }
+#ifdef _WIN32
+            socket->set_reuse(true, true);
+#else
+            socket->set_reuse(true);
+#endif
+            socket->set_none_block(true);
+            if (!socket->bind()) {
+                return 0;
+            }
+
+            const uint16_t allocated_port = static_cast<uint16_t>(socket->get_local_address().get_port());
+            auto acceptor = std::shared_ptr<yuan::net::StreamAcceptor>(
+                yuan::net::create_stream_acceptor(socket.release()),
+                [](yuan::net::StreamAcceptor *ptr) {
+                    if (ptr) {
+                        ptr->close();
+                        delete ptr;
+                    }
+                });
+            if (!acceptor || !acceptor->listen()) {
+                return 0;
+            }
+
+            acceptor->set_event_handler(runtime->event_loop());
+            acceptor->update_channel();
+
+            std::lock_guard<std::mutex> lock(remote_listener_mutex_);
+            pending_remote_listeners_[forward_key(bind_addr, allocated_port)] = acceptor;
+            return allocated_port;
+        }
+
+        void on_cancel_tcpip_forward(yuan::net::ssh::SshSession *,
+                                     const std::string &bind_addr,
+                                     uint16_t bind_port) override
+        {
+            std::shared_ptr<yuan::net::StreamAcceptor> acceptor;
+            {
+                std::lock_guard<std::mutex> lock(remote_listener_mutex_);
+                auto it = pending_remote_listeners_.find(forward_key(bind_addr, bind_port));
+                if (it != pending_remote_listeners_.end()) {
+                    acceptor = std::move(it->second);
+                    pending_remote_listeners_.erase(it);
+                }
+            }
+            if (acceptor) {
+                acceptor->close();
+            }
+        }
+
+        std::shared_ptr<yuan::net::StreamAcceptor> on_forwarded_tcpip_listener(
+            yuan::net::ssh::SshSession *,
+            const std::string &bind_addr,
+            uint16_t bind_port) override
+        {
+            std::lock_guard<std::mutex> lock(remote_listener_mutex_);
+            auto it = pending_remote_listeners_.find(forward_key(bind_addr, bind_port));
+            if (it == pending_remote_listeners_.end()) {
+                return {};
+            }
+            auto acceptor = std::move(it->second);
+            pending_remote_listeners_.erase(it);
+            return acceptor;
+        }
+
     private:
+        static std::string forward_key(const std::string &bind_addr, uint16_t bind_port)
+        {
+            return bind_addr + ":" + std::to_string(bind_port);
+        }
+
         std::string username_;
         std::string password_;
         bool enable_password_auth_ = true;
+        bool enable_port_forwarding_ = true;
+        std::mutex remote_listener_mutex_;
+        std::unordered_map<std::string, std::shared_ptr<yuan::net::StreamAcceptor>> pending_remote_listeners_;
     };
 }
 
@@ -476,6 +593,7 @@ int main(int argc, char **argv)
     config.enable_password_auth = read_env_bool("YUAN_SSH_ENABLE_PASSWORD_AUTH", config.enable_password_auth);
     config.enable_sftp = read_env_bool("YUAN_SSH_ENABLE_SFTP", config.enable_sftp);
     config.enable_port_forwarding = read_env_bool("YUAN_SSH_ENABLE_PORT_FORWARD", config.enable_port_forwarding);
+    config.auth_failure_delay_ms = read_env_int("YUAN_SSH_AUTH_FAILURE_DELAY_MS", config.auth_failure_delay_ms);
 
     if (config.username.empty() && config.enable_password_auth) {
         std::cerr << "username cannot be empty\n";
@@ -526,6 +644,7 @@ int main(int argc, char **argv)
     ssh_config.max_channels_per_session = 64;
     ssh_config.max_auth_attempts = 6;
     ssh_config.auth_timeout_ms = 60000;
+    ssh_config.auth_failure_delay_ms = static_cast<uint32_t>(std::max(0, config.auth_failure_delay_ms));
     ssh_config.auth_methods.clear();
     if (config.enable_publickey_auth) {
         ssh_config.auth_methods.push_back("publickey");
@@ -538,7 +657,8 @@ int main(int argc, char **argv)
     auto ssh_handler = std::make_shared<StaticCredentialSshHandler>(
         config.username,
         config.password,
-        config.enable_password_auth);
+        config.enable_password_auth,
+        config.enable_port_forwarding);
 
     ssh_server->set_handler(ssh_handler.get());
     if (!ssh_server->init(config.port)) {

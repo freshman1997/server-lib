@@ -59,7 +59,7 @@ namespace yuan::net::bit_torrent
 
     bool PeerListener::try_bind_and_listen(int32_t port)
     {
-        auto *sock = new net::Socket("", port);
+        auto *sock = new net::Socket("0.0.0.0", port);
         if (!sock->valid()) {
             delete sock;
             return false;

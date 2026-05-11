@@ -19,6 +19,7 @@ struct DownloadStats
     int32_t pieces_downloaded_ = 0;
     int32_t total_pieces_ = 0;
     float download_speed_ = 0.0f;
+    float upload_speed_ = 0.0f;
     float progress_ = 0.0f;
 };
 
@@ -42,11 +43,15 @@ public:
 
 private:
     void update_progress();
+    void update_rates();
 
 private:
     DownloadStats stats_;
     std::vector<bool> completed_pieces_;
     StatsCallback callback_;
+    int64_t last_downloaded_bytes_ = 0;
+    int64_t last_uploaded_bytes_ = 0;
+    uint64_t last_rate_update_ms_ = 0;
 };
 
 } // namespace yuan::net::bit_torrent

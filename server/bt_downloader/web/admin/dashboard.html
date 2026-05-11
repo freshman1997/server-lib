@@ -8,8 +8,11 @@
 </head>
 <body>
   <header>
-    <h1>Yuan 管理后台</h1>
-    <p>服务监控 / BT 下载状态 / 在线控制</p>
+    <div>
+      <h1>Yuan 管理后台</h1>
+      <p>服务监控 / BT 下载状态 / 在线控制</p>
+    </div>
+    <div id="syncState" class="sync-state sync-pending">连接中...</div>
   </header>
 
   <main>
@@ -96,6 +99,7 @@
         <button id="taskRemoveBtn" class="warn" type="button">按 ID 删除</button>
         <button id="taskRefreshBtn" type="button">刷新任务列表</button>
       </div>
+      <div id="taskSummary" class="task-summary"></div>
       <div id="taskList" class="task-table-wrap">loading...</div>
     </section>
 
@@ -119,7 +123,10 @@
     <div class="modal-box">
       <div class="modal-header">
         <h3 id="detailTitle">任务详情</h3>
-        <button id="detailClose" type="button">&times;</button>
+        <div class="modal-actions">
+          <span id="detailSync" class="detail-sync">自动刷新</span>
+          <button id="detailClose" type="button">&times;</button>
+        </div>
       </div>
       <div id="detailBody" class="modal-body"></div>
     </div>

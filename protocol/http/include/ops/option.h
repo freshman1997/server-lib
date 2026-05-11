@@ -58,8 +58,6 @@ namespace yuan::net::http::config
 
     extern int proxy_buffer_max;
 
-    extern const std::string_view file_list_html_text;
-
     extern const std::string_view upload_html_text;
 
     void load_config();

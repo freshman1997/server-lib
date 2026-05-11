@@ -2180,9 +2180,7 @@ namespace yuan::net::http
             return false;
         }
 
-        if (file_relative_path == "filelist.html") {
-            resp->append_body(config::file_list_html_text);
-        } else if (file_relative_path == "upload") {
+        if (file_relative_path == "upload") {
             resp->append_body(config::upload_html_text);
         } else {
             return false;

@@ -94,6 +94,9 @@ namespace yuan::net::http
         void broadcast(const SseEvent &event);
         void broadcast(const std::string &data, const std::string &event = "");
 
+        // 向所有订阅者发送心跳注释
+        void heartbeat();
+
         // 获取当前活跃连接数
         size_t active_count() const;
 

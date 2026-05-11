@@ -451,7 +451,11 @@ namespace yuan::net::bit_torrent
             if (!bf.empty())
                 peer->send_bitfield(bf);
 
-            peer->send_choke();
+            if (piece_state_.is_complete()) {
+                peer->send_unchoke();
+            } else {
+                peer->send_choke();
+            }
 
             if (!piece_state_.is_complete()) {
                 peer->send_interested();
@@ -630,6 +634,11 @@ namespace yuan::net::bit_torrent
     std::vector<std::shared_ptr<PeerConnection>> BitTorrentClient::get_active_peers() const
     {
         return runtime_coordinator_ ? runtime_coordinator_->get_active_peers() : std::vector<std::shared_ptr<PeerConnection>>{};
+    }
+
+    std::vector<TrackerAnnounceStatus> BitTorrentClient::get_tracker_statuses() const
+    {
+        return runtime_coordinator_ ? runtime_coordinator_->tracker_statuses() : std::vector<TrackerAnnounceStatus>{};
     }
 
     bool BitTorrentClient::emit_torrent_completed_once()

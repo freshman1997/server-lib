@@ -318,8 +318,8 @@ namespace yuan::net::bit_torrent
 
         auto &requests = inflight_requests_[piece_index];
         const auto it = std::find_if(requests.begin(), requests.end(),
-                                     [offset, length](const PieceBlockRequest &request) {
-                                     return request.offset_ == offset && request.length_ == length;
+                                     [offset](const PieceBlockRequest &request) {
+                                      return request.offset_ == offset;
         });
         if (it == requests.end()) {
             return false;

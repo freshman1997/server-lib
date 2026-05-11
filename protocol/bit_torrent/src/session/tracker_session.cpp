@@ -3,9 +3,54 @@
 #include "utils.h"
 #include <cstdlib>
 #include <algorithm>
+#include <chrono>
 
 namespace yuan::net::bit_torrent
 {
+
+    namespace
+    {
+        uint64_t now_ms()
+        {
+            return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        }
+
+        bool parse_udp_tracker_url(const std::string &url, std::string &host, uint16_t &port)
+        {
+            static constexpr const char *prefix = "udp://";
+            if (url.rfind(prefix, 0) != 0) {
+                return false;
+            }
+
+            std::string authority = url.substr(6);
+            const auto slash = authority.find('/');
+            if (slash != std::string::npos) {
+                authority = authority.substr(0, slash);
+            }
+            const auto query = authority.find('?');
+            if (query != std::string::npos) {
+                authority = authority.substr(0, query);
+            }
+
+            if (authority.empty()) {
+                return false;
+            }
+
+            const auto colon = authority.rfind(':');
+            if (colon == std::string::npos || colon == 0 || colon + 1 >= authority.size()) {
+                return false;
+            }
+
+            host = authority.substr(0, colon);
+            const int parsed_port = std::atoi(authority.substr(colon + 1).c_str());
+            if (parsed_port <= 0 || parsed_port > 65535) {
+                return false;
+            }
+            port = static_cast<uint16_t>(parsed_port);
+            return true;
+        }
+    }
 
     TrackerSession::~TrackerSession()
     {
@@ -25,10 +70,19 @@ namespace yuan::net::bit_torrent
         running_.store(true);
         started_sent_ = false;
         completed_sent_ = false;
+        {
+            std::lock_guard<std::mutex> lock(status_mutex_);
+            announce_statuses_.clear();
+        }
     }
 
     void TrackerSession::stop()
     {
+        TrackerAnnounceContext stopped_ctx;
+        if (running_.load()) {
+            stopped_ctx = make_announce_context(TrackerAnnounceEvent::stopped);
+        }
+
         running_.store(false);
         announce_interval_ = 0;
         consecutive_failures_ = 0;
@@ -38,23 +92,21 @@ namespace yuan::net::bit_torrent
             announce_timer_.reset();
         }
 
-        if (announcing_.load()) {
-            auto ctx = make_announce_context(TrackerAnnounceEvent::stopped);
-            if (ctx.meta_ && runtime_) {
-                TorrentMeta meta_copy = *ctx.meta_;
-                auto listen_port = ctx.listen_port_;
-                auto uploaded = ctx.uploaded_;
-                auto downloaded = ctx.downloaded_;
-                auto left = ctx.left_;
-                auto event = ctx.event_;
+        if (stopped_ctx.meta_ && !stopped_ctx.meta_->announce_.empty()) {
+            TorrentMeta meta_copy = *stopped_ctx.meta_;
+            auto listen_port = stopped_ctx.listen_port_;
+            auto uploaded = stopped_ctx.uploaded_;
+            auto downloaded = stopped_ctx.downloaded_;
+            auto left = stopped_ctx.left_;
+            std::string peer_id = stopped_ctx.peer_id_ ? *stopped_ctx.peer_id_ : std::string();
 
-                std::thread t([meta_copy = std::move(meta_copy), listen_port, uploaded, downloaded, left, event]() mutable {
-                    HttpTracker tracker;
-                    TrackerResponse resp;
-                    tracker.announce(meta_copy.announce_, meta_copy, listen_port, uploaded, downloaded, left, event, &resp);
-                });
-                t.detach();
-            }
+            std::thread t([meta_copy = std::move(meta_copy), listen_port, uploaded, downloaded, left, peer_id = std::move(peer_id)]() mutable {
+                HttpTracker tracker;
+                TrackerResponse resp;
+                tracker.announce(meta_copy.announce_, meta_copy, listen_port, uploaded, downloaded, left,
+                                 TrackerAnnounceEvent::stopped, &resp, peer_id);
+            });
+            t.detach();
         }
 
         detach_workers();
@@ -124,6 +176,7 @@ namespace yuan::net::bit_torrent
         auto left = ctx.left_;
         auto event = ctx.event_;
         auto runtime = runtime_;
+        std::string peer_id = ctx.peer_id_ ? *ctx.peer_id_ : std::string();
 
         auto self = shared_from_this();
         std::thread t([
@@ -134,11 +187,13 @@ namespace yuan::net::bit_torrent
             downloaded,
             left,
             event,
-            runtime
+            runtime,
+            peer_id = std::move(peer_id)
         ]() mutable {
             bool any_success = false;
             int32_t new_interval = 0;
             std::vector<PeerAddress> all_peers;
+            std::vector<TrackerAnnounceStatus> statuses;
 
             for (size_t tier = 0; tier < meta_copy.announce_list_.size(); ++tier) {
                 bool tier_success = false;
@@ -149,7 +204,16 @@ namespace yuan::net::bit_torrent
                         HttpTracker local_tracker;
                         TrackerResponse resp;
                         bool ok = local_tracker.announce(
-                            url, meta_copy, listen_port, uploaded, downloaded, left, event, &resp);
+                            url, meta_copy, listen_port, uploaded, downloaded, left, event, &resp, peer_id);
+                        TrackerAnnounceStatus status;
+                        status.url_ = url;
+                        status.success_ = ok && !resp.is_error;
+                        status.is_error_ = !status.success_;
+                        status.interval_ = resp.interval_;
+                        status.peer_count_ = static_cast<int32_t>(resp.peers_.size());
+                        status.last_announce_ms_ = now_ms();
+                        status.error_message_ = resp.error_message_;
+                        statuses.push_back(status);
                         if (ok && !resp.is_error) {
                             tier_success = true;
                             all_peers = std::move(resp.peers_);
@@ -159,17 +223,23 @@ namespace yuan::net::bit_torrent
                         continue;
                     }
 
-                    if (url.size() >= 3 && url.substr(0, 3) == "udp") {
-                        std::string host_port = url.substr(6);
-                        auto colon = host_port.find(':');
-                        if (colon != std::string::npos) {
-                            std::string host = host_port.substr(0, colon);
-                            uint16_t port = static_cast<uint16_t>(std::atoi(host_port.substr(colon + 1).c_str()));
-
+                    if (url.rfind("udp://", 0) == 0) {
+                        std::string host;
+                        uint16_t port = 0;
+                        if (parse_udp_tracker_url(url, host, port)) {
                             UdpTracker udp_tracker;
                             UdpTrackerResponse resp;
                             udp_tracker.announce(host, port, meta_copy, listen_port,
-                                                  uploaded, downloaded, left, event, &resp);
+                                                  uploaded, downloaded, left, event, &resp, peer_id);
+                            TrackerAnnounceStatus status;
+                            status.url_ = url;
+                            status.success_ = !resp.is_error;
+                            status.is_error_ = resp.is_error;
+                            status.interval_ = resp.interval_;
+                            status.peer_count_ = static_cast<int32_t>(resp.peers_.size());
+                            status.last_announce_ms_ = now_ms();
+                            status.error_message_ = resp.error_message_;
+                            statuses.push_back(status);
                             if (!resp.is_error) {
                                 tier_success = true;
                                 all_peers = std::move(resp.peers_);
@@ -193,10 +263,15 @@ namespace yuan::net::bit_torrent
                 any_success,
                 new_interval,
                 shared_peers,
-                event
+                event,
+                statuses = std::move(statuses)
             ]() {
                 if (!self->running_.load())
                     return;
+                {
+                    std::lock_guard<std::mutex> lock(self->status_mutex_);
+                    self->announce_statuses_ = std::move(statuses);
+                }
                 self->on_announce_complete(any_success, new_interval, *shared_peers, event);
             });
         });
@@ -264,6 +339,12 @@ namespace yuan::net::bit_torrent
     {
         ++consecutive_failures_;
         announce_interval_ = compute_backoff_interval();
+    }
+
+    std::vector<TrackerAnnounceStatus> TrackerSession::announce_statuses() const
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        return announce_statuses_;
     }
 
     void TrackerSession::join_workers()

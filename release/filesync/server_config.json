@@ -1,11 +1,13 @@
 {
   "listen_host": "0.0.0.0",
   "listen_port": 9095,
-  "peer_host": "192.168.1.20",
+  "peer_host": "",
   "peer_port": 9096,
   "token": "change-me",
   "conflict_strategy": "keep_both",
+  "sync_deletes": false,
   "scan_interval_ms": 1000,
+  "chunk_size": 32768,
   "include_extensions": [],
   "include_patterns": [],
   "exclude_patterns": [

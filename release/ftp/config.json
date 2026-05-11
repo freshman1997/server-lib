@@ -1,0 +1,8 @@
+{
+  "port": 2121,
+  "root_dir": ".",
+  "passive_port_start": 20000,
+  "passive_port_end": 21000,
+  "username": "tester",
+  "password": "secret"
+}

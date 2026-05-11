@@ -64,7 +64,8 @@ namespace yuan::net::bit_torrent
                       int64_t downloaded = 0,
                       int64_t left = -1,
                       TrackerAnnounceEvent event = TrackerAnnounceEvent::started,
-                      UdpTrackerResponse *out = nullptr);
+                      UdpTrackerResponse *out = nullptr,
+                      const std::string &peer_id = "");
 
         bool announce(const std::string &tracker_host,
                       uint16_t tracker_port,
@@ -85,7 +86,8 @@ namespace yuan::net::bit_torrent
             int64_t uploaded = 0,
             int64_t downloaded = 0,
             int64_t left = -1,
-            TrackerAnnounceEvent event = TrackerAnnounceEvent::started);
+            TrackerAnnounceEvent event = TrackerAnnounceEvent::started,
+            const std::string &peer_id = "");
 
         void disconnect();
 
@@ -109,7 +111,8 @@ namespace yuan::net::bit_torrent
         yuan::buffer::ByteBuffer build_connect_request();
         yuan::buffer::ByteBuffer build_announce_request(
             int64_t uploaded, int64_t downloaded, int64_t left,
-            int32_t local_port, TrackerAnnounceEvent event);
+            int32_t local_port, TrackerAnnounceEvent event,
+            const std::string &peer_id);
         yuan::buffer::ByteBuffer build_scrape_request();
 
         bool parse_connect_response(yuan::buffer::ByteBuffer &buf);

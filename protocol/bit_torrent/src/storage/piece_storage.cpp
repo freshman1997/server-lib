@@ -10,6 +10,31 @@
 namespace yuan::net::bit_torrent
 {
 
+    namespace
+    {
+        bool safe_path_component(const std::string &component)
+        {
+            return !component.empty() &&
+                   component != "." &&
+                   component != ".." &&
+                   component.find('/') == std::string::npos &&
+                   component.find('\\') == std::string::npos;
+        }
+
+        std::filesystem::path safe_join_path(const std::filesystem::path &base,
+                                             const std::vector<std::string> &components)
+        {
+            std::filesystem::path path = base;
+            for (const auto &component : components) {
+                if (!safe_path_component(component)) {
+                    return {};
+                }
+                path /= component;
+            }
+            return path;
+        }
+    }
+
     PieceStorage::~PieceStorage()
     {
         close_all();
@@ -274,7 +299,11 @@ namespace yuan::net::bit_torrent
         bool ok = true;
 
         if (meta_->info.files_.empty()) {
-            const auto target_path = (fs::path(save_path_) / meta_->info.name_).string();
+            const auto safe_path = safe_join_path(fs::path(save_path_), {meta_->info.name_});
+            if (safe_path.empty()) {
+                return false;
+            }
+            const auto target_path = safe_path.string();
             ok = write_piece_slice_to_file(target_path, piece_start, piece_data.data(), piece_data.size());
         } else {
             for (const auto &file : meta_->info.files_) {
@@ -286,9 +315,14 @@ namespace yuan::net::bit_torrent
                     continue;
                 }
 
-                fs::path target_path = fs::path(save_path_) / meta_->info.name_;
-                for (const auto &part : file.path_) {
-                    target_path /= part;
+                std::vector<std::string> components;
+                components.reserve(file.path_.size() + 1);
+                components.push_back(meta_->info.name_);
+                components.insert(components.end(), file.path_.begin(), file.path_.end());
+                const auto target_path = safe_join_path(fs::path(save_path_), components);
+                if (target_path.empty()) {
+                    ok = false;
+                    break;
                 }
 
                 const auto piece_offset = static_cast<size_t>(overlap_start - piece_start);
@@ -329,7 +363,11 @@ namespace yuan::net::bit_torrent
         size_t written = 0;
 
         if (meta_->info.files_.empty()) {
-            const auto target_path = (fs::path(save_path_) / meta_->info.name_).string();
+            const auto safe_path = safe_join_path(fs::path(save_path_), {meta_->info.name_});
+            if (safe_path.empty()) {
+                return false;
+            }
+            const auto target_path = safe_path.string();
             return read_piece_slice_from_file(target_path, block_start, out.data(), out.size());
         }
 
@@ -342,9 +380,13 @@ namespace yuan::net::bit_torrent
                 continue;
             }
 
-            fs::path target_path = fs::path(save_path_) / meta_->info.name_;
-            for (const auto &part : file.path_) {
-                target_path /= part;
+            std::vector<std::string> components;
+            components.reserve(file.path_.size() + 1);
+            components.push_back(meta_->info.name_);
+            components.insert(components.end(), file.path_.begin(), file.path_.end());
+            const auto target_path = safe_join_path(fs::path(save_path_), components);
+            if (target_path.empty()) {
+                return false;
             }
 
             const auto file_offset = overlap_start - file_start;

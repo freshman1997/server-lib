@@ -47,8 +47,28 @@ set_target_properties(release_filesync_client PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${RELEASE_FILESYNC_OUTPUT_DIR}"
 )
 
+add_executable(release_filesync_tests filesync_tests.cpp)
+target_compile_features(release_filesync_tests PUBLIC cxx_std_20)
+target_include_directories(release_filesync_tests PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+set_target_properties(release_filesync_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${RELEASE_FILESYNC_OUTPUT_DIR}"
+)
+
 add_custom_command(
     TARGET release_filesync_client POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/client_config.json"
+            "${RELEASE_FILESYNC_OUTPUT_DIR}/client_config.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/server_config.json"
+            "${RELEASE_FILESYNC_OUTPUT_DIR}/server_config.json"
+    COMMENT "Copy release filesync default configs"
+)
+
+add_custom_command(
+    TARGET release_filesync_server POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/client_config.json"
             "${RELEASE_FILESYNC_OUTPUT_DIR}/client_config.json"

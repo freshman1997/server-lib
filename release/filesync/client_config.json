@@ -5,7 +5,9 @@
   "peer_port": 9095,
   "token": "change-me",
   "conflict_strategy": "keep_both",
+  "sync_deletes": false,
   "scan_interval_ms": 1000,
+  "chunk_size": 32768,
   "include_extensions": [],
   "include_patterns": [],
   "exclude_patterns": [

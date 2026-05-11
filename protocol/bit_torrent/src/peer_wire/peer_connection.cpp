@@ -407,12 +407,20 @@ namespace yuan::net::bit_torrent
             case PeerMessageId::have: {
                 uint32_t piece = msg.have_piece_index();
                 peer_state_.set_have_piece(piece, total_pieces_);
+                if (!peer_state_.peer_choking && on_unchoke_) {
+                    on_unchoke_(this);
+                }
                 break;
             }
             case PeerMessageId::bitfield:
                 peer_state_.set_bitfield(msg.payload_, total_pieces_);
+                if (!peer_state_.peer_choking && on_unchoke_) {
+                    on_unchoke_(this);
+                }
                 break;
             case PeerMessageId::piece:
+            {
+                const auto before = pending_requests_.size();
                 pending_requests_.erase(
                     std::remove_if(
                         pending_requests_.begin(),
@@ -422,7 +430,7 @@ namespace yuan::net::bit_torrent
                                request.offset_ == msg.piece_block_offset();
                         }),
                     pending_requests_.end());
-                if (pending_request_count_ > 0) {
+                if (pending_requests_.size() < before && pending_request_count_ > 0) {
                     --pending_request_count_;
                 }
                 record_piece_received(msg.piece_block_size());
@@ -435,6 +443,7 @@ namespace yuan::net::bit_torrent
                         msg.piece_block_size());
                 }
                 break;
+            }
             case PeerMessageId::request:
                 if (piece_request_handler_) {
                     std::vector<uint8_t> block;
@@ -481,6 +490,9 @@ namespace yuan::net::bit_torrent
                 break;
             case PeerMessageId::have_all:
                 peer_state_.set_have_all(total_pieces_);
+                if (!peer_state_.peer_choking && on_unchoke_) {
+                    on_unchoke_(this);
+                }
                 break;
             case PeerMessageId::have_none:
                 peer_state_.set_have_none(total_pieces_);
