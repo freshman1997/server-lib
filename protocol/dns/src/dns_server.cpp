@@ -51,6 +51,13 @@ namespace yuan::net::dns
         response.set_recursion_available(true);
         response.set_authoritative_answer(true);
 
+        if (query.get_opcode() != DnsOpcode::QUERY) {
+            response.set_response_code(DnsResponseCode::NOT_IMPLEMENTED);
+            return;
+        }
+
+        bool has_missing_name = false;
+
         for (const auto &question : query.get_questions()) {
             response.add_question(question);
 
@@ -58,34 +65,62 @@ namespace yuan::net::dns
                 query_handler_(query, response);
             }
 
-            if (response.get_answers().empty()) {
-                DnsResourceRecord record = find_record(question.name, question.type);
-                if (record.name.empty()) {
-                    response.set_response_code(DnsResponseCode::NAME_ERROR);
-                } else {
+            const auto records = find_records(question.name, question.type);
+            if (!records.empty()) {
+                for (const auto &record : records) {
                     response.add_answer(record);
                 }
+                continue;
+            }
+
+            if (!has_name(question.name)) {
+                has_missing_name = true;
             }
         }
 
-        if (response.get_answers().empty() && response.get_response_code() == DnsResponseCode::NO_ERROR) {
+        if (response.get_answers().empty() && has_missing_name &&
+            response.get_response_code() == DnsResponseCode::NO_ERROR) {
             response.set_response_code(DnsResponseCode::NAME_ERROR);
         }
     }
 
-    DnsResourceRecord DnsServer::find_record(const std::string & name, DnsType type)
+    std::vector<DnsResourceRecord> DnsServer::find_records(const std::string & name, DnsType type) const
     {
-        auto key = name;
-        std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+        const auto key = normalize_name(name);
 
+        std::vector<DnsResourceRecord> matches;
         auto it = dns_records_.find(key);
-        if (it != dns_records_.end()) {
-            if (it->second.type == type || type == DnsType::ANY) {
-                return it->second;
+        if (it == dns_records_.end()) {
+            return matches;
+        }
+
+        for (const auto &record : it->second) {
+            if (type == DnsType::ANY || record.type == type) {
+                matches.push_back(record);
             }
         }
 
-        return DnsResourceRecord();
+        return matches;
+    }
+
+    bool DnsServer::has_name(const std::string & name) const
+    {
+        return dns_records_.find(normalize_name(name)) != dns_records_.end();
+    }
+
+    std::string DnsServer::normalize_name(std::string name)
+    {
+        while (!name.empty() && name.back() == '.') {
+            name.pop_back();
+        }
+
+        for (auto &ch : name) {
+            if (ch >= 'A' && ch <= 'Z') {
+                ch = static_cast<char>(ch - 'A' + 'a');
+            }
+        }
+
+        return name;
     }
 
     bool DnsServer::serve(int port)
@@ -128,14 +163,46 @@ namespace yuan::net::dns
     void DnsServer::add_record(const std::string & name, const std::string & ip, DnsType type)
     {
         DnsResourceRecord record;
-        record.name = name;
+        record.name = normalize_name(name);
         record.type = type;
         record.class_ = DnsClass::IN;
         record.ttl = 3600;
         record.set_rdata_from_string(ip);
+        if (record.rdata.empty()) {
+            return;
+        }
 
-        auto key = name;
-        std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-        dns_records_[key] = record;
+        auto &records = dns_records_[record.name];
+        auto it = std::find_if(records.begin(), records.end(), [&record](const DnsResourceRecord &existing) {
+            return existing.type == record.type && existing.rdata == record.rdata;
+        });
+        if (it != records.end()) {
+            *it = record;
+            return;
+        }
+
+        records.push_back(record);
+    }
+
+    bool DnsServer::has_record(const std::string & name, DnsType type, const std::string & value) const
+    {
+        DnsResourceRecord record;
+        record.name = normalize_name(name);
+        record.type = type;
+        record.class_ = DnsClass::IN;
+        record.set_rdata_from_string(value);
+        if (record.rdata.empty()) {
+            return false;
+        }
+
+        const auto key = normalize_name(name);
+        auto it = dns_records_.find(key);
+        if (it == dns_records_.end()) {
+            return false;
+        }
+
+        return std::any_of(it->second.begin(), it->second.end(), [&record](const DnsResourceRecord &existing) {
+            return existing.type == record.type && existing.rdata == record.rdata;
+        });
     }
 }

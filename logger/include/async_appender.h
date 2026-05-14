@@ -41,17 +41,21 @@ public:
 
 private:
     void thread_func();
+    void consume_item(const LogItem& item);
 
 private:
     std::queue<LogItem> queue_;
     mutable std::mutex mutex_;
     std::condition_variable cond_not_empty_;
     std::condition_variable cond_not_full_;
+    std::condition_variable cond_flushed_;
     std::atomic<bool> running_{false};
     std::atomic<bool> stopping_{false};
     size_t max_queue_size_;
+    bool processing_ = false;
     std::unique_ptr<std::thread> worker_thread_;
     Sink sink_;
+    mutable std::mutex sink_mutex_;
 };
 
 } // namespace yuan::log

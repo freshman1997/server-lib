@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <nlohmann/json.hpp>
 #include <unordered_map>
@@ -387,6 +388,34 @@ namespace yuan::server::nas
         return !redis_error(client_->del({ lock_key(token) }));
     }
 
+    std::size_t NasRedisMetadataStore::prune_expired_webdav_locks()
+    {
+        if (!available()) {
+            return 0;
+        }
+
+        std::size_t removed = 0;
+        const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+
+        for (const auto &share_id : redis_string_array(client_->smembers(key("shares")))) {
+            for (const auto &token : redis_string_array(client_->smembers(lock_index_key(share_id)))) {
+                auto lock = load_lock_by_token(token);
+                if (!lock) {
+                    (void)client_->srem(lock_index_key(share_id), { token });
+                    continue;
+                }
+                if (lock->expires_at_unix_ms > 0 && lock->expires_at_unix_ms <= now_ms) {
+                    if (remove_webdav_lock(lock->token)) {
+                        ++removed;
+                    }
+                }
+            }
+        }
+
+        return removed;
+    }
+
     bool NasRedisMetadataStore::append_audit_event(const NasAuditEvent &event)
     {
         if (!available() || event.action.empty()) {
@@ -396,7 +425,10 @@ namespace yuan::server::nas
         if (redis_error(client_->rpush(audit_key, { audit_to_json(event) }))) {
             return false;
         }
-        (void)client_->ltrim(audit_key, -1000, -1);
+        const auto cap = config_.audit_max_events > 0
+            ? static_cast<std::int64_t>(config_.audit_max_events)
+            : static_cast<std::int64_t>(1000);
+        (void)client_->ltrim(audit_key, -cap, -1);
         return true;
     }
 

@@ -123,6 +123,19 @@ namespace yuan::net::mqtt
             return std::nullopt;
         uint8_t connect_flags = data[offset++];
 
+        if ((connect_flags & 0x01) != 0)
+            return std::nullopt;
+
+        const bool will_flag = (connect_flags & MQTT_CONNECT_FLAG_WILL_FLAG) != 0;
+        const uint8_t will_qos = static_cast<uint8_t>((connect_flags >> MQTT_CONNECT_FLAG_WILL_QOS_SHIFT) & 0x03);
+        const bool will_retain = (connect_flags & MQTT_CONNECT_FLAG_WILL_RETAIN) != 0;
+        if (!will_flag && (will_qos != 0 || will_retain))
+            return std::nullopt;
+        if (will_qos > 2)
+            return std::nullopt;
+        if ((connect_flags & MQTT_CONNECT_FLAG_PASSWORD) && !(connect_flags & MQTT_CONNECT_FLAG_USERNAME))
+            return std::nullopt;
+
         if (offset + 2 > len)
             return std::nullopt;
         uint16_t keep_alive = (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
@@ -184,6 +197,9 @@ namespace yuan::net::mqtt
         pkt.qos = static_cast<QoS>((flags >> MQTT_PUBLISH_FLAG_QOS_SHIFT) & 0x03);
         pkt.retain = flags & MQTT_PUBLISH_FLAG_RETAIN;
 
+        if (pkt.qos == static_cast<QoS>(0x03))
+            return std::nullopt;
+
         auto topic = read_utf8_string(data, len, offset);
         if (!topic)
             return std::nullopt;
@@ -193,6 +209,8 @@ namespace yuan::net::mqtt
             if (offset + 2 > len)
                 return std::nullopt;
             pkt.packet_id = (static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1];
+            if (pkt.packet_id.value_or(0) == 0)
+                return std::nullopt;
             offset += 2;
         }
 
@@ -536,6 +554,17 @@ namespace yuan::net::mqtt
         encode_properties(body, props);
 
         ByteBuffer result = build_fixed_header(PacketType::DISCONNECT, 0, body.write_offset());
+        result.append(body.readable_span());
+        return result;
+    }
+
+    ByteBuffer MqttCodec::encode_auth(uint8_t reason_code, const MqttProperties & props)
+    {
+        ByteBuffer body(16);
+        body.append_u8(reason_code);
+        encode_properties(body, props);
+
+        ByteBuffer result = build_fixed_header(PacketType::AUTH, 0, body.write_offset());
         result.append(body.readable_span());
         return result;
     }

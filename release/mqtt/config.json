@@ -1,0 +1,19 @@
+{
+  "port": 1883,
+  "allow_anonymous": true,
+  "default_publish_allow": true,
+  "default_subscribe_allow": true,
+  "retained_store_file": "mqtt_retained_store.json",
+  "session_store_file": "mqtt_sessions.json",
+  "policy_store_file": "mqtt_policy.json",
+  "idle_timeout_ms": 30000,
+  "max_packet_size": 262144,
+  "business_routes": {
+    "enable_publish_deny_route": true,
+    "enable_publish_order_route": true,
+    "enable_publish_device_route": true,
+    "enable_publish_event_route": true,
+    "enable_subscribe_private_deny_route": true,
+    "enable_subscribe_shared_audit_route": true
+  }
+}

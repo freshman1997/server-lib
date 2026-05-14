@@ -2,9 +2,15 @@
 
 #include "base/utils/base64.h"
 
+#include "openssl/evp.h"
+
+#include <charconv>
+#include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <iomanip>
 #include <sstream>
+#include <system_error>
 #include <vector>
 
 namespace yuan::server::nas
@@ -19,6 +25,81 @@ namespace yuan::server::nas
                 hash *= 1099511628211ull;
             }
             return hash;
+        }
+
+        std::string legacy_hash_password_for_config(std::string_view password, std::string_view salt)
+        {
+            const std::string material = std::string(salt) + ":" + std::string(password);
+            std::ostringstream oss;
+            oss << "fnv1a64$" << salt << "$" << std::hex << fnv1a64(material);
+            return oss.str();
+        }
+
+        int hex_value(char ch)
+        {
+            if (ch >= '0' && ch <= '9') {
+                return ch - '0';
+            }
+            if (ch >= 'a' && ch <= 'f') {
+                return 10 + (ch - 'a');
+            }
+            if (ch >= 'A' && ch <= 'F') {
+                return 10 + (ch - 'A');
+            }
+            return -1;
+        }
+
+        std::string to_hex(std::string_view bytes)
+        {
+            std::ostringstream oss;
+            oss << std::hex << std::setfill('0');
+            for (unsigned char ch : bytes) {
+                oss << std::setw(2) << static_cast<int>(ch);
+            }
+            return oss.str();
+        }
+
+        std::optional<std::string> from_hex(std::string_view text)
+        {
+            if ((text.size() % 2) != 0) {
+                return std::nullopt;
+            }
+            std::string out;
+            out.resize(text.size() / 2);
+            for (std::size_t i = 0; i < text.size(); i += 2) {
+                const int hi = hex_value(text[i]);
+                const int lo = hex_value(text[i + 1]);
+                if (hi < 0 || lo < 0) {
+                    return std::nullopt;
+                }
+                out[i / 2] = static_cast<char>((hi << 4) | lo);
+            }
+            return out;
+        }
+
+        std::optional<std::string> pbkdf2_sha256(std::string_view password,
+                                                  std::string_view salt,
+                                                  int iterations,
+                                                  int key_len)
+        {
+            if (iterations <= 0 || key_len <= 0) {
+                return std::nullopt;
+            }
+
+            std::string out;
+            out.resize(static_cast<std::size_t>(key_len));
+            const int ok = PKCS5_PBKDF2_HMAC(password.data(),
+                                             static_cast<int>(password.size()),
+                                             reinterpret_cast<const unsigned char *>(salt.data()),
+                                             static_cast<int>(salt.size()),
+                                             iterations,
+                                             EVP_sha256(),
+                                             key_len,
+                                             reinterpret_cast<unsigned char *>(out.data()));
+            if (ok != 1) {
+                return std::nullopt;
+            }
+            return out;
         }
 
         bool constant_time_equal(std::string_view lhs, std::string_view rhs)
@@ -211,9 +292,17 @@ namespace yuan::server::nas
 
     std::string NasAuthService::hash_password_for_config(std::string_view password, std::string_view salt)
     {
-        const std::string material = std::string(salt) + ":" + std::string(password);
+        constexpr int kPbkdf2Iterations = 210000;
+        constexpr int kPbkdf2KeyLength = 32;
+        const std::string effective_salt = salt.empty() ? "nas" : std::string(salt);
+
+        auto key = pbkdf2_sha256(password, effective_salt, kPbkdf2Iterations, kPbkdf2KeyLength);
+        if (!key) {
+            return {};
+        }
+
         std::ostringstream oss;
-        oss << "fnv1a64$" << salt << "$" << std::hex << fnv1a64(material);
+        oss << "pbkdf2-sha256$" << kPbkdf2Iterations << "$" << effective_salt << "$" << to_hex(*key);
         return oss.str();
     }
 
@@ -230,6 +319,38 @@ namespace yuan::server::nas
 
     bool NasAuthService::verify_password(std::string_view stored_hash, std::string_view password)
     {
+        constexpr std::string_view pbkdf2_prefix = "pbkdf2-sha256$";
+        if (stored_hash.rfind(pbkdf2_prefix, 0) == 0) {
+            const auto iter_sep = stored_hash.find('$', pbkdf2_prefix.size());
+            if (iter_sep == std::string_view::npos) {
+                return false;
+            }
+            const auto salt_sep = stored_hash.find('$', iter_sep + 1);
+            if (salt_sep == std::string_view::npos) {
+                return false;
+            }
+
+            int iterations = 0;
+            const auto iter_text = stored_hash.substr(pbkdf2_prefix.size(), iter_sep - pbkdf2_prefix.size());
+            const auto [ptr, ec] = std::from_chars(iter_text.data(), iter_text.data() + iter_text.size(), iterations);
+            if (ec != std::errc() || ptr != iter_text.data() + iter_text.size() || iterations <= 0) {
+                return false;
+            }
+
+            const auto salt = stored_hash.substr(iter_sep + 1, salt_sep - (iter_sep + 1));
+            const auto digest_hex = stored_hash.substr(salt_sep + 1);
+            auto expected = from_hex(digest_hex);
+            if (!expected) {
+                return false;
+            }
+
+            auto actual = pbkdf2_sha256(password, salt, iterations, static_cast<int>(expected->size()));
+            if (!actual) {
+                return false;
+            }
+            return constant_time_equal(*expected, *actual);
+        }
+
         constexpr std::string_view plain_prefix = "plain:";
         if (stored_hash.rfind(plain_prefix, 0) == 0) {
             return constant_time_equal(stored_hash.substr(plain_prefix.size()), password);
@@ -242,7 +363,7 @@ namespace yuan::server::nas
                 return false;
             }
             const auto salt = stored_hash.substr(hash_prefix.size(), second_sep - hash_prefix.size());
-            return constant_time_equal(stored_hash, hash_password_for_config(password, salt));
+            return constant_time_equal(stored_hash, legacy_hash_password_for_config(password, salt));
         }
 
         return false;

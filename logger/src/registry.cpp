@@ -18,7 +18,7 @@ LogRegistry::LogRegistry()
     file_logger_ = file;
     loggers_["file"] = file;
     file_enabled_.store(true, std::memory_order_relaxed);
-    file_threshold_.store(Level::trace, std::memory_order_relaxed);
+    file_threshold_.store(Level::warn, std::memory_order_relaxed);
 }
 
 LogRegistry::~LogRegistry()
@@ -118,7 +118,9 @@ void LogRegistry::flush_all()
         if (logger) logger->flush();
     }
 
-    if (file_logger_snapshot) {
+    const auto file_it = loggers_snapshot.find("file");
+    if (file_logger_snapshot &&
+        (file_it == loggers_snapshot.end() || file_it->second != file_logger_snapshot)) {
         file_logger_snapshot->flush();
     }
 }

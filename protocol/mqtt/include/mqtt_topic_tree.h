@@ -19,6 +19,8 @@ namespace yuan::net::mqtt
         uint8_t retain_as_published = 0;
         uint8_t retain_handling = 0;
         std::optional<uint32_t> subscription_identifier;
+        std::string shared_group;
+        std::string shared_filter;
     };
 
     class MqttTopicTree

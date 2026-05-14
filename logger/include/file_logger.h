@@ -37,10 +37,10 @@ protected:
     void log_impl(Level level, const std::string& msg, const char* file, int line, const char* func) override;
 
 private:
-    void check_and_rotate();
-    bool open_new_file();
+    void check_and_rotate(uint64_t incoming_size = 0);
+    bool ensure_file_open();
     bool need_time_rotate() const;
-    bool need_size_rotate() const;
+    bool need_size_rotate(uint64_t incoming_size = 0) const;
     void do_rotate();
     void clean_old_backups();
 

@@ -44,6 +44,7 @@ namespace yuan::net::mqtt
         static ByteBuffer encode_unsuback(uint16_t packet_id, const std::vector<uint8_t> &reason_codes, ProtocolLevel level, const MqttProperties &props);
         static ByteBuffer encode_pingresp();
         static ByteBuffer encode_disconnect(uint8_t reason_code, ProtocolLevel level, const MqttProperties &props);
+        static ByteBuffer encode_auth(uint8_t reason_code, const MqttProperties &props);
 
         static ByteBuffer build_fixed_header(PacketType type, uint8_t flags, size_t remaining_length);
 

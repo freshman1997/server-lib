@@ -156,14 +156,14 @@ namespace yuan::net
                 return idle_timeout;
             }
 
-            return data_->timer_manager_->get_poll_timeout_ms(
+            return data_->timer_manager_->poll_timeout(
                 idle_timeout,
                 kRegisteredChannelPollTimeoutMs);
         };
         while (!data_->quit_.load(std::memory_order_acquire) &&
                !data_->resume_coroutine_requested_.load(std::memory_order_acquire)) {
             if (data_->timer_manager_) {
-                data_->timer_manager_->tick();
+                data_->timer_manager_->run_due_timers();
             }
 
             bool processed_work = drain_callbacks();
@@ -221,7 +221,7 @@ namespace yuan::net
             processed_work = drain_coroutines() || processed_work;
 
             if (data_->timer_manager_) {
-                data_->timer_manager_->tick();
+                data_->timer_manager_->run_due_timers();
             }
         }
 

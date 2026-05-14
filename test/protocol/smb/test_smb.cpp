@@ -1380,6 +1380,58 @@ bool test_dispatcher_negotiate_conservative_capabilities()
     return true;
 }
 
+bool test_dispatcher_negotiate_signing_required_mode()
+{
+    SmbServerConfig config;
+    config.require_signing = true;
+    SmbShareManager share_mgr;
+    SmbLockManager lock_mgr;
+    SmbPipeManager pipe_mgr;
+    SmbDfsResolver dfs;
+    SmbChangeNotifier cn;
+
+    SmbDispatcher disp(config, share_mgr, lock_mgr, pipe_mgr, dfs, cn);
+
+    SmbSessionManager session_mgr;
+    SmbSession *session = session_mgr.create_session(nullptr);
+
+    Smb2Header hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
+    hdr.protocol_id = SMB2_PROTOCOL_ID;
+    hdr.command = static_cast<uint16_t>(Smb2Command::NEGOTIATE);
+    hdr.credit_request = 1;
+
+    ByteBuffer req_buf = Smb2Codec::encode_header(hdr);
+    Smb2Codec::write_le16(req_buf, 36);
+    Smb2Codec::write_le16(req_buf, 1);
+    Smb2Codec::write_le16(req_buf, 0);
+    Smb2Codec::write_le16(req_buf, 0);
+    Smb2Codec::write_le32(req_buf, 0);
+    for (int i = 0; i < 16; ++i) {
+        req_buf.append_u8(0);
+    }
+    Smb2Codec::write_le64(req_buf, 0);
+    Smb2Codec::write_le16(req_buf, static_cast<uint16_t>(DialectRevision::SMB_3_1_1));
+
+    auto span = req_buf.readable_span();
+    auto resp = disp.dispatch(*session, hdr,
+                              reinterpret_cast<const uint8_t *>(span.data()),
+                              span.size());
+    auto resp_span = resp.readable_span();
+    const auto *raw = reinterpret_cast<const uint8_t *>(resp_span.data());
+    auto resp_hdr = Smb2Codec::decode_header(raw, resp_span.size());
+    TEST_ASSERT(resp_hdr.has_value(), "Should decode signing-required negotiate response");
+    TEST_ASSERT(resp_hdr->status == 0, "Signing-required negotiate should succeed");
+
+    const uint16_t security_mode = Smb2Codec::read_le16(raw + SMB2_HEADER_SIZE + 2);
+    const auto required_flag = static_cast<uint16_t>(SecurityMode::NEGOTIATE_SIGNING_REQUIRED);
+    TEST_ASSERT((security_mode & required_flag) != 0,
+                "Negotiate response should advertise signing required when enabled");
+
+    session_mgr.remove_session(session->session_id());
+    return true;
+}
+
 bool test_negotiate_response_layout_for_smb311()
 {
     Smb2Header hdr;
@@ -2155,6 +2207,7 @@ int main()
     std::cout << "\n--- Dispatcher ---" << std::endl;
     RUN_TEST(test_dispatcher_negotiate);
     RUN_TEST(test_dispatcher_negotiate_conservative_capabilities);
+    RUN_TEST(test_dispatcher_negotiate_signing_required_mode);
     RUN_TEST(test_negotiate_response_layout_for_smb311);
     RUN_TEST(test_dispatcher_query_filesystem_info);
     RUN_TEST(test_dispatcher_ioctl_validate_negotiate_info);

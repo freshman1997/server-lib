@@ -9,8 +9,7 @@
 #include "net/poller/epoll_poller.h"
 #include "net/poller/kqueue_poller.h"
 #include "net/poller/select_poller.h"
-#include "timer/wheel_timer_manager.h"
-#include "timer/timer_util.hpp"
+#include "timer/timer_manager_factory.h"
 
 namespace yuan::net
 {
@@ -25,11 +24,16 @@ namespace yuan::net
     }
 
     NetworkRuntime::NetworkRuntime()
+        : NetworkRuntime(timer::TimerBackend::automatic)
+    {
+    }
+
+    NetworkRuntime::NetworkRuntime(timer::TimerBackend timer_backend)
         : owns_(true)
     {
         owned_poller_.reset(create_default_poller());
         owned_poller_->init();
-        owned_timer_manager_.reset(new timer::WheelTimerManager());
+        owned_timer_manager_ = timer::create_timer_manager(timer_backend);
         owned_loop_.reset(new EventLoop(ptr_of(owned_poller_), ptr_of(owned_timer_manager_)));
 
         poller_ = ptr_of(owned_poller_);
@@ -59,7 +63,7 @@ namespace yuan::net
 
     Poller *NetworkRuntime::create_default_poller()
     {
-#if defined(__unix__)
+#if defined(__linux__)
         return new EpollPoller;
 #elif defined(__APPLE__)
         return new KQueuePoller;
@@ -108,7 +112,7 @@ namespace yuan::net
         if (!timer_manager_ || !callback) {
             return {};
         }
-        return timer::TimerUtil::build_timeout_handle(timer_manager_, delay_ms, [cb = std::move(callback)]() {
+        return timer_manager_->after(delay_ms, [cb = std::move(callback)]() {
             cb();
         });
     }
@@ -118,10 +122,9 @@ namespace yuan::net
         if (!timer_manager_ || !callback) {
             return {};
         }
-        return timer::TimerUtil::build_period_handle(timer_manager_, delay_ms, interval_ms, [cb = std::move(callback)]() {
+        return timer_manager_->every(delay_ms, interval_ms, [cb = std::move(callback)]() {
             cb();
-                                                                                           },
-                                                    repeat);
+        }, repeat);
     }
 
     void NetworkRuntime::dispatch(std::function<void()> callback)

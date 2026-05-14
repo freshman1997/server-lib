@@ -76,6 +76,10 @@ namespace
             locks[lock.token] = lock;
             return true;
         }
+        bool try_create_webdav_lock(const yuan::server::nas::NasWebDavLockRecord &lock) override
+        {
+            return upsert_webdav_lock(lock);
+        }
         std::optional<yuan::server::nas::NasWebDavLockRecord> find_webdav_lock(std::string_view token) const override
         {
             auto it = locks.find(std::string(token));
@@ -97,6 +101,7 @@ namespace
             return out;
         }
         bool remove_webdav_lock(std::string_view token) override { return locks.erase(std::string(token)) != 0; }
+        std::size_t prune_expired_webdav_locks() override { return 0; }
         bool append_audit_event(const yuan::server::nas::NasAuditEvent &event) override
         {
             audit.push_back(event);
@@ -285,6 +290,7 @@ int main()
     share.default_permissions = nas::NasPermission::read | nas::NasPermission::write | nas::NasPermission::remove;
 
     yuan::net::http::HttpServerConfig http_cfg;
+    http_cfg.enable_ssl = false;
     http_cfg.enable_keep_alive = false;
     yuan::server::HttpService service(port, http_cfg);
     check(service.init(), "http service should init");
@@ -380,6 +386,7 @@ int main()
         "Host: 127.0.0.1\r\n"
         "Authorization: " + auth + "\r\n"
         "Depth: 0\r\n"
+        "Timeout: Second-2\r\n"
         "Content-Type: application/xml\r\n"
         "Content-Length: " + std::to_string(lock_body.size()) + "\r\n"
         "Connection: close\r\n\r\n" + lock_body;
@@ -404,6 +411,11 @@ int main()
         "Connection: close\r\n\r\nlocked";
     const auto locked_put_resp = http_roundtrip(port, locked_put);
     check(locked_put_resp.find("423") != std::string::npos, "PUT without lock token should be locked");
+
+    std::this_thread::sleep_for(std::chrono::seconds(4));
+    const auto post_expire_put_resp = http_roundtrip(port, locked_put);
+    check(post_expire_put_resp.find("201") != std::string::npos || post_expire_put_resp.find("204") != std::string::npos,
+          "expired LOCK should be pruned and allow PUT");
 
     const std::string unlock_req =
         "UNLOCK /dav/public/docs/moved.txt HTTP/1.1\r\n"

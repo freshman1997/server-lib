@@ -822,8 +822,36 @@ namespace yuan::net::http
     bool HttpServer::init_ssl_if_needed()
     {
 #ifdef HTTP_USE_SSL
+        if (!config_.enable_ssl) {
+            return true;
+        }
+
+        auto resolve_asset = [](const std::filesystem::path &relative) {
+            std::error_code ec;
+            std::filesystem::path probe = std::filesystem::current_path(ec);
+            if (ec || probe.empty()) {
+                probe = std::filesystem::path(".");
+            }
+
+            for (int depth = 0; depth < 6; ++depth) {
+                const auto candidate = probe / relative;
+                if (std::filesystem::exists(candidate)) {
+                    return candidate;
+                }
+                if (!probe.has_parent_path()) {
+                    break;
+                }
+                probe = probe.parent_path();
+            }
+
+            return relative;
+        };
+
+        const auto cert_path = resolve_asset(std::filesystem::path("ca") / "ca.crt");
+        const auto key_path = resolve_asset(std::filesystem::path("ca") / "ca.key");
+
         ssl_module_ = std::make_shared<OpenSSLModule>();
-        if (!ssl_module_->init("./ca/ca.crt", "./ca/ca.key", SSLHandler::SSLMode::acceptor_)) {
+        if (!ssl_module_->init(cert_path.string(), key_path.string(), SSLHandler::SSLMode::acceptor_)) {
             if (auto msg = ssl_module_->get_error_message()) {
                 LOG_ERROR("{}", msg->c_str());
             }

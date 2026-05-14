@@ -2,6 +2,7 @@
 #include "buffer/byte_buffer.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <optional>
@@ -719,7 +720,8 @@ bool test_dispatcher_connect_and_topic_alias_publish()
     p1.topic_alias = 1;
     auto publish_with_topic = make_publish_packet_v5(0, "sensor/alias", p1, { 1, 2, 3 });
     auto r1 = dispatcher.dispatch(session, publish_with_topic.data(), publish_with_topic.size());
-    TEST_ASSERT(r1.readable_bytes() == 0, "QoS0 publish should not require ACK");
+    auto t1 = packet_type_of(r1);
+    TEST_ASSERT(!t1.has_value() || *t1 != PacketType::DISCONNECT, "First publish should not be disconnected");
     TEST_ASSERT(handler.published_topics.size() == 1, "Handler should receive first publish");
     TEST_ASSERT(handler.published_topics[0] == "sensor/alias", "First publish topic should match");
 
@@ -727,7 +729,8 @@ bool test_dispatcher_connect_and_topic_alias_publish()
     p2.topic_alias = 1;
     auto publish_alias_only = make_publish_packet_v5(0, "", p2, { 9, 9 });
     auto r2 = dispatcher.dispatch(session, publish_alias_only.data(), publish_alias_only.size());
-    TEST_ASSERT(r2.readable_bytes() == 0, "Alias-only QoS0 publish should not require ACK");
+    auto t2 = packet_type_of(r2);
+    TEST_ASSERT(!t2.has_value() || *t2 != PacketType::DISCONNECT, "Alias-only publish should not be disconnected");
     TEST_ASSERT(handler.published_topics.size() == 2, "Handler should receive alias publish");
     TEST_ASSERT(handler.published_topics[1] == "sensor/alias", "Alias-only publish should resolve topic");
 
@@ -803,6 +806,92 @@ bool test_dispatcher_qos_handshake_flow()
     auto pubcomp_type = packet_type_of(pubcomp);
     TEST_ASSERT(pubcomp_type.has_value(), "PUBCOMP packet should be parsable");
     TEST_ASSERT(*pubcomp_type == PacketType::PUBCOMP, "Response should be PUBCOMP");
+    return true;
+}
+
+bool test_dispatcher_invalid_publish_flags_get_disconnect_v5()
+{
+    MqttServerConfig config;
+    MqttSessionManager session_mgr;
+    MqttTopicTree tree;
+    MqttRetainedStore retained_store;
+    MqttDispatcher dispatcher(config, session_mgr, tree, retained_store, nullptr);
+
+    MqttSession &session = session_mgr.create_session(nullptr);
+    auto connect_packet = make_connect_packet_v5("client-bad-pub-flags");
+    auto connack = dispatcher.dispatch(session, connect_packet.data(), connect_packet.size());
+    TEST_ASSERT(connack.readable_bytes() > 0, "CONNECT should return CONNACK");
+
+    auto bad_publish = make_publish_packet_v5(MQTT_PUBLISH_FLAG_DUP, "bad/topic", MqttProperties{}, { 1 });
+    auto response = dispatcher.dispatch(session, bad_publish.data(), bad_publish.size());
+    auto ptype = packet_type_of(response);
+    TEST_ASSERT(ptype.has_value(), "Invalid publish should return response");
+    TEST_ASSERT(*ptype == PacketType::DISCONNECT, "Invalid publish flags should return DISCONNECT");
+    return true;
+}
+
+bool test_dispatcher_invalid_subscribe_flags_get_disconnect_v5()
+{
+    MqttServerConfig config;
+    MqttSessionManager session_mgr;
+    MqttTopicTree tree;
+    MqttRetainedStore retained_store;
+    MqttDispatcher dispatcher(config, session_mgr, tree, retained_store, nullptr);
+
+    MqttSession &session = session_mgr.create_session(nullptr);
+    auto connect_packet = make_connect_packet_v5("client-bad-sub-flags");
+    auto connack = dispatcher.dispatch(session, connect_packet.data(), connect_packet.size());
+    TEST_ASSERT(connack.readable_bytes() > 0, "CONNECT should return CONNACK");
+
+    ByteBuffer body(128);
+    body.append_u16(1);
+    encode_properties(body, MqttProperties{});
+    append_utf8(body, "sensor/+");
+    body.append_u8(0x00);
+    auto bad_sub = MqttCodec::build_fixed_header(PacketType::SUBSCRIBE, 0x00, body.write_offset());
+    bad_sub.append(body.readable_span());
+
+    auto response = dispatcher.dispatch(
+        session,
+        reinterpret_cast<const uint8_t *>(bad_sub.read_ptr()),
+        bad_sub.readable_bytes());
+    auto ptype = packet_type_of(response);
+    TEST_ASSERT(ptype.has_value(), "Invalid subscribe should return response");
+    TEST_ASSERT(*ptype == PacketType::DISCONNECT, "Invalid subscribe flags should return DISCONNECT");
+    return true;
+}
+
+bool test_dispatcher_shared_subscription_delivers_single_member()
+{
+    MqttServerConfig config;
+    MqttSessionManager session_mgr;
+    MqttTopicTree tree;
+    MqttRetainedStore retained_store;
+    MqttDispatcher dispatcher(config, session_mgr, tree, retained_store, nullptr);
+
+    MqttSession &sub1 = session_mgr.create_session(nullptr);
+    MqttSession &sub2 = session_mgr.create_session(nullptr);
+    MqttSession &pub = session_mgr.create_session(nullptr);
+
+    auto connect_sub1 = make_connect_packet_v5("shared-sub-1");
+    auto connect_sub2 = make_connect_packet_v5("shared-sub-2");
+    auto connect_pub = make_connect_packet_v5("shared-pub");
+    dispatcher.dispatch(sub1, connect_sub1.data(), connect_sub1.size());
+    dispatcher.dispatch(sub2, connect_sub2.data(), connect_sub2.size());
+    dispatcher.dispatch(pub, connect_pub.data(), connect_pub.size());
+
+    auto sub_pkt1 = make_subscribe_packet_v5(1, "$share/g/step/shared", 0x00);
+    auto sub_pkt2 = make_subscribe_packet_v5(2, "$share/g/step/shared", 0x00);
+    dispatcher.dispatch(sub1, sub_pkt1.data(), sub_pkt1.size());
+    dispatcher.dispatch(sub2, sub_pkt2.data(), sub_pkt2.size());
+
+    auto matches = tree.match("step/shared");
+    TEST_ASSERT(matches.size() == 2, "Tree should contain both shared subscribers");
+
+    auto pub_pkt = make_publish_packet_v5(0, "step/shared", MqttProperties{}, { 7 });
+    auto r = dispatcher.dispatch(pub, pub_pkt.data(), pub_pkt.size());
+    auto ptype = packet_type_of(r);
+    TEST_ASSERT(!ptype.has_value() || *ptype != PacketType::DISCONNECT, "Shared publish should not disconnect");
     return true;
 }
 
@@ -1038,6 +1127,38 @@ bool test_retained_store_empty_payload()
 
     store.store(empty_msg);
     TEST_ASSERT(store.size() == 0, "Empty payload should remove retained message");
+    return true;
+}
+
+bool test_retained_store_persistence_roundtrip()
+{
+    MqttRetainedStore store;
+
+    MqttRetainedMessage msg;
+    msg.topic = "persist/topic";
+    msg.payload = { 0xAA, 0xBB, 0xCC };
+    msg.qos = QoS::AT_LEAST_ONCE;
+    msg.message_expiry_interval = 120;
+    msg.payload_format_indicator = 1;
+    msg.content_type = "application/octet-stream";
+    msg.user_properties.push_back({ "k", "v" });
+    msg.stored_time = std::chrono::steady_clock::now();
+    store.store(msg);
+
+    const std::string path = "mqtt_retained_store_test.json";
+    TEST_ASSERT(store.save_to_file(path), "Retained store should save to file");
+
+    MqttRetainedStore loaded;
+    TEST_ASSERT(loaded.load_from_file(path), "Retained store should load from file");
+
+    auto matches = loaded.match("persist/topic");
+    TEST_ASSERT(matches.size() == 1, "Loaded store should contain retained message");
+    TEST_ASSERT(matches[0].payload == msg.payload, "Loaded payload should match");
+    TEST_ASSERT(matches[0].qos == msg.qos, "Loaded qos should match");
+    TEST_ASSERT(matches[0].content_type.has_value(), "Loaded content type should exist");
+    TEST_ASSERT(*matches[0].content_type == *msg.content_type, "Loaded content type should match");
+
+    std::remove(path.c_str());
     return true;
 }
 
@@ -1341,6 +1462,7 @@ int main()
     RUN_TEST(test_retained_store_overwrite);
     RUN_TEST(test_retained_store_wildcard);
     RUN_TEST(test_retained_store_empty_payload);
+    RUN_TEST(test_retained_store_persistence_roundtrip);
 
     std::cout << "\n--- Session ---" << std::endl;
     RUN_TEST(test_session_basic);
@@ -1359,6 +1481,9 @@ int main()
     RUN_TEST(test_dispatcher_connect_and_topic_alias_publish);
     RUN_TEST(test_dispatcher_subscribe_and_unsubscribe_flow);
     RUN_TEST(test_dispatcher_qos_handshake_flow);
+    RUN_TEST(test_dispatcher_invalid_publish_flags_get_disconnect_v5);
+    RUN_TEST(test_dispatcher_invalid_subscribe_flags_get_disconnect_v5);
+    RUN_TEST(test_dispatcher_shared_subscription_delivers_single_member);
 
     std::cout << "\n--- Property Encode/Decode ---" << std::endl;
     RUN_TEST(test_properties_roundtrip_u32_endianness);

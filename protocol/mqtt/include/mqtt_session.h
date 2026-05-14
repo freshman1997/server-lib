@@ -111,6 +111,10 @@ namespace yuan::net::mqtt
         bool add_inflight_packet_id(uint16_t pid);
         bool has_inflight_packet_id(uint16_t pid) const;
         void remove_inflight_packet_id(uint16_t pid);
+        size_t inflight_count() const
+        {
+            return inflight_packet_ids_.size();
+        }
         void add_outgoing_packet_id(uint16_t pid);
         bool has_outgoing_packet_id(uint16_t pid) const;
         void remove_outgoing_packet_id(uint16_t pid);
@@ -221,6 +225,8 @@ namespace yuan::net::mqtt
         MqttSession *find_by_connection(TcpConnection *conn);
         std::vector<MqttSession *> all_sessions() const;
         void cleanup_expired();
+        bool save_to_file(const std::string &path) const;
+        bool load_from_file(const std::string &path);
 
     private:
         std::map<uint64_t, std::shared_ptr<MqttSession> > sessions_;

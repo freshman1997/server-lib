@@ -14,23 +14,26 @@
   },
   "nas": {
     "webdav_mount": "/dav",
+    "admin_console_path": "./server/services/resources/nas_admin_console.html",
     "allow_anonymous_read": false,
     "redis": {
       "enabled": false,
       "host": "127.0.0.1",
       "port": 6379,
       "db": 0,
-      "key_prefix": "yuan:nas:"
+      "key_prefix": "yuan:nas:",
+      "audit_max_events": 1000
     },
     "audit": {
       "file_enabled": true,
-      "file_path": "./logs/nas-audit.jsonl"
+      "file_path": "./logs/nas-audit.jsonl",
+      "max_events": 1000
     },
     "users": [
       {
         "id": "admin-1",
         "username": "admin",
-        "password_hash": "fnv1a64$nas$0",
+        "password_hash": "pbkdf2-sha256$210000$nas$696f91def74b1382921221cfb768a3b9dcc58c885f551c84d0816b6eb017ecb6",
         "enabled": true,
         "admin": true
       }

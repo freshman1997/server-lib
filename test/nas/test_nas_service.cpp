@@ -19,6 +19,7 @@ constexpr socket_t kInvalidSocket = -1;
 
 #include <chrono>
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -90,6 +91,10 @@ namespace
             locks[lock.token] = lock;
             return true;
         }
+        bool try_create_webdav_lock(const yuan::server::nas::NasWebDavLockRecord &lock) override
+        {
+            return upsert_webdav_lock(lock);
+        }
         std::optional<yuan::server::nas::NasWebDavLockRecord> find_webdav_lock(std::string_view token) const override
         {
             auto it = locks.find(std::string(token));
@@ -97,12 +102,16 @@ namespace
         }
         std::vector<yuan::server::nas::NasWebDavLockRecord> list_webdav_locks(std::string_view, std::string_view) const override { return {}; }
         bool remove_webdav_lock(std::string_view token) override { return locks.erase(std::string(token)) != 0; }
+        std::size_t prune_expired_webdav_locks() override { return 0; }
         bool append_audit_event(const yuan::server::nas::NasAuditEvent &event) override
         {
             if (fail_audit_append) {
                 return false;
             }
             audit.push_back(event);
+            while (audit.size() > audit_max_events) {
+                audit.erase(audit.begin());
+            }
             return true;
         }
         std::vector<yuan::server::nas::NasAuditEvent> list_audit_events(std::size_t limit) const override
@@ -140,6 +149,7 @@ namespace
         std::vector<yuan::server::nas::NasAuditEvent> audit;
         std::unordered_map<std::string, yuan::server::nas::NasAdminSession> sessions;
         bool fail_audit_append = false;
+        std::size_t audit_max_events = 1000;
     };
 
     void close_socket(socket_t s)
@@ -179,10 +189,28 @@ namespace
         return port;
     }
 
-    std::string roundtrip(uint16_t port, const std::string &request)
+    std::string to_lower_ascii(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        return value;
+    }
+
+    std::string roundtrip(uint16_t port, const std::string &request, int timeout_ms = 5000)
     {
         socket_t s = ::socket(AF_INET, SOCK_STREAM, 0);
         if (s == kInvalidSocket) return {};
+#ifdef _WIN32
+        const DWORD socket_timeout_ms = timeout_ms > 0 ? static_cast<DWORD>(timeout_ms) : 5000;
+        (void)::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO,
+                           reinterpret_cast<const char *>(&socket_timeout_ms), sizeof(socket_timeout_ms));
+#else
+        timeval tv{};
+        tv.tv_sec = timeout_ms > 0 ? timeout_ms / 1000 : 5;
+        tv.tv_usec = timeout_ms > 0 ? (timeout_ms % 1000) * 1000 : 0;
+        (void)::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
@@ -208,15 +236,16 @@ namespace
             out.append(buf, static_cast<std::size_t>(rc));
             const auto header_end = out.find("\r\n\r\n");
             if (header_end != std::string::npos) {
-                const auto len_pos = out.find("content-length:");
+                const auto lower_headers = to_lower_ascii(out.substr(0, header_end));
+                const auto len_pos = lower_headers.find("content-length:");
                 if (len_pos != std::string::npos && len_pos < header_end) {
-                    const auto len_end = out.find("\r\n", len_pos);
-                    const auto len_text = out.substr(len_pos + 15, len_end - (len_pos + 15));
+                    const auto len_end = lower_headers.find("\r\n", len_pos);
+                    const auto len_text = lower_headers.substr(len_pos + 15, len_end - (len_pos + 15));
                     const auto body_len = static_cast<std::size_t>(std::stoull(len_text));
                     if (out.size() >= header_end + 4 + body_len) {
                         break;
                     }
-                } else if (out.find("connection: keep-alive") == std::string::npos) {
+                } else if (lower_headers.find("connection: keep-alive") == std::string::npos) {
                     break;
                 }
             }
@@ -242,6 +271,7 @@ int main()
     const auto root_admin = std::filesystem::temp_directory_path() / "yuan_nas_service_smoke_admin";
     const auto root_smb = std::filesystem::temp_directory_path() / "yuan_nas_service_smoke_smb";
     const auto audit_path = root / "nas-audit.jsonl";
+    const auto admin_console_path = root / "admin-console.html";
     std::error_code ec;
     std::filesystem::remove_all(root, ec);
     std::filesystem::remove_all(root_reloaded, ec);
@@ -251,6 +281,11 @@ int main()
     std::filesystem::create_directories(root_reloaded, ec);
     std::filesystem::create_directories(root_admin, ec);
     std::filesystem::create_directories(root_smb, ec);
+    {
+        std::ofstream out(admin_console_path, std::ios::binary | std::ios::trunc);
+        out << "<!doctype html><html><head><title>Custom Admin</title></head>"
+            << "<body><h1>Custom NAS Admin UI</h1></body></html>";
+    }
 
     auto metadata = std::make_shared<MemoryMetadataStore>();
     nas::NasUser user;
@@ -270,11 +305,12 @@ int main()
         std::ofstream out(config_path, std::ios::binary | std::ios::trunc);
         out << "{"
             << "\"port\":" << port << ","
-            << "\"http\":{\"enable_keep_alive\":false},"
+            << "\"http\":{\"enable_ssl\":false,\"enable_keep_alive\":false},"
             << "\"nas\":{"
-            << "\"webdav_mount\":\"/dav\","
+            << "\"webdav_mount\":\"/dav\"," 
+            << "\"admin_console_path\":\"admin-console.html\"," 
             << "\"redis\":{\"enabled\":false},"
-            << "\"audit\":{\"file_enabled\":true,\"file_path\":\"" << audit_path.generic_string() << "\"},"
+            << "\"audit\":{\"file_enabled\":true,\"file_path\":\"" << audit_path.generic_string() << "\",\"max_events\":3},"
             << "\"users\":[{\"id\":\"u1\",\"username\":\"alice\",\"password_hash\":\""
             << user.password_hash << "\",\"admin\":true},"
             << "{\"id\":\"u2\",\"username\":\"bob\",\"password_hash\":\""
@@ -290,11 +326,14 @@ int main()
     check(loaded && loaded->bootstrap_users.size() == 2, "nas service config should parse bootstrap users");
     check(loaded && loaded->nas.audit.file_path == audit_path.generic_string(),
           "nas service config should parse audit file path");
+    check(loaded && loaded->nas.admin_console_path == admin_console_path.lexically_normal().string(),
+          "nas service config should parse and resolve admin console path");
 
     if (!loaded) {
         return 1;
     }
     loaded->metadata = metadata;
+    metadata->audit_max_events = loaded->nas.audit.max_events;
 
     yuan::server::NasService service(*loaded);
     check(service.init(), "nas service init should succeed");
@@ -309,6 +348,8 @@ int main()
     check(health_resp.find("\"metadata_available\":true") != std::string::npos, "nas health should report metadata");
     check(health_resp.find("\"share_count\":1") != std::string::npos, "nas health should report share count");
     check(health_resp.find("\"smb_enabled\":false") != std::string::npos, "nas health should report smb disabled by default");
+    check(health_resp.find("\"smb_require_signing\":false") != std::string::npos,
+          "nas health should report smb signing disabled by default");
 
     const std::string admin_auth = "Basic " + yuan::base::util::base64_encode("alice:secret");
     const std::string reader_auth = "Basic " + yuan::base::util::base64_encode("bob:reader");
@@ -350,22 +391,13 @@ int main()
         "Host: 127.0.0.1\r\n"
         "Connection: close\r\n\r\n");
     check(admin_console_resp.find("200") != std::string::npos, "admin console should return 200");
-    check(admin_console_resp.find("Yuan NAS Admin") != std::string::npos,
-          "admin console should include title");
-    check(admin_console_resp.find("Probe") != std::string::npos,
-          "admin console should include health action button");
-    check(admin_console_resp.find("Create User") != std::string::npos,
-          "admin console should include user form");
-    check(admin_console_resp.find("Create Share") != std::string::npos,
-          "admin console should include share form");
-    check(admin_console_resp.find("Quota") != std::string::npos,
-          "admin console should include quota view");
-    check(admin_console_resp.find("Activity") != std::string::npos,
-          "admin console should include activity view");
-    check(admin_console_resp.find("Sessions") != std::string::npos,
-          "admin console should include sessions view");
-    check(admin_console_resp.find("Audit") != std::string::npos,
-          "admin console should include audit view");
+    check(admin_console_resp.find("Content-Type: text/html; charset=utf-8") != std::string::npos ||
+              admin_console_resp.find("content-type: text/html; charset=utf-8") != std::string::npos,
+          "admin console should return html content type");
+    check(admin_console_resp.find("Custom Admin") != std::string::npos,
+          "admin console should include configured title");
+    check(admin_console_resp.find("Custom NAS Admin UI") != std::string::npos,
+          "admin console should serve configured admin_console_path content");
 
     const std::string auth = admin_auth;
     const std::string new_user_body =
@@ -497,6 +529,10 @@ int main()
         "Connection: close\r\n\r\n");
     check(fallback_audit_resp.find("\"target\":\"dana\"") != std::string::npos,
           "admin audit should include file fallback events");
+    check(metadata->audit.size() == 3,
+          "metadata audit retention should keep only max_events entries");
+    check(fallback_audit_resp.find("\"count\":3") != std::string::npos,
+          "admin audit endpoint should apply max_events retention");
     metadata->fail_audit_append = false;
 
     const std::string body = "service";
@@ -515,7 +551,7 @@ int main()
         std::ofstream out(reload_config_path, std::ios::binary | std::ios::trunc);
         out << "{"
             << "\"port\":" << port << ","
-            << "\"http\":{\"enable_keep_alive\":false},"
+            << "\"http\":{\"enable_ssl\":false,\"enable_keep_alive\":false},"
             << "\"nas\":{"
             << "\"webdav_mount\":\"/dav\","
             << "\"redis\":{\"enabled\":false},"
@@ -556,7 +592,7 @@ int main()
         std::ofstream out(smb_config_path, std::ios::binary | std::ios::trunc);
         out << "{"
             << "\"port\":" << port << ","
-            << "\"http\":{\"enable_keep_alive\":false},"
+            << "\"http\":{\"enable_ssl\":false,\"enable_keep_alive\":false},"
             << "\"smb\":{\"enabled\":true,\"port\":" << smb_port << ",\"require_signing\":true},"
             << "\"nas\":{"
             << "\"webdav_mount\":\"/dav\","

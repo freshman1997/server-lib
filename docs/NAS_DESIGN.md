@@ -85,8 +85,8 @@ NAS Service
 
 Current implementation note:
 
-- The first auth slice supports Basic Auth parsing and a deterministic `fnv1a64$salt$hash` password format for development.
-- Before production exposure, replace this with a real password KDF such as PBKDF2-HMAC-SHA256, bcrypt, scrypt, or Argon2.
+- Basic Auth parsing supports `pbkdf2-sha256$iterations$salt$hex_digest` as the default password hash format.
+- Legacy `fnv1a64$...` and `plain:...` are kept only for migration/compatibility and should be disabled by production policy.
 
 `NasPermissionService`
 

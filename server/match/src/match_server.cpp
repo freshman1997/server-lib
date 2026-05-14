@@ -1,7 +1,6 @@
 #include "match_server.h"
 #include "logger_factory.h"
 #include "log.h"
-#include "timer/timer_util.hpp"
 #include "timer/wheel_timer_manager.h"
 #include "timer/timer_task.h"
 #include <chrono>
@@ -85,8 +84,7 @@ namespace match
 
         timer::WheelTimerManager timer_manager;
 
-        timer::TimerUtil::build_period_handle(
-            &timer_manager,
+        timer_manager.every(
             match_interval_ms_,
             match_interval_ms_,
             [this]() {
@@ -94,8 +92,7 @@ namespace match
             },
             -1);
 
-        timer::TimerUtil::build_period_handle(
-            &timer_manager,
+        timer_manager.every(
             monitor_interval_ms_,
             monitor_interval_ms_,
             [this]() {
@@ -109,8 +106,8 @@ namespace match
 
         while (running_.load())
         {
-            timer_manager.tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(timer_manager.get_poll_timeout_ms(50, 1)));
+            timer_manager.run_due_timers();
+            std::this_thread::sleep_for(std::chrono::milliseconds(timer_manager.poll_timeout(50, 1)));
         }
     }
 

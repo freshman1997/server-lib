@@ -277,4 +277,24 @@ namespace yuan::net::mqtt
     {
         return session_mgr_.all_sessions().size();
     }
+
+    bool MqttServer::save_retained_store(const std::string & path) const
+    {
+        return retained_store_.save_to_file(path);
+    }
+
+    bool MqttServer::load_retained_store(const std::string & path)
+    {
+        return retained_store_.load_from_file(path);
+    }
+
+    bool MqttServer::save_session_store(const std::string & path) const
+    {
+        return session_mgr_.save_to_file(path);
+    }
+
+    bool MqttServer::load_session_store(const std::string & path)
+    {
+        return session_mgr_.load_from_file(path);
+    }
 }

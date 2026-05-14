@@ -40,6 +40,9 @@ namespace yuan::server::nas
         NasHttpAuthOptions auth_options;
         auth_options.allow_anonymous_read = config.allow_anonymous_read;
         auth_options.realm = "Yuan NAS";
+        auth_options.mount_path = result.mount_path;
+        auth_options.share_manager = share_manager;
+        auth_options.metadata = metadata;
         pipeline->add(nas_basic_auth_middleware(std::make_shared<NasAuthService>(metadata), auth_options));
 
         server.on(result.mount_path,

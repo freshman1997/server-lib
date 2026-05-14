@@ -59,8 +59,14 @@ std::vector<std::string> json_string_array(const nlohmann::json& json, const cha
     if (!json.contains(key)) {
         return values;
     }
-    for (const auto& item : json.at(key)) {
-        values.push_back(item.get<std::string>());
+    const auto& node = json.at(key);
+    if (!node.is_array()) {
+        return values;
+    }
+    for (const auto& item : node) {
+        if (item.is_string()) {
+            values.push_back(item.get<std::string>());
+        }
     }
     return values;
 }
@@ -316,7 +322,8 @@ std::filesystem::path state_file_path(const Config& config) {
 }
 
 void save_state(const Config& config, const Manifest& manifest) {
-    nlohmann::json json;
+    nlohmann::json json = nlohmann::json::object();
+    json["manifest"] = nlohmann::json::array();
     for (const auto& [path, state] : manifest) {
         json["manifest"].push_back({
             {"path", path},
@@ -334,20 +341,49 @@ void save_state(const Config& config, const Manifest& manifest) {
 
 Manifest load_state(const Config& config) {
     Manifest manifest;
-    std::ifstream in(state_file_path(config));
+    const auto state_path = state_file_path(config);
+    std::ifstream in(state_path);
     if (!in) {
         return manifest;
     }
-    nlohmann::json json;
-    in >> json;
-    for (const auto& item : json.value("manifest", nlohmann::json::array())) {
-        manifest[item.at("path").get<std::string>()] = {
-            item.value("is_directory", false),
-            static_cast<std::uintmax_t>(item.value("size", 0ull)),
-            static_cast<std::uint64_t>(item.value("mtime", 0ull)),
-            static_cast<std::uint64_t>(item.value("hash", 0ull)),
-        };
+    try {
+        nlohmann::json json;
+        in >> json;
+
+        if (!json.is_object()) {
+            return manifest;
+        }
+
+        const auto it = json.find("manifest");
+        if (it == json.end() || !it->is_array()) {
+            return manifest;
+        }
+
+        for (const auto& item : *it) {
+            if (!item.is_object()) {
+                continue;
+            }
+
+            const auto path_it = item.find("path");
+            if (path_it == item.end() || !path_it->is_string()) {
+                continue;
+            }
+            const auto path = path_it->get<std::string>();
+            if (!filesync::is_safe_relative_path(path)) {
+                continue;
+            }
+
+            const bool is_directory = item.value("is_directory", false);
+            const auto size = static_cast<std::uintmax_t>(item.value("size", 0ull));
+            const auto mtime = static_cast<std::uint64_t>(item.value("mtime", 0ull));
+            const auto hash = static_cast<std::uint64_t>(item.value("hash", 0ull));
+            manifest[path] = {is_directory, size, mtime, hash};
+        }
+    } catch (const std::exception& ex) {
+        std::cerr << "warning: failed to load state file " << state_path.string() << ": " << ex.what() << "\n";
+        return {};
     }
+
     return manifest;
 }
 
@@ -993,18 +1029,26 @@ private:
 
 } // namespace
 
-int main(int argc, char** argv) {
-#ifdef FILESYNC_DEFAULT_CONFIG
-    const std::filesystem::path default_config = FILESYNC_DEFAULT_CONFIG;
-#else
-    const std::filesystem::path default_config = "peer_config.json";
-#endif
-    const std::filesystem::path config_path = argc > 1 ? argv[1] : default_config;
-    try {
-        PeerService service(load_config(config_path));
-        return service.start() ? 0 : 1;
-    } catch (const std::exception& ex) {
-        std::cerr << "filesync error: " << ex.what() << "\n";
-        return 1;
+class ReleaseFileSyncPeerApp {
+public:
+    int start(int argc, char** argv) {
+        #ifdef FILESYNC_DEFAULT_CONFIG
+        const std::filesystem::path default_config = FILESYNC_DEFAULT_CONFIG;
+        #else
+        const std::filesystem::path default_config = "peer_config.json";
+        #endif
+        const std::filesystem::path config_path = argc > 1 ? argv[1] : default_config;
+        try {
+            PeerService service(load_config(config_path));
+            return service.start() ? 0 : 1;
+        } catch (const std::exception& ex) {
+            std::cerr << "filesync error: " << ex.what() << "\n";
+            return 1;
+        }
     }
+};
+
+int main(int argc, char** argv) {
+    ReleaseFileSyncPeerApp app;
+    return app.start(argc, argv);
 }

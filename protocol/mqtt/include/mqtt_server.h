@@ -49,6 +49,10 @@ namespace yuan::net::mqtt
         void publish(const std::string &topic, const std::vector<uint8_t> &payload,
                      QoS qos = QoS::AT_MOST_ONCE, bool retain = false);
         size_t connected_clients() const;
+        bool save_retained_store(const std::string &path) const;
+        bool load_retained_store(const std::string &path);
+        bool save_session_store(const std::string &path) const;
+        bool load_session_store(const std::string &path);
 
     private:
         coroutine::Task<void> handle_connection(AsyncConnectionContext ctx);

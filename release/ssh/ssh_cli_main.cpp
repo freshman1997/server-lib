@@ -115,6 +115,7 @@ namespace
         bool help = false;
         bool version = false;
         bool probe = false;
+        bool stderr_prefix = false;
         HostKeyPolicy host_key_policy = HostKeyPolicy::no;
         std::string known_hosts_file;
     };
@@ -227,6 +228,7 @@ namespace
             << "      --password <password> Password auth secret (or YUAN_SSH_PASSWORD)\n"
             << "      --command <cmd>       Command to execute\n"
             << "      --timeout-ms <ms>     Socket receive timeout\n"
+            << "      --stderr-prefix       Prefix stderr lines with [stderr]\\n"
             << "      --probe               Only verify TCP + SSH version exchange\n\n"
             << "env defaults:\n"
             << "  YUAN_SSH_HOST\n"
@@ -342,6 +344,10 @@ namespace
             }
             if (opt == "--probe") {
                 args.probe = true;
+                continue;
+            }
+            if (opt == "--stderr-prefix") {
+                args.stderr_prefix = true;
                 continue;
             }
             if (opt == "--") {
@@ -1454,6 +1460,32 @@ namespace
     {
         using namespace yuan::net::ssh;
 
+        bool stderr_line_start = true;
+        auto write_stderr = [&](const std::vector<uint8_t> &data) {
+            if (data.empty()) {
+                return;
+            }
+            if (!args.stderr_prefix) {
+                std::cerr.write(reinterpret_cast<const char *>(data.data()),
+                                static_cast<std::streamsize>(data.size()));
+                std::cerr.flush();
+                return;
+            }
+
+            constexpr const char *kPrefix = "[stderr] ";
+            for (uint8_t byte : data) {
+                if (stderr_line_start) {
+                    std::cerr << kPrefix;
+                    stderr_line_start = false;
+                }
+                std::cerr.put(static_cast<char>(byte));
+                if (byte == '\n') {
+                    stderr_line_start = true;
+                }
+            }
+            std::cerr.flush();
+        };
+
 #ifndef _WIN32
         const int stdin_flags = fcntl(STDIN_FILENO, F_GETFL, 0);
         const bool stdin_nonblock_enabled = stdin_flags >= 0;
@@ -1682,7 +1714,9 @@ namespace
         bool stdin_eof_sent = false;
         bool shell_ready = false;
         TerminalSize last_terminal_size = query_terminal_size();
+#ifndef _WIN32
         sig_atomic_t handled_sigint_count = 0;
+#endif
         uint32_t local_channel_id = 0;
         uint32_t remote_channel_id = 0;
         uint32_t exit_code = 0;
@@ -2524,9 +2558,7 @@ namespace
             } else if (type == SshMessageType::SSH_MSG_CHANNEL_EXTENDED_DATA) {
                 auto ext_msg = SshMessageCodec::decode_channel_extended_data(payload.data(), payload.size());
                 if (ext_msg && !ext_msg->data.empty()) {
-                    std::cerr.write(reinterpret_cast<const char *>(ext_msg->data.data()),
-                                    static_cast<std::streamsize>(ext_msg->data.size()));
-                    std::cerr.flush();
+                    write_stderr(ext_msg->data);
                 }
             } else if (type == SshMessageType::SSH_MSG_CHANNEL_EOF) {
                 auto eof_msg = SshMessageCodec::decode_channel_eof(payload.data(), payload.size());

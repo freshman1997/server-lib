@@ -77,6 +77,49 @@ namespace yuan::net::webdav
             }
             return props;
         }
+
+        std::chrono::seconds parse_lock_timeout(http::HttpRequest *req,
+                                                std::uint32_t default_seconds,
+                                                std::uint32_t max_seconds)
+        {
+            const auto fallback = std::chrono::seconds(default_seconds > 0 ? default_seconds : 3600);
+            if (!req) {
+                return fallback;
+            }
+
+            const auto *timeout_header = req->get_header("timeout");
+            if (!timeout_header || timeout_header->empty()) {
+                return fallback;
+            }
+
+            std::string value = *timeout_header;
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::toupper(ch));
+            });
+            if (value.rfind("SECOND-", 0) != 0) {
+                return fallback;
+            }
+
+            const auto sec_text = value.substr(7);
+            if (sec_text.empty()) {
+                return fallback;
+            }
+            std::uint64_t seconds = 0;
+            try {
+                seconds = static_cast<std::uint64_t>(std::stoull(sec_text));
+            } catch (...) {
+                return fallback;
+            }
+
+            const std::uint64_t capped_max = max_seconds > 0 ? max_seconds : 86400;
+            if (seconds == 0) {
+                seconds = default_seconds > 0 ? default_seconds : 3600;
+            }
+            if (seconds > capped_max) {
+                seconds = capped_max;
+            }
+            return std::chrono::seconds(seconds);
+        }
     }
 
     WebDavHandler::WebDavHandler(std::shared_ptr<WebDavResourceBackend> backend, WebDavHandlerConfig config)
@@ -376,8 +419,11 @@ namespace yuan::net::webdav
     void WebDavHandler::lock(http::HttpRequest *req, http::HttpResponse *resp)
     {
         const auto href = href_from_request(*req);
+        const auto timeout = parse_lock_timeout(req,
+                                                config_.default_lock_timeout_seconds,
+                                                config_.max_lock_timeout_seconds);
         const auto *lock_token = req->get_header("if");
-        if (lock_token && locks_->refresh(*lock_token, std::chrono::seconds(3600))) {
+        if (lock_token && locks_->refresh(*lock_token, timeout)) {
             const auto refreshed = locks_->find(*lock_token);
             resp->set_response_code(http::ResponseCode::ok_);
             resp->add_header("Content-Type", "application/xml; charset=utf-8");
@@ -394,7 +440,7 @@ namespace yuan::net::webdav
         }
         const auto depth = parse_depth(req->get_header("depth") ? *req->get_header("depth") : "infinity", Depth::infinity);
         auto lock_info = locks_->create(href, parse_lock_scope(request_body(req)), depth, parse_lock_owner(request_body(req)),
-                                        std::chrono::seconds(3600));
+                                        timeout);
         resp->set_response_code(http::ResponseCode::ok_);
         resp->add_header("Lock-Token", "<" + lock_info.token + ">");
         resp->add_header("Content-Type", "application/xml; charset=utf-8");

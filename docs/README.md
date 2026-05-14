@@ -10,6 +10,9 @@
 
 - `docs/protocols/FTP_DESIGN.md`
 - `docs/protocols/MQTT_DESIGN.md`
+- `docs/protocols/RTSP_FULL_FEATURE_PLAN.md`
+- `docs/protocols/RTC_RTCP_WEBRTC_IMPLEMENTATION_PLAN.md`
+- `docs/protocols/WEBRTC_DESIGN.md`
 - `docs/protocols/SHADOWSOCKS_DESIGN.md`
 - `docs/protocols/SMB_DESIGN.md`
 - `docs/protocols/SOCKS5_DESIGN.md`

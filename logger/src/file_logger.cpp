@@ -104,7 +104,7 @@ FileLogger::FileLogger(const LogConfig& cfg)
         config_.log_file_name = proc_name + ".log";
     }
 
-    initialized_ = open_new_file();
+    initialized_ = ensure_file_open();
 }
 
 FileLogger::FileLogger(const std::string& log_path,
@@ -123,7 +123,7 @@ FileLogger::FileLogger(const std::string& log_path,
     set_level(level);
     formatter_ = std::make_shared<Formatter>();
     last_open_date_ = current_date_str();
-    initialized_ = open_new_file();
+    initialized_ = ensure_file_open();
 }
 
 FileLogger::~FileLogger()
@@ -155,14 +155,12 @@ void FileLogger::log_impl(Level level, const std::string& msg)
     }
 
     std::lock_guard<std::mutex> lock(file_mutex_);
-    check_and_rotate();
+    check_and_rotate(formatted.size() + 1);
 
-    if (!open_new_file()) return;
+    if (!ensure_file_open()) return;
     ofs_ << formatted << '\n';
-    ofs_.flush();
     current_file_size_.store(current_file_size_.load(std::memory_order_relaxed) + formatted.size() + 1,
                              std::memory_order_relaxed);
-    ofs_.close();
 }
 
 void FileLogger::log_impl(Level level, const std::string& msg,
@@ -177,14 +175,12 @@ void FileLogger::log_impl(Level level, const std::string& msg,
     }
 
     std::lock_guard<std::mutex> lock(file_mutex_);
-    check_and_rotate();
+    check_and_rotate(formatted.size() + 1);
 
-    if (!open_new_file()) return;
+    if (!ensure_file_open()) return;
     ofs_ << formatted << '\n';
-    ofs_.flush();
     current_file_size_.store(current_file_size_.load(std::memory_order_relaxed) + formatted.size() + 1,
                              std::memory_order_relaxed);
-    ofs_.close();
 }
 
 void FileLogger::flush()
@@ -204,15 +200,16 @@ bool FileLogger::need_time_rotate() const
     return false;
 }
 
-bool FileLogger::need_size_rotate() const
+bool FileLogger::need_size_rotate(uint64_t incoming_size) const
 {
     if (config_.rotate_policy != RotatePolicy::size_limit) return false;
-    return current_file_size_.load(std::memory_order_relaxed) >= config_.max_file_size;
+    if (config_.max_file_size == 0) return false;
+    return current_file_size_.load(std::memory_order_relaxed) + incoming_size > config_.max_file_size;
 }
 
-void FileLogger::check_and_rotate()
+void FileLogger::check_and_rotate(uint64_t incoming_size)
 {
-    if (need_time_rotate() || need_size_rotate()) {
+    if (need_time_rotate() || need_size_rotate(incoming_size)) {
         do_rotate();
     }
 }
@@ -233,9 +230,9 @@ std::string FileLogger::current_datetime_hour_str()
     return std::string(buf);
 }
 
-bool FileLogger::open_new_file()
+bool FileLogger::ensure_file_open()
 {
-    if (ofs_.is_open()) ofs_.close();
+    if (ofs_.is_open()) return true;
 
     try {
         fs::create_directories(config_.log_path);
@@ -244,12 +241,16 @@ bool FileLogger::open_new_file()
 
     const auto full_path = config_.log_path + "/" + config_.log_file_name;
     ofs_.open(full_path, std::ios::out | std::ios::app | std::ios::binary);
-    if (!ofs_.is_open()) return false;
+    if (!ofs_.is_open()) {
+        initialized_ = false;
+        return false;
+    }
 
     ofs_.seekp(0, std::ios::end);
     current_file_size_.store(static_cast<uint64_t>(ofs_.tellp()), std::memory_order_relaxed);
     last_open_date_ = (config_.rotate_policy == RotatePolicy::hourly) ? current_datetime_hour_str()
                                                                       : current_date_str();
+    initialized_ = true;
     return true;
 }
 
@@ -292,10 +293,14 @@ void FileLogger::do_rotate()
         }
     }
 
+    bool renamed = false;
     try {
         fs::rename(base_path, base_path + "." + time_part + "." + std::to_string(max_idx + 1));
+        renamed = true;
     } catch (...) {
     }
+
+    if (!renamed) return;
 
     current_file_size_.store(0, std::memory_order_relaxed);
     clean_old_backups();

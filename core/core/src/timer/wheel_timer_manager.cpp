@@ -138,6 +138,11 @@ namespace yuan::timer
         return time_unit_;
     }
 
+    const char *WheelTimerManager::backend_name() const
+    {
+        return "wheel";
+    }
+
     uint32_t WheelTimerManager::get_poll_timeout_ms(uint32_t idle_timeout_ms, uint32_t active_timeout_cap_ms)
     {
         cleanup_finished_timers();

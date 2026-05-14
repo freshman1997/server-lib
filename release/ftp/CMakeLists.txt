@@ -3,7 +3,9 @@ project(release_ftp)
 
 set(RELEASE_FTP_OUTPUT_DIR "${CMAKE_BINARY_DIR}/release/ftp")
 
-add_executable(release_ftp_server ftp_server_main.cpp)
+add_executable(release_ftp_server
+    ftp_server_main.cpp
+)
 target_compile_features(release_ftp_server PUBLIC cxx_std_20)
 target_link_libraries(release_ftp_server PUBLIC Core FtpProto)
 target_include_directories(release_ftp_server PUBLIC
@@ -17,7 +19,9 @@ set_target_properties(release_ftp_server PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${RELEASE_FTP_OUTPUT_DIR}"
 )
 
-add_executable(release_ftp_cli ftp_cli_main.cpp)
+add_executable(release_ftp_cli
+    ftp_cli_main.cpp
+)
 target_compile_features(release_ftp_cli PUBLIC cxx_std_20)
 target_link_libraries(release_ftp_cli PUBLIC Core FtpProto)
 target_include_directories(release_ftp_cli PUBLIC

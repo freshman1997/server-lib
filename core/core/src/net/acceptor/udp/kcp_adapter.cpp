@@ -36,7 +36,7 @@ namespace yuan::net
         kcp_->output = &KcpAdapter::on_send;
         ikcp_wndsize(kcp_, 128, 128);
         ikcp_nodelay(kcp_, 1, 10, 1, 1);
-        updateTimer_ = timerManager->interval_handle(0, timerManager->get_time_unit(), this, -1);
+        updateTimer_ = timerManager->every(0, timerManager->get_time_unit(), this);
         return true;
     }
 

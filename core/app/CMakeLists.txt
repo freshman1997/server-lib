@@ -5,5 +5,5 @@ file(GLOB_RECURSE APP_ALL_SRC CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src
 
 add_library(App ${APP_ALL_SRC})
 target_compile_features(App PUBLIC cxx_std_20)
-target_link_libraries(App PUBLIC Core Logger redisCli)
+target_link_libraries(App PUBLIC Core Logger)
 target_include_directories(App PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>" "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")

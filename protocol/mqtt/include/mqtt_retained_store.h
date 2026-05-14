@@ -31,6 +31,8 @@ namespace yuan::net::mqtt
         std::vector<MqttRetainedMessage> match(const std::string &topic_filter) const;
         void cleanup_expired();
         size_t size() const;
+        bool save_to_file(const std::string &path) const;
+        bool load_from_file(const std::string &path);
 
     private:
         std::map<std::string, MqttRetainedMessage> messages_;

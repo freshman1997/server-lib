@@ -1,0 +1,170 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Yuan NAS Admin</title>
+  <style>
+    body { font-family: Segoe UI, Arial, sans-serif; margin: 0; background: #f6f7f9; color: #1f2937; }
+    header { background: #0f172a; color: white; padding: 16px 24px; }
+    main { max-width: 1080px; margin: 0 auto; padding: 24px; }
+    section { background: white; border: 1px solid #d8dee8; border-radius: 8px; margin-bottom: 16px; padding: 16px; }
+    h1 { font-size: 22px; margin: 0; }
+    h2 { font-size: 16px; margin: 0 0 12px; }
+    button { padding: 6px 10px; border: 1px solid #94a3b8; background: #f8fafc; border-radius: 6px; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; border-bottom: 1px solid #eef1f5; padding: 8px; }
+    .muted { color: #64748b; }
+    .error { color: #b91c1c; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Yuan NAS Admin</h1>
+  </header>
+  <main>
+    <section>
+      <h2>Health</h2>
+      <button id="probeHealth" type="button">Probe</button>
+      <pre id="health" class="muted">Loading...</pre>
+    </section>
+    <section>
+      <h2>Create User</h2>
+      <form id="userForm">
+        <input name="id" placeholder="id" required>
+        <input name="username" placeholder="username" required>
+        <input name="password" type="password" placeholder="password" required>
+        <label><input name="admin" type="checkbox"> admin</label>
+        <button type="submit">Save User</button>
+      </form>
+    </section>
+    <section>
+      <h2>Create Share</h2>
+      <form id="shareForm">
+        <input name="id" placeholder="id" required>
+        <input name="name" placeholder="name" required>
+        <input name="root_path" placeholder="root path" required>
+        <label><input name="readonly" type="checkbox"> readonly</label>
+        <button type="submit">Save Share</button>
+      </form>
+    </section>
+    <section>
+      <h2>Users</h2>
+      <div id="users" class="muted">Loading...</div>
+    </section>
+    <section>
+      <h2>Shares</h2>
+      <div id="shares" class="muted">Loading...</div>
+    </section>
+    <section>
+      <h2>Quota</h2>
+      <div id="quota" class="muted">Loading...</div>
+    </section>
+    <section>
+      <h2>Activity</h2>
+      <pre id="activity" class="muted">Loading...</pre>
+    </section>
+    <section>
+      <h2>Sessions</h2>
+      <div id="sessions" class="muted">Loading...</div>
+    </section>
+    <section>
+      <h2>Audit</h2>
+      <div id="audit" class="muted">Loading...</div>
+    </section>
+  </main>
+  <script>
+    async function getJson(url) {
+      const response = await fetch(url, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error(response.status);
+      return response.json();
+    }
+
+    async function postJson(url, body) {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) throw new Error(response.status);
+      return response.json();
+    }
+
+    function table(rows, cols) {
+      if (!rows.length) return '<p class="muted">Empty</p>';
+      return '<table><thead><tr>' + cols.map(c => '<th>' + c + '</th>').join('') +
+        '</tr></thead><tbody>' +
+        rows.map(r => '<tr>' + cols.map(c => {
+          const v = r[c];
+          return '<td>' + String(v === undefined || v === null ? '' : v) + '</td>';
+        }).join('') + '</tr>').join('') +
+        '</tbody></table>';
+    }
+
+    async function load() {
+      try {
+        const health = await getJson('/nas/health');
+        document.getElementById('health').textContent = JSON.stringify(health, null, 2);
+
+        const users = await getJson('/nas/admin/users');
+        document.getElementById('users').innerHTML = table(users.users || [], ['id', 'username', 'enabled', 'admin']);
+
+        const shares = await getJson('/nas/admin/shares');
+        document.getElementById('shares').innerHTML = table(shares.shares || [], ['id', 'name', 'root_path', 'enabled', 'readonly']);
+
+        const quota = await getJson('/nas/admin/quota');
+        document.getElementById('quota').innerHTML = table(quota.shares || [], ['id', 'name', 'exists', 'used_bytes', 'available_bytes']);
+
+        const activity = await getJson('/nas/admin/activity');
+        document.getElementById('activity').textContent = JSON.stringify(activity, null, 2);
+
+        const sessions = await getJson('/nas/admin/sessions');
+        document.getElementById('sessions').innerHTML = table(sessions.sessions || [], ['username', 'remote_addr', 'last_path', 'request_count', 'last_seen_unix_ms']);
+
+        const audit = await getJson('/nas/admin/audit');
+        document.getElementById('audit').innerHTML = table(audit.events || [], ['timestamp_unix_ms', 'actor', 'action', 'target', 'detail']);
+      } catch (e) {
+        document.querySelector('main').insertAdjacentHTML('afterbegin', '<section class="error">Admin API error: ' + e.message + '</section>');
+      }
+    }
+
+    document.getElementById('userForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      await postJson('/nas/admin/users', {
+        id: form.id.value,
+        username: form.username.value,
+        password: form.password.value,
+        enabled: true,
+        admin: form.admin.checked
+      });
+      form.reset();
+      load();
+    });
+
+    document.getElementById('shareForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      await postJson('/nas/admin/shares', {
+        id: form.id.value,
+        name: form.name.value,
+        root_path: form.root_path.value,
+        readonly: form.readonly.checked,
+        enabled: true,
+        default_permissions: ['read', 'write', 'remove']
+      });
+      form.reset();
+      load();
+    });
+
+    document.getElementById('probeHealth').addEventListener('click', async () => {
+      const result = await postJson('/nas/admin/health/actions', { action: 'probe' });
+      document.getElementById('health').textContent = JSON.stringify(result.health, null, 2);
+      load();
+    });
+
+    load();
+  </script>
+</body>
+</html>

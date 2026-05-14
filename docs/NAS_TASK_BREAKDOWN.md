@@ -53,7 +53,7 @@ Goal: SMB/SFTP use the same NAS identity, share, permission, and storage model.
 | --- | --- | --- | --- |
 | N3.1 | Adapt SFTP to `NasStorageBackend` | shared filesystem behavior | OpenSSH SFTP tests |
 | N3.2 | Adapt SMB share manager to NAS shares | done: SMB share config generated from NAS config/metadata | adapter unit tests; `smbclient` tests still needed |
-| N3.3 | Map SMB auth to NAS users | in progress: SMB handler validates enabled NAS users and NTLMv2 proof for `plain:` dev passwords; production password hash format still needed | NTLMv2 and adapter unit tests; Windows/Linux login tests still needed |
+| N3.3 | Map SMB auth to NAS users | in progress: SMB handler validates enabled NAS users and NTLMv2 proof; `pbkdf2-sha256` is now default for HTTP/WebDAV auth and is intentionally not exposed to SMB password lookup | NTLMv2 and adapter unit tests; Windows/Linux login tests still needed |
 | N3.4 | Map SMB permissions to NAS ACL | done: SMB tree/create/read/write/query/set-info checks use NAS ACL | adapter unit tests; real SMB ACL tests still needed |
 | N3.5 | Add SMB interop matrix | in progress: optional `smbclient_nas_smoke` script covers list/upload/download/rename/delete; see `docs/SMB_SMBD_COMPAT_MATRIX.md` and `docs/SMB_NAS_PROGRESS.md` | Windows/macOS/Linux CIFS matrix still needed |
 
@@ -85,3 +85,20 @@ Work in this order:
 cmake --build build --target test_base64 test_nas_core test_nas_service test_nas_redis_e2e test_nas_webdav_integration test_webdav test_http_features -j 4
 ctest --test-dir build -R "base64|nas_core|nas_service|nas_redis_e2e|nas_webdav_integration|webdav|http_features" --output-on-failure
 ```
+
+## Commercialization Plan
+
+See `docs/NAS_COMMERCIALIZATION_PLAN.md` for the production rollout gates, priority order, and milestone schedule focused on WebDAV-first private deployment.
+
+## Active Refactor Rules (Commercialization)
+
+- Keep security-critical code paths short, explicit, and unit-testable.
+- Prefer interface-level extension over protocol-specific `dynamic_cast` in runtime paths.
+- Add backward-compatible migration shims first, then add policy toggles to phase out legacy behavior.
+- Any new feature must include one correctness test and one regression test.
+
+## Recent Hardening Notes
+
+- Admin API now enforces bounded JSON request body size.
+- Admin list endpoints now support bounded `limit` query parameter.
+- Admin API now includes per-actor+remote simple rate limiting and returns HTTP 429 on excess traffic.

@@ -16,7 +16,6 @@
 #include "net/auth_rate_limiter.h"
 #include "net/handler/connection_handler.h"
 #include "timer/timer_handle.h"
-#include "timer/timer_util.hpp"
 
 #include <memory>
 #include <unordered_map>

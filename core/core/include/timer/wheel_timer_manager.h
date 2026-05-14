@@ -26,6 +26,7 @@ namespace yuan::timer
     public:
         virtual void tick();
         virtual uint32_t get_time_unit() const override;
+        const char *backend_name() const override;
         uint32_t get_poll_timeout_ms(uint32_t idle_timeout_ms, uint32_t active_timeout_cap_ms) override;
 
     private:

@@ -2,12 +2,95 @@
 #include "mqtt_session.h"
 #include "net/connection/tcp_connection.h"
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <map>
 
 namespace yuan::net::mqtt
 {
     namespace
     {
+        void close_session_connection(MqttSession & session)
+        {
+            if (auto conn = session.connection()) {
+                conn->close();
+            }
+        }
+
+        ByteBuffer protocol_error_disconnect(const MqttSession & session, DisconnectReason reason)
+        {
+            if (session.protocol_level() != ProtocolLevel::V5_0)
+                return {};
+            return MqttCodec::encode_disconnect(static_cast<uint8_t>(reason), session.protocol_level(), {});
+        }
+
+        bool is_valid_publish_flags(uint8_t flags)
+        {
+            const uint8_t qos_bits = static_cast<uint8_t>((flags >> MQTT_PUBLISH_FLAG_QOS_SHIFT) & 0x03);
+            if (qos_bits == 0x03)
+                return false;
+            if (qos_bits == 0 && (flags & MQTT_PUBLISH_FLAG_DUP))
+                return false;
+            return true;
+        }
+
+        bool is_valid_packet_flags(PacketType type, uint8_t flags)
+        {
+            switch (type) {
+            case PacketType::PUBREL:
+            case PacketType::SUBSCRIBE:
+            case PacketType::UNSUBSCRIBE:
+                return flags == 0x02;
+            case PacketType::PUBLISH:
+                return is_valid_publish_flags(flags);
+            default:
+                return flags == 0x00;
+            }
+        }
+
+        std::optional<std::string> extract_shared_group(const std::string & filter)
+        {
+            if (!MqttTopicTree::is_shared_subscription(filter))
+                return std::nullopt;
+            const std::string group = MqttTopicTree::shared_group(filter);
+            if (group.empty())
+                return std::nullopt;
+            return group;
+        }
+
+        std::vector<MqttSubscription> apply_shared_subscription_policy(const std::vector<MqttSubscription> & matches)
+        {
+            if (matches.empty())
+                return {};
+
+            std::vector<MqttSubscription> result;
+            result.reserve(matches.size());
+            std::map<std::string, std::vector<const MqttSubscription *> > shared_groups;
+
+            for (const auto &sub : matches) {
+                if (sub.shared_group.empty()) {
+                    result.push_back(sub);
+                    continue;
+                }
+                shared_groups[sub.shared_group].push_back(&sub);
+            }
+
+            for (const auto &entry : shared_groups) {
+                const auto &subs = entry.second;
+                if (subs.empty())
+                    continue;
+
+                uint64_t score = 0;
+                for (char ch : entry.first) {
+                    score = (score * 131ULL) + static_cast<uint8_t>(ch);
+                }
+                const size_t index = static_cast<size_t>(score % subs.size());
+                result.push_back(*subs[index]);
+            }
+
+            return result;
+        }
+
         bool parse_remaining_length(const uint8_t * data, size_t len, size_t & header_len, size_t & body_len)
         {
             if (!data || len < 2)
@@ -54,10 +137,25 @@ namespace yuan::net::mqtt
         auto pkt_type = static_cast<PacketType>((first_byte >> 4) & 0x0F);
         uint8_t flags = first_byte & 0x0F;
 
+        if (session.state() != MqttSessionState::connected && pkt_type != PacketType::CONNECT) {
+            return protocol_error_disconnect(session, DisconnectReason::PROTOCOL_ERROR);
+        }
+
+        if (session.state() == MqttSessionState::connected && pkt_type == PacketType::CONNECT) {
+            session.set_state(MqttSessionState::disconnecting);
+            close_session_connection(session);
+            return protocol_error_disconnect(session, DisconnectReason::PROTOCOL_ERROR);
+        }
+
+        if (!is_valid_packet_flags(pkt_type, flags)) {
+            session.set_state(MqttSessionState::disconnecting);
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
+        }
+
         size_t fixed_header_len = 0;
         size_t body_len = 0;
         if (!parse_remaining_length(data, len, fixed_header_len, body_len))
-            return {};
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
 
         const uint8_t * body = data + fixed_header_len;
 
@@ -94,7 +192,7 @@ namespace yuan::net::mqtt
         auto connect_opt = MqttCodec::decode_connect(data, len);
         if (!connect_opt.has_value()) {
             session.set_state(MqttSessionState::disconnecting);
-            return {};
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
         }
 
         auto &connect = *connect_opt;
@@ -132,13 +230,18 @@ namespace yuan::net::mqtt
         }
 
         MqttSession *old_session = session_mgr_.find_by_client_id(connect.client_id);
+        const bool clean_start = (connect.connect_flags & MQTT_CONNECT_FLAG_CLEAN_START) != 0;
         if (old_session && old_session != &session) {
-            if (handler_) {
-                handler_->on_disconnected(old_session, 0);
-            }
-            old_session->set_state(MqttSessionState::disconnecting);
-            if (old_session->connection()) {
-                old_session->connection()->close();
+            const bool old_online = old_session->state() == MqttSessionState::connected ||
+                                    old_session->state() == MqttSessionState::connecting;
+            if (old_online || clean_start) {
+                if (handler_) {
+                    handler_->on_disconnected(old_session, 0);
+                }
+                old_session->set_state(MqttSessionState::disconnecting);
+                if (old_session->connection()) {
+                    old_session->connection()->close();
+                }
             }
         }
 
@@ -153,6 +256,17 @@ namespace yuan::net::mqtt
                 password = *connect.password;
         }
 
+        if (config_.require_authentication && username.empty()) {
+            session.set_protocol_level(connect.protocol_level);
+            session.set_state(MqttSessionState::disconnecting);
+            MqttConnackPacket connack;
+            connack.session_present = 0;
+            connack.reason_code = is_v5
+                                      ? static_cast<uint8_t>(ConnackCode::V5_BAD_USER_NAME_OR_PASSWORD)
+                                      : static_cast<uint8_t>(ConnackCode::BAD_USER_NAME_OR_PASSWORD);
+            return MqttCodec::encode_connack(connack, connect.protocol_level);
+        }
+
         if (handler_ && !handler_->on_connect(&session, connect.client_id, username, password)) {
             session.set_protocol_level(connect.protocol_level);
             session.set_state(MqttSessionState::disconnecting);
@@ -162,6 +276,24 @@ namespace yuan::net::mqtt
                                       ? static_cast<uint8_t>(ConnackCode::V5_NOT_AUTHORIZED)
                                       : static_cast<uint8_t>(ConnackCode::NOT_AUTHORIZED);
             return MqttCodec::encode_connack(connack, connect.protocol_level);
+        }
+
+        bool session_present = 0;
+        if (!connect.client_id.empty() && !clean_start) {
+            if (MqttSession *existing = session_mgr_.find_by_client_id(connect.client_id)) {
+                if (existing != &session && existing->state() == MqttSessionState::disconnected &&
+                    existing->session_expiry_interval() > 0) {
+                    session_present = 1;
+                }
+            }
+        }
+
+        if (clean_start) {
+            if (MqttSession *existing = session_mgr_.find_by_client_id(connect.client_id)) {
+                if (existing != &session) {
+                    topic_tree_.remove_all(existing->session_id());
+                }
+            }
         }
 
         session_mgr_.bind_client_id(session, connect.client_id);
@@ -208,7 +340,7 @@ namespace yuan::net::mqtt
         }
 
         MqttConnackPacket connack;
-        connack.session_present = 0;
+        connack.session_present = session_present;
         connack.reason_code = static_cast<uint8_t>(ConnackCode::ACCEPTED);
 
         if (is_v5) {
@@ -240,8 +372,9 @@ namespace yuan::net::mqtt
         uint8_t retain = (flags & MQTT_PUBLISH_FLAG_RETAIN) ? 1 : 0;
 
         auto publish_opt = MqttCodec::decode_publish(data, len, flags, session.protocol_level());
-        if (!publish_opt.has_value())
-            return {};
+        if (!publish_opt.has_value()) {
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
+        }
 
         auto &pkt = *publish_opt;
 
@@ -249,20 +382,47 @@ namespace yuan::net::mqtt
         if (is_v5 && pkt.properties.topic_alias.has_value()) {
             uint16_t alias = *pkt.properties.topic_alias;
             if (alias == 0) {
-                return {};
+                return protocol_error_disconnect(session, DisconnectReason::TOPIC_ALIAS_INVALID);
+            }
+            if (session.topic_alias_maximum() > 0 && alias > session.topic_alias_maximum()) {
+                return protocol_error_disconnect(session, DisconnectReason::TOPIC_ALIAS_INVALID);
             }
             if (pkt.topic.empty()) {
                 auto resolved = session.resolve_topic_alias(alias);
                 if (!resolved.has_value())
-                    return {};
+                    return protocol_error_disconnect(session, DisconnectReason::TOPIC_ALIAS_INVALID);
                 pkt.topic = *resolved;
             } else {
                 session.set_topic_alias(alias, pkt.topic);
             }
         }
 
+        if (is_v5 && pkt.properties.topic_alias.has_value() && pkt.topic.empty()) {
+            return protocol_error_disconnect(session, DisconnectReason::TOPIC_ALIAS_INVALID);
+        }
+
         if (pkt.topic.empty() || !MqttTopicTree::validate_topic_name(pkt.topic)) {
-            return {};
+            return protocol_error_disconnect(session, DisconnectReason::TOPIC_ALIAS_INVALID);
+        }
+
+        if (qos != QoS::AT_MOST_ONCE && !pkt.packet_id.has_value()) {
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
+        }
+
+        if (qos != QoS::AT_MOST_ONCE && pkt.packet_id.value_or(0) == 0) {
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
+        }
+
+        if (qos == QoS::EXACTLY_ONCE) {
+            if (session.inflight_count() >= session.receive_maximum()) {
+                return protocol_error_disconnect(session, DisconnectReason::RECEIVE_MAXIMUM_EXCEEDED);
+            }
+            if (pkt.packet_id.has_value() && session.has_inflight_packet_id(*pkt.packet_id)) {
+                return MqttCodec::encode_pubrec(
+                    *pkt.packet_id,
+                    static_cast<uint8_t>(PubrecReason::PACKET_IDENTIFIER_IN_USE),
+                    session.protocol_level(), {});
+            }
         }
 
         if (handler_ && !handler_->on_publish(&session, pkt.topic, pkt.payload, qos, retain)) {
@@ -324,7 +484,7 @@ namespace yuan::net::mqtt
     {
         auto puback_opt = MqttCodec::decode_puback(data, len, session.protocol_level());
         if (!puback_opt.has_value())
-            return {};
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
 
         if (handler_)
             handler_->on_message_delivered(&session, puback_opt->packet_id);
@@ -336,7 +496,10 @@ namespace yuan::net::mqtt
     {
         auto pubrec_opt = MqttCodec::decode_pubrec(data, len, session.protocol_level());
         if (!pubrec_opt.has_value())
-            return {};
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
+
+        if (pubrec_opt->packet_id == 0)
+            return protocol_error_disconnect(session, DisconnectReason::PROTOCOL_ERROR);
 
         return MqttCodec::encode_pubrel(
             pubrec_opt->packet_id,
@@ -348,9 +511,19 @@ namespace yuan::net::mqtt
     {
         auto pubrel_opt = MqttCodec::decode_pubrel(data, len, session.protocol_level());
         if (!pubrel_opt.has_value())
-            return {};
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
 
         uint16_t pid = pubrel_opt->packet_id;
+        if (pid == 0)
+            return protocol_error_disconnect(session, DisconnectReason::PROTOCOL_ERROR);
+
+        if (!session.has_inflight_packet_id(pid)) {
+            return MqttCodec::encode_pubcomp(
+                pid,
+                static_cast<uint8_t>(PubcompReason::PACKET_IDENTIFIER_NOT_FOUND),
+                session.protocol_level(), {});
+        }
+
         session.remove_inflight_packet_id(pid);
 
         return MqttCodec::encode_pubcomp(
@@ -363,7 +536,7 @@ namespace yuan::net::mqtt
     {
         auto pubcomp_opt = MqttCodec::decode_pubcomp(data, len, session.protocol_level());
         if (!pubcomp_opt.has_value())
-            return {};
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
 
         session.remove_outgoing_packet_id(pubcomp_opt->packet_id);
         return {};
@@ -373,9 +546,12 @@ namespace yuan::net::mqtt
     {
         auto sub_opt = MqttCodec::decode_subscribe(data, len, session.protocol_level());
         if (!sub_opt.has_value())
-            return {};
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
 
         auto &sub_pkt = *sub_opt;
+        if (sub_pkt.packet_id == 0 || sub_pkt.subscriptions.empty())
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
+
         std::vector<uint8_t> reason_codes;
         reason_codes.reserve(sub_pkt.subscriptions.size());
 
@@ -386,6 +562,27 @@ namespace yuan::net::mqtt
                 reason_codes.push_back(is_v5
                                            ? static_cast<uint8_t>(SubackReason::TOPIC_FILTER_INVALID)
                                            : static_cast<uint8_t>(SubackReason::UNSPECIFIED_ERROR));
+                continue;
+            }
+
+            if (MqttTopicTree::is_shared_subscription(sub.topic_filter) && !config_.shared_subscription_available) {
+                reason_codes.push_back(is_v5
+                                           ? static_cast<uint8_t>(SubackReason::SHARED_SUBSCRIPTION_NOT_SUPPORTED)
+                                           : static_cast<uint8_t>(SubackReason::UNSPECIFIED_ERROR));
+                continue;
+            }
+
+            if (!config_.wildcard_subscription_available &&
+                (sub.topic_filter.find('+') != std::string::npos || sub.topic_filter.find('#') != std::string::npos)) {
+                reason_codes.push_back(is_v5
+                                           ? static_cast<uint8_t>(SubackReason::WILDCARD_SUBSCRIPTIONS_NOT_SUPPORTED)
+                                           : static_cast<uint8_t>(SubackReason::UNSPECIFIED_ERROR));
+                continue;
+            }
+
+            if (is_v5 && sub_pkt.properties.subscription_identifier.has_value() &&
+                !config_.subscription_identifier_available) {
+                reason_codes.push_back(static_cast<uint8_t>(SubackReason::SUBSCRIPTION_IDENTIFIERS_NOT_SUPPORTED));
                 continue;
             }
 
@@ -408,12 +605,19 @@ namespace yuan::net::mqtt
             tree_sub.retain_handling = sub.retain_handling;
             if (is_v5 && sub_pkt.properties.subscription_identifier.has_value())
                 tree_sub.subscription_identifier = sub_pkt.properties.subscription_identifier;
+            if (auto sg = extract_shared_group(sub.topic_filter); sg.has_value()) {
+                tree_sub.shared_group = *sg;
+                tree_sub.shared_filter = sub.topic_filter;
+            }
 
             topic_tree_.subscribe(sub.topic_filter, tree_sub);
             session.add_subscription(sub.topic_filter, granted_qos);
 
             auto retained_msgs = retained_store_.match(sub.topic_filter);
             for (auto &rm : retained_msgs) {
+                if (sub.retain_handling == 2)
+                    continue;
+
                 MqttPublishPacket pub;
                 pub.retain = 1;
                 pub.topic = rm.topic;
@@ -452,9 +656,12 @@ namespace yuan::net::mqtt
     {
         auto unsub_opt = MqttCodec::decode_unsubscribe(data, len, session.protocol_level());
         if (!unsub_opt.has_value())
-            return {};
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
 
         auto &unsub_pkt = *unsub_opt;
+        if (unsub_pkt.packet_id == 0 || unsub_pkt.topic_filters.empty())
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
+
         std::vector<uint8_t> reason_codes;
         reason_codes.reserve(unsub_pkt.topic_filters.size());
 
@@ -477,11 +684,13 @@ namespace yuan::net::mqtt
 
     ByteBuffer MqttDispatcher::handle_pingreq(MqttSession & session)
     {
+        session.update_last_activity();
         return MqttCodec::encode_pingresp();
     }
 
     ByteBuffer MqttDispatcher::handle_disconnect(MqttSession & session, const uint8_t * data, size_t len)
     {
+        const bool was_connected = (session.state() == MqttSessionState::connected);
         session.set_state(MqttSessionState::disconnected);
 
         bool clear_will = true;
@@ -496,14 +705,22 @@ namespace yuan::net::mqtt
         if (clear_will)
             session.clear_will_message();
 
+        if (was_connected && session.session_expiry_interval() == 0) {
+            topic_tree_.remove_all(session.session_id());
+        }
+
         return {};
     }
 
     ByteBuffer MqttDispatcher::handle_auth(MqttSession & session, const uint8_t * data, size_t len)
     {
+        if (session.protocol_level() != ProtocolLevel::V5_0) {
+            return {};
+        }
+
         auto auth_opt = MqttCodec::decode_auth(data, len);
         if (!auth_opt.has_value())
-            return {};
+            return protocol_error_disconnect(session, DisconnectReason::MALFORMED_PACKET);
 
         std::string method;
         std::vector<uint8_t> auth_data;
@@ -512,14 +729,18 @@ namespace yuan::net::mqtt
         if (auth_opt->properties.authentication_data.has_value())
             auth_data = *auth_opt->properties.authentication_data;
 
+        if (method.empty()) {
+            return protocol_error_disconnect(session, DisconnectReason::BAD_AUTHENTICATION_METHOD);
+        }
+
         if (handler_ && handler_->on_auth(&session, method, auth_data)) {
             MqttAuthPacket response;
             response.reason_code = static_cast<uint8_t>(AuthReason::SUCCESS);
-            return {};
+            return MqttCodec::encode_auth(response.reason_code, response.properties);
         }
 
         return MqttCodec::encode_disconnect(
-            static_cast<uint8_t>(ConnackCode::V5_BAD_AUTHENTICATION_METHOD),
+            static_cast<uint8_t>(DisconnectReason::BAD_AUTHENTICATION_METHOD),
             session.protocol_level(), {});
     }
 
@@ -529,7 +750,9 @@ namespace yuan::net::mqtt
         if (matches.empty())
             return;
 
-        for (auto &sub : matches) {
+        const auto selected_matches = apply_shared_subscription_policy(matches);
+
+        for (auto &sub : selected_matches) {
             if (sub.no_local && sub.session_id == source.session_id())
                 continue;
 
@@ -576,8 +799,25 @@ namespace yuan::net::mqtt
 
     void MqttDispatcher::on_session_closed(MqttSession & session)
     {
-        send_will_message(session);
-        topic_tree_.remove_all(session.session_id());
+        bool should_send_will = true;
+        if (session.protocol_level() == ProtocolLevel::V5_0) {
+            auto *will = session.will_message();
+            if (will && will->will_delay_interval.has_value() && *will->will_delay_interval > 0) {
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now() - session.last_activity());
+                if (elapsed.count() < static_cast<int64_t>(*will->will_delay_interval)) {
+                    should_send_will = false;
+                }
+            }
+        }
+
+        if (should_send_will) {
+            send_will_message(session);
+        }
+
+        if (session.session_expiry_interval() == 0) {
+            topic_tree_.remove_all(session.session_id());
+        }
 
         if (handler_)
             handler_->on_disconnected(&session, 0);

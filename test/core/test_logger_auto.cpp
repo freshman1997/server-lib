@@ -1,6 +1,7 @@
 #include "file_logger.h"
 #include "formatter.h"
 #include "log_config.h"
+#include "logger_factory.h"
 
 #include <chrono>
 #include <filesystem>
@@ -108,6 +109,50 @@ int main()
     const auto content = read_file(log_path);
     require(content.find("中文输出 测试") != std::string::npos, "utf-8 content not written");
     require(content.find("{value: 1}") != std::string::npos, "brace payload not written correctly");
+
+    LogConfig rotate_cfg;
+    rotate_cfg.log_path = (root / "rotate").string();
+    rotate_cfg.log_file_name = "size.log";
+    rotate_cfg.log_level = Level::trace;
+    rotate_cfg.rotate_policy = RotatePolicy::size_limit;
+    rotate_cfg.max_file_size = 32;
+    rotate_cfg.backup_count = 3;
+    rotate_cfg.fmt_pattern = "{message}";
+
+    FileLogger rotate_logger(rotate_cfg);
+    rotate_logger.log_fmt(Level::info, "{}", "111111111111111111111111");
+    rotate_logger.log_fmt(Level::info, "{}", "222222222222222222222222");
+    rotate_logger.flush();
+
+    const auto active_rotate_content = read_file(root / "rotate" / "size.log");
+    require(active_rotate_content.find("222222222222222222222222") != std::string::npos,
+            "active log file should contain latest record after explicit flush");
+
+    int backup_files = 0;
+    for (const auto& entry : fs::directory_iterator(root / "rotate")) {
+        const auto name = entry.path().filename().string();
+        if (name.rfind("size.log.", 0) == 0) ++backup_files;
+    }
+    require(backup_files > 0, "size rotation should create a backup before oversize write");
+
+    LogConfig factory_cfg1;
+    factory_cfg1.log_path = (root / "factory1").string();
+    factory_cfg1.log_file_name = "factory.log";
+    factory_cfg1.log_level = Level::trace;
+    factory_cfg1.fmt_pattern = "{message}";
+
+    LogConfig factory_cfg2 = factory_cfg1;
+    factory_cfg2.log_path = (root / "factory2").string();
+
+    auto factory = LoggerFactory::get_instance();
+    factory->init_with_config(factory_cfg1);
+    auto old_file_logger = factory->get_logger(LoggerType::file_);
+    factory->init_with_config(factory_cfg2);
+    auto new_file_logger = factory->get_logger(LoggerType::file_);
+    require(old_file_logger != new_file_logger, "factory reinit should drop cached logger instances");
+    new_file_logger->log_fmt(Level::info, "{}", "factory reinit target");
+    new_file_logger->flush();
+    require(fs::exists(root / "factory2" / "factory.log"), "factory reinit should use new config path");
 
     fs::remove_all(root, ec);
     std::cout << "logger_auto test passed\n";

@@ -25,6 +25,29 @@ This directory is organized by feature area:
   - `.\test\proxy\proxy_tool.exe udp-echo 19090`
   - `.\test\proxy\proxy_tool.exe udp-probe 127.0.0.1 1080 127.0.0.1 19090 PING-UDP`
 
+## Build Test Groups Selectively
+
+To reduce compile time, each major test area can be toggled independently:
+
+- `YUAN_TEST_BUILD_CORE` (default `ON`)
+- `YUAN_TEST_BUILD_NAS` (default `ON`)
+- `YUAN_TEST_BUILD_NETWORK` (default `ON`)
+- `YUAN_TEST_BUILD_PLUGIN` (default `ON`)
+- `YUAN_TEST_BUILD_PROTOCOL` (default `ON`)
+- `YUAN_TEST_BUILD_PROXY` (default `ON`)
+- `YUAN_TEST_BUILD_BENCHMARK` (default `ON`)
+
+Protocol tests also support per-module switches:
+
+- `YUAN_TEST_BUILD_PROTOCOL_HTTP`, `YUAN_TEST_BUILD_PROTOCOL_DNS`, `YUAN_TEST_BUILD_PROTOCOL_BIT_TORRENT`
+- `YUAN_TEST_BUILD_PROTOCOL_MQTT`, `YUAN_TEST_BUILD_PROTOCOL_WEBSOCKET`, `YUAN_TEST_BUILD_PROTOCOL_FTP`
+- `YUAN_TEST_BUILD_PROTOCOL_SOCKS5`, `YUAN_TEST_BUILD_PROTOCOL_SSH`, `YUAN_TEST_BUILD_PROTOCOL_SMB`
+- `YUAN_TEST_BUILD_PROTOCOL_SHADOWSOCKS`, `YUAN_TEST_BUILD_PROTOCOL_WEBDAV`
+
+Example (only build core + network tests):
+
+`cmake -S . -B build -D YUAN_BUILD_TESTS=ON -D YUAN_TEST_BUILD_CORE=ON -D YUAN_TEST_BUILD_NETWORK=ON -D YUAN_TEST_BUILD_PROTOCOL=OFF -D YUAN_TEST_BUILD_NAS=OFF -D YUAN_TEST_BUILD_PLUGIN=OFF -D YUAN_TEST_BUILD_PROXY=OFF -D YUAN_TEST_BUILD_BENCHMARK=OFF`
+
 ## Connection Ownership
 
 The networking core now uses shared ownership for live connections:

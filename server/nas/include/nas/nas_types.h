@@ -40,6 +40,7 @@ namespace yuan::server::nas
         std::string password;
         int db = 0;
         std::string key_prefix = "yuan:nas:";
+        std::size_t audit_max_events = 1000;
     };
 
     struct NasUser
@@ -86,6 +87,7 @@ namespace yuan::server::nas
     {
         bool file_enabled = true;
         std::string file_path = "nas_audit.jsonl";
+        std::size_t max_events = 1000;
     };
 
     struct NasAdminSession
@@ -105,6 +107,7 @@ namespace yuan::server::nas
         NasRedisConfig redis;
         NasAuditConfig audit;
         std::string webdav_mount = "/dav";
+        std::string admin_console_path;
         bool allow_anonymous_read = false;
         std::vector<NasShare> shares;
     };

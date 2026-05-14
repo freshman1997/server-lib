@@ -1,0 +1,9 @@
+{
+  "name": "release_dns",
+  "version": "@RELEASE_DNS_VERSION@",
+  "platform": "@RELEASE_DNS_PLATFORM@",
+  "arch": "@RELEASE_DNS_ARCH@",
+  "package": "@RELEASE_DNS_PACKAGE_NAME@",
+  "git_commit": "@RELEASE_DNS_GIT_COMMIT@",
+  "build_utc": "@RELEASE_DNS_BUILD_UTC@"
+}

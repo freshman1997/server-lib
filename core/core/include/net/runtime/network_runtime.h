@@ -10,6 +10,7 @@
 #include "coroutine/queue_in_loop_awaitable.h"
 #include "timer/timer.h"
 #include "timer/timer_handle.h"
+#include "timer/timer_manager_factory.h"
 
 namespace yuan::timer
 {
@@ -34,6 +35,8 @@ namespace yuan::net
     {
     public:
         NetworkRuntime();
+
+        explicit NetworkRuntime(timer::TimerBackend timer_backend);
 
         NetworkRuntime(EventLoop *loop, timer::TimerManager *tm);
 

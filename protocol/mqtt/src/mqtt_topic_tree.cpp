@@ -216,6 +216,22 @@ namespace yuan::net::mqtt
         if (filter.empty())
             return false;
 
+        if (is_shared_subscription(filter)) {
+            size_t second_slash = filter.find('/', 7);
+            if (second_slash == std::string::npos)
+                return false;
+
+            const std::string group = filter.substr(7, second_slash - 7);
+            const std::string inner = filter.substr(second_slash + 1);
+            if (group.empty() || inner.empty())
+                return false;
+
+            if (group.find('+') != std::string::npos || group.find('#') != std::string::npos)
+                return false;
+
+            return validate_topic_filter(inner);
+        }
+
         for (char c : filter) {
             if (c == '\0')
                 return false;

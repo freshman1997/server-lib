@@ -10,7 +10,6 @@
 #include "net/poller/select_poller.h"
 #include "net/socket/inet_address.h"
 #include "timer/timer_handle.h"
-#include "timer/timer_util.hpp"
 #include "timer/wheel_timer_manager.h"
 
 #if defined(__linux__)
@@ -301,8 +300,8 @@ bool NetLogger::Impl::schedule_reconnect_locked()
         return false;
     }
 
-    reconnect_timer_ = yuan::timer::TimerUtil::build_timeout_handle(
-        timer_manager_, static_cast<uint32_t>(cfg_.net_reconnect_delay_ms),
+    reconnect_timer_ = timer_manager_->after(
+        static_cast<uint32_t>(cfg_.net_reconnect_delay_ms),
         [this]() {
             std::lock_guard<std::mutex> lock(mutex_);
             reconnect_timer_.reset();
@@ -386,6 +385,9 @@ void NetLogger::Impl::write_on_loop(const std::string& data)
         std::lock_guard<std::mutex> lock(mutex_);
         if (!connected_ || !connection_) {
             enqueue_pending_locked(data);
+            if (!schedule_connect_locked()) {
+                schedule_reconnect_locked();
+            }
             return;
         }
         connection = connection_;

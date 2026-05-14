@@ -11,6 +11,9 @@
 #include <iostream>
 #include <optional>
 #include <algorithm>
+#include <cstdint>
+#include <iomanip>
+#include <sstream>
 #include <unordered_map>
 
 namespace
@@ -49,9 +52,11 @@ namespace
         bool set_dead_property(std::string_view, std::string_view, std::string_view, std::string_view) override { return true; }
         bool remove_dead_property(std::string_view, std::string_view, std::string_view) override { return true; }
         bool upsert_webdav_lock(const yuan::server::nas::NasWebDavLockRecord &) override { return true; }
+        bool try_create_webdav_lock(const yuan::server::nas::NasWebDavLockRecord &) override { return true; }
         std::optional<yuan::server::nas::NasWebDavLockRecord> find_webdav_lock(std::string_view) const override { return std::nullopt; }
         std::vector<yuan::server::nas::NasWebDavLockRecord> list_webdav_locks(std::string_view, std::string_view) const override { return {}; }
         bool remove_webdav_lock(std::string_view) override { return true; }
+        std::size_t prune_expired_webdav_locks() override { return 0; }
         bool append_audit_event(const yuan::server::nas::NasAuditEvent &event) override
         {
             audit.push_back(event);
@@ -187,6 +192,23 @@ int main()
     nas::NasAuthService auth(memory);
     check(auth.authenticate_password("alice", "secret").authenticated, "password auth should accept valid password");
     check(!auth.authenticate_password("alice", "bad").authenticated, "password auth should reject invalid password");
+    check(user.password_hash.rfind("pbkdf2-sha256$", 0) == 0,
+          "config hash helper should generate pbkdf2-sha256 format");
+
+    const std::string legacy_fallback = "fnv1a64$salt$" + [&] {
+        std::uint64_t hash = 1469598103934665603ull;
+        const std::string material = "salt:secret";
+        for (unsigned char ch : material) {
+            hash ^= ch;
+            hash *= 1099511628211ull;
+        }
+        std::ostringstream oss;
+        oss << std::hex << hash;
+        return oss.str();
+    }();
+    check(nas::NasAuthService::verify_password(legacy_fallback, "secret"),
+          "legacy fnv1a64 format should still verify for migration");
+
     const std::string basic = "Basic " + yuan::base::util::base64_encode("alice:secret");
     check(auth.authenticate_basic_header(basic).authenticated, "basic auth should parse and authenticate");
 

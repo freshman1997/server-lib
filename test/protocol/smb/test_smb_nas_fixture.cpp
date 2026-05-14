@@ -118,6 +118,11 @@ namespace
             return true;
         }
 
+        bool try_create_webdav_lock(const yuan::server::nas::NasWebDavLockRecord &lock) override
+        {
+            return upsert_webdav_lock(lock);
+        }
+
         std::optional<yuan::server::nas::NasWebDavLockRecord> find_webdav_lock(std::string_view) const override
         {
             return std::nullopt;
@@ -131,6 +136,11 @@ namespace
         bool remove_webdav_lock(std::string_view) override
         {
             return true;
+        }
+
+        std::size_t prune_expired_webdav_locks() override
+        {
+            return 0;
         }
 
         bool append_audit_event(const yuan::server::nas::NasAuditEvent &) override

@@ -1,6 +1,6 @@
 # SMB NAS Progress
 
-Last updated: 2026-04-25
+Last updated: 2026-05-12
 
 This document records the current SMB/NAS integration state so future work can continue from the same point without rediscovering context.
 
@@ -29,7 +29,7 @@ Move the in-repo SMB implementation toward practical Samba `smbd` compatibility 
 
 - Wired SMB SPNEGO/NTLM flow to handler password lookup.
 - Added NTLMv2 password-proof tests.
-- Current production gap: NAS password hash format is not fully integrated for SMB NTLMv2; `plain:` development credentials are supported for the adapter flow.
+- Current production gap: SMB NTLMv2 path still depends on credentials that can expose plain password or NT hash material; `pbkdf2-sha256` hashes are intentionally not exposed through SMB lookup.
 
 ### Local SMB Filesystem Behavior
 
@@ -67,27 +67,39 @@ Move the in-repo SMB implementation toward practical Samba `smbd` compatibility 
 
 ### Interop Support
 
-- Added optional `smbclient_nas_smoke.sh` workflow for:
+- Added optional `smbclient_nas_smoke.sh` and `smbclient_nas_smoke.ps1` workflows for:
   - upload
   - download
   - rename
   - delete
   - list
-- Current gap: the script still needs an automated local server fixture before it becomes a reliable CI test.
+- Added automated local SMB/NAS fixture integration via `test_smb_nas_fixture` in CTest for:
+  - `smbclient_nas_smoke`
+  - `smbclient_nas_smoke_signing_required`
+- The `smbclient` smoke tests remain optional and return `SKIP_RETURN_CODE 77` when the environment lacks `smbclient`.
+
+### Signing Required Validation
+
+- Added dispatcher-level regression `test_dispatcher_negotiate_signing_required_mode`.
+- The new test validates `NEGOTIATE_SIGNING_REQUIRED` is advertised when `SmbServerConfig.require_signing=true`.
+- Request-path enforcement remains covered: unsigned post-auth SMB2 requests are rejected with `ACCESS_DENIED` when signing is required.
 
 ## Validation Snapshot
 
 Known passing commands after the latest SMB work:
 
 ```bash
-cmake --build build --target test_smb -j2
-./build/test/protocol/smb/test_smb
+cmake --build build --target test_smb test_nas_smb_adapter -j2
+ctest --test-dir build -R "smb$|nas_smb_adapter|smb_internal_client_smoke|smb_internal_client_smoke_basic|smb_internal_client_smoke_ioctl" --output-on-failure
+
+# optional interop (requires smbclient)
+ctest --test-dir build -R "smbclient_nas_smoke|smbclient_nas_smoke_signing_required" --output-on-failure
 ```
 
 Expected result:
 
 ```text
-48/48 passed, 0 failed
+SMB and NAS SMB adapter tests pass; smbclient smoke may be skipped when smbclient is unavailable.
 ```
 
 NAS adapter validation:
@@ -103,7 +115,7 @@ Expected result:
 NAS SMB adapter tests passed
 ```
 
-`ctest` registration is incomplete in the current build state; direct test binaries are the reliable acceptance path for now.
+`ctest` registration now includes `smbclient_nas_smoke` and `smbclient_nas_smoke_signing_required` with skip behavior for missing client tooling.
 
 ## Current State By Area
 
@@ -118,15 +130,14 @@ NAS SMB adapter tests passed
 | Filesystem info | usable | Common client mount queries are covered. |
 | IOCTL/FSCTL | partial | Common mount-path FSCTLs are covered; copychunk, snapshots, and richer DFS/RPC remain. |
 | Change notify | fallback | Empty completion avoids stuck clients; real async notification remains. |
-| Signing | partial | Basic verify/sign policy exists; real `smbclient --signing=required` interop remains. |
+| Signing | partial | Basic verify/sign policy exists; negotiate signing-required advertisement test is covered; real client interop still environment-dependent. |
 | Encryption | partial | Crypto primitives exist; end-to-end SMB3 encryption interop remains. |
 | Durable handles | missing | Needs create-context and reconnect behavior. |
 | Multi-channel | missing | Capability is intentionally not advertised. |
 
 ## Next Implementation Order
 
-1. Add an automated local SMB/NAS server fixture for `smbclient_nas_smoke.sh`.
-2. Run and document Linux `smbclient` interop with normal and signing-required modes.
+1. Run and document Linux `smbclient` interop with normal and signing-required modes in CI-capable environments.
 3. Replace empty `CHANGE_NOTIFY` with real async directory notifications.
 4. Integrate production NAS password hashes into NTLMv2 verification.
 5. Add Linux CIFS mount smoke coverage.

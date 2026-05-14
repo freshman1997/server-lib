@@ -7,6 +7,7 @@
 #include "response.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -208,6 +209,81 @@ namespace yuan::server
             }
         }
 
+        constexpr std::size_t kAdminMaxJsonBytes = 64 * 1024;
+        constexpr int kAdminDefaultLimit = 100;
+        constexpr int kAdminMaxLimit = 500;
+        constexpr std::uint32_t kAdminRateLimitPerMinute = 240;
+
+        std::optional<nlohmann::json> request_json_bounded(yuan::net::http::HttpRequest *req,
+                                                           std::size_t max_bytes)
+        {
+            if (!req) {
+                return std::nullopt;
+            }
+            const auto bytes = req->body_buffer_size() > 0 ? req->body_buffer_size() : req->get_body_length();
+            if (bytes > max_bytes) {
+                return std::nullopt;
+            }
+            return request_json(req);
+        }
+
+        int bounded_limit(yuan::net::http::HttpRequest *req,
+                          int fallback = kAdminDefaultLimit,
+                          int max_limit = kAdminMaxLimit)
+        {
+            if (!req) {
+                return fallback;
+            }
+            int limit = req->get_param_int("limit", fallback);
+            if (limit <= 0) {
+                return fallback;
+            }
+            if (limit > max_limit) {
+                return max_limit;
+            }
+            return limit;
+        }
+
+        bool enforce_admin_rate_limit(yuan::net::http::HttpRequest *req,
+                                      yuan::net::http::HttpResponse *resp,
+                                      std::string_view actor)
+        {
+            if (!req || !resp || actor.empty()) {
+                return true;
+            }
+
+            struct AdminRateWindow
+            {
+                std::int64_t minute_window = 0;
+                std::uint32_t request_count = 0;
+            };
+
+            static std::mutex rate_mutex;
+            static std::unordered_map<std::string, AdminRateWindow> windows;
+
+            const auto now_ms = unix_ms_now();
+            const auto minute = now_ms / 60000;
+            const std::string key = std::string(actor) + "|" + admin_remote_addr(req);
+
+            std::lock_guard<std::mutex> lock(rate_mutex);
+            auto &window = windows[key];
+            if (window.minute_window != minute) {
+                window.minute_window = minute;
+                window.request_count = 0;
+            }
+            if (window.request_count >= kAdminRateLimitPerMinute) {
+                nlohmann::json body;
+                body["error"] = "too_many_requests";
+                body["retry_after_seconds"] = 60;
+                resp->json(body.dump(), yuan::net::http::ResponseCode::too_many_requests);
+                resp->add_header("Retry-After", "60");
+                resp->send();
+                return false;
+            }
+            ++window.request_count;
+            return true;
+        }
+
         void json_error(yuan::net::http::HttpResponse *resp,
                         yuan::net::http::ResponseCode code,
                         std::string_view message)
@@ -216,6 +292,26 @@ namespace yuan::server
             body["error"] = message;
             resp->json(body.dump(), code);
             resp->send();
+        }
+
+        bool ensure_admin_get_or_default(yuan::net::http::HttpRequest *req,
+                                         yuan::net::http::HttpResponse *resp)
+        {
+            if (req && req->get_method() != yuan::net::http::HttpMethod::get_) {
+                json_error(resp, yuan::net::http::ResponseCode::method_not_allowed, "method_not_allowed");
+                return false;
+            }
+            return true;
+        }
+
+        bool ensure_admin_post(yuan::net::http::HttpRequest *req,
+                               yuan::net::http::HttpResponse *resp)
+        {
+            if (!req || req->get_method() != yuan::net::http::HttpMethod::post_) {
+                json_error(resp, yuan::net::http::ResponseCode::method_not_allowed, "method_not_allowed");
+                return false;
+            }
+            return true;
         }
 
         void upsert_config_user(std::vector<yuan::server::nas::NasUser> &users,
@@ -297,6 +393,78 @@ namespace yuan::server
             }
             return item;
         }
+
+        void trim_audit_file_to_cap(const std::filesystem::path &audit_path, std::size_t cap)
+        {
+            if (cap == 0) {
+                return;
+            }
+
+            std::ifstream in(audit_path, std::ios::binary);
+            if (!in.good()) {
+                return;
+            }
+
+            std::deque<std::string> recent;
+            std::string line;
+            while (std::getline(in, line)) {
+                if (line.empty()) {
+                    continue;
+                }
+                recent.push_back(std::move(line));
+                while (recent.size() > cap) {
+                    recent.pop_front();
+                }
+            }
+
+            std::ofstream rewrite(audit_path, std::ios::binary | std::ios::trunc);
+            if (!rewrite.good()) {
+                return;
+            }
+            for (const auto &entry : recent) {
+                rewrite << entry << '\n';
+            }
+        }
+
+        constexpr std::string_view kNasAdminConsoleFallbackHtml =
+            "<!doctype html><html><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            "<title>Yuan NAS Admin</title></head><body>"
+            "<h1>Yuan NAS Admin</h1><p>Probe</p><p>Create User</p><p>Create Share</p>"
+            "<p>Quota</p><p>Activity</p><p>Sessions</p><p>Audit</p>"
+            "</body></html>";
+
+        std::string load_nas_admin_console_html(const std::string &configured_path)
+        {
+            const auto source_dir = std::filesystem::path(__FILE__).parent_path().parent_path();
+            const auto cwd = std::filesystem::current_path();
+            std::vector<std::filesystem::path> candidates;
+            if (!configured_path.empty()) {
+                candidates.emplace_back(configured_path);
+            }
+            const std::array<std::filesystem::path, 4> defaults = {
+                source_dir / "resources" / "nas_admin_console.html",
+                cwd / "resources" / "nas_admin_console.html",
+                cwd / "server" / "services" / "resources" / "nas_admin_console.html",
+                cwd / ".." / "server" / "services" / "resources" / "nas_admin_console.html"
+            };
+            candidates.insert(candidates.end(), defaults.begin(), defaults.end());
+
+            for (const auto &path : candidates) {
+                std::ifstream in(path, std::ios::binary);
+                if (!in.good()) {
+                    continue;
+                }
+                std::ostringstream out;
+                out << in.rdbuf();
+                const auto html = out.str();
+                if (!html.empty()) {
+                    return html;
+                }
+            }
+
+            return std::string(kNasAdminConsoleFallbackHtml);
+        }
     }
 
     NasService::NasService(NasServiceConfig config)
@@ -358,7 +526,9 @@ namespace yuan::server
         if (!config_.metadata) {
 #if YUAN_NAS_HAS_REDIS
             if (config_.nas.redis.enabled) {
-                auto redis = std::make_shared<yuan::server::nas::NasRedisMetadataStore>(config_.nas.redis);
+                auto redis_cfg = config_.nas.redis;
+                redis_cfg.audit_max_events = config_.nas.audit.max_events;
+                auto redis = std::make_shared<yuan::server::nas::NasRedisMetadataStore>(std::move(redis_cfg));
                 if (!redis->init()) {
                     return false;
                 }
@@ -492,6 +662,7 @@ namespace yuan::server
         if (out.good()) {
             out << audit_json(event).dump() << '\n';
         }
+        trim_audit_file_to_cap(audit_path, config_.nas.audit.max_events);
     }
 
     std::vector<yuan::server::nas::NasAuditEvent> NasService::audit_events(std::size_t limit) const
@@ -499,9 +670,12 @@ namespace yuan::server
         if (limit == 0) {
             return {};
         }
+        const auto effective_limit = config_.nas.audit.max_events > 0
+            ? (std::min)(limit, config_.nas.audit.max_events)
+            : limit;
         std::vector<yuan::server::nas::NasAuditEvent> out;
         if (config_.metadata) {
-            out = config_.metadata->list_audit_events(limit);
+            out = config_.metadata->list_audit_events(effective_limit);
         }
         if (!config_.nas.audit.file_enabled || config_.nas.audit.file_path.empty()) {
             return out;
@@ -517,7 +691,7 @@ namespace yuan::server
         while (std::getline(in, line)) {
             if (auto event = audit_from_json(line)) {
                 recent.push_back(std::move(*event));
-                while (recent.size() > limit) {
+                while (recent.size() > effective_limit) {
                     recent.pop_front();
                 }
             }
@@ -529,8 +703,8 @@ namespace yuan::server
         std::sort(out.begin(), out.end(), [](const auto &lhs, const auto &rhs) {
             return lhs.timestamp_unix_ms > rhs.timestamp_unix_ms;
         });
-        if (out.size() > limit) {
-            out.resize(limit);
+        if (out.size() > effective_limit) {
+            out.resize(effective_limit);
         }
         return out;
     }
@@ -565,6 +739,20 @@ namespace yuan::server
         (void)config_.metadata->upsert_admin_session(session);
     }
 
+    std::optional<std::string> NasService::guard_admin_request(yuan::net::http::HttpRequest *req,
+                                                               yuan::net::http::HttpResponse *resp)
+    {
+        std::string actor;
+        if (!require_admin(req, resp, config_.metadata, &actor)) {
+            return std::nullopt;
+        }
+        if (!enforce_admin_rate_limit(req, resp, actor)) {
+            return std::nullopt;
+        }
+        record_admin_session(req, actor);
+        return actor;
+    }
+
     void NasService::install_health_endpoint()
     {
         if (!http_) {
@@ -586,284 +774,399 @@ namespace yuan::server
         }
 
         http_->server().on("/nas/admin/shares", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
-            std::string actor;
-            if (!require_admin(req, resp, config_.metadata, &actor)) {
-                return;
-            }
-            record_admin_session(req, actor);
-            if (req && req->get_method() == yuan::net::http::HttpMethod::post_) {
-                auto body = request_json(req);
-                if (!body) {
-                    json_error(resp, yuan::net::http::ResponseCode::bad_request, "invalid_json");
-                    return;
-                }
-                yuan::server::nas::NasShare share;
-                share.id = json_string(*body, "id");
-                share.name = json_string(*body, "name");
-                share.root_path = json_string(*body, "root_path");
-                share.enabled = json_bool(*body, "enabled", share.enabled);
-                share.readonly = json_bool(*body, "readonly", share.readonly);
-                if (body->contains("default_permissions")) {
-                    share.default_permissions = parse_permissions(body->at("default_permissions"), share.default_permissions);
-                }
-                if (share.id.empty() || share.name.empty() || share.root_path.empty()) {
-                    json_error(resp, yuan::net::http::ResponseCode::bad_request, "missing_required_share_fields");
-                    return;
-                }
-                if (!config_.metadata || !config_.metadata->upsert_share(share)) {
-                    json_error(resp, yuan::net::http::ResponseCode::internal_server_error, "store_failed");
-                    return;
-                }
-                upsert_config_share(config_.nas.shares, share);
-                if (mount_result_.share_manager) {
-                    mount_result_.share_manager->replace(effective_shares());
-                    mount_result_.share_count = mount_result_.share_manager->shares().size();
-                }
-                refresh_smb_shares();
-                record_audit(actor, "share.upsert", share.name, share.root_path);
-                nlohmann::json out;
-                out["ok"] = true;
-                out["id"] = share.id;
-                out["name"] = share.name;
-                resp->json(out.dump(), yuan::net::http::ResponseCode::ok_);
-                resp->send();
-                return;
-            }
-            if (req && req->get_method() != yuan::net::http::HttpMethod::get_) {
-                json_error(resp, yuan::net::http::ResponseCode::method_not_allowed, "method_not_allowed");
-                return;
-            }
-
-            nlohmann::json shares = nlohmann::json::array();
-            for (const auto &share : config_.nas.shares) {
-                nlohmann::json item;
-                item["id"] = share.id;
-                item["name"] = share.name;
-                item["root_path"] = share.root_path;
-                item["enabled"] = share.enabled;
-                item["readonly"] = share.readonly;
-                item["default_permissions"] = static_cast<std::uint32_t>(share.default_permissions);
-                shares.push_back(std::move(item));
-            }
-            nlohmann::json body;
-            body["shares"] = std::move(shares);
-            body["count"] = config_.nas.shares.size();
-            resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
-            resp->send();
+            handle_admin_shares(req, resp);
         });
 
         http_->server().on("/nas/admin/users", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
-            std::string actor;
-            if (!require_admin(req, resp, config_.metadata, &actor)) {
-                return;
-            }
-            record_admin_session(req, actor);
-            if (req && req->get_method() == yuan::net::http::HttpMethod::post_) {
-                auto body = request_json(req);
-                if (!body) {
-                    json_error(resp, yuan::net::http::ResponseCode::bad_request, "invalid_json");
-                    return;
-                }
-                yuan::server::nas::NasUser user;
-                user.id = json_string(*body, "id");
-                user.username = json_string(*body, "username");
-                user.password_hash = json_string(*body, "password_hash");
-                if (user.password_hash.empty() && body->contains("password")) {
-                    user.password_hash = yuan::server::nas::NasAuthService::hash_password_for_config(
-                        body->at("password").get<std::string>(),
-                        json_string(*body, "salt", "nas"));
-                }
-                user.enabled = json_bool(*body, "enabled", user.enabled);
-                user.admin = json_bool(*body, "admin", user.admin);
-                if (user.id.empty() || user.username.empty() || user.password_hash.empty()) {
-                    json_error(resp, yuan::net::http::ResponseCode::bad_request, "missing_required_user_fields");
-                    return;
-                }
-                if (!config_.metadata || !config_.metadata->upsert_user(user)) {
-                    json_error(resp, yuan::net::http::ResponseCode::internal_server_error, "store_failed");
-                    return;
-                }
-                upsert_config_user(config_.bootstrap_users, user);
-                record_audit(actor, "user.upsert", user.username, user.admin ? "admin" : "user");
-                nlohmann::json out;
-                out["ok"] = true;
-                out["id"] = user.id;
-                out["username"] = user.username;
-                resp->json(out.dump(), yuan::net::http::ResponseCode::ok_);
-                resp->send();
-                return;
-            }
-            if (req && req->get_method() != yuan::net::http::HttpMethod::get_) {
-                json_error(resp, yuan::net::http::ResponseCode::method_not_allowed, "method_not_allowed");
-                return;
-            }
-
-            nlohmann::json users = nlohmann::json::array();
-            const auto listed = config_.metadata ? config_.metadata->list_users() : std::vector<yuan::server::nas::NasUser>{};
-            for (const auto &user : listed) {
-                nlohmann::json item;
-                item["id"] = user.id;
-                item["username"] = user.username;
-                item["enabled"] = user.enabled;
-                item["admin"] = user.admin;
-                users.push_back(std::move(item));
-            }
-            nlohmann::json body;
-            body["users"] = std::move(users);
-            body["count"] = listed.size();
-            resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
-            resp->send();
+            handle_admin_users(req, resp);
         });
 
         http_->server().on("/nas/admin/quota", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
-            std::string actor;
-            if (!require_admin(req, resp, config_.metadata, &actor)) {
-                return;
-            }
-            record_admin_session(req, actor);
-            if (req && req->get_method() != yuan::net::http::HttpMethod::get_) {
-                json_error(resp, yuan::net::http::ResponseCode::method_not_allowed, "method_not_allowed");
-                return;
-            }
-
-            nlohmann::json shares = nlohmann::json::array();
-            std::uint64_t total_used = 0;
-            for (const auto &share : effective_shares()) {
-                auto item = share_quota_json(share);
-                total_used += item.value("used_bytes", 0ull);
-                shares.push_back(std::move(item));
-            }
-
-            nlohmann::json body;
-            body["shares"] = std::move(shares);
-            body["count"] = body["shares"].size();
-            body["total_used_bytes"] = total_used;
-            resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
-            resp->send();
+            handle_admin_quota(req, resp);
         });
 
         http_->server().on("/nas/admin/health/actions", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
-            std::string actor;
-            if (!require_admin(req, resp, config_.metadata, &actor)) {
-                return;
-            }
-            record_admin_session(req, actor);
-            if (req && req->get_method() == yuan::net::http::HttpMethod::get_) {
-                nlohmann::json body;
-                body["actions"] = nlohmann::json::array({ "probe" });
-                resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
-                resp->send();
-                return;
-            }
-            if (!req || req->get_method() != yuan::net::http::HttpMethod::post_) {
-                json_error(resp, yuan::net::http::ResponseCode::method_not_allowed, "method_not_allowed");
-                return;
-            }
-
-            auto body = request_json(req);
-            if (!body) {
-                json_error(resp, yuan::net::http::ResponseCode::bad_request, "invalid_json");
-                return;
-            }
-            const auto action = json_string(*body, "action");
-            if (action != "probe") {
-                json_error(resp, yuan::net::http::ResponseCode::bad_request, "unsupported_action");
-                return;
-            }
-
-            record_audit(actor, "service.health_probe", config_.nas.webdav_mount, "admin action");
-            nlohmann::json out;
-            out["ok"] = true;
-            out["action"] = action;
-            out["health"] = health_status_json();
-            resp->json(out.dump(), yuan::net::http::ResponseCode::ok_);
-            resp->send();
+            handle_admin_health_actions(req, resp);
         });
 
         http_->server().on("/nas/admin/audit", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
-            std::string actor;
-            if (!require_admin(req, resp, config_.metadata, &actor)) {
-                return;
-            }
-            record_admin_session(req, actor);
-            if (req && req->get_method() != yuan::net::http::HttpMethod::get_) {
-                json_error(resp, yuan::net::http::ResponseCode::method_not_allowed, "method_not_allowed");
-                return;
-            }
-
-            const auto events = audit_events(100);
-            nlohmann::json items = nlohmann::json::array();
-            for (const auto &event : events) {
-                items.push_back(audit_json(event));
-            }
-
-            nlohmann::json body;
-            body["events"] = std::move(items);
-            body["count"] = body["events"].size();
-            resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
-            resp->send();
+            handle_admin_audit(req, resp);
         });
 
         http_->server().on("/nas/admin/sessions", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
-            std::string actor;
-            if (!require_admin(req, resp, config_.metadata, &actor)) {
-                return;
-            }
-            record_admin_session(req, actor);
-            if (req && req->get_method() != yuan::net::http::HttpMethod::get_) {
-                json_error(resp, yuan::net::http::ResponseCode::method_not_allowed, "method_not_allowed");
-                return;
-            }
-
-            const auto sessions = config_.metadata
-                                      ? config_.metadata->list_admin_sessions(100)
-                                      : std::vector<yuan::server::nas::NasAdminSession>{};
-            nlohmann::json items = nlohmann::json::array();
-            for (const auto &session : sessions) {
-                nlohmann::json item;
-                item["id"] = session.id;
-                item["username"] = session.username;
-                item["remote_addr"] = session.remote_addr;
-                item["user_agent"] = session.user_agent;
-                item["last_path"] = session.last_path;
-                item["created_at_unix_ms"] = session.created_at_unix_ms;
-                item["last_seen_unix_ms"] = session.last_seen_unix_ms;
-                item["request_count"] = session.request_count;
-                items.push_back(std::move(item));
-            }
-
-            nlohmann::json body;
-            body["sessions"] = std::move(items);
-            body["count"] = body["sessions"].size();
-            resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
-            resp->send();
+            handle_admin_sessions(req, resp);
         });
 
         http_->server().on("/nas/admin/activity", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
-            std::string actor;
-            if (!require_admin(req, resp, config_.metadata, &actor)) {
-                return;
-            }
-            record_admin_session(req, actor);
-            if (req && req->get_method() != yuan::net::http::HttpMethod::get_) {
-                json_error(resp, yuan::net::http::ResponseCode::method_not_allowed, "method_not_allowed");
-                return;
-            }
-
-            const auto users = config_.metadata ? config_.metadata->list_users() : std::vector<yuan::server::nas::NasUser>{};
-            const auto shares = effective_shares();
-            nlohmann::json body;
-            body["initialized"] = initialized_;
-            body["started"] = started_;
-            body["mounted"] = mounted_;
-            body["webdav_mount"] = config_.nas.webdav_mount;
-            body["redis_enabled"] = config_.nas.redis.enabled;
-            body["user_count"] = users.size();
-            body["share_count"] = shares.size();
-            body["metadata_available"] = config_.metadata && config_.metadata->available();
-            resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
-            resp->send();
+            handle_admin_activity(req, resp);
         });
+    }
+
+    void NasService::handle_admin_shares(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp)
+    {
+        auto actor = guard_admin_request(req, resp);
+        if (!actor) {
+            return;
+        }
+        if (req && req->get_method() == yuan::net::http::HttpMethod::post_) {
+            handle_admin_shares_post(req, resp, *actor);
+            return;
+        }
+        if (!ensure_admin_get_or_default(req, resp)) {
+            return;
+        }
+        handle_admin_shares_get(resp);
+    }
+
+    void NasService::handle_admin_shares_get(yuan::net::http::HttpResponse *resp) const
+    {
+        auto body = build_admin_shares_json();
+        resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
+        resp->send();
+    }
+
+    void NasService::handle_admin_shares_post(yuan::net::http::HttpRequest *req,
+                                              yuan::net::http::HttpResponse *resp,
+                                              const std::string &actor)
+    {
+        if (!ensure_admin_post(req, resp)) {
+            return;
+        }
+
+        auto body = request_json_bounded(req, kAdminMaxJsonBytes);
+        if (!body) {
+            json_error(resp, yuan::net::http::ResponseCode::bad_request, "invalid_json");
+            return;
+        }
+        yuan::server::nas::NasShare share;
+        share.id = json_string(*body, "id");
+        share.name = json_string(*body, "name");
+        share.root_path = json_string(*body, "root_path");
+        share.enabled = json_bool(*body, "enabled", share.enabled);
+        share.readonly = json_bool(*body, "readonly", share.readonly);
+        if (body->contains("default_permissions")) {
+            share.default_permissions = parse_permissions(body->at("default_permissions"), share.default_permissions);
+        }
+        if (share.id.empty() || share.name.empty() || share.root_path.empty()) {
+            json_error(resp, yuan::net::http::ResponseCode::bad_request, "missing_required_share_fields");
+            return;
+        }
+        if (!config_.metadata || !config_.metadata->upsert_share(share)) {
+            json_error(resp, yuan::net::http::ResponseCode::internal_server_error, "store_failed");
+            return;
+        }
+        upsert_config_share(config_.nas.shares, share);
+        if (mount_result_.share_manager) {
+            mount_result_.share_manager->replace(effective_shares());
+            mount_result_.share_count = mount_result_.share_manager->shares().size();
+        }
+        refresh_smb_shares();
+        record_audit(actor, "share.upsert", share.name, share.root_path);
+        nlohmann::json out;
+        out["ok"] = true;
+        out["id"] = share.id;
+        out["name"] = share.name;
+        resp->json(out.dump(), yuan::net::http::ResponseCode::ok_);
+        resp->send();
+    }
+
+    void NasService::handle_admin_users(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp)
+    {
+        auto actor = guard_admin_request(req, resp);
+        if (!actor) {
+            return;
+        }
+        if (req && req->get_method() == yuan::net::http::HttpMethod::post_) {
+            handle_admin_users_post(req, resp, *actor);
+            return;
+        }
+        if (!ensure_admin_get_or_default(req, resp)) {
+            return;
+        }
+        handle_admin_users_get(resp);
+    }
+
+    void NasService::handle_admin_users_get(yuan::net::http::HttpResponse *resp) const
+    {
+        auto body = build_admin_users_json();
+        resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
+        resp->send();
+    }
+
+    void NasService::handle_admin_users_post(yuan::net::http::HttpRequest *req,
+                                             yuan::net::http::HttpResponse *resp,
+                                             const std::string &actor)
+    {
+        if (!ensure_admin_post(req, resp)) {
+            return;
+        }
+
+        auto body = request_json_bounded(req, kAdminMaxJsonBytes);
+        if (!body) {
+            json_error(resp, yuan::net::http::ResponseCode::bad_request, "invalid_json");
+            return;
+        }
+        yuan::server::nas::NasUser user;
+        user.id = json_string(*body, "id");
+        user.username = json_string(*body, "username");
+        user.password_hash = json_string(*body, "password_hash");
+        if (user.password_hash.empty() && body->contains("password")) {
+            user.password_hash = yuan::server::nas::NasAuthService::hash_password_for_config(
+                body->at("password").get<std::string>(),
+                json_string(*body, "salt", "nas"));
+        }
+        user.enabled = json_bool(*body, "enabled", user.enabled);
+        user.admin = json_bool(*body, "admin", user.admin);
+        if (user.id.empty() || user.username.empty() || user.password_hash.empty()) {
+            json_error(resp, yuan::net::http::ResponseCode::bad_request, "missing_required_user_fields");
+            return;
+        }
+        if (!config_.metadata || !config_.metadata->upsert_user(user)) {
+            json_error(resp, yuan::net::http::ResponseCode::internal_server_error, "store_failed");
+            return;
+        }
+        upsert_config_user(config_.bootstrap_users, user);
+        record_audit(actor, "user.upsert", user.username, user.admin ? "admin" : "user");
+        nlohmann::json out;
+        out["ok"] = true;
+        out["id"] = user.id;
+        out["username"] = user.username;
+        resp->json(out.dump(), yuan::net::http::ResponseCode::ok_);
+        resp->send();
+    }
+
+    void NasService::handle_admin_quota(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp)
+    {
+        if (!guard_admin_request(req, resp)) {
+            return;
+        }
+        if (!ensure_admin_get_or_default(req, resp)) {
+            return;
+        }
+
+        auto body = build_admin_quota_json();
+        resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
+        resp->send();
+    }
+
+    void NasService::handle_admin_health_actions(yuan::net::http::HttpRequest *req,
+                                                 yuan::net::http::HttpResponse *resp)
+    {
+        auto actor = guard_admin_request(req, resp);
+        if (!actor) {
+            return;
+        }
+        if (req && req->get_method() == yuan::net::http::HttpMethod::get_) {
+            handle_admin_health_actions_get(resp);
+            return;
+        }
+        if (!ensure_admin_post(req, resp)) {
+            return;
+        }
+        handle_admin_health_actions_post(req, resp, *actor);
+    }
+
+    void NasService::handle_admin_health_actions_get(yuan::net::http::HttpResponse *resp) const
+    {
+        nlohmann::json body;
+        body["actions"] = nlohmann::json::array({ "probe" });
+        resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
+        resp->send();
+    }
+
+    void NasService::handle_admin_health_actions_post(yuan::net::http::HttpRequest *req,
+                                                      yuan::net::http::HttpResponse *resp,
+                                                      const std::string &actor)
+    {
+        auto body = request_json_bounded(req, kAdminMaxJsonBytes);
+        if (!body) {
+            json_error(resp, yuan::net::http::ResponseCode::bad_request, "invalid_json");
+            return;
+        }
+        const auto action = json_string(*body, "action");
+        if (action != "probe") {
+            json_error(resp, yuan::net::http::ResponseCode::bad_request, "unsupported_action");
+            return;
+        }
+
+        record_audit(actor, "service.health_probe", config_.nas.webdav_mount, "admin action");
+        nlohmann::json out;
+        out["ok"] = true;
+        out["action"] = action;
+        out["health"] = health_status_json();
+        resp->json(out.dump(), yuan::net::http::ResponseCode::ok_);
+        resp->send();
+    }
+
+    void NasService::handle_admin_audit(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp)
+    {
+        if (!guard_admin_request(req, resp)) {
+            return;
+        }
+        if (!ensure_admin_get_or_default(req, resp)) {
+            return;
+        }
+
+        handle_admin_audit_get(req, resp);
+    }
+
+    void NasService::handle_admin_audit_get(yuan::net::http::HttpRequest *req,
+                                            yuan::net::http::HttpResponse *resp) const
+    {
+        auto body = build_admin_audit_json(req);
+        resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
+        resp->send();
+    }
+
+    void NasService::handle_admin_sessions(yuan::net::http::HttpRequest *req,
+                                           yuan::net::http::HttpResponse *resp)
+    {
+        if (!guard_admin_request(req, resp)) {
+            return;
+        }
+        if (!ensure_admin_get_or_default(req, resp)) {
+            return;
+        }
+
+        handle_admin_sessions_get(req, resp);
+    }
+
+    void NasService::handle_admin_sessions_get(yuan::net::http::HttpRequest *req,
+                                               yuan::net::http::HttpResponse *resp) const
+    {
+        auto body = build_admin_sessions_json(req);
+        resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
+        resp->send();
+    }
+
+    void NasService::handle_admin_activity(yuan::net::http::HttpRequest *req,
+                                           yuan::net::http::HttpResponse *resp)
+    {
+        if (!guard_admin_request(req, resp)) {
+            return;
+        }
+        if (!ensure_admin_get_or_default(req, resp)) {
+            return;
+        }
+
+        handle_admin_activity_get(resp);
+    }
+
+    void NasService::handle_admin_activity_get(yuan::net::http::HttpResponse *resp) const
+    {
+        auto body = build_admin_activity_json();
+        resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
+        resp->send();
+    }
+
+    nlohmann::json NasService::build_admin_shares_json() const
+    {
+        nlohmann::json shares = nlohmann::json::array();
+        for (const auto &share : config_.nas.shares) {
+            nlohmann::json item;
+            item["id"] = share.id;
+            item["name"] = share.name;
+            item["root_path"] = share.root_path;
+            item["enabled"] = share.enabled;
+            item["readonly"] = share.readonly;
+            item["default_permissions"] = static_cast<std::uint32_t>(share.default_permissions);
+            shares.push_back(std::move(item));
+        }
+        nlohmann::json body;
+        body["shares"] = std::move(shares);
+        body["count"] = config_.nas.shares.size();
+        return body;
+    }
+
+    nlohmann::json NasService::build_admin_users_json() const
+    {
+        nlohmann::json users = nlohmann::json::array();
+        const auto listed = config_.metadata ? config_.metadata->list_users() : std::vector<yuan::server::nas::NasUser>{};
+        for (const auto &user : listed) {
+            nlohmann::json item;
+            item["id"] = user.id;
+            item["username"] = user.username;
+            item["enabled"] = user.enabled;
+            item["admin"] = user.admin;
+            users.push_back(std::move(item));
+        }
+        nlohmann::json body;
+        body["users"] = std::move(users);
+        body["count"] = listed.size();
+        return body;
+    }
+
+    nlohmann::json NasService::build_admin_quota_json() const
+    {
+        nlohmann::json shares = nlohmann::json::array();
+        std::uint64_t total_used = 0;
+        for (const auto &share : effective_shares()) {
+            auto item = share_quota_json(share);
+            total_used += item.value("used_bytes", 0ull);
+            shares.push_back(std::move(item));
+        }
+
+        nlohmann::json body;
+        body["shares"] = std::move(shares);
+        body["count"] = body["shares"].size();
+        body["total_used_bytes"] = total_used;
+        return body;
+    }
+
+    nlohmann::json NasService::build_admin_audit_json(yuan::net::http::HttpRequest *req) const
+    {
+        const auto events = audit_events(static_cast<std::size_t>(bounded_limit(req)));
+        nlohmann::json items = nlohmann::json::array();
+        for (const auto &event : events) {
+            items.push_back(audit_json(event));
+        }
+
+        nlohmann::json body;
+        body["events"] = std::move(items);
+        body["count"] = body["events"].size();
+        return body;
+    }
+
+    nlohmann::json NasService::build_admin_sessions_json(yuan::net::http::HttpRequest *req) const
+    {
+        const auto limit = static_cast<std::size_t>(bounded_limit(req));
+        const auto sessions = config_.metadata
+                                  ? config_.metadata->list_admin_sessions(limit)
+                                  : std::vector<yuan::server::nas::NasAdminSession>{};
+        nlohmann::json items = nlohmann::json::array();
+        for (const auto &session : sessions) {
+            nlohmann::json item;
+            item["id"] = session.id;
+            item["username"] = session.username;
+            item["remote_addr"] = session.remote_addr;
+            item["user_agent"] = session.user_agent;
+            item["last_path"] = session.last_path;
+            item["created_at_unix_ms"] = session.created_at_unix_ms;
+            item["last_seen_unix_ms"] = session.last_seen_unix_ms;
+            item["request_count"] = session.request_count;
+            items.push_back(std::move(item));
+        }
+
+        nlohmann::json body;
+        body["sessions"] = std::move(items);
+        body["count"] = body["sessions"].size();
+        return body;
+    }
+
+    nlohmann::json NasService::build_admin_activity_json() const
+    {
+        const auto users = config_.metadata ? config_.metadata->list_users() : std::vector<yuan::server::nas::NasUser>{};
+        const auto shares = effective_shares();
+        nlohmann::json body;
+        body["initialized"] = initialized_;
+        body["started"] = started_;
+        body["mounted"] = mounted_;
+        body["webdav_mount"] = config_.nas.webdav_mount;
+        body["redis_enabled"] = config_.nas.redis.enabled;
+        body["user_count"] = users.size();
+        body["share_count"] = shares.size();
+        body["metadata_available"] = config_.metadata && config_.metadata->available();
+        return body;
     }
 
     void NasService::install_admin_console()
@@ -872,64 +1175,19 @@ namespace yuan::server
             return;
         }
 
-        http_->server().on("/nas/admin", [](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
+        const auto html = std::make_shared<std::string>(
+            load_nas_admin_console_html(config_.nas.admin_console_path));
+
+        http_->server().on("/nas/admin", [html](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
             if (req && req->get_method() != yuan::net::http::HttpMethod::get_) {
                 resp->json("{\"error\":\"method_not_allowed\"}", yuan::net::http::ResponseCode::method_not_allowed);
                 resp->send();
                 return;
             }
 
-            static constexpr std::string_view html =
-                "<!doctype html><html><head><meta charset=\"utf-8\">"
-                "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-                "<title>Yuan NAS Admin</title>"
-                "<style>"
-                "body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#f6f7f9;color:#1f2937}"
-                "header{background:#0f172a;color:white;padding:16px 24px}"
-                "main{max-width:1080px;margin:0 auto;padding:24px}"
-                "section{background:white;border:1px solid #d8dee8;border-radius:8px;margin-bottom:16px;padding:16px}"
-                "h1{font-size:22px;margin:0}h2{font-size:16px;margin:0 0 12px}"
-                "button{padding:6px 10px;border:1px solid #94a3b8;background:#f8fafc;border-radius:6px;cursor:pointer}"
-                "table{width:100%;border-collapse:collapse}th,td{text-align:left;border-bottom:1px solid #eef1f5;padding:8px}"
-                ".muted{color:#64748b}.error{color:#b91c1c}"
-                "</style></head><body><header><h1>Yuan NAS Admin</h1></header>"
-                "<main><section><h2>Health</h2><button id=\"probeHealth\" type=\"button\">Probe</button><pre id=\"health\" class=\"muted\">Loading...</pre></section>"
-                "<section><h2>Create User</h2><form id=\"userForm\">"
-                "<input name=\"id\" placeholder=\"id\" required> <input name=\"username\" placeholder=\"username\" required> "
-                "<input name=\"password\" type=\"password\" placeholder=\"password\" required> "
-                "<label><input name=\"admin\" type=\"checkbox\"> admin</label> "
-                "<button type=\"submit\">Save User</button></form></section>"
-                "<section><h2>Create Share</h2><form id=\"shareForm\">"
-                "<input name=\"id\" placeholder=\"id\" required> <input name=\"name\" placeholder=\"name\" required> "
-                "<input name=\"root_path\" placeholder=\"root path\" required> "
-                "<label><input name=\"readonly\" type=\"checkbox\"> readonly</label> "
-                "<button type=\"submit\">Save Share</button></form></section>"
-                "<section><h2>Users</h2><div id=\"users\" class=\"muted\">Loading...</div></section>"
-                "<section><h2>Shares</h2><div id=\"shares\" class=\"muted\">Loading...</div></section>"
-                "<section><h2>Quota</h2><div id=\"quota\" class=\"muted\">Loading...</div></section>"
-                "<section><h2>Activity</h2><pre id=\"activity\" class=\"muted\">Loading...</pre></section>"
-                "<section><h2>Sessions</h2><div id=\"sessions\" class=\"muted\">Loading...</div></section>"
-                "<section><h2>Audit</h2><div id=\"audit\" class=\"muted\">Loading...</div></section></main>"
-                "<script>"
-                "async function getJson(u){const r=await fetch(u,{credentials:'same-origin'});if(!r.ok)throw new Error(r.status);return r.json();}"
-                "async function postJson(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(b)});if(!r.ok)throw new Error(r.status);return r.json();}"
-                "function table(rows,cols){if(!rows.length)return '<p class=\"muted\">Empty</p>';return '<table><thead><tr>'+cols.map(c=>'<th>'+c+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+cols.map(c=>{const v=r[c];return '<td>'+String(v===undefined||v===null?'':v)+'</td>';}).join('')+'</tr>').join('')+'</tbody></table>';}"
-                "async function load(){try{const h=await getJson('/nas/health');document.getElementById('health').textContent=JSON.stringify(h,null,2);"
-                "const u=await getJson('/nas/admin/users');document.getElementById('users').innerHTML=table(u.users||[],['id','username','enabled','admin']);"
-                "const s=await getJson('/nas/admin/shares');document.getElementById('shares').innerHTML=table(s.shares||[],['id','name','root_path','enabled','readonly']);"
-                "const q=await getJson('/nas/admin/quota');document.getElementById('quota').innerHTML=table(q.shares||[],['id','name','exists','used_bytes','available_bytes']);"
-                "const a=await getJson('/nas/admin/activity');document.getElementById('activity').textContent=JSON.stringify(a,null,2);"
-                "const se=await getJson('/nas/admin/sessions');document.getElementById('sessions').innerHTML=table(se.sessions||[],['username','remote_addr','last_path','request_count','last_seen_unix_ms']);"
-                "const au=await getJson('/nas/admin/audit');document.getElementById('audit').innerHTML=table(au.events||[],['timestamp_unix_ms','actor','action','target','detail']);"
-                "}catch(e){document.querySelector('main').insertAdjacentHTML('afterbegin','<section class=\"error\">Admin API error: '+e.message+'</section>');}}"
-                "document.getElementById('userForm').addEventListener('submit',async e=>{e.preventDefault();const f=e.target;await postJson('/nas/admin/users',{id:f.id.value,username:f.username.value,password:f.password.value,enabled:true,admin:f.admin.checked});f.reset();load();});"
-                "document.getElementById('shareForm').addEventListener('submit',async e=>{e.preventDefault();const f=e.target;await postJson('/nas/admin/shares',{id:f.id.value,name:f.name.value,root_path:f.root_path.value,readonly:f.readonly.checked,enabled:true,default_permissions:['read','write','remove']});f.reset();load();});"
-                "document.getElementById('probeHealth').addEventListener('click',async()=>{const r=await postJson('/nas/admin/health/actions',{action:'probe'});document.getElementById('health').textContent=JSON.stringify(r.health,null,2);load();});"
-                "load();"
-                "</script></body></html>";
             resp->set_response_code(yuan::net::http::ResponseCode::ok_);
             resp->add_header("Content-Type", "text/html; charset=utf-8");
-            resp->append_body(html);
+            resp->append_body(*html);
             resp->add_header("Content-Length", std::to_string(resp->body_buffer_size()));
             resp->send();
         });
@@ -1067,6 +1325,7 @@ namespace yuan::server
         if (j.contains("http")) {
             const auto &http = j.at("http");
             config.http.thread_pool_size = json_int(http, "thread_pool_size", config.http.thread_pool_size);
+            config.http.enable_ssl = json_bool(http, "enable_ssl", config.http.enable_ssl);
             config.http.enable_cors = json_bool(http, "enable_cors", config.http.enable_cors);
             config.http.enable_keep_alive = json_bool(http, "enable_keep_alive", config.http.enable_keep_alive);
             config.http.enable_http2 = json_bool(http, "enable_http2", config.http.enable_http2);
@@ -1080,6 +1339,7 @@ namespace yuan::server
         if (j.contains("nas")) {
             const auto &nas = j.at("nas");
             config.nas.webdav_mount = json_string(nas, "webdav_mount", config.nas.webdav_mount);
+            config.nas.admin_console_path = json_string(nas, "admin_console_path", config.nas.admin_console_path);
             config.nas.allow_anonymous_read = json_bool(nas, "allow_anonymous_read", config.nas.allow_anonymous_read);
 
             if (nas.contains("redis")) {
@@ -1096,6 +1356,13 @@ namespace yuan::server
                 const auto &audit = nas.at("audit");
                 config.nas.audit.file_enabled = json_bool(audit, "file_enabled", config.nas.audit.file_enabled);
                 config.nas.audit.file_path = json_string(audit, "file_path", config.nas.audit.file_path);
+                if (audit.contains("max_events")) {
+                    config.nas.audit.max_events = audit.at("max_events").get<std::size_t>();
+                }
+            }
+
+            if (nas.contains("redis") && nas.at("redis").is_object()) {
+                config.nas.redis.audit_max_events = config.nas.audit.max_events;
             }
 
             if (nas.contains("shares") && nas.at("shares").is_array()) {
@@ -1147,6 +1414,13 @@ namespace yuan::server
             std::filesystem::path audit_path(config.nas.audit.file_path);
             if (audit_path.is_relative()) {
                 config.nas.audit.file_path = (config_dir / audit_path).lexically_normal().string();
+            }
+        }
+
+        if (!config.nas.admin_console_path.empty()) {
+            std::filesystem::path admin_console_path(config.nas.admin_console_path);
+            if (admin_console_path.is_relative()) {
+                config.nas.admin_console_path = (config_dir / admin_console_path).lexically_normal().string();
             }
         }
 

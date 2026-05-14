@@ -14,6 +14,7 @@ AsyncAppender::~AsyncAppender()
 
 void AsyncAppender::set_sink(Sink sink)
 {
+    std::lock_guard<std::mutex> lock(sink_mutex_);
     sink_ = std::move(sink);
 }
 
@@ -42,7 +43,7 @@ void AsyncAppender::stop()
 void AsyncAppender::append(const LogItem& item)
 {
     if (!running_.load(std::memory_order_acquire)) {
-        if (sink_) sink_(item);
+        consume_item(item);
         return;
     }
 
@@ -56,7 +57,7 @@ void AsyncAppender::append(const LogItem& item)
 
         if (!running_.load()) {
             lock.unlock();
-            if (sink_) sink_(item);
+            consume_item(item);
             return;
         }
 
@@ -81,27 +82,49 @@ void AsyncAppender::thread_func()
 
             item = std::move(queue_.front());
             queue_.pop();
+            processing_ = true;
         }
         cond_not_full_.notify_one();
 
-        if (sink_) sink_(item);
+        consume_item(item);
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            processing_ = false;
+            if (queue_.empty()) cond_flushed_.notify_all();
+        }
     }
 }
 
 void AsyncAppender::flush()
 {
-    std::queue<LogItem> pending;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        pending.swap(queue_);
+    if (running_.load(std::memory_order_acquire)) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cond_flushed_.wait(lock, [&] { return queue_.empty() && !processing_; });
+        return;
     }
-    cond_not_full_.notify_all();
 
-    while (!pending.empty()) {
-        auto item = std::move(pending.front());
-        pending.pop();
-        if (sink_) sink_(item);
+    while (true) {
+        LogItem item;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (queue_.empty()) break;
+            item = std::move(queue_.front());
+            queue_.pop();
+        }
+        cond_not_full_.notify_one();
+        consume_item(item);
     }
+}
+
+void AsyncAppender::consume_item(const LogItem& item)
+{
+    Sink sink;
+    {
+        std::lock_guard<std::mutex> lock(sink_mutex_);
+        sink = sink_;
+    }
+    if (sink) sink(item);
 }
 
 size_t AsyncAppender::pending_count() const

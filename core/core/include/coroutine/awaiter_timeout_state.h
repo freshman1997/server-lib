@@ -9,7 +9,7 @@
 #include "event/event_loop.h"
 #include "timer/timer.h"
 #include "timer/timer_handle.h"
-#include "timer/timer_util.hpp"
+#include "timer/timer_manager.h"
 
 namespace yuan::coroutine::detail
 {
@@ -31,8 +31,7 @@ namespace yuan::coroutine::detail
             return {};
         }
 
-        state->timer = timer::TimerUtil::build_timeout_handle(
-            runtime.timer_manager(),
+        state->timer = runtime.timer_manager()->after(
             timeout_ms,
             [weak_state = std::weak_ptr<AwaiterTimeoutState>(state)]() {
                 auto state = weak_state.lock();

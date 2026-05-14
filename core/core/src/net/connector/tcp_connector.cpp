@@ -14,7 +14,6 @@
 #include "net/socket/socket_ops.h"
 #include "timer/timer_manager.h"
 #include "timer/timer_handle.h"
-#include "timer/timer_util.hpp"
 
 #include <cassert>
 #include <memory>
@@ -215,7 +214,7 @@ namespace yuan::net
             data_->event_handler_->on_new_connection(conn);
         }
         data_->conn_ = conn;
-        data_->conn_timer_ = timer::TimerUtil::build_timeout_handle(data_->timer_manager_, data_->timeout_, [this]() { on_connect_timeout(); });
+        data_->conn_timer_ = data_->timer_manager_->after(data_->timeout_, [this]() { on_connect_timeout(); });
 
         return true;
     }
@@ -279,7 +278,7 @@ namespace yuan::net
             data_->conn_ = conn;
             data_->connected_ = false;
             data_->suppress_failure_callback_ = false;
-            data_->conn_timer_ = timer::TimerUtil::build_timeout_handle(data_->timer_manager_, data_->timeout_, [this]() { on_connect_timeout(); });
+            data_->conn_timer_ = data_->timer_manager_->after(data_->timeout_, [this]() { on_connect_timeout(); });
         } else {
             auto timed_out_conn = data_->conn_;
             if (data_->conn_) {

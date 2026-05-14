@@ -1,0 +1,16 @@
+{
+  "host": "0.0.0.0",
+  "port": 9000,
+  "probe_host": "127.0.0.1",
+  "local_ssrc": 270544960,
+  "clock_rate": 90000,
+  "diagnostics_keep_latest_only": true,
+  "nomination_max_pending_signals": 16,
+  "diagnostics_max_pending_signals": 8,
+  "diagnostics_emit_flat_compat_fields": false,
+  "diagnostics_release_mode_strict_v2": false,
+  "diagnostics_rollout_alert_window_seconds": 86400,
+  "diagnostics_rollout_mismatch_count_alert_threshold": 0,
+  "diagnostics_rollout_mismatch_ratio_threshold_ppm": 1000,
+  "health_log_interval_ms": 5000
+}

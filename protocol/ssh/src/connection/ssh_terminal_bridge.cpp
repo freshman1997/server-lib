@@ -3,11 +3,154 @@
 #include "protocol/ssh_message_codec.h"
 #include "ssh_session.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#include <array>
 #include <chrono>
+#include <cstring>
+#include <cstdio>
 #include <thread>
 
 namespace yuan::net::ssh
 {
+    namespace
+    {
+#ifdef _WIN32
+        bool drain_pipe_available(HANDLE pipe_handle, std::vector<uint8_t> & out, bool force_drain)
+        {
+            std::array<uint8_t, 4096> buffer{};
+            bool read_any = false;
+
+            while (true) {
+                DWORD available = 0;
+                if (!PeekNamedPipe(pipe_handle, nullptr, 0, nullptr, &available, nullptr)) {
+                    return read_any;
+                }
+
+                if (!force_drain && available == 0) {
+                    return read_any;
+                }
+
+                const DWORD request = (available > 0 && available < static_cast<DWORD>(buffer.size()))
+                                          ? available
+                                          : static_cast<DWORD>(buffer.size());
+                DWORD read_bytes = 0;
+                if (!ReadFile(pipe_handle, buffer.data(), request, &read_bytes, nullptr)) {
+                    const DWORD err = GetLastError();
+                    if (err == ERROR_BROKEN_PIPE) {
+                        return read_any;
+                    }
+                    return read_any;
+                }
+
+                if (read_bytes == 0) {
+                    return read_any;
+                }
+
+                out.insert(out.end(), buffer.begin(), buffer.begin() + read_bytes);
+                read_any = true;
+
+                if (!force_drain && available <= read_bytes) {
+                    return read_any;
+                }
+            }
+        }
+
+        bool run_windows_exec_capture(const std::string & command,
+                                      std::vector<uint8_t> & stdout_out,
+                                      std::vector<uint8_t> & stderr_out,
+                                      uint32_t & exit_code)
+        {
+            stdout_out.clear();
+            stderr_out.clear();
+            exit_code = 1;
+
+            if (command.empty()) {
+                return false;
+            }
+
+            SECURITY_ATTRIBUTES sa{};
+            sa.nLength = sizeof(sa);
+            sa.bInheritHandle = TRUE;
+
+            HANDLE stdout_read = nullptr;
+            HANDLE stdout_write = nullptr;
+            HANDLE stderr_read = nullptr;
+            HANDLE stderr_write = nullptr;
+
+            if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0)) {
+                return false;
+            }
+            if (!CreatePipe(&stderr_read, &stderr_write, &sa, 0)) {
+                CloseHandle(stdout_read);
+                CloseHandle(stdout_write);
+                return false;
+            }
+
+            (void)SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
+            (void)SetHandleInformation(stderr_read, HANDLE_FLAG_INHERIT, 0);
+
+            STARTUPINFOA si{};
+            si.cb = sizeof(si);
+            si.dwFlags = STARTF_USESTDHANDLES;
+            si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+            si.hStdOutput = stdout_write;
+            si.hStdError = stderr_write;
+
+            PROCESS_INFORMATION pi{};
+            std::string cmdline = "cmd.exe /C \"" + command + "\"";
+
+            const BOOL created = CreateProcessA(
+                nullptr,
+                cmdline.data(),
+                nullptr,
+                nullptr,
+                TRUE,
+                CREATE_NO_WINDOW,
+                nullptr,
+                nullptr,
+                &si,
+                &pi);
+
+            CloseHandle(stdout_write);
+            CloseHandle(stderr_write);
+
+            if (!created) {
+                CloseHandle(stdout_read);
+                CloseHandle(stderr_read);
+                return false;
+            }
+
+            bool process_done = false;
+            while (!process_done) {
+                (void)drain_pipe_available(stdout_read, stdout_out, false);
+                (void)drain_pipe_available(stderr_read, stderr_out, false);
+
+                const DWORD wait_rc = WaitForSingleObject(pi.hProcess, 5);
+                if (wait_rc == WAIT_OBJECT_0) {
+                    process_done = true;
+                }
+            }
+
+            (void)drain_pipe_available(stdout_read, stdout_out, true);
+            (void)drain_pipe_available(stderr_read, stderr_out, true);
+
+            DWORD child_exit = 1;
+            if (GetExitCodeProcess(pi.hProcess, &child_exit) != 0) {
+                exit_code = child_exit;
+            }
+
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            CloseHandle(stdout_read);
+            CloseHandle(stderr_read);
+            return true;
+        }
+#endif
+    }
+
     SshTerminalBridge::SshTerminalBridge(SshSession * session,
                                          SshConnectionManager * conn_mgr)
         : session_(session), conn_mgr_(conn_mgr)
@@ -337,6 +480,35 @@ namespace yuan::net::ssh
         if (!terminal_state.exec_requested || has_pty_process(channel->remote_id())) {
             return;
         }
+
+#ifdef _WIN32
+        std::vector<uint8_t> stdout_output;
+        std::vector<uint8_t> stderr_output;
+        uint32_t exit_code = 1;
+        const bool executed = run_windows_exec_capture(terminal_state.exec_command,
+                                                       stdout_output,
+                                                       stderr_output,
+                                                       exit_code);
+        if (!executed) {
+            const char *message = "Windows exec backend failed\n";
+            stderr_output.assign(message, message + std::strlen(message));
+            exit_code = 127;
+        }
+        if (!stdout_output.empty()) {
+            session_->enqueue_outgoing(conn_mgr_->build_channel_data(channel->remote_id(), stdout_output));
+        }
+        if (!stderr_output.empty()) {
+            session_->enqueue_outgoing(conn_mgr_->build_channel_extended_data(
+                channel->remote_id(),
+                static_cast<uint32_t>(SshChannelExtendedDataType::SSH_EXTENDED_DATA_STDERR),
+                stderr_output));
+        }
+        channel->mark_termination_notified();
+        session_->enqueue_outgoing(conn_mgr_->build_channel_exit_status(channel->remote_id(), exit_code));
+        session_->enqueue_outgoing(conn_mgr_->build_channel_eof(channel->remote_id()));
+        session_->enqueue_outgoing(conn_mgr_->build_channel_close(channel->remote_id()));
+        return;
+#endif
 
         auto pty = std::make_unique<SshPtyProcess>();
         std::string err;

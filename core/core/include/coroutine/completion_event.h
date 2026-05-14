@@ -8,7 +8,6 @@
 #include "event/event_loop.h"
 #include "timer/timer.h"
 #include "timer/timer_manager.h"
-#include "timer/timer_util.hpp"
 
 namespace yuan::coroutine
 {
@@ -114,8 +113,7 @@ public:
             }
 
             if (timeout_ms_ > 0 && timer_manager_) {
-                state_->timer = timer::TimerUtil::build_timeout_handle(
-                    timer_manager_,
+                state_->timer = timer_manager_->after(
                     timeout_ms_,
                     [state = state_]() {
                         if (!state || state->completed || state->resumed) {

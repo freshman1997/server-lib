@@ -26,6 +26,7 @@ namespace yuan::net::ssh
 {
     namespace
     {
+#if !defined(_WIN32)
         enum class TerminalOpcode : uint8_t {
             kVINTR = 1,
             kVQUIT = 2,
@@ -235,6 +236,7 @@ namespace yuan::net::ssh
             }
             return shell_path.substr(pos + 1);
         }
+#endif
 
         void maybe_set_error(std::string *error_message, const std::string &message)
         {

@@ -37,6 +37,7 @@ namespace yuan::net::http
     struct HttpServerConfig
     {
         int thread_pool_size = 1;
+        bool enable_ssl = true;
         bool enable_cors = true;
         bool enable_keep_alive = true;
         bool enable_http2 = false;

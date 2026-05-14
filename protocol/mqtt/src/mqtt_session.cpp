@@ -1,7 +1,9 @@
 #include "mqtt_session.h"
 #include <algorithm>
 #include <atomic>
+#include <fstream>
 #include <memory>
+#include <nlohmann/json.hpp>
 
 namespace yuan::net::mqtt
 {
@@ -208,5 +210,201 @@ namespace yuan::net::mqtt
             }
             ++it;
         }
+    }
+
+    bool MqttSessionManager::save_to_file(const std::string & path) const
+    {
+        if (path.empty())
+            return false;
+
+        nlohmann::json root = nlohmann::json::array();
+        for (const auto &pair : sessions_) {
+            const auto &session = pair.second;
+            if (!session)
+                continue;
+
+            nlohmann::json item;
+            item["session_id"] = session->session_id();
+            item["client_id"] = session->client_id();
+            item["protocol_level"] = static_cast<uint8_t>(session->protocol_level());
+            item["state"] = static_cast<int>(session->state());
+            item["keep_alive"] = session->keep_alive();
+            item["clean_start"] = session->clean_start();
+            item["session_expiry_interval"] = session->session_expiry_interval();
+            item["receive_maximum"] = session->receive_maximum();
+            item["client_receive_maximum"] = session->client_receive_maximum();
+            item["maximum_packet_size"] = session->maximum_packet_size();
+            item["topic_alias_maximum"] = session->topic_alias_maximum();
+
+            nlohmann::json subs = nlohmann::json::array();
+            for (const auto &sub : session->subscriptions()) {
+                subs.push_back({ { "topic_filter", sub.first }, { "qos", static_cast<uint8_t>(sub.second) } });
+            }
+            item["subscriptions"] = std::move(subs);
+
+            if (const auto *will = session->will_message()) {
+                nlohmann::json jwill;
+                jwill["topic"] = will->topic;
+                jwill["payload"] = will->payload;
+                jwill["qos"] = static_cast<uint8_t>(will->qos);
+                jwill["retain"] = will->retain;
+                if (will->will_delay_interval.has_value())
+                    jwill["will_delay_interval"] = *will->will_delay_interval;
+                if (will->payload_format_indicator.has_value())
+                    jwill["payload_format_indicator"] = *will->payload_format_indicator;
+                if (will->message_expiry_interval.has_value())
+                    jwill["message_expiry_interval"] = *will->message_expiry_interval;
+                if (will->content_type.has_value())
+                    jwill["content_type"] = *will->content_type;
+                if (will->response_topic.has_value())
+                    jwill["response_topic"] = *will->response_topic;
+                if (will->correlation_data.has_value())
+                    jwill["correlation_data"] = *will->correlation_data;
+
+                nlohmann::json up = nlohmann::json::array();
+                for (const auto &p : will->user_properties) {
+                    up.push_back({ { "key", p.key }, { "value", p.value } });
+                }
+                jwill["user_properties"] = std::move(up);
+                item["will_message"] = std::move(jwill);
+            }
+
+            root.push_back(std::move(item));
+        }
+
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        if (!out.is_open())
+            return false;
+        out << root.dump(2);
+        return out.good();
+    }
+
+    bool MqttSessionManager::load_from_file(const std::string & path)
+    {
+        if (path.empty())
+            return false;
+
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open())
+            return false;
+
+        nlohmann::json root;
+        try {
+            in >> root;
+        } catch (...) {
+            return false;
+        }
+
+        if (!root.is_array())
+            return false;
+
+        sessions_.clear();
+        client_id_index_.clear();
+
+        for (const auto &item : root) {
+            if (!item.is_object())
+                continue;
+
+            auto session = std::make_shared<MqttSession>(static_cast<TcpConnection *>(nullptr));
+            if (item.contains("client_id") && item["client_id"].is_string())
+                session->set_client_id(item["client_id"].get<std::string>());
+
+            if (item.contains("protocol_level") && item["protocol_level"].is_number_unsigned()) {
+                const uint8_t lvl = item["protocol_level"].get<uint8_t>();
+                if (lvl == static_cast<uint8_t>(ProtocolLevel::V5_0))
+                    session->set_protocol_level(ProtocolLevel::V5_0);
+                else
+                    session->set_protocol_level(ProtocolLevel::V3_1_1);
+            }
+
+            if (item.contains("state") && item["state"].is_number_integer()) {
+                const int st = item["state"].get<int>();
+                if (st >= static_cast<int>(MqttSessionState::disconnected) &&
+                    st <= static_cast<int>(MqttSessionState::disconnecting)) {
+                    session->set_state(static_cast<MqttSessionState>(st));
+                } else {
+                    session->set_state(MqttSessionState::disconnected);
+                }
+            } else {
+                session->set_state(MqttSessionState::disconnected);
+            }
+
+            if (item.contains("keep_alive") && item["keep_alive"].is_number_unsigned())
+                session->set_keep_alive(item["keep_alive"].get<uint16_t>());
+            if (item.contains("clean_start") && item["clean_start"].is_boolean())
+                session->set_clean_start(item["clean_start"].get<bool>());
+            if (item.contains("session_expiry_interval") && item["session_expiry_interval"].is_number_unsigned())
+                session->set_session_expiry_interval(item["session_expiry_interval"].get<uint32_t>());
+            if (item.contains("receive_maximum") && item["receive_maximum"].is_number_unsigned())
+                session->set_receive_maximum(item["receive_maximum"].get<uint16_t>());
+            if (item.contains("client_receive_maximum") && item["client_receive_maximum"].is_number_unsigned())
+                session->set_client_receive_maximum(item["client_receive_maximum"].get<uint16_t>());
+            if (item.contains("maximum_packet_size") && item["maximum_packet_size"].is_number_unsigned())
+                session->set_maximum_packet_size(item["maximum_packet_size"].get<uint32_t>());
+            if (item.contains("topic_alias_maximum") && item["topic_alias_maximum"].is_number_unsigned())
+                session->set_topic_alias_maximum(item["topic_alias_maximum"].get<uint16_t>());
+
+            if (item.contains("subscriptions") && item["subscriptions"].is_array()) {
+                for (const auto &sub : item["subscriptions"]) {
+                    if (!sub.is_object())
+                        continue;
+                    if (!sub.contains("topic_filter") || !sub.contains("qos"))
+                        continue;
+                    if (!sub["topic_filter"].is_string() || !sub["qos"].is_number_unsigned())
+                        continue;
+                    const auto filter = sub["topic_filter"].get<std::string>();
+                    const auto qos_u8 = sub["qos"].get<uint8_t>();
+                    const QoS qos = qos_u8 <= 2 ? static_cast<QoS>(qos_u8) : QoS::AT_MOST_ONCE;
+                    session->add_subscription(filter, qos);
+                }
+            }
+
+            if (item.contains("will_message") && item["will_message"].is_object()) {
+                const auto &jwill = item["will_message"];
+                MqttWillMessage will;
+                if (jwill.contains("topic") && jwill["topic"].is_string())
+                    will.topic = jwill["topic"].get<std::string>();
+                if (jwill.contains("payload") && jwill["payload"].is_array())
+                    will.payload = jwill["payload"].get<std::vector<uint8_t> >();
+                if (jwill.contains("qos") && jwill["qos"].is_number_unsigned()) {
+                    const auto qos_u8 = jwill["qos"].get<uint8_t>();
+                    will.qos = qos_u8 <= 2 ? static_cast<QoS>(qos_u8) : QoS::AT_MOST_ONCE;
+                }
+                if (jwill.contains("retain") && jwill["retain"].is_boolean())
+                    will.retain = jwill["retain"].get<bool>();
+                if (jwill.contains("will_delay_interval") && jwill["will_delay_interval"].is_number_unsigned())
+                    will.will_delay_interval = jwill["will_delay_interval"].get<uint32_t>();
+                if (jwill.contains("payload_format_indicator") && jwill["payload_format_indicator"].is_number_unsigned())
+                    will.payload_format_indicator = jwill["payload_format_indicator"].get<uint8_t>();
+                if (jwill.contains("message_expiry_interval") && jwill["message_expiry_interval"].is_number_unsigned())
+                    will.message_expiry_interval = jwill["message_expiry_interval"].get<uint32_t>();
+                if (jwill.contains("content_type") && jwill["content_type"].is_string())
+                    will.content_type = jwill["content_type"].get<std::string>();
+                if (jwill.contains("response_topic") && jwill["response_topic"].is_string())
+                    will.response_topic = jwill["response_topic"].get<std::string>();
+                if (jwill.contains("correlation_data") && jwill["correlation_data"].is_array())
+                    will.correlation_data = jwill["correlation_data"].get<std::vector<uint8_t> >();
+                if (jwill.contains("user_properties") && jwill["user_properties"].is_array()) {
+                    for (const auto &up : jwill["user_properties"]) {
+                        if (!up.is_object())
+                            continue;
+                        if (!up.contains("key") || !up.contains("value"))
+                            continue;
+                        if (!up["key"].is_string() || !up["value"].is_string())
+                            continue;
+                        will.user_properties.push_back({ up["key"].get<std::string>(), up["value"].get<std::string>() });
+                    }
+                }
+                if (!will.topic.empty()) {
+                    session->set_will_message(std::move(will));
+                }
+            }
+
+            const uint64_t sid = session->session_id();
+            sessions_[sid] = session;
+            if (!session->client_id().empty())
+                client_id_index_[session->client_id()] = sid;
+        }
+        return true;
     }
 }

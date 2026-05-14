@@ -76,6 +76,7 @@ release_ssh_cli [options] [user@]host [command]
 release_ssh_cli --probe -p 2222 yuan@127.0.0.1
 release_ssh_cli -p 2222 --password yuan yuan@127.0.0.1 "whoami"
 release_ssh_cli -o Port=2222 -o User=yuan --probe 127.0.0.1
+release_ssh_cli --stderr-prefix -p 2222 --password yuan yuan@127.0.0.1 "echo out & dir nosuchfile"
 ```
 
 ## Health Check
@@ -131,6 +132,28 @@ Toolchain file:
 Musl output directory:
 
 - `build-musl-release/release/ssh`
+
+## Windows (MinGW)
+
+SSH targets are available on Windows when building with MinGW.
+
+Configure and build:
+
+```bash
+cmake -S . -B build-win-mingw-ssh -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DYUAN_ENABLE_SSH=ON -DYUAN_ENABLE_SSH_SFTP=ON
+cmake --build build-win-mingw-ssh --target release_ssh_cli release_ssh_server -j 8
+```
+
+Output binaries:
+
+- `build-win-mingw-ssh/release/ssh/release_ssh_cli.exe`
+- `build-win-mingw-ssh/release/ssh/release_ssh_server.exe`
+
+Quick verify:
+
+```bash
+build-win-mingw-ssh/release/ssh/release_ssh_cli.exe --version
+```
 
 ## Current CLI Scope
 

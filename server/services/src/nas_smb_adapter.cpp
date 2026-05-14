@@ -26,6 +26,12 @@ namespace yuan::server
             return password_hash.substr(prefix.size());
         }
 
+        bool is_pbkdf2_hash(const std::string &password_hash)
+        {
+            constexpr std::string_view prefix = "pbkdf2-sha256$";
+            return std::string_view(password_hash).rfind(prefix, 0) == 0;
+        }
+
         std::optional<std::string> nt_hash_from_hash(const std::string &password_hash)
         {
             constexpr std::string_view nthash_prefix = "nthash:";
@@ -196,6 +202,9 @@ namespace yuan::server
         }
         auto nas_user = metadata_->find_user_by_name(user);
         if (!nas_user || !nas_user->enabled) {
+            return std::nullopt;
+        }
+        if (is_pbkdf2_hash(nas_user->password_hash)) {
             return std::nullopt;
         }
         return plain_password_from_hash(nas_user->password_hash);

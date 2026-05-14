@@ -358,7 +358,7 @@ namespace yuan::net
                 handler->on_connected(shared_from_this());
             }
             if (instance_ && instance_->get_timer_manager()) {
-                alive_timer_ = instance_->get_timer_manager()->interval_handle(0, 10 * 1000, this, -1);
+                alive_timer_ = instance_->get_timer_manager()->every(0, 10 * 1000, this);
             }
         }
     }

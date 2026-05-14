@@ -1,8 +1,12 @@
-#ifdef __linux__
 #include <algorithm>
-#include <sys/poll.h>
 #include <unordered_map>
 #include <vector>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+#include <poll.h>
+#endif
 
 #include "base/time.h"
 #include "net/poller/poll_poller.h"
@@ -11,10 +15,32 @@
 
 namespace yuan::net
 {
+    namespace
+    {
+#ifdef _WIN32
+        using NativePollFd = WSAPOLLFD;
+        constexpr short READ_MASK = POLLRDNORM;
+        constexpr short WRITE_MASK = POLLWRNORM;
+        constexpr short REQUEST_MASK = READ_MASK | WRITE_MASK;
+        constexpr short ERROR_MASK = POLLERR | POLLHUP | POLLNVAL;
+#else
+        using NativePollFd = struct pollfd;
+        constexpr short READ_MASK = POLLIN;
+        constexpr short WRITE_MASK = POLLOUT;
+        constexpr short REQUEST_MASK = READ_MASK | WRITE_MASK;
+        constexpr short ERROR_MASK = POLLERR | POLLHUP | POLLNVAL;
+#ifdef POLLRDHUP
+        constexpr short READ_HUP_MASK = POLLRDHUP;
+#else
+        constexpr short READ_HUP_MASK = 0;
+#endif
+#endif
+    }
+
     class PollPoller::HelperData
     {
     public:
-        std::vector<struct pollfd> fds_;
+        std::vector<NativePollFd> fds_;
         std::unordered_map<int, net::Channel *> channels_;
         std::vector<int> removed_fds_;
     };
@@ -43,10 +69,10 @@ namespace yuan::net
                 if (it != data_->channels_.end()) {
                     data_->channels_.erase(fd);
                     data_->fds_.erase(std::remove_if(data_->fds_.begin(), data_->fds_.end(),
-                                                     [fd](struct pollfd pfd)->bool {
-                        return fd == pfd.fd;
-                                      }),
-                                      data_->fds_.end());
+                                                     [fd](const NativePollFd &pfd)->bool {
+                        return fd == static_cast<int>(pfd.fd);
+                                       }),
+                                       data_->fds_.end());
                 }
             }
 
@@ -57,23 +83,35 @@ namespace yuan::net
             return tm;
         }
 
+#ifdef _WIN32
+        int ret = ::WSAPoll(data_->fds_.data(), static_cast<ULONG>(data_->fds_.size()), static_cast<INT>(timeout));
+#else
         int ret = ::poll(data_->fds_.data(), static_cast<nfds_t>(data_->fds_.size()), timeout);
+#endif
         if (ret < 0) {
+#ifdef _WIN32
+            LOG_WARN("poll poller failed, ret: {}, wsa_error: {}, fds: {}", ret, WSAGetLastError(), data_->fds_.size());
+#else
             LOG_WARN("poll poller failed, ret: {}", ret);
+#endif
             return tm;
         }
 
         for (std::size_t i = 0; i < data_->fds_.size(); ++i) {
             int ev = Channel::NONE_EVENT;
-            if (data_->fds_[i].revents & POLLRDHUP || data_->fds_[i].revents & POLLERR || data_->fds_[i].revents & POLLIN) {
+            if (data_->fds_[i].revents & READ_MASK || data_->fds_[i].revents & ERROR_MASK
+#ifndef _WIN32
+                || data_->fds_[i].revents & READ_HUP_MASK
+#endif
+            ) {
                 ev |= Channel::READ_EVENT;
             }
 
-            if (data_->fds_[i].revents & POLLOUT) {
+            if (data_->fds_[i].revents & WRITE_MASK) {
                 ev |= Channel::WRITE_EVENT;
             }
 
-            const int fd = data_->fds_[i].fd;
+            const int fd = static_cast<int>(data_->fds_[i].fd);
             auto it = data_->channels_.find(fd);
             if (it != data_->channels_.end() && ev != Channel::NONE_EVENT && it->second) {
                 PollEvent pe;
@@ -90,17 +128,18 @@ namespace yuan::net
     void PollPoller::do_add_channel(Channel * channel)
     {
         data_->channels_[channel->get_fd()] = channel;
-        struct pollfd pfd;
-        pfd.fd = channel->get_fd();
+        NativePollFd pfd{};
+        pfd.fd = static_cast<decltype(pfd.fd)>(channel->get_fd());
         pfd.events = 0;
         pfd.revents = 0;
         if (channel->get_events() & Channel::READ_EVENT) {
-            pfd.events |= POLLIN | POLLERR;
+            pfd.events |= READ_MASK;
         }
 
         if (channel->get_events() & Channel::WRITE_EVENT) {
-            pfd.events |= POLLOUT;
+            pfd.events |= WRITE_MASK;
         }
+        pfd.events &= REQUEST_MASK;
 
         data_->fds_.push_back(pfd);
     }
@@ -121,8 +160,8 @@ namespace yuan::net
                 remove_channel(channel);
             } else {
                 int fd = channel->get_fd();
-                auto it = std::find_if(data_->fds_.begin(), data_->fds_.end(), [fd](const struct pollfd & pfd)->bool {
-                    return pfd.fd == fd;
+                auto it = std::find_if(data_->fds_.begin(), data_->fds_.end(), [fd](const NativePollFd &pfd)->bool {
+                    return static_cast<int>(pfd.fd) == fd;
                 });
 
                 data_->channels_[channel->get_fd()] = channel;
@@ -130,12 +169,13 @@ namespace yuan::net
                     it->events = 0;
                     it->revents = 0;
                     if (channel->get_events() & Channel::READ_EVENT) {
-                        it->events |= POLLIN | POLLERR;
+                        it->events |= READ_MASK;
                     }
 
                     if (channel->get_events() & Channel::WRITE_EVENT) {
-                        it->events |= POLLOUT;
+                        it->events |= WRITE_MASK;
                     }
+                    it->events &= REQUEST_MASK;
                 } else {
                     do_add_channel(channel);
                 }
@@ -153,4 +193,3 @@ namespace yuan::net
         data_->channels_[channel->get_fd()] = nullptr;
     }
 }
-#endif

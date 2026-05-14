@@ -66,9 +66,11 @@ namespace
         bool set_dead_property(std::string_view, std::string_view, std::string_view, std::string_view) override { return true; }
         bool remove_dead_property(std::string_view, std::string_view, std::string_view) override { return true; }
         bool upsert_webdav_lock(const yuan::server::nas::NasWebDavLockRecord &) override { return true; }
+        bool try_create_webdav_lock(const yuan::server::nas::NasWebDavLockRecord &lock) override { return upsert_webdav_lock(lock); }
         std::optional<yuan::server::nas::NasWebDavLockRecord> find_webdav_lock(std::string_view) const override { return std::nullopt; }
         std::vector<yuan::server::nas::NasWebDavLockRecord> list_webdav_locks(std::string_view, std::string_view) const override { return {}; }
         bool remove_webdav_lock(std::string_view) override { return true; }
+        std::size_t prune_expired_webdav_locks() override { return 0; }
         bool append_audit_event(const yuan::server::nas::NasAuditEvent &) override { return true; }
         std::vector<yuan::server::nas::NasAuditEvent> list_audit_events(std::size_t) const override { return {}; }
         bool upsert_admin_session(const yuan::server::nas::NasAdminSession &) override { return true; }

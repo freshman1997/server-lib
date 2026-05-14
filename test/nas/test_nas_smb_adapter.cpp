@@ -71,9 +71,11 @@ namespace
         bool set_dead_property(std::string_view, std::string_view, std::string_view, std::string_view) override { return true; }
         bool remove_dead_property(std::string_view, std::string_view, std::string_view) override { return true; }
         bool upsert_webdav_lock(const yuan::server::nas::NasWebDavLockRecord &) override { return true; }
+        bool try_create_webdav_lock(const yuan::server::nas::NasWebDavLockRecord &lock) override { return upsert_webdav_lock(lock); }
         std::optional<yuan::server::nas::NasWebDavLockRecord> find_webdav_lock(std::string_view) const override { return std::nullopt; }
         std::vector<yuan::server::nas::NasWebDavLockRecord> list_webdav_locks(std::string_view, std::string_view) const override { return {}; }
         bool remove_webdav_lock(std::string_view) override { return true; }
+        std::size_t prune_expired_webdav_locks() override { return 0; }
         bool append_audit_event(const yuan::server::nas::NasAuditEvent &) override { return true; }
         std::vector<yuan::server::nas::NasAuditEvent> list_audit_events(std::size_t) const override { return {}; }
         bool upsert_admin_session(const yuan::server::nas::NasAdminSession &) override { return true; }
@@ -165,7 +167,9 @@ int main()
     auto reader_password = handler.on_password_lookup(&reader_session, "reader", "WORKGROUP");
     check(reader_password && *reader_password == "reader-secret", "plain NAS password should be available for NTLMv2 proof");
     check(!handler.on_password_lookup(&reader_session, "hashed", "WORKGROUP"),
-          "non-plain NAS password hash should not be exposed for SMB NTLM proof");
+          "pbkdf2 NAS password hash should not be exposed for SMB NTLM proof");
+    check(nas::NasAuthService::verify_password(hashed.password_hash, "hashed-secret"),
+          "pbkdf2 NAS hash should verify for HTTP/WebDAV auth path");
     auto reader_nt_hash = handler.on_nt_hash_lookup(&reader_session, "nthash", "WORKGROUP");
     check(reader_nt_hash && *reader_nt_hash == nt_hash_user.password_hash,
           "NT hash NAS password should be available for SMB NTLM proof without exposing plain password");

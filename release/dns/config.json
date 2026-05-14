@@ -1,0 +1,30 @@
+{
+  "port": 5353,
+  "records": [
+    {
+      "name": "localhost",
+      "type": "A",
+      "value": "127.0.0.1"
+    },
+    {
+      "name": "webserver.local",
+      "type": "A",
+      "value": "127.0.0.1"
+    },
+    {
+      "name": "webserver.local",
+      "type": "AAAA",
+      "value": "::1"
+    },
+    {
+      "name": "mail.local",
+      "type": "MX",
+      "value": "10 mx1.mail.local"
+    },
+    {
+      "name": "mail.local",
+      "type": "TXT",
+      "value": "dns release sample"
+    }
+  ]
+}

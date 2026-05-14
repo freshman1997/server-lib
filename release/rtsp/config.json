@@ -1,0 +1,10 @@
+{
+  "port": 554,
+  "app_name": "release-rtsp-server",
+  "enable_log": true,
+  "enable_audit": true,
+  "max_audit_events": 256,
+  "udp_retry_max_retries": 2,
+  "udp_retry_base_backoff_ms": 25,
+  "udp_retry_max_backoff_ms": 1000
+}

@@ -22,6 +22,10 @@ add_library(ServerServices ${SERVER_SERVICES_SRC})
 target_compile_features(ServerServices PUBLIC cxx_std_20)
 target_link_libraries(ServerServices PUBLIC ServerProxy DnsProto HttpProto WebSocketProto BitTorrentProto Socks5Proto MqttProto)
 
+if (TARGET RtspProto)
+    target_link_libraries(ServerServices PUBLIC RtspProto)
+endif()
+
 if (TARGET SshProto)
     target_link_libraries(ServerServices PUBLIC SshProto)
 endif()
@@ -41,4 +45,9 @@ endif()
 target_include_directories(ServerServices PUBLIC
     "${CMAKE_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+install(
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/nas_admin_console.html"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/yuan/server/services/resources"
 )

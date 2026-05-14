@@ -1034,10 +1034,3 @@ int main()
 
     return exit_code;
 }
-    struct WillOptions
-    {
-        std::string topic;
-        std::vector<uint8_t> payload;
-        QoS qos = QoS::AT_MOST_ONCE;
-        bool retain = false;
-    };

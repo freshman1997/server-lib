@@ -123,7 +123,7 @@ namespace yuan::net::dns
         std::string to_string() const;
 
         static void encode_name(::yuan::buffer::ByteBuffer &buffer, const std::string &name);
-        static std::string decode_name(const uint8_t *data, size_t size, size_t &pos);
+        static bool decode_name(const uint8_t *data, size_t size, size_t &pos, std::string &name);
 
     private:
         uint16_t session_id_;

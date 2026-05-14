@@ -1,5 +1,4 @@
 #include "nas/nas_redis_webdav_lock_manager.h"
-#include "nas/nas_redis_metadata_store.h"
 
 #include <chrono>
 #include <atomic>
@@ -7,6 +6,34 @@
 
 namespace yuan::server::nas
 {
+    namespace
+    {
+        std::int64_t now_unix_ms()
+        {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+        }
+
+        bool lock_is_active(const NasWebDavLockRecord &record)
+        {
+            return record.expires_at_unix_ms <= 0 || record.expires_at_unix_ms > now_unix_ms();
+        }
+
+        std::chrono::steady_clock::time_point to_steady_expiry(std::int64_t unix_ms)
+        {
+            if (unix_ms <= 0) {
+                return std::chrono::steady_clock::now();
+            }
+            const auto sys_now = std::chrono::system_clock::now();
+            const auto steady_now = std::chrono::steady_clock::now();
+            const auto target = std::chrono::system_clock::time_point(std::chrono::milliseconds(unix_ms));
+            if (target <= sys_now) {
+                return steady_now;
+            }
+            return steady_now + (target - sys_now);
+        }
+    }
+
     NasRedisWebDavLockManager::NasRedisWebDavLockManager(std::shared_ptr<NasShareManager> shares,
                                                          std::shared_ptr<NasMetadataStore> metadata,
                                                          std::string mount_path)
@@ -22,6 +49,8 @@ namespace yuan::server::nas
                                                                   std::string owner,
                                                                   std::chrono::seconds timeout)
     {
+        prune_expired();
+
         auto make_failed_lock = [&](std::string failed_href) {
             yuan::net::webdav::LockInfo info;
             info.token.clear();
@@ -49,14 +78,7 @@ namespace yuan::server::nas
         }
 
         if (metadata_ && !record.share_id.empty()) {
-            bool created = false;
-            if (auto *redis_store = dynamic_cast<NasRedisMetadataStore *>(metadata_.get())) {
-                created = redis_store->try_create_webdav_lock(record);
-            } else {
-                created = metadata_->upsert_webdav_lock(record);
-            }
-
-            if (!created) {
+            if (!metadata_->try_create_webdav_lock(record)) {
                 return make_failed_lock(record.path);
             }
         } else if (metadata_) {
@@ -70,8 +92,9 @@ namespace yuan::server::nas
         if (!metadata_) {
             return false;
         }
+        prune_expired();
         auto record = metadata_->find_webdav_lock(normalize_token(token));
-        if (!record) {
+        if (!record || !lock_is_active(*record)) {
             return false;
         }
         record->expires_at_unix_ms = unix_ms_after(timeout);
@@ -85,6 +108,7 @@ namespace yuan::server::nas
 
     bool NasRedisWebDavLockManager::allows(std::string_view href, std::string_view if_header_or_token) const
     {
+        prune_expired();
         const std::string token = normalize_token(if_header_or_token);
         for (const auto &lock : active_locks(href)) {
             if (!token.empty() && token == lock.token) {
@@ -101,6 +125,7 @@ namespace yuan::server::nas
         if (!metadata_) {
             return out;
         }
+        prune_expired();
         auto route = route_of(href);
         if (!route) {
             return out;
@@ -111,6 +136,9 @@ namespace yuan::server::nas
         }
         const std::string path = route->relative_path.empty() ? "/" : "/" + route->relative_path;
         for (const auto &record : metadata_->list_webdav_locks(share->id, path)) {
+            if (!lock_is_active(record)) {
+                continue;
+            }
             out.push_back(to_lock_info(record));
         }
         return out;
@@ -121,12 +149,20 @@ namespace yuan::server::nas
         if (!metadata_) {
             return std::nullopt;
         }
+        prune_expired();
         auto record = metadata_->find_webdav_lock(normalize_token(token));
+        if (!record || !lock_is_active(*record)) {
+            return std::nullopt;
+        }
         return record ? std::optional<yuan::net::webdav::LockInfo>(to_lock_info(*record)) : std::nullopt;
     }
 
     void NasRedisWebDavLockManager::prune_expired() const
     {
+        if (!metadata_) {
+            return;
+        }
+        (void)metadata_->prune_expired_webdav_locks();
     }
 
     std::optional<NasWebDavRoute> NasRedisWebDavLockManager::route_of(std::string_view href) const
@@ -180,7 +216,7 @@ namespace yuan::server::nas
                      record.depth == "1" ? yuan::net::webdav::Depth::one
                                            : yuan::net::webdav::Depth::infinity;
         info.owner = record.owner;
-        info.expires_at = std::chrono::steady_clock::now() + std::chrono::hours(1);
+        info.expires_at = to_steady_expiry(record.expires_at_unix_ms);
         return info;
     }
 }

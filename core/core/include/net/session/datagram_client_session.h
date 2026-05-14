@@ -22,7 +22,6 @@
 #include "net/socket/socket.h"
 #include "timer/timer_handle.h"
 #include "timer/timer_manager.h"
-#include "timer/timer_util.hpp"
 
 namespace yuan::net
 {

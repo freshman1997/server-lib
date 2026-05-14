@@ -9,8 +9,8 @@
 #include "coroutine/scheduler.h"
 #include "coroutine/event_loop_timeout_awaitable.h"
 #include "coroutine/queue_in_loop_awaitable.h"
-#include "timer/timer_util.hpp"
 #include "timer/timer_handle.h"
+#include "timer/timer_manager.h"
 
 namespace yuan::timer
 {
@@ -109,8 +109,7 @@ namespace yuan::coroutine
             if (!timer_manager_ || !callback) {
                 return {};
             }
-            return timer::TimerUtil::build_timeout_handle(timer_manager_, delay_ms,
-                                                          [cb = std::move(callback)]() { cb(); });
+            return timer_manager_->after(delay_ms, [cb = std::move(callback)]() { cb(); });
         }
 
         timer::TimerHandle schedule_handle(uint32_t delay_ms, std::function<void()> callback) const
@@ -124,8 +123,8 @@ namespace yuan::coroutine
             if (!timer_manager_ || !callback) {
                 return {};
             }
-            return timer::TimerUtil::build_period_handle(timer_manager_, delay_ms, interval_ms,
-                                                         [cb = std::move(callback)]() { cb(); }, repeat);
+            return timer_manager_->every(delay_ms, interval_ms,
+                                         [cb = std::move(callback)]() { cb(); }, repeat);
         }
 
         timer::TimerHandle schedule_periodic_handle(uint32_t delay_ms, uint32_t interval_ms,

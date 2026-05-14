@@ -2,6 +2,7 @@
 #include "console_logger.h"
 #include "file_logger.h"
 #include <map>
+#include <mutex>
 
 namespace yuan::log
 {
@@ -12,6 +13,7 @@ public:
     LogConfig cfg_;
     std::map<LoggerType, std::shared_ptr<Logger>> loggers_;
     std::map<LoggerType, LoggerCreator> creators_;
+    mutable std::mutex mutex_;
 };
 
 LoggerFactory::LoggerFactory()
@@ -25,35 +27,59 @@ LoggerFactory::~LoggerFactory()
 
 bool LoggerFactory::init(const std::string& config_path)
 {
+    LogConfig cfg;
     if (!config_path.empty()) {
-        data_->cfg_ = LogConfig::load_from_json(config_path);
+        cfg = LogConfig::load_from_json(config_path);
     } else {
-        data_->cfg_ = LogConfig::default_config();
+        cfg = LogConfig::default_config();
     }
-    return init_with_config(data_->cfg_);
+    return init_with_config(cfg);
 }
 
 bool LoggerFactory::init_with_config(const LogConfig& cfg)
 {
-    data_->cfg_ = cfg;
+    std::vector<std::shared_ptr<Logger>> old_loggers;
+    {
+        std::lock_guard<std::mutex> lock(data_->mutex_);
+        for (const auto& [type, logger] : data_->loggers_) {
+            if (logger) old_loggers.push_back(logger);
+        }
+        data_->loggers_.clear();
+        data_->cfg_ = cfg;
+    }
+
+    for (const auto& logger : old_loggers) {
+        logger->flush();
+    }
+
     return true;
 }
 
 void LoggerFactory::register_creator(LoggerType type, LoggerCreator creator)
 {
+    std::lock_guard<std::mutex> lock(data_->mutex_);
     data_->creators_[type] = std::move(creator);
+    data_->loggers_.erase(type);
 }
 
 std::shared_ptr<Logger> LoggerFactory::get_logger(LoggerType type)
 {
-    auto it = data_->loggers_.find(type);
-    if (it != data_->loggers_.end()) {
-        return it->second;
+    LogConfig cfg;
+    LoggerCreator creator;
+    {
+        std::lock_guard<std::mutex> lock(data_->mutex_);
+        auto it = data_->loggers_.find(type);
+        if (it != data_->loggers_.end()) {
+            return it->second;
+        }
+        cfg = data_->cfg_;
+        auto creator_it = data_->creators_.find(type);
+        if (creator_it != data_->creators_.end()) {
+            creator = creator_it->second;
+        }
     }
 
     std::shared_ptr<Logger> logger;
-    const auto& cfg = data_->cfg_;
-
     switch (type) {
         case LoggerType::console_:
             logger = std::make_shared<ConsoleLogger>("console");
@@ -65,30 +91,33 @@ std::shared_ptr<Logger> LoggerFactory::get_logger(LoggerType type)
             break;
 
         case LoggerType::net_: {
-            auto creator_it = data_->creators_.find(type);
-            if (creator_it != data_->creators_.end() && creator_it->second) {
-                logger = creator_it->second(cfg);
+            if (creator) {
+                logger = creator(cfg);
             }
             break;
         }
 
         default: {
-            auto creator_it = data_->creators_.find(type);
-            if (creator_it != data_->creators_.end() && creator_it->second) {
-                logger = creator_it->second(cfg);
+            if (creator) {
+                logger = creator(cfg);
             }
             break;
         }
     }
 
     if (logger) {
-        data_->loggers_[type] = logger;
+        std::lock_guard<std::mutex> lock(data_->mutex_);
+        auto [it, inserted] = data_->loggers_.emplace(type, logger);
+        if (!inserted) {
+            return it->second;
+        }
     }
     return logger;
 }
 
 std::vector<std::shared_ptr<Logger>> LoggerFactory::get_all_loggers() const
 {
+    std::lock_guard<std::mutex> lock(data_->mutex_);
     std::vector<std::shared_ptr<Logger>> result;
     for (const auto& [type, logger] : data_->loggers_) {
         if (logger) result.push_back(logger);
@@ -98,7 +127,15 @@ std::vector<std::shared_ptr<Logger>> LoggerFactory::get_all_loggers() const
 
 void LoggerFactory::flush_all()
 {
-    for (auto& [type, logger] : data_->loggers_) {
+    std::vector<std::shared_ptr<Logger>> loggers;
+    {
+        std::lock_guard<std::mutex> lock(data_->mutex_);
+        for (const auto& [type, logger] : data_->loggers_) {
+            if (logger) loggers.push_back(logger);
+        }
+    }
+
+    for (auto& logger : loggers) {
         if (logger) logger->flush();
     }
 }

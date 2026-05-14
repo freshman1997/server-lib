@@ -44,11 +44,12 @@ namespace yuan::server::nas
                                   std::string_view name) override;
 
         bool upsert_webdav_lock(const NasWebDavLockRecord &lock) override;
-        bool try_create_webdav_lock(const NasWebDavLockRecord &lock);
+        bool try_create_webdav_lock(const NasWebDavLockRecord &lock) override;
         std::optional<NasWebDavLockRecord> find_webdav_lock(std::string_view token) const override;
         std::vector<NasWebDavLockRecord> list_webdav_locks(std::string_view share_id,
                                                            std::string_view path) const override;
         bool remove_webdav_lock(std::string_view token) override;
+        std::size_t prune_expired_webdav_locks() override;
 
         bool append_audit_event(const NasAuditEvent &event) override;
         std::vector<NasAuditEvent> list_audit_events(std::size_t limit) const override;

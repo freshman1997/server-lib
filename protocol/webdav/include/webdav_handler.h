@@ -24,6 +24,8 @@ namespace yuan::net::webdav
         bool allow_infinite_depth = false;
         bool create_parent_on_put = true;
         std::uint64_t max_put_bytes = 1024ull * 1024ull * 1024ull;
+        std::uint32_t default_lock_timeout_seconds = 3600;
+        std::uint32_t max_lock_timeout_seconds = 86400;
     };
 
     class WebDavHandler

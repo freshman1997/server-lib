@@ -41,10 +41,18 @@ namespace yuan::server::nas
                                           std::string_view name) = 0;
 
         virtual bool upsert_webdav_lock(const NasWebDavLockRecord &lock) = 0;
+        virtual bool try_create_webdav_lock(const NasWebDavLockRecord &lock)
+        {
+            return upsert_webdav_lock(lock);
+        }
         virtual std::optional<NasWebDavLockRecord> find_webdav_lock(std::string_view token) const = 0;
         virtual std::vector<NasWebDavLockRecord> list_webdav_locks(std::string_view share_id,
                                                                    std::string_view path) const = 0;
         virtual bool remove_webdav_lock(std::string_view token) = 0;
+        virtual std::size_t prune_expired_webdav_locks()
+        {
+            return 0;
+        }
 
         virtual bool append_audit_event(const NasAuditEvent &event) = 0;
         virtual std::vector<NasAuditEvent> list_audit_events(std::size_t limit) const = 0;

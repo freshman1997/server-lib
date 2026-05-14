@@ -3,6 +3,7 @@
 #include "buffer/byte_buffer.h"
 #include "coroutine/sync_wait.h"
 #include "logger.h"
+#include <chrono>
 
 namespace yuan::net::dns
 {
@@ -66,18 +67,41 @@ namespace yuan::net::dns
             co_return DnsPacket();
         }
 
-        auto read_result = co_await client_.receive_async(timeout_ms);
-        if (read_result.status != coroutine::IoStatus::success || read_result.data.readable_bytes() == 0) {
-            co_return DnsPacket();
-        }
+        const auto start = std::chrono::steady_clock::now();
 
-        DnsPacket response;
-        if (!response.deserialize(read_result.data)) {
-            co_return DnsPacket();
-        }
+        while (true) {
+            uint32_t wait_ms = timeout_ms;
+            if (timeout_ms > 0) {
+                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start);
+                if (elapsed.count() >= static_cast<long long>(timeout_ms)) {
+                    co_return DnsPacket();
+                }
 
-        last_response_ = response;
-        co_return response;
+                wait_ms = static_cast<uint32_t>(
+                    static_cast<long long>(timeout_ms) - elapsed.count());
+            }
+
+            auto read_result = co_await client_.receive_async(wait_ms);
+            if (read_result.status != coroutine::IoStatus::success) {
+                co_return DnsPacket();
+            }
+            if (read_result.data.readable_bytes() == 0) {
+                continue;
+            }
+
+            DnsPacket response;
+            if (!response.deserialize(read_result.data)) {
+                continue;
+            }
+
+            if (!response.is_response() || response.get_session_id() != session_id) {
+                continue;
+            }
+
+            last_response_ = response;
+            co_return response;
+        }
     }
 
     bool DnsClient::query(const std::string & domain, DnsType type, uint32_t timeout_ms)

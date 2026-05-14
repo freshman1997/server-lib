@@ -23,3 +23,5 @@ logs
 test_http_static
 *.gz
 *.log
+third_party/musl-cross/
+dist/

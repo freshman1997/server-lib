@@ -12,9 +12,14 @@ void Logger::set_formatter(std::shared_ptr<Formatter> fmt)
 
 std::string Logger::format_log_item(const LogItem& item)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (formatter_) {
-        return formatter_->format(item);
+    std::shared_ptr<Formatter> formatter;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        formatter = formatter_;
+    }
+
+    if (formatter) {
+        return formatter->format(item);
     }
 
     try {

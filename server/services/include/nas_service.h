@@ -70,6 +70,38 @@ namespace yuan::server
                           std::string detail = {});
         std::vector<yuan::server::nas::NasAuditEvent> audit_events(std::size_t limit) const;
         void record_admin_session(const yuan::net::http::HttpRequest *req, const std::string &username);
+        std::optional<std::string> guard_admin_request(yuan::net::http::HttpRequest *req,
+                                                       yuan::net::http::HttpResponse *resp);
+        void handle_admin_shares(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp);
+        void handle_admin_shares_get(yuan::net::http::HttpResponse *resp) const;
+        void handle_admin_shares_post(yuan::net::http::HttpRequest *req,
+                                      yuan::net::http::HttpResponse *resp,
+                                      const std::string &actor);
+        void handle_admin_users(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp);
+        void handle_admin_users_get(yuan::net::http::HttpResponse *resp) const;
+        void handle_admin_users_post(yuan::net::http::HttpRequest *req,
+                                     yuan::net::http::HttpResponse *resp,
+                                     const std::string &actor);
+        void handle_admin_quota(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp);
+        void handle_admin_health_actions(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp);
+        void handle_admin_health_actions_get(yuan::net::http::HttpResponse *resp) const;
+        void handle_admin_health_actions_post(yuan::net::http::HttpRequest *req,
+                                              yuan::net::http::HttpResponse *resp,
+                                              const std::string &actor);
+        void handle_admin_audit(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp);
+        void handle_admin_audit_get(yuan::net::http::HttpRequest *req,
+                                    yuan::net::http::HttpResponse *resp) const;
+        void handle_admin_sessions(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp);
+        void handle_admin_sessions_get(yuan::net::http::HttpRequest *req,
+                                       yuan::net::http::HttpResponse *resp) const;
+        void handle_admin_activity(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp);
+        void handle_admin_activity_get(yuan::net::http::HttpResponse *resp) const;
+        nlohmann::json build_admin_shares_json() const;
+        nlohmann::json build_admin_users_json() const;
+        nlohmann::json build_admin_quota_json() const;
+        nlohmann::json build_admin_audit_json(yuan::net::http::HttpRequest *req) const;
+        nlohmann::json build_admin_sessions_json(yuan::net::http::HttpRequest *req) const;
+        nlohmann::json build_admin_activity_json() const;
         void install_health_endpoint();
         void install_admin_endpoints();
         void install_admin_console();
