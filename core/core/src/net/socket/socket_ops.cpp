@@ -171,22 +171,19 @@ namespace yuan::net::socket
 
     bool set_reuse(int fd, bool on, bool exclude)
     {
+        return set_reuse_addr(fd, on, exclude);
+    }
+
+    bool set_reuse_addr(int fd, bool on, bool exclusive)
+    {
 #ifndef _WIN32
+        (void)exclusive;
         int optval = on ? 1 : 0;
-        if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
-                         &optval, static_cast<socklen_t>(sizeof optval)) != 0) {
-            return false;
-        }
-#ifdef SO_REUSEPORT
-        if (on) {
-            (void)::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT,
-                               &optval, static_cast<socklen_t>(sizeof optval));
-        }
-#endif
-        return true;
+        return ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
+                            &optval, static_cast<socklen_t>(sizeof optval)) == 0;
 #else
         u_long optval = on ? 1 : 0;
-        if (!exclude) {
+        if (!exclusive) {
             return ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
                                 reinterpret_cast<char *>(&optval), sizeof(optval)) == 0;
         } else {
@@ -195,6 +192,36 @@ namespace yuan::net::socket
         }
 
 #endif
+    }
+
+    bool set_reuse_port(int fd, bool on)
+    {
+#ifndef _WIN32
+#ifdef SO_REUSEPORT
+        int optval = on ? 1 : 0;
+        return ::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT,
+                            &optval, static_cast<socklen_t>(sizeof optval)) == 0;
+#else
+        return !on;
+#endif
+#else
+        (void)fd;
+        return !on;
+#endif
+    }
+
+    bool apply_listen_options(int fd, const ListenOptions &options)
+    {
+        if (options.reuse_addr && !set_reuse_addr(fd, true, options.exclusive_addr)) {
+            return false;
+        }
+        if (options.reuse_port && !set_reuse_port(fd, true)) {
+            return false;
+        }
+        if (options.non_block) {
+            set_none_block(fd, true);
+        }
+        return true;
     }
 
     void set_no_delay(int fd, bool on)

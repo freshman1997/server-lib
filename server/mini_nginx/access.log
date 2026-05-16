@@ -83,3 +83,6 @@
 {"ip":"127.0.0.1:40690","latency_ms":0,"method":"GET","status":404,"ts":"2026-05-07 12:40:41","upstream":"127.0.0.1:18086","url":"/hello.txt"}
 {"ip":"127.0.0.1:40694","latency_ms":0,"method":"GET","status":404,"ts":"2026-05-07 12:40:41","upstream":"127.0.0.1:18086","url":"/hello.txt"}
 {"ip":"127.0.0.1:40698","latency_ms":1,"method":"GET","status":404,"ts":"2026-05-07 12:40:42","upstream":"127.0.0.1:18086","url":"/hello.txt"}
+{"ip":"127.0.0.1:55398","latency_ms":3,"method":"GET","status":200,"ts":"2026-05-15 21:38:22","upstream":"localhost:8080","url":"/static/"}
+{"ip":"127.0.0.1:55398","latency_ms":0,"method":"GET","status":404,"ts":"2026-05-15 21:38:23","upstream":"localhost:8080","url":"/favicon.ico"}
+{"ip":"127.0.0.1:62960","latency_ms":3,"method":"GET","status":200,"ts":"2026-05-15 21:38:29","upstream":"localhost:8080","url":"/static/"}

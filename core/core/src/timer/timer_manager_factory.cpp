@@ -8,7 +8,7 @@ namespace yuan::timer
     std::unique_ptr<TimerManager> create_timer_manager(TimerBackend backend)
     {
         if (backend == TimerBackend::automatic) {
-            backend = TimerBackend::wheel;
+            backend = TimerBackend::heap;
         }
 
         if (backend == TimerBackend::heap) {

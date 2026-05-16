@@ -262,6 +262,13 @@ namespace yuan::net::http
                 : uint32_t{30000};
         }
 
+        uint32_t response_write_timeout_ms(const HttpServerConfig &config)
+        {
+            return config.write_timeout_ms > 0
+                ? static_cast<uint32_t>(config.write_timeout_ms)
+                : keep_alive_idle_timeout_ms();
+        }
+
         bool should_close_http1_connection(HttpRequest *req, HttpResponse *resp, bool keep_alive_enabled)
         {
             if (!req || !resp) {
@@ -1106,6 +1113,11 @@ namespace yuan::net::http
         }
     }
 
+    void HttpServer::set_listen_options(const ::yuan::net::ListenOptions &options)
+    {
+        config_.listen_options = options;
+    }
+
     bool HttpServer::parse_request(HttpSessionContext * context)
     {
         if (!context->parse()) {
@@ -1303,7 +1315,7 @@ namespace yuan::net::http
             return false;
         }
 
-        if (!listener_.bind(port, runtime)) {
+        if (!listener_.bind(static_cast<uint16_t>(port), runtime, config_.listen_options)) {
             LOG_ERROR("bind port {} failed!", port);
             if (owned_runtime_)
                 owned_runtime_.reset();
@@ -1332,9 +1344,11 @@ namespace yuan::net::http
                 co_await handle_connection(std::move(ctx));
             });
 
+        auto accept_task = listener_.run_async();
+        accept_task.resume();
+        accept_task.detach();
+
         if (owned_runtime_) {
-            auto accept_task = listener_.run_async();
-            accept_task.resume();
             owned_runtime_->run();
         }
     }
@@ -1819,12 +1833,26 @@ namespace yuan::net::http
                     context->get_request(), context->get_response(), config_.enable_keep_alive);
                 http1_long_lived_response = context->get_response()->is_sse();
 
+                bool response_stream_failed = false;
+                const uint32_t write_timeout_ms = response_write_timeout_ms(config_);
                 while (context->get_response()->is_uploading()) {
-                    auto flush_result = co_await ctx.flush_async();
+                    auto flush_result = co_await ctx.flush_async(write_timeout_ms);
                     if (flush_result.status != coroutine::IoStatus::success) {
+                        response_stream_failed = true;
                         break;
                     }
                     context->write();
+                    if (!ctx.is_connected()) {
+                        response_stream_failed = true;
+                        break;
+                    }
+                }
+
+                if (response_stream_failed) {
+                    if (ctx.is_connected()) {
+                        ctx.abort();
+                    }
+                    break;
                 }
 
                 if (close_after_response && ctx.is_connected()) {
@@ -2204,10 +2232,6 @@ namespace yuan::net::http
 
     bool HttpServer::serve_embedded_static_page(const std::string & file_relative_path, HttpResponse * resp, const StaticMountOptions &options)
     {
-        if (!options.enable_legacy_embedded_pages) {
-            return false;
-        }
-
         if (file_relative_path == "upload") {
             resp->append_body(config::upload_html_text);
         } else {

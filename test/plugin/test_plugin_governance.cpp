@@ -1,4 +1,7 @@
+#include "bootstrap.h"
+#include "eventbus/event_bus.h"
 #include "plugin_resource_guard.h"
+#include "plugin_protocol_service_adapter.h"
 #include "plugin_service_registry_adapter.h"
 #include "plugin/plugin_call_guard.h"
 #include "plugin/plugin_context.h"
@@ -11,13 +14,16 @@
 #include "plugin/plugin_meta.h"
 #include "plugin/plugin_state.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>
 #include <chrono>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -153,6 +159,7 @@ namespace
         require(yuan::plugin::accepts_callbacks(yuan::plugin::PluginState::active), "active should accept callbacks");
         require(yuan::plugin::accepts_callbacks(yuan::plugin::PluginState::degraded), "degraded should accept callbacks");
         require(yuan::plugin::accepts_callbacks(yuan::plugin::PluginState::initialized), "initialized should accept callbacks");
+        require(yuan::plugin::accepts_callbacks(yuan::plugin::PluginState::loaded), "loaded should accept init callbacks");
         require(!yuan::plugin::accepts_callbacks(yuan::plugin::PluginState::faulted), "faulted should not accept callbacks");
         require(!yuan::plugin::accepts_callbacks(yuan::plugin::PluginState::quarantined), "quarantined should not accept callbacks");
         require(!yuan::plugin::accepts_callbacks(yuan::plugin::PluginState::stopped), "stopped should not accept callbacks");
@@ -471,6 +478,279 @@ namespace
                 "has_capability should return false when pointer is set but permission not granted");
     }
 
+    void test_plugin_context_identity_boundary()
+    {
+        yuan::plugin::PluginContext ctx;
+        ctx.app_name = "plugin-identity-app";
+        ctx.plugin_name = "identity-plugin";
+        ctx.plugin_root_path = "/plugins/identity-plugin";
+        ctx.plugin_config_path = "/plugins/identity-plugin/plugin.json";
+        ctx.run_mode = yuan::plugin::PluginRunMode::multi_process;
+        ctx.worker_threads = 8;
+        ctx.runtime_worker_count = 4;
+        ctx.worker_index = 2;
+        ctx.is_worker_process = true;
+        ctx.active_service_name = "plugin-host";
+        ctx.service_index = 5;
+        ctx.service_instance_index = 1;
+        ctx.service_instance_count = 3;
+        ctx.listener_reuse_port = true;
+
+        auto boundary = ctx.sdk_boundary();
+        require(boundary.app_name == ctx.app_name, "sdk boundary should carry app name");
+        require(boundary.plugin_name == ctx.plugin_name, "sdk boundary should carry plugin name");
+        require(boundary.worker_threads == 8 &&
+                    boundary.runtime_worker_count == 4 &&
+                    boundary.worker_index == 2 &&
+                    boundary.is_worker_process,
+                "sdk boundary should carry runtime worker identity");
+        require(boundary.active_service_name == "plugin-host" &&
+                    boundary.service_index == 5 &&
+                    boundary.service_instance_index == 1 &&
+                    boundary.service_instance_count == 3 &&
+                    boundary.listener_reuse_port,
+                "sdk boundary should carry service-instance identity");
+    }
+
+    void test_protocol_service_permission_names()
+    {
+        const auto permissions = yuan::plugin::PluginPermissionNames::parse(
+            "register_protocol_service,use_network_runtime");
+        require(yuan::plugin::has_permission(
+                    permissions,
+                    yuan::plugin::PluginPermission::register_protocol_service),
+                "register_protocol_service permission should parse");
+        require(yuan::plugin::has_permission(
+                    permissions,
+                    yuan::plugin::PluginPermission::use_network_runtime),
+                "use_network_runtime permission should still parse with protocol service permission");
+        require(std::string(yuan::plugin::PluginPermissionNames::name(
+                    yuan::plugin::PluginPermission::register_protocol_service)) == "register_protocol_service",
+                "register_protocol_service permission should have a stable name");
+
+        bool found = false;
+        for (const auto &name : yuan::plugin::PluginPermissionNames::to_names(permissions)) {
+            if (name == "register_protocol_service") {
+                found = true;
+            }
+        }
+        require(found, "to_names should include register_protocol_service");
+    }
+
+    void test_protocol_service_manifest_discovery()
+    {
+        yuan::plugin::PluginManager manager;
+
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-protocol-services-" + std::to_string(static_cast<unsigned long long>(
+                                                                std::chrono::steady_clock::now().time_since_epoch().count())));
+        const auto allowed_dir = temp_root / "proto_allowed";
+        const auto denied_dir = temp_root / "proto_denied";
+        std::filesystem::create_directories(allowed_dir);
+        std::filesystem::create_directories(denied_dir);
+
+        {
+            std::ofstream manifest(allowed_dir / "plugin.json");
+            require(static_cast<bool>(manifest), "allowed protocol service manifest should be creatable");
+            manifest << "{\n";
+            manifest << "  \"run_mode\": \"script\",\n";
+            manifest << "  \"language\": \"lua\",\n";
+            manifest << "  \"entry\": \"main.lua\",\n";
+            manifest << "  \"permissions\": \"register_protocol_service,use_network_runtime\",\n";
+            manifest << "  \"protocol_services\": [{\n";
+            manifest << "    \"name\": \"echo_proto\",\n";
+            manifest << "    \"type\": \"echo\",\n";
+            manifest << "    \"protocol\": \"tcp\",\n";
+            manifest << "    \"host\": \"127.0.0.1\",\n";
+            manifest << "    \"port\": 19090,\n";
+            manifest << "    \"contract_id\": \"plugin.echo\",\n";
+            manifest << "    \"contract_version\": 2\n";
+            manifest << "  }]\n";
+            manifest << "}\n";
+        }
+
+        {
+            std::ofstream manifest(denied_dir / "plugin.json");
+            require(static_cast<bool>(manifest), "denied protocol service manifest should be creatable");
+            manifest << "{\n";
+            manifest << "  \"run_mode\": \"script\",\n";
+            manifest << "  \"language\": \"lua\",\n";
+            manifest << "  \"permissions\": \"use_network_runtime\",\n";
+            manifest << "  \"protocol_services\": [{\n";
+            manifest << "    \"name\": \"blocked_proto\",\n";
+            manifest << "    \"protocol\": \"tcp\",\n";
+            manifest << "    \"port\": 19091,\n";
+            manifest << "    \"contract_id\": \"plugin.blocked\"\n";
+            manifest << "  }]\n";
+            manifest << "}\n";
+        }
+
+        manager.set_plugin_path(temp_root.string());
+
+        const auto allowed = manager.discover_protocol_services({ "proto_allowed" });
+        require(allowed.size() == 1, "plugin manager should discover allowed protocol service");
+        require(allowed[0].plugin_id == "proto_allowed", "protocol service should carry plugin id");
+        require(allowed[0].name == "echo_proto", "protocol service should carry name");
+        require(allowed[0].type == "echo", "protocol service should carry type");
+        require(allowed[0].protocol == "tcp", "protocol service should carry protocol");
+        require(allowed[0].host == "127.0.0.1", "protocol service should carry host");
+        require(allowed[0].port == 19090, "protocol service should carry port");
+        require(allowed[0].contract_id == "plugin.echo", "protocol service should carry contract id");
+        require(allowed[0].contract_version == 2, "protocol service should carry contract version");
+        require(allowed[0].run_mode == yuan::plugin::PluginRunMode::script,
+                "protocol service should carry plugin run mode");
+        require(allowed[0].language == "lua", "protocol service should carry language");
+        require(allowed[0].entry == "main.lua", "protocol service should carry entry");
+
+        const auto denied = manager.discover_protocol_services({ "proto_denied" });
+        require(denied.empty(), "plugin manager should reject protocol services without permission");
+
+        yuan::app::ServicePlacement placement;
+        placement.mode = yuan::app::PlacementMode::sharded;
+        placement.instances = 2;
+        const auto descriptor = yuan::app::make_plugin_protocol_service_descriptor(allowed[0], placement);
+        require(descriptor.has_value(), "allowed protocol service should convert to app service descriptor");
+        require(descriptor->name == "proto_allowed.echo_proto",
+                "plugin protocol descriptor should be namespaced by plugin id");
+        require(descriptor->type_name == "plugin.protocol.echo",
+                "plugin protocol descriptor should carry plugin protocol type");
+        require(descriptor->contract_id == "plugin.echo",
+                "plugin protocol descriptor should carry contract id");
+        require(descriptor->contract_version == 2,
+                "plugin protocol descriptor should carry contract version");
+        require(descriptor->placement.mode == yuan::app::PlacementMode::sharded &&
+                    descriptor->placement.instances == 2,
+                "plugin protocol descriptor should preserve requested placement");
+        require(descriptor->endpoints.size() == 1,
+                "plugin protocol descriptor should expose one endpoint");
+        require(descriptor->endpoints[0].name == "echo_proto" &&
+                    descriptor->endpoints[0].host == "127.0.0.1" &&
+                    descriptor->endpoints[0].port == 19090 &&
+                    descriptor->endpoints[0].protocol == "tcp",
+                "plugin protocol descriptor should carry endpoint details");
+
+        std::error_code ec;
+        std::filesystem::remove_all(temp_root, ec);
+    }
+
+    void test_protocol_service_worker_local_adapter()
+    {
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-protocol-worker-local-" + std::to_string(static_cast<unsigned long long>(
+                                                                std::chrono::steady_clock::now().time_since_epoch().count())));
+        const auto plugin_dir = temp_root / "proto_worker";
+        std::filesystem::create_directories(plugin_dir);
+
+        {
+            std::ofstream manifest(plugin_dir / "plugin.json");
+            require(static_cast<bool>(manifest), "worker-local protocol plugin manifest should be creatable");
+            manifest << "{\n";
+            manifest << "  \"run_mode\": \"script\",\n";
+            manifest << "  \"language\": \"lua\",\n";
+            manifest << "  \"entry\": \"main.lua\",\n";
+            manifest << "  \"permissions\": \"register_protocol_service,use_logger,use_network_runtime\",\n";
+            manifest << "  \"protocol_services\": [{\n";
+            manifest << "    \"name\": \"echo_proto\",\n";
+            manifest << "    \"type\": \"echo\",\n";
+            manifest << "    \"protocol\": \"tcp\",\n";
+            manifest << "    \"host\": \"127.0.0.1\",\n";
+            manifest << "    \"port\": 0,\n";
+            manifest << "    \"contract_id\": \"plugin.echo.worker\",\n";
+            manifest << "    \"contract_version\": 1\n";
+            manifest << "  }]\n";
+            manifest << "}\n";
+        }
+
+        {
+            std::ofstream script(plugin_dir / "main.lua");
+            require(static_cast<bool>(script), "worker-local protocol plugin script should be creatable");
+            script << "local plugin = {}\n";
+            script << "function plugin.on_init(ctx)\n";
+            script << "  if not ctx.logger then return false end\n";
+            script << "  ctx.logger:info('protocol worker init')\n";
+            script << "  return true\n";
+            script << "end\n";
+            script << "function plugin.on_enable() end\n";
+            script << "function plugin.on_disable() end\n";
+            script << "function plugin.on_health_check() return true end\n";
+            script << "function plugin.on_release() end\n";
+            script << "return plugin\n";
+        }
+
+        yuan::plugin::PluginManager discovery_manager;
+        discovery_manager.set_plugin_path(temp_root.string());
+        const auto protocol_services = discovery_manager.discover_protocol_services({ "proto_worker" });
+        require(protocol_services.size() == 1, "worker-local protocol service should be discoverable");
+
+        auto event_bus = std::make_shared<yuan::eventbus::EventBus>();
+        std::mutex mutex;
+        std::vector<std::size_t> loaded_worker_indices;
+        std::vector<std::size_t> loaded_service_indices;
+
+        event_bus->subscribe(yuan::plugin::events::plugin_loaded, [&](const yuan::eventbus::Event &event) {
+            const auto *plugin_event = std::any_cast<yuan::plugin::PluginEvent>(&event.payload);
+            if (!plugin_event || plugin_event->plugin_name != "proto_worker") {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(mutex);
+            loaded_worker_indices.push_back(plugin_event->worker_index);
+            loaded_service_indices.push_back(plugin_event->service_instance_index);
+        });
+
+        yuan::app::RuntimeContext context;
+        context.app_name = "protocol-service-worker-local-test";
+        context.run_mode = yuan::app::RunMode::multi_thread;
+        context.worker_threads = 2;
+        context.runtime_workers.worker_count = 2;
+        context.event_bus = event_bus;
+
+        yuan::app::Application app(context);
+        yuan::app::ServicePlacement placement;
+        placement.mode = yuan::app::PlacementMode::all_workers;
+
+        require(yuan::app::add_plugin_protocol_service(
+                    app,
+                    temp_root.string(),
+                    protocol_services[0],
+                    placement),
+                "plugin protocol service should register as an app ServiceDefinition");
+
+        yuan::app::Bootstrap bootstrap(app);
+        require(bootstrap.run(), "bootstrap should start worker-local plugin protocol service instances");
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < deadline) {
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                if (loaded_worker_indices.size() >= 2) {
+                    break;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        const auto snapshot = bootstrap.supervisor_snapshot();
+        require(snapshot.running_workers == 2,
+                "plugin protocol service should run on two in-process workers");
+
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            require(loaded_worker_indices.size() == 2,
+                    "each worker-local plugin protocol service should initialize a plugin runtime");
+            std::sort(loaded_worker_indices.begin(), loaded_worker_indices.end());
+            std::sort(loaded_service_indices.begin(), loaded_service_indices.end());
+            require(loaded_worker_indices[0] == 0 && loaded_worker_indices[1] == 1,
+                    "plugin loaded events should carry distinct worker indices");
+            require(loaded_service_indices[0] == 0 && loaded_service_indices[1] == 1,
+                    "plugin loaded events should carry distinct service instance indices");
+        }
+
+        bootstrap.shutdown();
+
+        std::error_code ec;
+        std::filesystem::remove_all(temp_root, ec);
+    }
+
     void test_resource_guard_cleanup_on_stop()
     {
         yuan::app::PluginResourceGuard guard;
@@ -592,6 +872,10 @@ int main()
 
     std::cout << "=== Phase C: Capability Enforcement Tests ===" << std::endl;
     test_capability_enforcement();
+    test_plugin_context_identity_boundary();
+    test_protocol_service_permission_names();
+    test_protocol_service_manifest_discovery();
+    test_protocol_service_worker_local_adapter();
     test_resource_guard_cleanup_on_stop();
     std::cout << "  PASSED" << std::endl;
 

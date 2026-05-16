@@ -27,7 +27,7 @@ namespace yuan::server
     void FtpService::start()
     {
         if (shared_runtime_) {
-            host_.start([this]() { server_->serve(port_, *shared_runtime_); });
+            host_.start_inline([this]() { server_->serve(port_, *shared_runtime_); });
         } else {
             host_.start([this]() { server_->serve(port_); });
         }

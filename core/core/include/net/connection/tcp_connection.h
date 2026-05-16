@@ -89,6 +89,9 @@ namespace yuan::net
 
         void init();
 
+        bool finish_output_drained();
+        void update_ssl_handshake_interest(SSLHandler &ssl);
+
     protected:
         ConnectionState state_;
         std::unique_ptr<Channel> channel_;

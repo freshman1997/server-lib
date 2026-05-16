@@ -36,8 +36,14 @@ namespace yuan::plugin
         std::string plugin_config_path;
         PluginRunMode run_mode = PluginRunMode::unknown;
         std::size_t worker_threads = 1;
+        std::size_t runtime_worker_count = 1;
         std::size_t worker_index = 0;
         bool is_worker_process = false;
+        std::string active_service_name;
+        std::size_t service_index = 0;
+        std::size_t service_instance_index = 0;
+        std::size_t service_instance_count = 1;
+        bool listener_reuse_port = false;
     };
 
     struct PluginCapabilitySnapshot
@@ -65,8 +71,14 @@ namespace yuan::plugin
         PluginConfigView config;
         PluginRunMode run_mode = PluginRunMode::unknown;
         std::size_t worker_threads = 1;
+        std::size_t runtime_worker_count = 1;
         std::size_t worker_index = 0;
         bool is_worker_process = false;
+        std::string active_service_name;
+        std::size_t service_index = 0;
+        std::size_t service_instance_index = 0;
+        std::size_t service_instance_count = 1;
+        bool listener_reuse_port = false;
 
         HostEventBus *event_bus = nullptr;
         HostLogger *logger = nullptr;
@@ -91,8 +103,14 @@ namespace yuan::plugin
                 plugin_config_path,
                 run_mode,
                 worker_threads,
+                runtime_worker_count,
                 worker_index,
-                is_worker_process
+                is_worker_process,
+                active_service_name,
+                service_index,
+                service_instance_index,
+                service_instance_count,
+                listener_reuse_port
             };
         }
 

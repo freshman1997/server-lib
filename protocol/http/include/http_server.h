@@ -21,6 +21,7 @@
 #include "net/async/async_connection_context.h"
 #include "net/runtime/network_runtime.h"
 #include "net/security/ssl_module.h"
+#include "net/socket/listen_options.h"
 #include "request_dispatcher.h"
 #include "thread/thread_pool.h"
 
@@ -43,9 +44,11 @@ namespace yuan::net::http
         bool enable_http2 = false;
         bool enable_http3 = false;
         size_t max_body_size = 0;
+        int write_timeout_ms = 10000;
         int max_connections = 0;
         int max_connections_per_ip = 0;
         int max_inflight_requests_per_ip = 0;
+        ::yuan::net::ListenOptions listen_options;
         std::string server_name = "YuanServer/1.0";
     };
 
@@ -68,7 +71,6 @@ namespace yuan::net::http
     struct StaticMountOptions
     {
         bool auto_index = true;
-        bool enable_legacy_embedded_pages = true;
         bool enable_range = true;
         std::vector<std::string> index_files{ "index.html", "index.htm" };
         std::vector<std::string> try_files;
@@ -113,6 +115,7 @@ namespace yuan::net::http
         HttpProxyHandler *ensure_proxy();
         void set_proxy_factory(ProxyFactory factory);
         void set_proxy_handler(std::unique_ptr<HttpProxyHandler> proxy);
+        void set_listen_options(const ::yuan::net::ListenOptions &options);
         void mount_static(const std::string &url_prefix, const std::string &root, StaticMountOptions options = {});
 
     public:

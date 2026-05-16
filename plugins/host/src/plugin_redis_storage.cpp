@@ -11,6 +11,8 @@
 #include "value/status_value.h"
 #include "value/string_value.h"
 
+#include <cstdlib>
+
 namespace yuan::app
 {
 
@@ -35,7 +37,18 @@ namespace yuan::app
         try
         {
             yuan::redis::Option opt;
-            opt.host_ = "192.168.206.128";
+            if (const char *host = std::getenv("YUAN_PLUGIN_REDIS_HOST")) {
+                if (*host != '\0') {
+                    config_.host = host;
+                }
+            }
+            if (const char *port = std::getenv("YUAN_PLUGIN_REDIS_PORT")) {
+                if (*port != '\0') {
+                    config_.port = std::atoi(port);
+                }
+            }
+
+            opt.host_ = config_.host;
             opt.port_ = config_.port;
             opt.password_ = config_.password;
             opt.db_ = config_.db;

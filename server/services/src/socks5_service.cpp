@@ -93,6 +93,10 @@ namespace yuan::server
 
     void Socks5Service::start()
     {
+        if (shared_runtime_) {
+            host_.start_inline([this]() { server_->serve(); });
+            return;
+        }
         host_.start([this]() { server_->serve(); });
     }
 

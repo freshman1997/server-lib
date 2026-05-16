@@ -241,8 +241,7 @@ namespace yuan::coroutine
         bool await_ready() const noexcept
         {
             auto *connection = connection_handle_.get();
-            return !connection || !runtime_.event_loop() ||
-                   connection->get_connection_state() == net::ConnectionState::closed;
+            return !connection || !runtime_.event_loop();
         }
 
         bool await_suspend(std::coroutine_handle<> handle)
@@ -395,8 +394,7 @@ namespace yuan::coroutine
         bool await_ready() const noexcept
         {
             auto *connection = connection_handle_.get();
-            return !connection || !runtime_.event_loop() ||
-                   connection->get_connection_state() == net::ConnectionState::closed;
+            return !connection || !runtime_.event_loop();
         }
 
         bool await_suspend(std::coroutine_handle<> handle)

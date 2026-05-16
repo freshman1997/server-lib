@@ -14,6 +14,7 @@
 
 namespace yuan::plugin
 {
+    class PluginManager;
     class HostScheduler;
     class HostServiceRegistry;
     class HostPermissionGuard;
@@ -37,6 +38,7 @@ namespace yuan::app
         PluginHostService() = default;
         explicit PluginHostService(const std::string &plugin_path);
         PluginHostService(const std::string &plugin_path, const std::vector<std::string> &plugins);
+        ~PluginHostService() override;
 
         void set_plugin_path(const std::string &plugin_path);
         const std::string &plugin_path() const;
@@ -84,6 +86,7 @@ namespace yuan::app
         plugin::HostResourceGuard *resource_guard_ptr() const;
         plugin::HostHttpInterceptor *http_interceptor_ptr() const;
         plugin::HostNetworkRuntime *network_runtime_ptr() const;
+        plugin::PluginManager &plugin_manager() const;
 
         PluginServiceRegistryAdapter *service_registry_adapter() const;
         PluginPermissionGuard *permission_guard_adapter() const;
@@ -111,6 +114,7 @@ namespace yuan::app
         std::function<void *()> pending_http_server_accessor_;
         std::function<bool(std::shared_ptr<plugin::HttpMiddlewareCallback>, std::string)> pending_http_middleware_installer_;
         std::function<bool(std::shared_ptr<plugin::HttpRouteCallback>, std::string, std::string, std::string)> pending_http_route_installer_;
+        mutable std::unique_ptr<plugin::PluginManager> plugin_manager_;
     };
 
 } // namespace yuan::app

@@ -1,45 +1,96 @@
-# Service Instance Runtime Refactor
+# Runtime Worker Placement Refactor
 
 ## Purpose
 
-This document defines the refactor needed to remove the current runtime ceiling where `multi_process` effectively means one process per service. The target model is service replication: a logical service can produce multiple runtime instances, and each instance can be placed in a process or thread according to its deployment policy.
+This document replaces the earlier "one service instance per worker" refactor direction with a
+runtime-worker placement model.
 
-This refactor may remove old registration APIs. Compatibility with the current `Application::add_service(...)` style is not required for this phase.
+The core architecture problem is not only that `multi_process` currently means one worker process per
+service. The deeper problem is that the current runtime model couples three independent concepts:
 
-The design also covers how the plugin system should participate in protocol/service extension, so plugins can add protocols or protocol-facing services through stable host contracts instead of reaching into server internals.
+```text
+Service        = business capability
+Thread/Process = execution resource
+Listener/Port  = I/O entry resource
+```
 
-## Current Limit
+The target architecture must separate these concepts.
 
-The current multi-process model is service isolation, not service replication.
+The scalable model is:
+
+```text
+Application declares service capabilities.
+RuntimeSupervisor owns execution resources.
+EndpointManager owns listening endpoints.
+PlacementPlanner maps service instances onto runtime workers.
+```
+
+This lets one HTTP service use all CPU cores without requiring more logical services, and it also lets
+small singleton services share a worker instead of each consuming a dedicated thread or process.
+
+## Implementation Status
+
+Status as of 2026-05-17:
+
+- `Application` now has a definition catalog (`ServiceDefinition` + `ServiceFactory`) and a separate worker-local instance list.
+- `ServiceRegistry` remains the concrete instance registry and is no longer the source of placement truth.
+- `RuntimeContext` now carries explicit runtime worker and service-instance identity fields.
+- `build_worker_plan()` supports `singleton`, `all_workers`, `sharded`, `dedicated`, and `disabled` placement.
+- The `multi_thread` factory-registration path can now start in-process `WorkerPlan` runtime workers, each with its own `NetworkRuntime`/`EventLoop`, and inject that worker runtime into local service instances through `RuntimeContext::shared_runtime`.
+- The POSIX `multi_process` path can fork one process per `WorkerPlan`, host multiple service instances in one worker process, and restart the failed worker plan.
+- Worker-plan service identity is now injected into worker-local services through `RuntimeContext`.
+- Socket/listener binding now uses explicit `ListenOptions`, including separately observable `reuse_addr` and `reuse_port`.
+- `EndpointManager` now builds a listener ownership plan from `WorkerPlan`, classifies private binds vs replicated `reuse_port` binds, and rejects conflicting logical services before Bootstrap starts factory-based workers.
+- HTTP receives listen options, and `mini_nginx` registers HTTP through a factory/builder path so worker-local instances are configured before startup.
+- App events, server service events, plugin events, and the plugin SDK boundary now carry runtime worker and service-instance identity.
+- Shared-runtime service startup now has an inline path, so HTTP/WebSocket/SSH/SMB/RTSP/MQTT/SOCKS5/DNS/FTP/Proxy services do not create a private service thread when a worker-owned runtime is provided.
+- HTTP shared-runtime request handling is covered by `http_features`; Linux `SO_REUSEPORT` HTTP startup has a dedicated `http_shared_reuse_port` test target that skips on Windows and must still be run on Linux.
+- HTTP is also covered through the Bootstrap in-process worker path: a factory-created `HttpService` starts on a worker-owned runtime and serves a real request.
+- HTTP static-response tail behavior is now covered by regressions for keep-alive client close, mid-stream abort, and stalled readers closed by `write_timeout_ms` instead of the idle timeout.
+- In-process worker failure recovery now restarts the same `WorkerPlan` with backoff/window limits, and restart-limit suppression is covered by regression tests.
+- Plugin manifests can declare `protocol_services`; `register_protocol_service` is a first-class permission; `PluginManager` can discover declarations before load; `PluginHost` can convert those declarations to app `ServiceDescriptor`.
+- `PluginProtocolServiceAdapter` can register those declarations as app `ServiceDefinition`s and initialize a worker-local plugin runtime per service instance. Each `PluginHostService` owns an isolated `PluginManager`, so two in-process workers can load the same plugin declaration without overwriting one another's context.
+- Runtime lifecycle coverage now includes async listener shutdown with concurrent real TCP clients, detached handler coroutine completion, and post-close connection object release checks.
+- `release/filesync` now has CTest coverage for remote path safety, action accounting, payload encoding, hash-verified file commit semantics, and a Windows many-tree E2E. The E2E covers 1200 files, empty directories, a scan interval shorter than the transfer duration, and server-side changes after initial sync.
+- Windows multi-process remains unsupported in this phase, matching the previous implementation boundary.
+- Baseline and current core microbenchmark output is recorded in `RUNTIME_WORKER_PLACEMENT_BENCHMARK.md`; the benchmark now covers runtime dispatch, coroutine lifecycle, timer-backed coroutine lifecycle, TCP connection object lifecycle, persistent echo processing capacity, concurrent short-connection echo lifecycle, and Bootstrap-managed worker lifecycle.
+
+Remaining architectural work is replacing remaining service-local endpoint decisions with `EndpointManager` binding plans, implementing shared-fd/single-owner strategies, running the Linux HTTP shared-port proof on Linux CI/host, binding concrete plugin protocol handlers/listeners beyond runtime initialization, and continuing to retire owned-runtime compatibility paths where a shared worker runtime is available.
+
+## Legacy Limit
+
+The legacy model was service-owned runtime execution.
 
 Relevant files:
 
-- `core/app/include/runtime_context.h`
 - `core/app/include/application.h`
 - `core/app/src/application.cpp`
 - `core/app/include/bootstrap.h`
 - `core/app/src/bootstrap.cpp`
-- `core/app/src/runtime_plan.cpp`
+- `core/app/include/runtime_context.h`
+- `core/app/include/service_registry.h`
+- `server/proxy/src/server_runtime_host.cpp`
+- `core/core/include/net/async/async_listener_host.h`
+- `core/core/src/net/socket/socket_ops.cpp`
 
-Current behavior in `Bootstrap::run_multi_process()`:
+Legacy `Application` state stored already-created concrete services:
+
+```cpp
+struct ServiceEntry
+{
+    ServiceDescriptor descriptor;
+    std::shared_ptr<Service> service;
+};
+```
+
+Legacy `Bootstrap::run_multi_process()` expanded workers from service count:
 
 ```cpp
 const auto &services = application_.services();
 const auto worker_count = services.size();
-
-for (std::size_t i = 0; i < services.size(); ++i) {
-    const auto &entry = services[i];
-    start_worker_process(entry, i, worker_count, &worker_info);
-}
 ```
 
-That means:
-
-```text
-worker process count == service count
-```
-
-Current child process behavior in `run_local_service_process(...)` starts only one service entry:
+Legacy child process startup injected the parent-side service object:
 
 ```cpp
 local_worker_application_ = std::make_unique<Application>(context);
@@ -47,88 +98,202 @@ local_worker_application_->add_service(entry.descriptor, entry.service);
 local_worker_application_->start();
 ```
 
-This prevents a single HTTP/MQTT/SOCKS service from being scaled to multiple worker processes on the same port.
+Legacy `Application::start_services_multi_thread()` only parallelized service startup and then joined
+the startup threads. It does not create a long-running runtime worker pool:
 
-## Target Model
+```cpp
+for (const auto &entry : services_) {
+    workers.emplace_back([service = entry.service] {
+        service->start();
+    });
+}
+for (auto &worker : workers) {
+    worker.join();
+}
+```
 
-The target model separates logical service definition from runtime instances.
+Some long-running service execution is still service-owned. For example, `ServerRuntimeHost::start()`
+creates one thread per service:
+
+```cpp
+worker_ = std::thread([fn = std::move(serve_fn), this]() {
+    fn();
+    started_.store(false);
+});
+```
+
+This means the performance ceiling is tied to the number of logical services, not to a configured
+runtime capacity.
+
+Current migration note: this path remains for compatibility when a service owns its runtime. Services
+that receive `RuntimeContext::shared_runtime` now use `ServerRuntimeHost::start_inline()` and rely on
+the worker runtime to run the event loop.
+
+There is also an important listener detail: on POSIX, `Socket::set_reuse(true)` currently attempts
+`SO_REUSEPORT` implicitly when the platform defines it. That behavior is useful for experiments but
+too implicit for a production placement model. Endpoint reuse must become explicit and validated.
+
+## Architecture Goal
+
+The target architecture is a runtime worker pool with explicit service placement.
 
 ```text
 Application
-  ServiceDefinition[]
-    name
-    factory
-    deployment
+  ServiceDefinitionCatalog
+    http
+    mqtt
+    nas
+    plugin_host
 
-RuntimeSupervisor / Bootstrap
-  ServiceInstancePlan[]
-    service_name
-    service_index
-    instance_index
-    instance_count
-    worker_index
-    worker_count
+RuntimeSupervisor
+  RuntimeWorkerPool
+    worker 0: NetworkRuntime/EventLoop/TimerManager
+    worker 1: NetworkRuntime/EventLoop/TimerManager
+    worker 2: NetworkRuntime/EventLoop/TimerManager
+    worker 3: NetworkRuntime/EventLoop/TimerManager
 
-Worker process/thread
-  local Application
-    one Service instance created from factory
+EndpointManager
+  endpoint 0.0.0.0:8080/tcp
+    binding_strategy: reuse_port | shared_fd | single_owner_dispatch
+
+PlacementPlanner
+  worker 0: http[0], metrics[0]
+  worker 1: http[1]
+  worker 2: http[2]
+  worker 3: http[3], mqtt[0]
 ```
 
-Terminology:
+The important change is that a worker can host multiple service instances, and a service can be placed
+on multiple workers.
 
-- `ServiceDefinition`: logical service registered by the application.
-- `ServiceFactory`: callable that creates a fresh service object for each runtime instance.
-- `ServiceInstance`: one runtime copy of a logical service.
-- `ServiceInstancePlan`: launch-time plan item describing where and how one service instance runs.
-- `RuntimeSupervisor`: orchestration role currently implemented by `Bootstrap`.
-
-Example:
+This is more general than the previous target model:
 
 ```text
-Logical services:
-  http
-  mqtt
-  bt
+old target:
+  ServiceInstancePlan[] -> one service instance per worker
 
-Deployment:
-  http x 4 process instances
-  mqtt x 2 process instances
-  bt   x 1 process instance
-
-Expanded workers:
-  worker 0: http instance 0/4
-  worker 1: http instance 1/4
-  worker 2: http instance 2/4
-  worker 3: http instance 3/4
-  worker 4: mqtt instance 0/2
-  worker 5: mqtt instance 1/2
-  worker 6: bt instance 0/1
+new target:
+  WorkerPlan[] -> each worker hosts zero or more service instances
 ```
+
+## Terminology
+
+- `ServiceDefinition`: a logical service declaration registered by the application.
+- `ServiceFactory`: callable that creates a fresh concrete service instance.
+- `ServiceInstance`: one runtime copy of a logical service.
+- `RuntimeWorker`: one execution slot with an event loop, timer manager, and network runtime.
+- `RuntimeWorkerPool`: the configured set of runtime workers.
+- `EndpointDefinition`: a declared listening endpoint such as `0.0.0.0:8080/tcp`.
+- `EndpointManager`: owner of endpoint validation and bind strategy.
+- `PlacementPolicy`: service-level scaling and placement rule.
+- `WorkerPlan`: launch-time plan for one runtime worker and its assigned service instances.
+- `ServiceInstancePlan`: launch-time plan for one concrete service instance inside a worker.
+- `RuntimeSupervisor`: orchestration role currently implemented by `Bootstrap`.
 
 ## Non-Goals
 
-- Do not preserve old `Application::add_service(...)` APIs unless they are still useful internally.
-- Do not support Windows multi-process in the first phase.
-- Do not make every protocol service replicated in the first phase.
+- Do not preserve the old shared-instance registration API as the primary API.
+- Do not make every protocol service replicated by default.
 - Do not make the event bus cross-process in this refactor.
-- Do not allow plugins to directly mutate internal server/protocol objects.
-- Do not implement a full out-of-process plugin sandbox in this refactor.
+- Do not require Windows multi-process support in the first phase.
+- Do not allow plugins to mutate internal app/protocol objects directly.
+- Do not implement dynamic plugin-provided listener spawning in the first phase.
+- Do not make `SO_REUSEPORT` the only long-term listener strategy.
 
-## API Direction
+## Design Principles
 
-Remove shared-instance service registration as the primary API. A runtime-replicable service must be registered with a factory.
+1. Execution capacity is configured independently from service count.
+2. Service replication is a placement policy, not the worker model itself.
+3. Endpoint ownership is explicit and validated before workers start.
+4. Top-level application state stores definitions, worker-local state stores instances.
+5. Runtime identity must distinguish worker identity from service-instance identity.
+6. Stateful protocols are singleton by default unless they declare a state distribution strategy.
+7. Plugin protocol services are discovered before planning and instantiated inside workers after fork.
 
-Recommended replacement API:
+## Runtime Worker Configuration
+
+Add a runtime worker configuration to `RuntimeContext` or a dedicated runtime config object.
+
+Recommended shape:
 
 ```cpp
 namespace yuan::app
 {
-    struct ServiceDeployment
+    enum class WorkerProcessMode
     {
-        std::size_t process_instances = 1;
-        std::size_t thread_instances = 1;
-        bool reuse_port = false;
+        in_process,
+        process_per_worker,
+    };
+
+    struct RuntimeWorkerConfig
+    {
+        // 0 means auto from the compatibility field during migration.
+        std::size_t worker_count = 0;
+        WorkerProcessMode process_mode = WorkerProcessMode::in_process;
+        bool restart_failed_workers = true;
+    };
+}
+```
+
+For the current repository, `RuntimeContext::worker_threads` should not be reused as the final
+worker-count field. Keep it as a compatibility field while introducing an explicit runtime worker
+count. The old field can later be renamed or deprecated.
+
+## Placement Policy
+
+Replace raw `process_instances` as the primary scaling knob with a placement policy.
+
+```cpp
+namespace yuan::app
+{
+    enum class PlacementMode
+    {
+        singleton,     // one instance on one shared worker
+        all_workers,   // one instance on every data worker
+        sharded,       // N instances spread across workers
+        dedicated,     // one or more dedicated workers
+        disabled,
+    };
+
+    struct ServicePlacement
+    {
+        PlacementMode mode = PlacementMode::singleton;
+        std::size_t instances = 1;
         bool restart_failed_instances = true;
+    };
+}
+```
+
+Suggested initial mapping:
+
+| Service | Initial placement | Notes |
+| --- | --- | --- |
+| HTTP | `all_workers` | Requires explicit endpoint reuse strategy. |
+| WebSocket | `all_workers` or `sharded` later | Connection state is worker-local. |
+| SOCKS5 | `all_workers` later | Feasible once listener options are generalized. |
+| SSH | `sharded` later | Needs forward/listener state review. |
+| FTP | `sharded` later | Active/passive data listeners need endpoint review. |
+| MQTT | `singleton` first | Replication needs session/subscription distribution. |
+| RTSP | `singleton` first | Session/media state needs placement design. |
+| DNS | `sharded` later | UDP/TCP listener semantics must be checked. |
+| NAS/SMB | `singleton` | Metadata, locking, and filesystem consistency are stateful. |
+| BitTorrent | `singleton` | DHT/NAT/task state should remain singleton unless redesigned. |
+| PluginHostService | `singleton` | Plugin runtime should not be casually replicated. |
+| Metrics/Admin | `singleton` or shared worker | Avoid per-worker admin duplication at first. |
+
+## Service Definition API
+
+Application registration should become definition-based and factory-based.
+
+```cpp
+namespace yuan::app
+{
+    struct ServiceEndpoint
+    {
+        std::string name;
+        std::string host = "0.0.0.0";
+        int port = 0;
+        std::string protocol = "tcp";
     };
 
     struct ServiceDescriptor
@@ -137,7 +302,8 @@ namespace yuan::app
         std::string type_name;
         std::string contract_id;
         int contract_version = 1;
-        ServiceDeployment deployment;
+        ServicePlacement placement;
+        std::vector<ServiceEndpoint> endpoints;
     };
 
     using ServiceFactory = std::function<std::shared_ptr<Service>()>;
@@ -147,96 +313,16 @@ namespace yuan::app
         ServiceDescriptor descriptor;
         ServiceFactory factory;
     };
+
+    struct ServiceInstanceEntry
+    {
+        ServiceDescriptor descriptor;
+        std::shared_ptr<Service> service;
+    };
 }
 ```
 
-Application registration should become factory-only:
-
-```cpp
-bool add_service(ServiceDescriptor descriptor, ServiceFactory factory);
-```
-
-Optional convenience wrapper:
-
-```cpp
-template <typename T, typename Factory>
-bool add_typed_service(ServiceDescriptor descriptor, Factory factory);
-```
-
-Example:
-
-```cpp
-yuan::app::ServiceDescriptor http;
-http.name = "http";
-http.contract_id = "yuan.service.http";
-http.contract_version = 1;
-http.deployment.process_instances = 4;
-http.deployment.reuse_port = true;
-
-app.add_service(http, [cfg] {
-    return std::make_shared<yuan::server::HttpService>(8080, cfg);
-});
-```
-
-Required validation:
-
-- `descriptor.name` must not be empty.
-- `factory` must not be empty.
-- `process_instances == 0` should be normalized to `1` or rejected. Prefer reject for clearer configuration errors.
-- `thread_instances == 0` should be normalized to `1` or rejected. Prefer reject.
-- Duplicate service names are rejected.
-- `process_instances > 1` and `reuse_port == false` should be rejected for services that bind the same endpoint, unless the service declares it does not listen on a shared port.
-
-## Application Refactor
-
-Modify `core/app/include/application.h`.
-
-Replace current `ServiceEntry` with a factory-based definition:
-
-```cpp
-struct ServiceDefinition
-{
-    ServiceDescriptor descriptor;
-    ServiceFactory factory;
-
-    std::shared_ptr<Service> create_instance() const
-    {
-        return factory ? factory() : nullptr;
-    }
-};
-```
-
-`Application` should store definitions, not pre-created service instances, at the top-level supervisor side.
-
-However, a worker-local `Application` still needs to own concrete instances after factory creation. The cleanest split is:
-
-```cpp
-struct ServiceDefinition
-{
-    ServiceDescriptor descriptor;
-    ServiceFactory factory;
-};
-
-struct ServiceInstanceEntry
-{
-    ServiceDescriptor descriptor;
-    std::shared_ptr<Service> service;
-};
-```
-
-Recommended `Application` responsibilities:
-
-- Top-level application stores `ServiceDefinition` objects.
-- Worker-local application stores `ServiceInstanceEntry` objects.
-- `Application::init()` and `Application::start()` operate on concrete instance entries only.
-- `Bootstrap` creates the worker-local application and injects concrete instances.
-
-Minimal alternative:
-
-- Keep one vector, but `Application` supports both definitions and already-created instances.
-- This is easier to patch but weaker architecturally.
-
-Preferred new methods:
+Preferred application APIs:
 
 ```cpp
 bool add_service(ServiceDescriptor descriptor, ServiceFactory factory);
@@ -246,632 +332,412 @@ const std::vector<ServiceDefinition> &service_definitions() const;
 const std::vector<ServiceInstanceEntry> &service_instances() const;
 ```
 
-`add_service_instance(...)` should be used by `Bootstrap` only when building local worker applications.
+`add_service_instance(...)` is worker-local and should be used by `Bootstrap` or a worker runtime
+builder after a factory creates the concrete service.
 
-## RuntimeContext Refactor
+Required validation:
 
-Modify `core/app/include/runtime_context.h`.
+- `descriptor.name` must not be empty.
+- `descriptor.contract_version` must be positive.
+- `factory` must not be empty.
+- Duplicate logical service names are rejected.
+- `PlacementMode::sharded` requires `instances > 0`.
+- `PlacementMode::all_workers` ignores `instances` or treats it as a validation error.
+- Listening endpoints must be validated before worker startup.
 
-Add fields that distinguish global worker identity from service-instance identity:
+## Service Definition vs Service Registry
 
-```cpp
-std::string active_service_name;
-std::size_t service_index = 0;
-std::size_t service_instance_index = 0;
-std::size_t service_instance_count = 1;
-std::size_t worker_count = 1;
-bool listener_reuse_port = false;
+The current `ServiceRegistry` is used as a host-service discovery surface, including plugin-facing
+catalogs and HTTP dashboard state. It should remain an instance registry, not become the definition
+catalog.
+
+Recommended split:
+
+```text
+ServiceDefinitionCatalog
+  - logical service definitions
+  - factories
+  - placement policy
+  - endpoint declarations
+  - supervisor-side only
+
+ServiceRegistry
+  - concrete service instances
+  - worker-local lookup
+  - plugin host service catalog
+  - dashboard/runtime visibility
 ```
 
-Keep existing fields unless the implementation can cleanly migrate all references:
+This split prevents plugins and dashboards from confusing "the application declares service X" with
+"this worker currently runs instance X[2]".
+
+## Worker Plan
+
+The planner output should be worker-centered, not instance-centered.
 
 ```cpp
-std::size_t worker_threads = 1;
-std::size_t worker_index = 0;
-bool is_worker_process = false;
-```
-
-Suggested meanings after refactor:
-
-- `worker_index`: global runtime worker index.
-- `worker_count`: total expanded runtime workers.
-- `worker_threads`: legacy name, either keep as alias for `worker_count` or later rename.
-- `service_instance_index`: index within one logical service.
-- `service_instance_count`: total instances for the logical service.
-- `listener_reuse_port`: worker-local hint for services that bind shared listening ports.
-
-Plugin context should later mirror these fields. See `Plugin Runtime Context` below.
-
-## Instance Plan
-
-Add an internal plan type in `core/app/src/bootstrap.cpp` first. Only move it to a public header if tests need direct access.
-
-```cpp
-struct ServiceInstancePlan
+namespace yuan::app
 {
-    std::size_t worker_index = 0;
-    std::size_t worker_count = 0;
-    std::size_t service_index = 0;
-    std::size_t service_instance_index = 0;
-    std::size_t service_instance_count = 1;
-    const ServiceDefinition *definition = nullptr;
-};
-```
+    struct RuntimeIdentity
+    {
+        std::size_t worker_index = 0;
+        std::size_t worker_count = 1;
+        bool is_worker_process = false;
 
-Build plan helper:
+        std::string active_service_name;
+        std::size_t service_index = 0;
+        std::size_t service_instance_index = 0;
+        std::size_t service_instance_count = 1;
+    };
 
-```cpp
-std::vector<ServiceInstancePlan> build_service_instance_plan(
-    const std::vector<ServiceDefinition> &definitions)
-{
-    std::size_t total = 0;
-    for (const auto &def : definitions) {
-        total += def.descriptor.deployment.process_instances;
-    }
+    struct ServiceInstancePlan
+    {
+        std::size_t service_index = 0;
+        std::size_t service_instance_index = 0;
+        std::size_t service_instance_count = 1;
+        const ServiceDefinition *definition = nullptr;
+    };
 
-    std::vector<ServiceInstancePlan> result;
-    result.reserve(total);
-
-    std::size_t worker_index = 0;
-    for (std::size_t service_index = 0; service_index < definitions.size(); ++service_index) {
-        const auto &def = definitions[service_index];
-        const auto count = def.descriptor.deployment.process_instances;
-        for (std::size_t instance_index = 0; instance_index < count; ++instance_index) {
-            result.push_back(ServiceInstancePlan{
-                worker_index,
-                total,
-                service_index,
-                instance_index,
-                count,
-                &def
-            });
-            ++worker_index;
-        }
-    }
-
-    return result;
+    struct WorkerPlan
+    {
+        std::size_t worker_index = 0;
+        std::size_t worker_count = 1;
+        bool dedicated = false;
+        std::vector<ServiceInstancePlan> service_instances;
+    };
 }
 ```
 
-Validation should happen before this helper, so `process_instances` is already known to be at least `1`.
+Initial placement behavior:
+
+- `singleton`: put one instance on worker `0`, unless the service requests a dedicated worker.
+- `all_workers`: create one instance on every non-dedicated data worker.
+- `sharded`: create `instances` service instances and spread them round-robin over workers.
+- `dedicated`: allocate dedicated worker plans for that service.
+- `disabled`: create no instance.
+
+Example:
+
+```text
+runtime.worker_count = 4
+
+http.placement = all_workers
+mqtt.placement = sharded(instances = 2)
+nas.placement = singleton
+
+WorkerPlan:
+  worker 0: http[0/4], mqtt[0/2], nas[0/1]
+  worker 1: http[1/4], mqtt[1/2]
+  worker 2: http[2/4]
+  worker 3: http[3/4]
+```
+
+This avoids creating six workers for `http x 4 + mqtt x 2` unless the user explicitly requests
+dedicated workers.
+
+## Runtime Context
+
+Extend `RuntimeContext` with explicit runtime identity fields, but keep old fields during migration.
+
+```cpp
+struct RuntimeContext
+{
+    std::string app_name = "webserver";
+    RunMode run_mode = RunMode::single_thread;
+
+    // Existing compatibility fields.
+    std::size_t worker_threads = 1;
+    std::size_t worker_index = 0;
+    bool is_worker_process = false;
+
+    // New runtime worker identity.
+    std::size_t runtime_worker_count = 1;
+
+    // Active service identity for context injection.
+    std::string active_service_name;
+    std::size_t service_index = 0;
+    std::size_t service_instance_index = 0;
+    std::size_t service_instance_count = 1;
+
+    // Endpoint hints for worker-local service init.
+    bool listener_reuse_port = false;
+
+    std::shared_ptr<ServiceRegistry> service_registry;
+    net::NetworkRuntime *shared_runtime = nullptr;
+};
+```
+
+Suggested meaning:
+
+- `worker_index`: current runtime worker index.
+- `runtime_worker_count`: total workers in the pool.
+- `worker_threads`: legacy compatibility field until callers migrate.
+- `active_service_name`: the service currently receiving context injection.
+- `service_instance_index`: index inside one logical service.
+- `service_instance_count`: total instances of that logical service.
+
+Events should mirror the new fields:
+
+- `ApplicationEvent`
+- `ServiceEvent`
+- `WorkerProcessEvent`
+- `ServiceRuntimeEvent`
+- plugin lifecycle events
+- plugin SDK boundary
+
+## Endpoint Manager
+
+Endpoint binding must be explicit before service instances start.
+
+Recommended endpoint model:
+
+```cpp
+namespace yuan::net
+{
+    enum class EndpointBindingStrategy
+    {
+        single_owner,
+        reuse_port,
+        shared_fd,
+        single_acceptor_dispatch,
+    };
+
+    struct ListenOptions
+    {
+        bool reuse_addr = true;
+        bool reuse_port = false;
+        bool exclusive_addr_use = false;
+    };
+}
+```
+
+Current POSIX `set_reuse(true)` behavior should be split into:
+
+```cpp
+bool set_reuse_addr(int fd, bool on);
+bool set_reuse_port(int fd, bool on);
+```
+
+Important requirements:
+
+- `reuse_port` must not be silently best-effort when a replicated endpoint depends on it.
+- If `SO_REUSEPORT` is unavailable or fails, planner/startup must fail clearly.
+- Windows multi-process should not claim shared-port support in this phase.
+- Endpoint declarations should be checked before forking worker processes.
+
+### Binding Strategies
+
+`reuse_port`:
+
+- First implementation target for Linux HTTP replication.
+- Each worker binds the same endpoint with `SO_REUSEPORT`.
+- Simple but platform-dependent.
+
+`shared_fd`:
+
+- Longer-term POSIX strategy.
+- Supervisor binds once, then workers inherit or receive listener fds.
+- Cleaner for prefork semantics and avoids platform-specific port distribution differences.
+
+`single_acceptor_dispatch`:
+
+- One acceptor accepts connections and dispatches accepted sockets to workers.
+- Useful when `reuse_port` is unavailable.
+- More complex because accepted connections must be transferred or assigned safely.
+
+The first phase can implement `reuse_port`, but the architecture should not depend on it as the only
+path.
+
+## Service Runtime Ownership
+
+Long term, services should not own long-running threads.
+
+Current pattern:
+
+```text
+Service::start()
+  -> ServerRuntimeHost::start()
+     -> std::thread(...)
+```
+
+Target pattern:
+
+```text
+RuntimeWorker owns NetworkRuntime/EventLoop.
+Service::init() binds resources using the worker runtime.
+Service::start() activates handlers/tasks without creating a private thread.
+RuntimeWorker runs the event loop.
+```
+
+Transition plan:
+
+1. Keep existing service-owned runtime for compatibility.
+2. When `RuntimeContext::shared_runtime` is set, services should avoid creating a private runtime
+   thread.
+3. Split protocol server methods into:
+   - bind/init endpoint
+   - install handlers
+   - run owned runtime only when no shared runtime is provided
+4. Move long-running event loop execution to `RuntimeWorker`.
+
+HTTP should be the first service migrated because it is the primary stateless throughput service.
 
 ## Bootstrap Refactor
 
-Modify `core/app/include/bootstrap.h`.
+`Bootstrap` should become a supervisor over worker plans.
 
-Extend `WorkerProcessInfo`:
+Recommended high-level flow:
 
 ```cpp
-struct WorkerProcessInfo
+bool Bootstrap::run()
 {
-    std::intptr_t pid = -1;
-    std::string service_name;
-    std::size_t service_index = 0;
-    std::size_t service_instance_index = 0;
-    std::size_t service_instance_count = 1;
-    std::size_t worker_index = 0;
-    std::size_t worker_count = 1;
-    ...
-};
-```
-
-Modify `core/app/src/bootstrap.cpp`.
-
-Current signatures:
-
-```cpp
-bool start_worker_process(const ServiceEntry &entry,
-                          std::size_t worker_index,
-                          std::size_t worker_count,
-                          WorkerProcessInfo *worker_info = nullptr);
-
-bool run_local_service_process(const ServiceEntry &entry,
-                               std::size_t worker_index,
-                               std::size_t worker_count);
-```
-
-Replace with instance-plan based signatures:
-
-```cpp
-bool start_worker_process(const ServiceInstancePlan &instance,
-                          WorkerProcessInfo *worker_info = nullptr);
-
-bool run_local_service_process(const ServiceInstancePlan &instance);
-```
-
-`run_multi_process()` should become:
-
-```cpp
-const auto plan = build_service_instance_plan(application_.service_definitions());
-if (plan.empty()) {
-    LOG_WARN("multi-process mode requested without any registered service");
-    return false;
-}
-
-process_role_ = ProcessRole::supervisor;
-set_supervisor_state(SupervisorState::starting, SupervisorReason::spawning_initial_workers);
-
-auto supervisor_context = application_.context();
-supervisor_context.worker_count = plan.size();
-supervisor_context.worker_threads = plan.size();
-supervisor_context.worker_index = 0;
-supervisor_context.is_worker_process = false;
-application_.set_context(supervisor_context);
-ensure_event_bus(application_);
-
-for (const auto &instance : plan) {
-    WorkerProcessInfo worker_info;
-    fill_worker_info(instance, worker_info);
-
-    if (!start_worker_process(instance, &worker_info)) {
-        shutdown_multi_process();
+    auto definitions = application_.service_definitions();
+    auto endpoints = endpoint_manager_.collect(definitions);
+    if (!endpoint_manager_.validate(endpoints)) {
         return false;
     }
 
-    worker_processes_.push_back(std::move(worker_info));
-    application_.context().event_bus->publish(
-        events::worker_started,
-        make_worker_event(application_.context(), worker_processes_.back()));
+    auto worker_plans = placement_planner_.build(runtime_config_, definitions, endpoints);
+    if (worker_plans.empty()) {
+        return false;
+    }
+
+    if (runtime_config_.process_mode == WorkerProcessMode::process_per_worker) {
+        return run_worker_processes(worker_plans);
+    }
+
+    return run_in_process_workers(worker_plans);
 }
 ```
 
-`run_local_service_process(...)` should create a fresh service instance:
+Worker-local startup:
 
 ```cpp
-auto service = instance.definition->create_instance();
-if (!service) {
-    LOG_ERROR("worker {} failed to create service '{}'",
-              instance.worker_index,
-              instance.definition->descriptor.name);
-    return false;
+bool start_worker(const WorkerPlan &worker)
+{
+    RuntimeWorker runtime(worker.worker_index);
+    Application local_app(make_worker_context(worker, runtime));
+
+    for (const auto &instance : worker.service_instances) {
+        auto service = instance.definition->factory();
+        if (!service) {
+            return false;
+        }
+
+        auto service_context = make_service_context(worker, instance, runtime);
+        if (auto *aware = dynamic_cast<RuntimeContextAwareService *>(&*service)) {
+            aware->set_runtime_context(service_context);
+        }
+
+        if (!local_app.add_service_instance(instance.definition->descriptor, service)) {
+            return false;
+        }
+    }
+
+    return local_app.start();
 }
 ```
 
-Then build a worker-local context:
-
-```cpp
-auto context = application_.context();
-context.worker_threads = instance.worker_count;
-context.worker_count = instance.worker_count;
-context.worker_index = instance.worker_index;
-context.is_worker_process = true;
-context.active_service_name = instance.definition->descriptor.name;
-context.service_index = instance.service_index;
-context.service_instance_index = instance.service_instance_index;
-context.service_instance_count = instance.service_instance_count;
-context.listener_reuse_port = instance.definition->descriptor.deployment.reuse_port ||
-                              instance.service_instance_count > 1;
-```
-
-Then start a worker-local app:
-
-```cpp
-local_worker_application_ = std::make_unique<Application>(context);
-if (!local_worker_application_->add_service_instance(instance.definition->descriptor, service)) {
-    LOG_ERROR("worker {} failed to register service '{}'",
-              instance.worker_index,
-              instance.definition->descriptor.name);
-    return false;
-}
-
-if (!local_worker_application_->start()) {
-    LOG_ERROR("worker {} failed to start service '{}'",
-              instance.worker_index,
-              instance.definition->descriptor.name);
-    return false;
-}
-```
+The worker process/thread is the long-running unit. The service instance is not the long-running unit.
 
 ## Restart Semantics
 
-Restart logic should restart a single service instance, not the whole logical service.
+Restart should operate at the worker level first, then at the service instance level later.
 
-Existing restart fields can remain, but identify the failed unit with:
+Phase 1:
 
-```text
-service_name + service_instance_index
-```
+- If a worker process crashes, restart the same `WorkerPlan`.
+- The replacement worker recreates all service instances assigned to that worker.
+- Events identify `worker_index` and all service instances inside the worker.
 
-Restart lookup should use `worker.service_index` and `worker.service_instance_index` to recreate the same instance plan.
+Later:
 
-Avoid looking up by only `worker.worker_index` if plan generation can change at runtime. For the first phase the plan can be immutable after startup.
+- In in-process worker mode, individual service instance restart may be possible.
+- For process-per-worker mode, a process crash naturally restarts the whole worker plan.
 
-## Runtime Plan
+This is simpler and more honest than trying to restart one service instance inside a failed process.
 
-Modify `core/app/src/runtime_plan.cpp` notes.
+## HTTP First-Class Migration
 
-Current POSIX multi-process note says:
+HTTP is the first service that should prove the new model.
 
-```text
-POSIX uses a minimal service-per-process supervisor; each worker keeps a local reactor runtime
-```
+Current issue:
 
-Replace with:
+- `mini_nginx` configures routes and proxy after `bootstrap.run()` by accessing the concrete
+  `HttpService` instance.
+- In a factory/worker model, the supervisor-side `HttpService` is not the worker-local service
+  instance.
 
-```text
-POSIX uses a service-instance supervisor; each worker runs one expanded service instance with a local reactor runtime
-```
+Required migration:
 
-Windows remains unsupported in this phase:
-
-```text
-multi-process supervisor is not implemented on Windows/MinGW yet
-```
-
-## Listener Reuse Port
-
-Multiple process instances of the same listening service need shared-port binding.
-
-Required behavior:
-
-- Linux: set `SO_REUSEADDR` and `SO_REUSEPORT` before bind.
-- macOS/BSD: support `SO_REUSEPORT`, but verify semantics separately.
-- Windows: do not claim support in this phase.
-
-Recommended new socket/listener type:
-
-```cpp
-struct ListenOptions
-{
-    bool reuse_addr = true;
-    bool reuse_port = false;
-};
-```
-
-Candidate files to inspect and modify:
-
-- `core/core/include/net/socket/*`
-- `core/core/src/net/socket/*`
-- `core/core/include/net/acceptor/*`
-- `core/core/src/net/acceptor/*`
-- `core/core/include/net/async/async_listener_host.h`
-- `core/core/src/net/async/async_listener_host.cpp`
-
-HTTP first-phase integration:
-
-- Add `bool reuse_port = false;` to `protocol/http/include/http_server.h` in `HttpServerConfig`.
-- Pass the config to the listener bind path.
-- In `server/services/src/http_service.cpp`, apply `runtime_context_.listener_reuse_port` before `server_->init(...)`.
+- Move HTTP route/static/proxy/middleware setup into a factory-captured builder.
+- Worker-created HTTP instances must be fully configured before `init()`.
+- Do not rely on post-bootstrap mutation of a supervisor-side `HttpService`.
 
 Example:
 
 ```cpp
-bool HttpService::init()
-{
-    if (runtime_context_.listener_reuse_port) {
-        config_.reuse_port = true;
-    }
-    server_ = std::make_unique<yuan::net::http::HttpServer>(config_);
-    ...
-}
-```
-
-If `HttpServer` is constructed before `set_runtime_context(...)`, move construction later or expose a setter before bind. Prefer constructing the concrete server in `init()` after runtime context has been set.
-
-## Service Suitability
-
-Not every service should be replicated by default.
-
-Recommended initial support:
-
-| Service | Initial replication support | Notes |
-| --- | --- | --- |
-| HTTP | Yes | Needs `SO_REUSEPORT`; stateless handlers work best. |
-| SOCKS5 | Later | Usually feasible after listener options are generalized. |
-| MQTT | Later | Needs session/subscription state strategy. |
-| RTSP | Later | Needs session/media-state strategy. |
-| DNS | Later | UDP/TCP listener behavior must be checked. |
-| NAS | No | Share metadata, locking, SMB/WebDAV consistency need design. |
-| SMB | No | Stateful protocol; not first-phase candidate. |
-| BitTorrent | No | DHT/NAT/task state should remain singleton unless redesigned. |
-| PluginHostService | Usually No | It controls plugins in one runtime. Protocol plugin instances are separate. |
-
-## Plugin System Impact
-
-The plugin system already has useful boundaries:
-
-- `plugins/core/include/plugin/plugin.h`
-- `plugins/core/include/plugin/plugin_context.h`
-- `plugins/core/include/plugin/host_service_registry.h`
-- `plugins/core/include/plugin/extension_point_registry.h`
-- `plugins/host/include/plugin_service_registry_adapter.h`
-- `plugins/host/src/plugin_service_registry_adapter.cpp`
-
-Current plugin capabilities include:
-
-- Host service registry for plugin-managed services.
-- Extension point registry.
-- Host network runtime access for timers and dispatch.
-- HTTP interceptor capability.
-
-However, plugin services are currently plugin-local service objects, not first-class app runtime service definitions. That means plugins can register internal managed services, but cannot cleanly add a new protocol-level runtime service that participates in `Bootstrap`, service replication, process supervision, and port binding.
-
-## Plugin Protocol Extension Goal
-
-Plugins should be able to add protocol-facing services through stable host contracts.
-
-Target examples:
-
-```text
-Plugin provides a custom protocol service:
-  plugin: my_echo_protocol
-  service: echo
-  listens on: 19000
-  process_instances: 2
-  reuse_port: true
-
-Plugin provides HTTP route extensions:
-  plugin: admin_extra
-  routes: /admin/plugin/*
-  no new listener
-
-Plugin provides protocol codec/handler extension:
-  plugin: mqtt_acl
-  extension point: yuan.protocol.mqtt.acl.v1
-```
-
-## Plugin Extension Types
-
-Separate plugin extension types into three categories.
-
-### 1. Host Service Extension
-
-Plugin registers a service object inside the plugin host only.
-
-Existing support:
-
-```cpp
-HostServiceRegistry::register_managed_service(...)
-```
-
-Keep this for plugin-private or plugin-public services that do not need app-level runtime supervision.
-
-### 2. Protocol Extension Point
-
-Plugin contributes behavior to an existing protocol service.
-
-Examples:
-
-- HTTP middleware/interceptor
-- MQTT auth/ACL provider
-- WebSocket route handler
-- NAS policy provider
-
-Existing base:
-
-```cpp
-ExtensionPointRegistry
-HostHttpInterceptor
-```
-
-Recommended contracts:
-
-```text
-yuan.protocol.http.interceptor.v1
-yuan.protocol.http.route.v1
-yuan.protocol.mqtt.auth.v1
-yuan.protocol.mqtt.acl.v1
-yuan.protocol.websocket.route.v1
-```
-
-This type does not create new listening services. It attaches to an existing host service.
-
-### 3. Protocol Service Provider
-
-Plugin creates a new app-level service definition with a factory.
-
-This is the missing piece.
-
-Recommended new host interface:
-
-```cpp
-namespace yuan::plugin
-{
-    struct PluginProtocolServiceDeployment
-    {
-        std::size_t process_instances = 1;
-        std::size_t thread_instances = 1;
-        bool reuse_port = false;
-    };
-
-    struct PluginProtocolServiceDescriptor
-    {
-        std::string name;
-        std::string protocol;
-        std::string contract_id;
-        int contract_version = 1;
-        int port = 0;
-        PluginProtocolServiceDeployment deployment;
-    };
-
-    class HostProtocolServiceRegistry
-    {
-    public:
-        virtual ~HostProtocolServiceRegistry() = default;
-
-        virtual bool register_protocol_service(
-            const std::string &plugin_name,
-            PluginProtocolServiceDescriptor descriptor,
-            std::function<std::shared_ptr<app::Service>()> factory) = 0;
-
-        virtual void unregister_plugin_protocol_services(
-            const std::string &plugin_name) = 0;
-    };
-}
-```
-
-Important: this should not expose concrete `Application` internals to plugins. The host adapter translates plugin protocol service descriptors into app `ServiceDescriptor` objects.
-
-Because `plugin` core should not necessarily depend on `app::Service`, an ABI-cleaner alternative is to define a plugin-side protocol service abstraction and adapt it:
-
-```cpp
-class PluginProtocolService : public PluginService
-{
-public:
-    virtual bool init_protocol(const PluginContext &context) = 0;
-    virtual void start_protocol() = 0;
-    virtual void stop_protocol() = 0;
+auto http_builder = [cfg] {
+    auto service = std::make_shared<yuan::server::HttpService>(cfg.listen_port, cfg.server_config);
+    install_protection_middlewares(*service, cfg);
+    install_access_log(*service, cfg);
+    install_static_mounts(service->server(), cfg);
+    install_routes(service->server().ensure_proxy(), cfg.routes);
+    return service;
 };
+
+app.add_service(http_descriptor, http_builder);
 ```
 
-Then the host creates an `app::Service` adapter around the plugin protocol service.
+If `server()` is not safe before `init()`, add explicit `HttpService` builder hooks instead of
+forcing callers to touch the concrete `HttpServer` too early.
 
-Preferred first-phase implementation:
+## Plugin System Direction
 
-- Keep native C++ plugin integration simple.
-- Add host-side adapter in `plugins/host` that can wrap `std::shared_ptr<plugin::PluginProtocolService>` as `yuan::app::Service`.
-- Do not expose all of `app` to script plugins yet.
+The plugin protocol service design remains useful, but it should not be first-wave runtime work.
 
-## Plugin Runtime Context
+Current plugin loading happens through `PluginHostService::init()`, which is itself an app service.
+That is too late for worker planning if plugins are expected to add supervised protocol services.
 
-Modify `plugins/core/include/plugin/plugin_context.h`.
-
-Extend `PluginSdkBoundary` and `PluginContext` to mirror service-instance runtime fields:
-
-```cpp
-std::string active_service_name;
-std::size_t service_instance_index = 0;
-std::size_t service_instance_count = 1;
-std::size_t worker_count = 1;
-```
-
-Update `PluginContext::sdk_boundary()` to include the fields. Since SDK compatibility is not required right now, bump `host_api_version` from `1` to `2` when this is implemented.
-
-Modify `plugins/host/src/plugin_host_service.cpp` so `make_base_plugin_context(...)` copies these values from `RuntimeContext`.
-
-## Plugin Manifest Additions
-
-Current manifest support already includes extension point concepts. Add protocol service declarations to plugin manifests.
-
-Recommended manifest shape:
-
-```json
-{
-  "name": "echo_protocol",
-  "version": "0.1.0",
-  "api_version": 2,
-  "permissions": [
-    "use_network_runtime",
-    "register_protocol_service"
-  ],
-  "protocol_services": [
-    {
-      "name": "echo",
-      "protocol": "echo",
-      "contract_id": "yuan.protocol.echo.service",
-      "contract_version": 1,
-      "port": 19000,
-      "process_instances": 2,
-      "reuse_port": true
-    }
-  ],
-  "extension_points": [
-    {
-      "name": "echo.codec",
-      "type": "protocol_codec",
-      "contract_id": "yuan.protocol.echo.codec",
-      "contract_version": 1
-    }
-  ]
-}
-```
-
-Add a new permission:
+Recommended direction:
 
 ```text
-register_protocol_service
+Startup control plane:
+  read plugin manifests
+  collect protocol service declarations
+  validate permissions and endpoints
+  add resulting service definitions before placement planning
+
+Worker data plane:
+  initialize plugin runtime locally
+  create plugin protocol service instances
+  run adapted app::Service instances
 ```
 
-This should be separate from `use_service_registry`, because registering a supervised listener is stronger than registering a plugin-local service.
+Do not require plugin `on_init()` to dynamically register protocol listeners before the first worker
+planning phase. Prefer manifest-first discovery for the initial implementation.
 
-Candidate files:
+Plugin extension categories remain:
 
-- `plugins/core/include/plugin/plugin_manifest.h`
-- `plugins/core/include/plugin/plugin_permission.h`
-- `plugins/core/src/plugin/plugin_permission.cpp`
-- `plugins/core/src/plugin/plugin_manager.cpp`
-- `plugins/host/src/plugin_host_service.cpp`
+1. Host service extension: plugin-local services managed by `HostServiceRegistry`.
+2. Protocol extension point: middleware, route, ACL, codec contributions to existing services.
+3. Protocol service provider: new supervised listener service, discovered before planning.
 
-## Plugin Protocol Service Lifecycle
+First-phase plugin work should be limited to runtime identity alignment:
 
-Protocol services provided by plugins must have host-managed lifecycle.
+- Extend `PluginContext` with worker/service-instance identity.
+- Extend `PluginSdkBoundary`.
+- Keep plugin host API version changes explicit.
 
-Recommended flow:
+Current implementation note: the control-plane half is now present. Manifests can declare
+`protocol_services`, discovery enforces `register_protocol_service`, and PluginHost has an adapter
+from plugin protocol declarations to app `ServiceDescriptor`. The remaining data-plane work is an
+actual worker-local adapted `Service` that initializes the plugin runtime and binds the declared
+protocol implementation.
 
-```text
-Plugin discovered
-Plugin loaded
-Plugin initialized with PluginContext
-Plugin registers protocol service provider with HostProtocolServiceRegistry
-Application/Bootstrap expands protocol service into ServiceInstancePlan
-Worker creates plugin protocol service instance via factory
-Worker starts adapted app::Service
-```
+## Recommended Implementation Phases
 
-There are two implementation choices.
-
-### Option A: Startup-Only Plugin Protocol Services
-
-Plugin protocol services are discovered and registered before `Bootstrap::run()` expands the service plan.
-
-Pros:
-
-- Much simpler.
-- No dynamic process spawning after startup.
-- Fits current `Bootstrap` structure.
-
-Cons:
-
-- Cannot enable a new listening protocol at runtime without restart.
-
-Recommended for the first phase.
-
-### Option B: Dynamic Plugin Protocol Services
-
-Plugin protocol services can be registered after the app is running, and the supervisor can spawn new workers dynamically.
-
-Pros:
-
-- More flexible.
-
-Cons:
-
-- Requires mutable service instance plan.
-- Requires runtime worker creation and teardown.
-- Requires new supervisor control APIs.
-
-Do not implement this in the first phase.
-
-## Plugin and Multi-Process Caveat
-
-In POSIX `fork()` mode, in-process plugins loaded before fork are copied into workers. This has several risks:
-
-- Plugin state is copied, not shared.
-- Timers and resources must be worker-local.
-- File descriptors inherited across fork must be controlled.
-- Script runtimes may not be fork-safe if active threads exist.
-
-Recommended first-phase rule:
-
-```text
-Load protocol-service plugins before worker fork, but create runtime service instances after fork.
-Do not start plugin-managed timers/tasks before fork for protocol service workers.
-```
-
-If this is too risky, use this stricter rule:
-
-```text
-Supervisor reads plugin manifests before fork.
-Each worker initializes the plugin runtime locally after fork.
-```
-
-The stricter rule is cleaner for long-term design, especially for future Windows spawn support.
-
-## Recommended First-Phase Scope
-
-Implement in this order.
-
-### Phase 1: Factory-only app service model
+### Phase 1: Definition and Instance Split
 
 Files:
 
@@ -881,241 +747,277 @@ Files:
 
 Changes:
 
-- Add `ServiceDeployment`.
-- Replace shared-service registration with factory registration.
-- Add worker-local `add_service_instance(...)`.
-- Remove or deprecate old `add_service(...)` overloads.
+- Add `ServicePlacement`.
+- Add `ServiceDefinition` and `ServiceFactory`.
+- Add worker-local `ServiceInstanceEntry`.
+- Keep old `add_typed_service(...)` temporarily as a compatibility wrapper that creates a singleton
+  factory only when safe.
+- Keep `ServiceRegistry` as an instance registry.
 
 Acceptance:
 
-- App can register services only through factories.
-- Worker-local app can start concrete service instances.
-- Existing examples are migrated to factory registration.
+- Application can register factory-based service definitions.
+- Worker-local applications can register concrete service instances.
+- Existing tests still pass through compatibility wrappers.
 
-### Phase 2: Service instance planning
-
-Files:
-
-- `core/app/include/bootstrap.h`
-- `core/app/src/bootstrap.cpp`
-- `core/app/src/runtime_plan.cpp`
-
-Changes:
-
-- Add `ServiceInstancePlan`.
-- Expand `process_instances` into workers.
-- Extend `WorkerProcessInfo`.
-- Restart one service instance at a time.
-
-Acceptance:
-
-- `http x 4 + mqtt x 2` expands to six workers.
-- Logs include `service_instance_index`.
-- `process_instances = 1` still behaves like current model except using factories.
-
-### Phase 3: Runtime context injection
+### Phase 2: Runtime Worker and WorkerPlan
 
 Files:
 
 - `core/app/include/runtime_context.h`
-- `server/services/src/http_service.cpp`
-- `server/services/include/http_service.h`
+- `core/app/include/bootstrap.h`
+- `core/app/src/bootstrap.cpp`
+- new planner helper under `core/app/src/`
 
 Changes:
 
-- Add instance identity fields.
-- Inject `listener_reuse_port`.
-- Ensure service construction can apply context before bind.
+- Add `RuntimeWorkerConfig`.
+- Add `WorkerPlan` and `ServiceInstancePlan`.
+- Implement planner tests for `singleton`, `all_workers`, `sharded`, and `dedicated`.
+- Keep initial runtime execution compatible with current service-owned threads.
 
 Acceptance:
 
-- HTTP service can see its instance index.
-- Dashboard and service events can display worker and instance identity.
+- `runtime.worker_count = 4` and `http all_workers` creates four HTTP service instance plans.
+- `mqtt sharded(2)` is placed on two workers without creating two extra workers.
+- `nas singleton` is placed once.
 
-### Phase 4: Listener reuse port for HTTP
-
-Files to inspect first:
-
-- `core/core/include/net/socket/*`
-- `core/core/src/net/socket/*`
-- `core/core/include/net/acceptor/*`
-- `core/core/src/net/acceptor/*`
-- `core/core/include/net/async/async_listener_host.h`
-- `core/core/src/net/async/async_listener_host.cpp`
-- `protocol/http/include/http_server.h`
-- `protocol/http/src/http_server.cpp`
-
-Changes:
-
-- Add listener options.
-- Add HTTP `reuse_port` config.
-- Apply `SO_REUSEPORT` on Linux.
-
-Acceptance:
-
-- Linux can start two HTTP worker processes on one port.
-- Windows compile is not broken, but multi-process remains unsupported.
-
-### Phase 5: Plugin runtime context alignment
+### Phase 3: Runtime Identity and Events
 
 Files:
 
+- `core/app/include/runtime_context.h`
+- `core/app/include/app_events.h`
+- `server/services/include/server_service_events.h`
+- `server/proxy/src/server_runtime_host.cpp`
 - `plugins/core/include/plugin/plugin_context.h`
 - `plugins/host/src/plugin_host_service.cpp`
 
 Changes:
 
-- Add service-instance fields to plugin context.
-- Bump plugin host API version to `2`.
+- Add explicit worker count and service-instance identity fields.
+- Propagate identity into app events, server service events, and plugin context.
+- Keep old fields readable during migration.
 
 Acceptance:
 
-- Plugins can inspect worker and service instance identity.
+- Dashboard and plugin context can distinguish worker index from service instance index.
+- Events include enough identity to debug placement.
 
-### Phase 6: Plugin protocol service contract
+### Phase 4: Explicit Endpoint Options
 
 Files:
 
-- `plugins/core/include/plugin/plugin_permission.h`
-- `plugins/core/src/plugin/plugin_permission.cpp`
-- `plugins/core/include/plugin/plugin_manifest.h`
-- `plugins/core/include/plugin/host_service_registry.h` or a new `host_protocol_service_registry.h`
-- `plugins/host/include/plugin_service_registry_adapter.h` or a new adapter
-- `plugins/host/src/plugin_service_registry_adapter.cpp` or a new adapter
+- `core/app/include/endpoint_manager.h`
+- `core/app/src/endpoint_manager.cpp`
+- `test/core/test_endpoint_manager.cpp`
+- `core/core/include/net/socket/socket_ops.h`
+- `core/core/src/net/socket/socket_ops.cpp`
+- `core/core/include/net/socket/socket.h`
+- `core/core/src/net/socket/socket.cpp`
+- `core/core/include/net/async/async_listener_host.h`
+- `core/core/include/net/session/stream_server_session.h`
+- `core/core/include/net/session/datagram_server_session.h`
 
 Changes:
 
-- Add `register_protocol_service` permission.
-- Add manifest declarations for `protocol_services`.
-- Add host interface for protocol service registration.
-- Add adapter from plugin protocol service to `app::Service`.
+- Split `reuse_addr` and `reuse_port`.
+- Add `ListenOptions`.
+- Make `reuse_port` failure observable.
+- Stop treating POSIX `SO_REUSEPORT` as an implicit side effect of `set_reuse(true)`.
+- Add an `EndpointManager` planning layer that groups `WorkerPlan` endpoints, classifies
+  `private_bind` vs replicated `reuse_port`, and reports conflicts between different logical
+  services before workers start.
 
 Acceptance:
 
-- Native plugin can declare/register a protocol service provider.
-- The provider is converted into an app `ServiceDefinition` before bootstrap expands the runtime plan.
+- Existing singleton listeners still bind.
+- Linux HTTP can request `reuse_port` explicitly.
+- Windows compile is not broken, but multi-process shared-port support remains unsupported.
+- Bootstrap rejects conflicting factory-registered endpoint plans before any worker runtime starts.
 
-## Example New Application Setup
+### Phase 5: HTTP Placement Proof
 
-```cpp
-yuan::app::RuntimeContext context;
-context.app_name = "mini_nginx";
-context.run_mode = yuan::app::RunMode::multi_process;
+Files:
 
-yuan::app::Application app(context);
+- `protocol/http/include/http_server.h`
+- `protocol/http/src/http_server.cpp`
+- `server/services/include/http_service.h`
+- `server/services/src/http_service.cpp`
+- `server/mini_nginx/main.cpp`
 
-yuan::app::ServiceDescriptor http;
-http.name = "http";
-http.contract_id = "yuan.service.http";
-http.contract_version = 1;
-http.deployment.process_instances = 4;
-http.deployment.reuse_port = true;
+Changes:
 
-app.add_service(http, [cfg] {
-    return std::make_shared<yuan::server::HttpService>(8080, cfg);
-});
+- Move HTTP setup into factory/builder configuration.
+- Add endpoint/listen options to HTTP init path.
+- Allow HTTP to run as `all_workers` with explicit `reuse_port` on Linux.
+- Ensure `shared_runtime` mode does not require a private service thread.
 
-yuan::app::Bootstrap bootstrap(app);
-if (!bootstrap.run()) {
-    return 1;
-}
-```
+Acceptance:
 
-## Example Plugin Protocol Provider Shape
+- One logical HTTP service can run on four runtime workers.
+- Requests to the shared port succeed.
+- Logs/events identify different HTTP service instance indices.
 
-Native plugin code should eventually be able to do:
+Current verification:
 
-```cpp
-bool EchoPlugin::on_init(const yuan::plugin::PluginContext &ctx)
-{
-    if (!ctx.protocol_service_registry) {
-        return false;
-    }
+- `http_features` covers shared-runtime HTTP request handling on Windows.
+- `http_features` also covers Bootstrap-owned in-process worker runtime startup for a real
+  `HttpService` request path.
+- `http_shared_reuse_port` is a Linux integration target for four HTTP instances sharing one port;
+  it intentionally skips on Windows because `SO_REUSEPORT` is not available there.
+- `server_runtime_host` covers inline lifecycle and verifies the start function runs on the caller
+  thread.
 
-    yuan::plugin::PluginProtocolServiceDescriptor desc;
-    desc.name = "echo";
-    desc.protocol = "echo";
-    desc.contract_id = "yuan.protocol.echo.service";
-    desc.contract_version = 1;
-    desc.port = 19000;
-    desc.deployment.process_instances = 2;
-    desc.deployment.reuse_port = true;
+### Phase 6: Worker Execution
 
-    return ctx.protocol_service_registry->register_protocol_service(
-        ctx.plugin_name,
-        std::move(desc),
-        [] {
-            return std::make_shared<EchoPluginProtocolService>();
-        });
-}
-```
+Files:
 
-If keeping `plugin` core free of `app::Service`, use a host adapter:
+- `core/app/include/bootstrap.h`
+- `core/app/src/bootstrap.cpp`
 
-```cpp
-return ctx.protocol_service_registry->register_protocol_service(
-    ctx.plugin_name,
-    std::move(desc),
-    [] {
-        return std::make_shared<EchoPluginProtocolService>();
-    });
-```
+Changes:
 
-The host adapter wraps `EchoPluginProtocolService` into an `app::Service` implementation before adding it to `Application`.
+- Start one `NetworkRuntime`/`EventLoop` per in-process worker for `multi_thread` factory-registered
+  applications.
+- Build worker-local applications from `WorkerPlan` and inject `shared_runtime`.
+- Fork one process per `WorkerPlan`, not per service.
+- A worker process can host multiple service instances.
+- Restart recreates the same `WorkerPlan`.
+
+Acceptance:
+
+- `multi_thread + all_workers` creates multiple in-process runtime workers without service-owned
+  long-running threads.
+- Worker-local services receive `shared_runtime`, worker identity, and service-instance identity.
+- In-process worker shutdown stops local services and their event loops.
+- `http all_workers + nas singleton` with four workers starts four processes, not five.
+- Killing one worker restarts that worker plan.
+- Events show worker-level restart with service-instance details.
+
+Current verification:
+
+- `in_process_worker_runtime` covers in-process `WorkerPlan` execution, runtime dispatch, identity,
+  listener reuse hints, and shutdown.
+- `in_process_worker_runtime` also forces the first worker runtime to exit unexpectedly, then
+  verifies `Bootstrap::poll_workers()` restarts the same `WorkerPlan` and returns the supervisor
+  snapshot to one healthy running worker.
+- The same target covers restart-limit behavior by using an always-failing worker and verifying the
+  supervisor reports a suppressed recovery instead of entering a tight restart loop.
+- `http_features` covers a real `HttpService` started through Bootstrap on an in-process worker-owned
+  runtime.
+- `core_runtime_benchmark` now includes `in_process_worker_lifecycle`, which repeatedly starts and
+  stops Bootstrap-managed in-process workers and verifies init/start/dispatch/stop lifecycle counts.
+- POSIX process-per-worker restart is covered by the existing supervisor tests; Linux shared-port HTTP
+  proof still needs a Linux runner.
+
+### Phase 7: Plugin Protocol Services
+
+Files:
+
+- `plugins/core/include/plugin/plugin_manifest.h`
+- `plugins/core/include/plugin/plugin_permission.h`
+- `plugins/core/src/plugin/plugin_permission.cpp`
+- `plugins/core/src/plugin/plugin_manager.cpp`
+- `plugins/host/src/plugin_host_service.cpp`
+- new protocol service registry/adapter files
+
+Changes:
+
+- Add manifest-level `protocol_services`.
+- Add `register_protocol_service` permission.
+- Discover protocol service declarations before placement planning.
+- Initialize actual plugin runtime inside workers.
+- Keep each worker-local plugin host isolated with its own `PluginManager`.
+
+Acceptance:
+
+- A native plugin can declare a protocol service in manifest.
+- The service becomes an app `ServiceDefinition` before worker plans are built.
+- Worker-local plugin runtime creates the actual adapted service instance.
+- Multiple in-process workers can initialize the same plugin declaration without overwriting each
+  other's runtime context.
+
+Current verification:
+
+- `plugin_governance` covers permission parsing, manifest-first discovery, missing-permission
+  rejection, and conversion to app `ServiceDescriptor`.
+- `plugin_governance` also starts a manifest-declared Lua protocol service through
+  `PluginProtocolServiceAdapter` on two Bootstrap-managed in-process workers and verifies
+  plugin-loaded events carry distinct worker and service-instance indices.
+- The remaining plugin protocol work is binding concrete protocol handlers/listeners beyond runtime
+  initialization.
 
 ## Test Plan
 
-Add core tests:
+Add unit tests:
 
-- `test/core/test_service_factory_registration.cpp`
-- `test/core/test_service_instance_plan.cpp`
-- `test/core/test_bootstrap_worker_identity.cpp`
+- `test/core/test_service_definition_registration.cpp`
+- `test/core/test_worker_plan.cpp`
+- `test/core/test_runtime_identity.cpp`
+- `test/core/test_endpoint_options.cpp`
 
-Test cases:
+Planner cases:
 
-- Factory registration rejects empty name.
-- Factory registration rejects empty factory.
-- `process_instances = 0` is rejected.
-- One service with one instance expands to one worker.
-- One service with four instances expands to four workers.
-- Two services with `4 + 2` instances expand to six workers.
-- `worker_index` is globally increasing.
-- `service_instance_index` resets per service.
-- `worker_count` equals total instance count.
+- One singleton service on one worker.
+- One singleton service with four workers still creates one instance.
+- One `all_workers` service with four workers creates four instances.
+- `all_workers + singleton` shares workers.
+- Two `sharded` services are spread without increasing worker count.
+- Dedicated services allocate dedicated workers.
+- Duplicate service names are rejected.
+- Invalid endpoint reuse strategy is rejected.
 
 HTTP integration tests on Linux:
 
-- HTTP with `process_instances = 2` and `reuse_port = true` starts successfully.
+- HTTP `all_workers` with `reuse_port` starts successfully.
 - Requests to the shared port return success.
-- Logs show two different worker pids.
-- Killing one worker triggers restart for only that service instance.
+- Logs/events show multiple worker indices and service instance indices.
+- Killing one worker process restarts that worker plan.
 
 Plugin tests:
 
-- Plugin context exposes service-instance fields.
-- Plugin manifest parser accepts `protocol_services`.
+- Plugin context exposes runtime worker and service-instance identity.
+- Manifest parser accepts `protocol_services`.
 - Permission parser accepts `register_protocol_service`.
-- Native plugin can register a protocol service descriptor before bootstrap.
+- Worker-local `PluginProtocolServiceAdapter` initializes one plugin runtime per planned service
+  instance and preserves worker/service-instance identity in plugin events.
 
 ## Migration Notes
 
-Because old APIs can be removed, migrate examples and tests directly to factory registration.
-
-Old style to remove:
+Old style:
 
 ```cpp
-app.add_service("http", std::make_shared<HttpService>(8080, cfg));
+auto service = std::make_shared<HttpService>(8080, cfg);
+app.add_typed_service<HttpService>("http", service, "server.http", 1);
 ```
 
-New style:
+Transitional style:
 
 ```cpp
 yuan::app::ServiceDescriptor desc;
 desc.name = "http";
-desc.deployment.process_instances = 1;
+desc.contract_id = "server.http";
+desc.contract_version = 1;
+desc.placement.mode = yuan::app::PlacementMode::singleton;
 
 app.add_service(desc, [cfg] {
     return std::make_shared<HttpService>(8080, cfg);
+});
+```
+
+Scalable HTTP style:
+
+```cpp
+yuan::app::ServiceDescriptor desc;
+desc.name = "http";
+desc.contract_id = "server.http";
+desc.contract_version = 1;
+desc.placement.mode = yuan::app::PlacementMode::all_workers;
+desc.endpoints.push_back({"http", "0.0.0.0", 8080, "tcp"});
+
+app.add_service(desc, [cfg] {
+    return make_configured_http_service(cfg);
 });
 ```
 
@@ -1128,32 +1030,44 @@ ServiceEntry
 services()
 run_local_service_process
 start_worker_process
+ServerRuntimeHost::start
+set_reuse(
+listener_.bind(
 ```
 
 Likely callers:
 
+- `main.cpp`
 - `server/mini_nginx/main.cpp`
 - `server/bt_downloader/main.cpp`
-- test programs under `test/`
-- plugin host integration tests if they create app services
+- `server/match/main.cpp`
+- `test/protocol/http/test_http_server.cpp`
+- `test/protocol/websocket/test_websocket_server.cpp`
+- `test/protocol/ftp/test_ftp_server.cpp`
+- plugin host integration tests
 
 ## Risks
 
-1. Reuse-port behavior differs by platform.
-2. Plugin runtimes may not be fork-safe if initialized before fork.
-3. Process-replicated services cannot share in-memory state.
-4. EventBus remains process-local.
-5. Admin dashboards may show only worker-local state unless aggregation is added.
-6. Stateful protocols need individual replication designs.
+1. Existing services may assume they own their runtime thread.
+2. HTTP setup currently mutates the concrete service after registration.
+3. `SO_REUSEPORT` behavior differs by platform and must be explicit.
+4. Worker-level restart restarts all instances assigned to that worker.
+5. EventBus remains process-local.
+6. Dashboard state may be worker-local until aggregation exists.
+7. Stateful protocols need separate state distribution designs.
+8. Plugin runtimes may not be fork-safe if initialized before worker fork.
 
 ## Done Criteria
 
 The refactor is complete when all of these are true:
 
-- App-level service registration is factory-based.
-- `Bootstrap` expands `process_instances` into service instance workers.
-- Worker identity includes service instance identity.
-- Linux HTTP can run multiple worker processes on one port using `SO_REUSEPORT`.
-- Existing singleton services can still run with `process_instances = 1`.
-- Plugin context exposes runtime instance identity.
-- Plugin design has a concrete host contract for protocol service registration, even if only native C++ plugins are supported initially.
+- App-level services are registered as definitions with factories.
+- Execution capacity is configured through runtime workers, not service count.
+- `WorkerPlan` can place multiple service instances on one worker.
+- One logical HTTP service can run across multiple runtime workers.
+- Endpoint reuse is explicit and validated.
+- Worker and service-instance identity are visible in context and events.
+- Singleton services still run with one instance.
+- POSIX process mode forks one worker per `WorkerPlan`.
+- Plugin runtime context exposes placement identity.
+- Plugin protocol services have a manifest-first path into app service definitions.

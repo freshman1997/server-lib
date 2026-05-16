@@ -3,10 +3,15 @@
 
 #include "application.h"
 #include "native_platform.h"
+#include "worker_plan.h"
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace yuan::app
@@ -92,6 +97,7 @@ class Bootstrap
 {
 public:
     explicit Bootstrap(Application& application);
+    ~Bootstrap();
 
     bool run();
     void shutdown();
@@ -107,9 +113,18 @@ public:
     const std::vector<WorkerProcessInfo>& worker_processes() const noexcept;
 
 private:
+    struct InProcessWorker;
+
     bool run_multi_process();
+    bool run_worker_plan_multi_process();
+    bool run_in_process_worker_plan();
     bool start_worker_process(const ServiceEntry &entry, std::size_t worker_index, std::size_t worker_count, WorkerProcessInfo *worker_info = nullptr);
     bool run_local_service_process(const ServiceEntry &entry, std::size_t worker_index, std::size_t worker_count);
+    bool start_worker_process(const WorkerPlan &worker, WorkerProcessInfo *worker_info = nullptr);
+    bool run_local_worker_process(const WorkerPlan &worker);
+    bool start_in_process_worker(const WorkerPlan &worker);
+    void shutdown_in_process_workers();
+    void update_in_process_worker_failures();
     void start_due_worker_restarts();
     void set_supervisor_state(SupervisorState state, SupervisorReason reason = SupervisorReason::none);
     void reap_worker_processes(bool block_until_exit);
@@ -126,6 +141,8 @@ private:
     SupervisorState supervisor_state_ = SupervisorState::idle;
     SupervisorReason supervisor_reason_ = SupervisorReason::none;
     std::unique_ptr<Application> local_worker_application_;
+    std::vector<std::unique_ptr<InProcessWorker>> in_process_workers_;
+    std::vector<WorkerPlan> worker_plans_;
 #ifndef _WIN32
     std::vector<WorkerProcessInfo> worker_processes_;
 #endif

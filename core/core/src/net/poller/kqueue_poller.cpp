@@ -93,11 +93,18 @@ namespace yuan::net
             for (int i = 0; i < count; ++i) {
                 int ev = Channel::NONE_EVENT;
                 const auto &event = data_->kqueue_events_[i];
+                const uintptr_t token = reinterpret_cast<uintptr_t>(event.udata);
+                const int fd = decode_kqueue_fd(token);
+                auto channel_it = data_->channels_.find(fd);
+                Channel *channel = channel_it != data_->channels_.end() ? channel_it->second : nullptr;
 
                 // kqueue 对 TCP 关闭/错误会在 flags 里给出 EV_EOF/EV_ERROR。
                 // 这里按 epoll 的策略：把“异常/挂断”当作 READ 事件交给连接层处理（read() 会返回 0 / errno）。
                 if (event.flags & (EV_EOF | EV_ERROR)) {
-                    ev |= Channel::READ_EVENT;
+                    ev |= channel ? (channel->get_events() & (Channel::READ_EVENT | Channel::WRITE_EVENT)) : Channel::READ_EVENT;
+                    if (ev == Channel::NONE_EVENT) {
+                        ev = Channel::READ_EVENT;
+                    }
                 }
 
                 if (event.filter == EVFILT_READ) {
@@ -108,8 +115,6 @@ namespace yuan::net
                     ev |= Channel::WRITE_EVENT;
                 }
 
-                const uintptr_t token = reinterpret_cast<uintptr_t>(event.udata);
-                const int fd = decode_kqueue_fd(token);
                 if (ev != Channel::NONE_EVENT) {
                     auto &pe = revents_by_fd[fd];
                     pe.fd = fd;

@@ -26,6 +26,21 @@ namespace yuan::plugin
         script,
     };
 
+    struct ProtocolServiceDescriptor
+    {
+        std::string plugin_id;
+        std::string name;
+        std::string type;
+        std::string protocol = "tcp";
+        std::string host = "0.0.0.0";
+        int port = 0;
+        std::string contract_id;
+        int contract_version = 1;
+        PluginRunMode run_mode = PluginRunMode::unknown;
+        std::string language;
+        std::string entry;
+    };
+
     struct PluginManifest
     {
         std::string plugin_id;
@@ -38,6 +53,7 @@ namespace yuan::plugin
         PluginPermission required_permissions = PluginPermission::none;
         std::vector<std::string> depends_on;
         std::vector<ExtensionPointDescriptor> extension_points;
+        std::vector<ProtocolServiceDescriptor> protocol_services;
         PluginRunMode run_mode = PluginRunMode::unknown;
         std::string language;
     };

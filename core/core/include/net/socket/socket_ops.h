@@ -1,6 +1,7 @@
 #ifndef __SOCKET_OPS_H__
 #define __SOCKET_OPS_H__
 #include "inet_address.h"
+#include "listen_options.h"
 
 namespace yuan::net::socket
 {
@@ -29,6 +30,12 @@ namespace yuan::net::socket
     int get_last_error();
 
     bool set_reuse(int fd, bool on, bool exclude = false);
+
+    bool set_reuse_addr(int fd, bool on, bool exclusive = false);
+
+    bool set_reuse_port(int fd, bool on);
+
+    bool apply_listen_options(int fd, const ListenOptions &options);
 
     void set_no_delay(int fd, bool on);
 

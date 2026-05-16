@@ -214,6 +214,7 @@ namespace yuan::net::socks5
         SessionStateCallback session_state_cb_;
         RelayHandler relay_handler_;
         UdpRelayHandler udp_relay_handler_;
+        coroutine::Task<void> accept_task_;
         timer::TimerHandle idle_sweep_timer_;
         std::atomic_bool stop_requested_{ false };
         AuthRateLimiter auth_rate_limiter_;

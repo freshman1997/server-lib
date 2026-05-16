@@ -19,6 +19,7 @@ namespace yuan::net
 
     public:
         virtual bool listen();
+        bool listen(int backlog) override;
 
         virtual void close();
 

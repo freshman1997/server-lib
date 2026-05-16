@@ -15,6 +15,11 @@ namespace yuan::net
     {
     public:
         virtual bool listen() = 0;
+        virtual bool listen(int backlog)
+        {
+            (void)backlog;
+            return listen();
+        }
 
         virtual void close() = 0;
 

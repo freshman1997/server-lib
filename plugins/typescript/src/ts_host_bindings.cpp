@@ -494,6 +494,7 @@ namespace yuan::plugin
             cb.execution_timeout_ms = ctx_info ? ctx_info->execution_timeout_ms : 0;
             cb.js_mutex = ctx_info ? ctx_info->js_mutex : nullptr;
             cb.interrupt_data = ctx_info ? ctx_info->interrupt_data : nullptr;
+            const auto tracked_plugin_name = cb.plugin_name;
 
             int cb_id;
             {
@@ -566,7 +567,7 @@ namespace yuan::plugin
 
             auto *guard = ctx_info ? ctx_info->resource_guard : nullptr;
             if (guard) {
-                guard->track(cb.plugin_name, PluginResourceType::event_subscription,
+                guard->track(tracked_plugin_name, PluginResourceType::event_subscription,
                              [bus, token]() {
                                  if (bus) bus->unsubscribe(token);
                              },
@@ -687,6 +688,7 @@ namespace yuan::plugin
             cb.execution_timeout_ms = ctx_info ? ctx_info->execution_timeout_ms : 0;
             cb.js_mutex = ctx_info ? ctx_info->js_mutex : nullptr;
             cb.interrupt_data = ctx_info ? ctx_info->interrupt_data : nullptr;
+            const auto tracked_plugin_name = cb.plugin_name;
 
             int cb_id;
             {
@@ -742,7 +744,7 @@ namespace yuan::plugin
 
             auto *guard = ctx_info ? ctx_info->resource_guard : nullptr;
             if (guard) {
-                guard->track(cb.plugin_name, PluginResourceType::scheduler_task,
+                guard->track(tracked_plugin_name, PluginResourceType::scheduler_task,
                              [sched, id]() {
                                  if (sched) sched->cancel(id);
                              },
@@ -785,6 +787,7 @@ namespace yuan::plugin
             cb.execution_timeout_ms = ctx_info ? ctx_info->execution_timeout_ms : 0;
             cb.js_mutex = ctx_info ? ctx_info->js_mutex : nullptr;
             cb.interrupt_data = ctx_info ? ctx_info->interrupt_data : nullptr;
+            const auto tracked_plugin_name = cb.plugin_name;
 
             int cb_id;
             {
@@ -840,7 +843,7 @@ namespace yuan::plugin
 
             auto *guard = ctx_info ? ctx_info->resource_guard : nullptr;
             if (guard) {
-                guard->track(cb.plugin_name, PluginResourceType::scheduler_task,
+                guard->track(tracked_plugin_name, PluginResourceType::scheduler_task,
                              [sched, id]() {
                                  if (sched) sched->cancel(id);
                              },
@@ -874,7 +877,9 @@ namespace yuan::plugin
                                       JSClassFinalizer *finalizer, const JSCFunctionListEntry *proto_funcs,
                                       int proto_funcs_len)
         {
-            JS_NewClassID(class_id);
+            if (*class_id == 0) {
+                JS_NewClassID(class_id);
+            }
             JSClassDef class_def;
             memset(&class_def, 0, sizeof(class_def));
             class_def.class_name = class_name;
@@ -882,13 +887,17 @@ namespace yuan::plugin
             JS_NewClass(JS_GetRuntime(ctx), *class_id, &class_def);
 
             JSValue proto = JS_NewObject(ctx);
-            JS_SetPropertyFunctionList(ctx, proto, proto_funcs, proto_funcs_len);
+            if (proto_funcs && proto_funcs_len > 0) {
+                JS_SetPropertyFunctionList(ctx, proto, proto_funcs, proto_funcs_len);
+            }
             JS_SetClassProto(ctx, *class_id, proto);
         }
 
         static JSValue make_instance(JSContext *ctx, JSClassID class_id, void *ptr)
         {
-            JSValue obj = JS_NewObjectProtoClass(ctx, JS_GetClassProto(ctx, class_id), class_id);
+            JSValue proto = JS_GetClassProto(ctx, class_id);
+            JSValue obj = JS_NewObjectProtoClass(ctx, proto, class_id);
+            JS_FreeValue(ctx, proto);
             JS_SetOpaque(obj, ptr);
             return obj;
         }
@@ -914,7 +923,9 @@ namespace yuan::plugin
         JSValue global = JS_GetGlobalObject(ctx);
         JSAtom ctx_key = JS_NewAtom(ctx, CTX_REGISTRY_KEY);
         register_js_class(ctx, &js_ctx_info_class_id, "TsCtxInfo", js_ctx_info_finalizer, nullptr, 0);
-        JSValue info_obj = JS_NewObjectProtoClass(ctx, JS_GetClassProto(ctx, js_ctx_info_class_id), js_ctx_info_class_id);
+        JSValue ctx_info_proto = JS_GetClassProto(ctx, js_ctx_info_class_id);
+        JSValue info_obj = JS_NewObjectProtoClass(ctx, ctx_info_proto, js_ctx_info_class_id);
+        JS_FreeValue(ctx, ctx_info_proto);
         JS_SetOpaque(info_obj, ctx_info);
         JS_SetProperty(ctx, global, ctx_key, info_obj);
         JS_FreeAtom(ctx, ctx_key);

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -31,7 +32,7 @@ namespace yuan::plugin
     {
         std::lock_guard<std::recursive_mutex> lock(js_mutex_);
         if (ctx_) {
-            cleanup_ts_plugin_callbacks(ctx_, manifest_.name);
+            cleanup_ts_plugin_callbacks(ctx_, callback_owner_name());
         }
         if (ctx_) {
             JS_FreeContext(ctx_);
@@ -74,7 +75,7 @@ namespace yuan::plugin
     bool TsScriptPluginAdapter::init_js_engine()
     {
         if (rt_) {
-            cleanup_ts_plugin_callbacks(ctx_, manifest_.name);
+            cleanup_ts_plugin_callbacks(ctx_, callback_owner_name());
             JS_FreeContext(ctx_);
             ctx_ = nullptr;
             JS_FreeRuntime(rt_);
@@ -87,11 +88,10 @@ namespace yuan::plugin
             return false;
         }
 
-        JS_SetMemoryLimit(rt_, config_.memory_limit);
         JS_SetMaxStackSize(rt_, config_.max_stack_size);
         JS_SetInterruptHandler(rt_, js_interrupt_handler, &interrupt_data_);
 
-        ctx_ = JS_NewContext(rt_);
+        ctx_ = JS_NewContextRaw(rt_);
         if (!ctx_) {
             LOG_ERROR("failed to create quickjs context for plugin '{}'", manifest_.name);
             JS_FreeRuntime(rt_);
@@ -100,6 +100,7 @@ namespace yuan::plugin
         }
 
         JS_AddIntrinsicBaseObjects(ctx_);
+        JS_AddIntrinsicEval(ctx_);
         JS_AddIntrinsicDate(ctx_);
         JS_AddIntrinsicRegExp(ctx_);
         JS_AddIntrinsicJSON(ctx_);
@@ -108,6 +109,17 @@ namespace yuan::plugin
         JS_AddIntrinsicPromise(ctx_);
 
         apply_sandbox();
+
+        JSMemoryUsage usage;
+        JS_ComputeMemoryUsage(rt_, &usage);
+        const auto bootstrap_used = static_cast<size_t>(usage.malloc_size);
+        const auto extra_budget = config_.memory_limit;
+        const auto runtime_limit = extra_budget > std::numeric_limits<size_t>::max() - bootstrap_used
+                                       ? std::numeric_limits<size_t>::max()
+                                       : bootstrap_used + extra_budget;
+        JS_SetMemoryLimit(rt_, runtime_limit);
+        memory_budget_.limit = runtime_limit;
+
         return true;
     }
 
@@ -365,7 +377,7 @@ namespace yuan::plugin
         std::lock_guard<std::recursive_mutex> lock(js_mutex_);
         call_js_void("on_release");
         if (ctx_) {
-            cleanup_ts_plugin_callbacks(ctx_, manifest_.name);
+            cleanup_ts_plugin_callbacks(ctx_, callback_owner_name());
         }
         if (ctx_) {
             JS_FreeContext(ctx_);
@@ -428,6 +440,17 @@ namespace yuan::plugin
     void TsScriptPluginAdapter::do_config_changed(const PluginConfigView & config)
     {
         call_js_config_changed(config);
+    }
+
+    std::string TsScriptPluginAdapter::callback_owner_name() const
+    {
+        if (!context_.plugin_name.empty()) {
+            return context_.plugin_name;
+        }
+        if (!manifest_.plugin_id.empty()) {
+            return manifest_.plugin_id;
+        }
+        return manifest_.name;
     }
 
 } // namespace yuan::plugin

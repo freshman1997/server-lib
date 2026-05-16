@@ -9,6 +9,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
@@ -35,6 +36,88 @@ namespace yuan::plugin
         static std::string join_path(const std::string &base, const std::string &relative)
         {
             return (std::filesystem::path(base) / relative).string();
+        }
+
+        static std::vector<std::string> native_plugin_extensions()
+        {
+            std::vector<std::string> extensions{ ".plugin" };
+            if (extensions.front() != NATIVE_PLUGIN_EXT) {
+                extensions.push_back(NATIVE_PLUGIN_EXT);
+            }
+            return extensions;
+        }
+
+        static PluginRunMode parse_run_mode(const std::string &run_mode)
+        {
+            if (run_mode == "single_thread") {
+                return PluginRunMode::single_thread;
+            }
+            if (run_mode == "multi_thread") {
+                return PluginRunMode::multi_thread;
+            }
+            if (run_mode == "multi_process") {
+                return PluginRunMode::multi_process;
+            }
+            if (run_mode == "sandbox") {
+                return PluginRunMode::sandbox;
+            }
+            if (run_mode == "script") {
+                return PluginRunMode::script;
+            }
+            return PluginRunMode::unknown;
+        }
+
+        static std::vector<ProtocolServiceDescriptor> parse_protocol_services(
+            const PluginConfigView &config,
+            const std::string &plugin_name)
+        {
+            std::vector<ProtocolServiceDescriptor> services;
+            auto *j = config.raw();
+            if (!j || !j->contains("protocol_services") || !(*j)["protocol_services"].is_array()) {
+                return services;
+            }
+
+            const auto run_mode = parse_run_mode(config.get_string("run_mode", ""));
+            const auto language = config.get_string("language", "");
+            const auto entry = config.get_string("entry", "");
+
+            for (const auto &item : (*j)["protocol_services"]) {
+                if (!item.is_object()) {
+                    continue;
+                }
+
+                ProtocolServiceDescriptor service;
+                service.plugin_id = plugin_name;
+                service.name = item.value("name", "");
+                service.type = item.value("type", item.value("service_type", ""));
+                service.protocol = item.value("protocol", "tcp");
+                service.host = item.value("host", "0.0.0.0");
+                service.port = item.value("port", 0);
+                service.contract_id = item.value("contract_id", "");
+                service.contract_version = item.value("contract_version", 1);
+                service.run_mode = run_mode;
+                service.language = language;
+                service.entry = entry;
+
+                if (service.type.empty()) {
+                    service.type = service.name;
+                }
+                if (service.name.empty() || service.contract_id.empty() || service.port < 0) {
+                    LOG_WARN("plugin '{}' has invalid protocol service declaration '{}'",
+                             plugin_name, service.name);
+                    continue;
+                }
+
+                services.push_back(std::move(service));
+            }
+
+            return services;
+        }
+
+        static PluginPermission permissions_from_config(const PluginConfigView &config)
+        {
+            const std::string perm_str = config.get_string("permissions", "");
+            return perm_str.empty() ? PluginPermission::none : PluginPermissionNames::parse(perm_str);
         }
 
         static std::string find_manifest_config_path(const std::string &base_path,
@@ -166,8 +249,32 @@ namespace yuan::plugin
 
     void *PluginManager::load_plugin_library(const std::string & plugin_name) const
     {
-        const std::string real_name = join_path(data_->plugin_path_, plugin_name + NATIVE_PLUGIN_EXT);
-        return PluginSymbolSolver::load_native_lib(real_name);
+        std::vector<std::string> candidates;
+        for (const auto &extension : native_plugin_extensions()) {
+            const std::string real_name = join_path(data_->plugin_path_, plugin_name + extension);
+            candidates.push_back(real_name);
+
+            std::error_code ec;
+            if (!std::filesystem::exists(real_name, ec) || ec) {
+                continue;
+            }
+
+            if (void *handle = PluginSymbolSolver::load_native_lib(real_name)) {
+                return handle;
+            }
+
+            LOG_ERROR("failed to load native plugin library '{}'", real_name);
+        }
+
+        std::string joined;
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            if (i > 0) {
+                joined += ", ";
+            }
+            joined += candidates[i];
+        }
+        LOG_ERROR("native plugin '{}' not found; tried [{}]", plugin_name, joined);
+        return nullptr;
     }
 
     Plugin *PluginManager::create_plugin_instance(const std::string & plugin_name, void * handle) const
@@ -226,18 +333,14 @@ namespace yuan::plugin
             context.plugin_config_path = config_path;
             context.config = load_plugin_config(config_path);
             if (context.config.loaded()) {
-                std::string run_mode_str = context.config.get_string("run_mode", "");
-                if (run_mode_str == "script") {
+                if (parse_run_mode(context.config.get_string("run_mode", "")) == PluginRunMode::script) {
                     context.plugin_root_path = join_path(data_->plugin_path_, plugin_name);
                 }
             }
         }
 
         if (context.config.loaded()) {
-            auto perm_str = context.config.get_string("permissions", "");
-            if (!perm_str.empty()) {
-                context.granted_permissions = PluginPermissionNames::parse(perm_str);
-            }
+            context.granted_permissions = permissions_from_config(context.config);
         }
 
         return context;
@@ -369,10 +472,7 @@ namespace yuan::plugin
         manifest.language = config.get_string("language", "lua");
         manifest.run_mode = PluginRunMode::script;
 
-        std::string perm_str = config.get_string("permissions", "");
-        if (!perm_str.empty()) {
-            manifest.required_permissions = PluginPermissionNames::parse(perm_str);
-        }
+        manifest.required_permissions = permissions_from_config(config);
 
         auto *j = config.raw();
         if (j && j->contains("depends_on") && (*j)["depends_on"].is_array()) {
@@ -398,6 +498,8 @@ namespace yuan::plugin
             }
         }
 
+        manifest.protocol_services = parse_protocol_services(config, name);
+
         if (manifest.api_version > HOST_API_VERSION) {
             LOG_ERROR("script plugin '{}' requires api_version {} but host provides {}",
                       name, manifest.api_version, HOST_API_VERSION);
@@ -414,6 +516,7 @@ namespace yuan::plugin
 
         std::string script_path = join_path(join_path(data_->plugin_path_, name), manifest.entry);
         if (!adapter->load_script(script_path)) {
+            LOG_ERROR("script plugin '{}' failed to load script '{}'", name, script_path);
             delete adapter;
             return false;
         }
@@ -442,8 +545,7 @@ namespace yuan::plugin
         auto config = find_plugin_manifest_config(pluginName);
 
         if (config.loaded()) {
-            std::string run_mode_str = config.get_string("run_mode", "");
-            if (run_mode_str == "script") {
+            if (parse_run_mode(config.get_string("run_mode", "")) == PluginRunMode::script) {
                 return load_script_plugin(pluginName, config);
             }
         }
@@ -483,9 +585,9 @@ namespace yuan::plugin
             }
 
             auto config = find_plugin_manifest_config(name);
-            std::string run_mode_str = config.get_string("run_mode", "");
+            const auto run_mode = parse_run_mode(config.get_string("run_mode", ""));
 
-            if (config.loaded() && run_mode_str == "script") {
+            if (config.loaded() && run_mode == PluginRunMode::script) {
                 std::vector<std::string> deps;
                 auto *j = config.raw();
                 if (j && j->contains("depends_on") && (*j)["depends_on"].is_array()) {
@@ -648,6 +750,37 @@ namespace yuan::plugin
         }
 
         return true;
+    }
+
+    std::vector<ProtocolServiceDescriptor> PluginManager::discover_protocol_services(
+        const std::vector<std::string> & plugin_names) const
+    {
+        std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
+
+        std::vector<ProtocolServiceDescriptor> out;
+        for (const auto &plugin_name : plugin_names) {
+            auto config = find_plugin_manifest_config(plugin_name);
+            if (!config.loaded()) {
+                continue;
+            }
+
+            auto declarations = parse_protocol_services(config, plugin_name);
+            if (declarations.empty()) {
+                continue;
+            }
+
+            const auto permissions = permissions_from_config(config);
+            if (!has_permission(permissions, PluginPermission::register_protocol_service)) {
+                LOG_ERROR("plugin '{}' declares protocol services without register_protocol_service permission",
+                          plugin_name);
+                continue;
+            }
+
+            out.insert(out.end(),
+                       std::make_move_iterator(declarations.begin()),
+                       std::make_move_iterator(declarations.end()));
+        }
+        return out;
     }
 
     Plugin *PluginManager::get_plugin(const std::string & name)

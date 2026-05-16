@@ -86,7 +86,17 @@ namespace yuan::net
             for (int i = 0; i < nevent; ++i) {
                 int ev = Channel::NONE_EVENT;
                 int event = data_->epoll_events_[i].events;
-                if (event & EPOLLIN || event & EPOLLERR || event & EPOLLHUP || event & EPOLLRDHUP) {
+                const uint64_t token = data_->epoll_events_[i].data.u64;
+                const int fd = decode_fd(token);
+                auto channel_it = data_->channels_.find(fd);
+                Channel *channel = channel_it != data_->channels_.end() ? channel_it->second : nullptr;
+
+                if (event & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+                    ev |= channel ? (channel->get_events() & (Channel::READ_EVENT | Channel::WRITE_EVENT)) : Channel::READ_EVENT;
+                    if (ev == Channel::NONE_EVENT) {
+                        ev = Channel::READ_EVENT;
+                    }
+                } else if (event & EPOLLIN) {
                     ev |= Channel::READ_EVENT;
                 }
 
@@ -94,10 +104,9 @@ namespace yuan::net
                     ev |= Channel::WRITE_EVENT;
                 }
 
-                const uint64_t token = data_->epoll_events_[i].data.u64;
                 if (ev != Channel::NONE_EVENT) {
                     PollEvent pe;
-                    pe.fd = decode_fd(token);
+                    pe.fd = fd;
                     pe.revents = ev;
                     pe.generation = decode_generation(token);
                     events.push_back(pe);

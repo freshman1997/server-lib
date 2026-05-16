@@ -87,9 +87,11 @@ namespace yuan::net::websocket
                 co_await handle_connection(std::move(ctx));
             });
 
+        auto accept_task = data_->listener_.run_async();
+        accept_task.resume();
+        accept_task.detach();
+
         if (data_->owned_runtime_) {
-            auto accept_task = data_->listener_.run_async();
-            accept_task.resume();
             data_->owned_runtime_->run();
         }
     }

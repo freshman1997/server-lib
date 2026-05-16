@@ -30,7 +30,7 @@ namespace yuan::net
     namespace
     {
         constexpr uint32_t kIdlePollTimeoutMs = 50;
-        constexpr uint32_t kRegisteredChannelPollTimeoutMs = 2;
+        constexpr uint32_t kActiveTimerPollTimeoutCapMs = 50;
     }
 
     class EventLoop::HelperData
@@ -144,21 +144,18 @@ namespace yuan::net
             std::lock_guard<std::mutex> lock(data_->m);
             return !data_->channels_.empty();
         };
-        auto poll_timeout = [this](const bool has_registered_channels, const bool processed_work) {
+        auto poll_timeout = [this](const bool processed_work) {
             if (processed_work) {
                 return 0U;
             }
 
-            const auto idle_timeout = has_registered_channels
-                ? kRegisteredChannelPollTimeoutMs
-                : kIdlePollTimeoutMs;
             if (!data_->timer_manager_) {
-                return idle_timeout;
+                return kIdlePollTimeoutMs;
             }
 
             return data_->timer_manager_->poll_timeout(
-                idle_timeout,
-                kRegisteredChannelPollTimeoutMs);
+                kIdlePollTimeoutMs,
+                kActiveTimerPollTimeoutCapMs);
         };
         while (!data_->quit_.load(std::memory_order_acquire) &&
                !data_->resume_coroutine_requested_.load(std::memory_order_acquire)) {
@@ -171,7 +168,7 @@ namespace yuan::net
 
             events.clear();
             const bool has_registered_channels = has_channels();
-            const uint32_t timeout_ms = poll_timeout(has_registered_channels, processed_work);
+            const uint32_t timeout_ms = poll_timeout(processed_work);
             if (!has_registered_channels) {
                 if (timeout_ms > 0) {
                     std::unique_lock<std::mutex> lock(data_->m);

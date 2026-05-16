@@ -920,7 +920,7 @@ namespace yuan::server
             });
         }
 
-        host_.start([this]() {
+        host_.start_inline([this]() {
             if (!torrent_file_path_.empty() && tasks_.empty()) {
                 std::string error;
                 (void)add_task(torrent_file_path_, save_path_, true, &error);

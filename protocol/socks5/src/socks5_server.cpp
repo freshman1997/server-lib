@@ -529,24 +529,30 @@ namespace yuan::net::socks5
             co_return;
         };
 
+        accept_task_ = accept_loop();
+        accept_task_.resume();
+
         if (owned_runtime_) {
-            auto task = accept_loop();
-            task.resume();
             owned_runtime_->run();
-        } else if (listener_.runtime()) {
-            auto task = accept_loop();
-            task.resume();
         }
     }
 
     void Socks5Server::stop()
     {
         stop_requested_.store(true, std::memory_order_relaxed);
-        listener_.close();
 
-        if (idle_sweep_timer_) {
-            idle_sweep_timer_.cancel();
-            idle_sweep_timer_.reset();
+        auto close_listener_and_timers = [this]() {
+            listener_.close();
+            if (idle_sweep_timer_) {
+                idle_sweep_timer_.cancel();
+                idle_sweep_timer_.reset();
+            }
+        };
+
+        if (owned_runtime_ && owned_runtime_->event_loop()) {
+            owned_runtime_->dispatch(close_listener_and_timers);
+        } else {
+            close_listener_and_timers();
         }
 
         const auto drain_ms = std::max(static_cast<uint32_t>(config_.drain_timeout_ms), uint32_t(0));
@@ -571,6 +577,8 @@ namespace yuan::net::socks5
         if (owned_runtime_) {
             owned_runtime_->stop();
         }
+
+        accept_task_ = {};
     }
 
     coroutine::Task<void> Socks5Server::handle_connection(AsyncConnectionContext ctx)

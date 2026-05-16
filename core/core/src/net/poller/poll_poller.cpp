@@ -83,6 +83,10 @@ namespace yuan::net
             return tm;
         }
 
+        for (auto &pfd : data_->fds_) {
+            pfd.revents = 0;
+        }
+
 #ifdef _WIN32
         int ret = ::WSAPoll(data_->fds_.data(), static_cast<ULONG>(data_->fds_.size()), static_cast<INT>(timeout));
 #else
@@ -98,21 +102,35 @@ namespace yuan::net
         }
 
         for (std::size_t i = 0; i < data_->fds_.size(); ++i) {
-            int ev = Channel::NONE_EVENT;
-            if (data_->fds_[i].revents & READ_MASK || data_->fds_[i].revents & ERROR_MASK
-#ifndef _WIN32
-                || data_->fds_[i].revents & READ_HUP_MASK
-#endif
-            ) {
-                ev |= Channel::READ_EVENT;
-            }
-
-            if (data_->fds_[i].revents & WRITE_MASK) {
-                ev |= Channel::WRITE_EVENT;
-            }
-
             const int fd = static_cast<int>(data_->fds_[i].fd);
             auto it = data_->channels_.find(fd);
+            if (it == data_->channels_.end() || !it->second) {
+                continue;
+            }
+
+            const auto revents = data_->fds_[i].revents;
+            const bool has_error = (revents & ERROR_MASK)
+#ifndef _WIN32
+                || (revents & READ_HUP_MASK)
+#endif
+                ;
+
+            int ev = Channel::NONE_EVENT;
+            if (has_error) {
+                ev |= it->second->get_events() & (Channel::READ_EVENT | Channel::WRITE_EVENT);
+                if (ev == Channel::NONE_EVENT) {
+                    ev = Channel::READ_EVENT;
+                }
+            } else {
+                if (revents & READ_MASK) {
+                    ev |= Channel::READ_EVENT;
+                }
+
+                if (revents & WRITE_MASK) {
+                    ev |= Channel::WRITE_EVENT;
+                }
+            }
+
             if (it != data_->channels_.end() && ev != Channel::NONE_EVENT && it->second) {
                 PollEvent pe;
                 pe.fd = fd;

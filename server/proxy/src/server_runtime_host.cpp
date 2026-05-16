@@ -27,13 +27,34 @@ namespace yuan::server
 
         publish(events::service_activating);
 
-        worker_ = std::thread([
-            fn = std::move(serve_fn),
-            this
-        ]() {
-        fn();
-        started_.store(false);
-         });
+        worker_ = std::thread([fn = std::move(serve_fn), this]() {
+            fn();
+            started_.store(false);
+        });
+
+        publish(events::service_activated);
+        return true;
+    }
+
+    bool ServerRuntimeHost::start_inline(std::function<void()> start_fn)
+    {
+        if (started_.exchange(true)) {
+            return false;
+        }
+
+        publish(events::service_activating);
+
+        try
+        {
+            if (start_fn) {
+                start_fn();
+            }
+        }
+        catch (...)
+        {
+            started_.store(false);
+            throw;
+        }
 
         publish(events::service_activated);
         return true;
@@ -73,8 +94,18 @@ namespace yuan::server
         event.app_name = runtime_context_.app_name;
         event.run_mode = runtime_context_.run_mode;
         event.worker_threads = runtime_context_.worker_threads;
+        event.runtime_worker_count = runtime_context_.runtime_worker_count == 0
+            ? runtime_context_.worker_threads
+            : runtime_context_.runtime_worker_count;
         event.worker_index = runtime_context_.worker_index;
         event.is_worker_process = runtime_context_.is_worker_process;
+        event.active_service_name = runtime_context_.active_service_name;
+        event.service_index = runtime_context_.service_index;
+        event.service_instance_index = runtime_context_.service_instance_index;
+        event.service_instance_count = runtime_context_.service_instance_count == 0
+            ? 1
+            : runtime_context_.service_instance_count;
+        event.listener_reuse_port = runtime_context_.listener_reuse_port;
         event.service_name = config_.service_name;
         event.protocol = config_.protocol;
         event.port = config_.port;

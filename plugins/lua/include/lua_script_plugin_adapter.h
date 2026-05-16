@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <mutex>
 #include <string>
+#include <string_view>
 
 struct lua_State;
 
@@ -61,6 +62,8 @@ namespace yuan::plugin
         void call_lua_void(const char *func_name);
         bool call_lua_init(const PluginContext &context);
         void call_lua_config_changed(const PluginConfigView &config);
+        void log_host_error(std::string_view message) const;
+        std::string callback_owner_name() const;
 
         lua_State *L_ = nullptr;
         Config config_;

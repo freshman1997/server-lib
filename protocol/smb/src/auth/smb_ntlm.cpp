@@ -566,6 +566,8 @@ namespace yuan::net::smb
             };
             add_av(NTLMSSP_AV_HOSTNAME, server_name_);
             add_av(NTLMSSP_AV_DOMAINNAME, domain_name_);
+            add_av(NTLMSSP_AV_DNS_HOSTNAME, server_name_);
+            add_av(NTLMSSP_AV_DNS_DOMAINNAME, domain_name_);
             target_info.resize(target_info.size() + 2);
             write_u16_le(target_info.data() + target_info.size() - 2, NTLMSSP_AV_EOL);
             target_info.resize(target_info.size() + 2);
@@ -629,7 +631,7 @@ namespace yuan::net::smb
                                                            msg->domain_name, msg->ntlm_response);
                  }
 
-                 if ((msg->flags & NTLMSSP_NEGOTIATE_KEY_EXCH) && !msg->encrypted_session_key.empty() && !base_key.empty()) {
+                 if (!msg->encrypted_session_key.empty() && !base_key.empty()) {
                      result_.session_key = rc4_decrypt(base_key, msg->encrypted_session_key);
                  } else {
                      result_.session_key = std::move(base_key);

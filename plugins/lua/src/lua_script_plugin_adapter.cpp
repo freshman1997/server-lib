@@ -10,6 +10,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 namespace yuan::plugin
 {
@@ -30,7 +31,7 @@ namespace yuan::plugin
     {
         std::lock_guard<std::recursive_mutex> lock(lua_mutex_);
         if (L_) {
-            cleanup_lua_plugin_callbacks(L_, manifest_.name);
+            cleanup_lua_plugin_callbacks(L_, callback_owner_name());
             lua_close(L_);
             L_ = nullptr;
         }
@@ -238,7 +239,10 @@ namespace yuan::plugin
         set_execution_hook();
         if (lua_pcall(L_, 0, 0, 0) != LUA_OK) {
             const char *err = lua_tostring(L_, -1);
-            LOG_ERROR("lua plugin '{}' {}: {}", manifest_.name, func_name, err ? err : "unknown");
+            std::string message = "lua plugin '" + manifest_.name + "' " + func_name + ": "
+                                + (err ? err : "unknown");
+            LOG_ERROR("{}", message);
+            log_host_error(message);
             lua_pop(L_, 1);
         }
         clear_execution_hook();
@@ -273,7 +277,10 @@ namespace yuan::plugin
 
         if (ret != LUA_OK) {
             const char *err = lua_tostring(L_, -1);
-            LOG_ERROR("lua plugin '{}' on_init error: {}", manifest_.name, err ? err : "unknown");
+            std::string message = "lua plugin '" + manifest_.name + "' on_init error: "
+                                + (err ? err : "unknown");
+            LOG_ERROR("{}", message);
+            log_host_error(message);
             if (err && strstr(err, "instruction limit exceeded")) {
                 timeout_triggered_ = true;
             }
@@ -314,7 +321,10 @@ namespace yuan::plugin
         set_execution_hook();
         if (lua_pcall(L_, 1, 0, 0) != LUA_OK) {
             const char *err = lua_tostring(L_, -1);
-            LOG_ERROR("lua plugin '{}' on_config_changed error: {}", manifest_.name, err ? err : "unknown");
+            std::string message = "lua plugin '" + manifest_.name + "' on_config_changed error: "
+                                + (err ? err : "unknown");
+            LOG_ERROR("{}", message);
+            log_host_error(message);
             lua_pop(L_, 1);
         }
         clear_execution_hook();
@@ -342,7 +352,7 @@ namespace yuan::plugin
         std::lock_guard<std::recursive_mutex> lock(lua_mutex_);
         call_lua_void("on_release");
         if (L_) {
-            cleanup_lua_plugin_callbacks(L_, manifest_.name);
+            cleanup_lua_plugin_callbacks(L_, callback_owner_name());
             lua_close(L_);
             L_ = nullptr;
         }
@@ -373,7 +383,10 @@ namespace yuan::plugin
 
         if (ret != LUA_OK) {
             const char *err = lua_tostring(L_, -1);
-            LOG_ERROR("lua plugin '{}' on_health_check error: {}", manifest_.name, err ? err : "unknown");
+            std::string message = "lua plugin '" + manifest_.name + "' on_health_check error: "
+                                + (err ? err : "unknown");
+            LOG_ERROR("{}", message);
+            log_host_error(message);
             lua_pop(L_, 2);
             return false;
         }
@@ -386,6 +399,29 @@ namespace yuan::plugin
     void LuaScriptPluginAdapter::do_config_changed(const PluginConfigView & config)
     {
         call_lua_config_changed(config);
+    }
+
+    void LuaScriptPluginAdapter::log_host_error(std::string_view message) const
+    {
+        if (context_.logger) {
+            context_.logger->log(
+                HostLogLevel::error,
+                __FILE__,
+                __LINE__,
+                __func__,
+                message);
+        }
+    }
+
+    std::string LuaScriptPluginAdapter::callback_owner_name() const
+    {
+        if (!context_.plugin_name.empty()) {
+            return context_.plugin_name;
+        }
+        if (!manifest_.plugin_id.empty()) {
+            return manifest_.plugin_id;
+        }
+        return manifest_.name;
     }
 
 } // namespace yuan::plugin

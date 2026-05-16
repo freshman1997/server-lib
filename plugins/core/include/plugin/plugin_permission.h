@@ -20,6 +20,7 @@ namespace yuan::plugin
         use_storage = 1 << 6,          ///< 使用持久化存储
         use_network_runtime = 1 << 7,  ///< 使用网络运行时 (定时器/调度)
         use_extension_points = 1 << 8, ///< 解析扩展点
+        register_protocol_service = 1 << 9,
         all = ~0u,
     };
 
@@ -62,6 +63,8 @@ namespace yuan::plugin
                 return "use_network_runtime";
             case PluginPermission::use_extension_points:
                 return "use_extension_points";
+            case PluginPermission::register_protocol_service:
+                return "register_protocol_service";
             case PluginPermission::all:
                 return "all";
             default:

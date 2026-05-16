@@ -31,6 +31,18 @@ namespace yuan::server
         constexpr size_t kDashboardRecentEventLimit = 120;
         constexpr size_t kBtTaskHistoryLimit = 50;
 
+        std::string service_state_key(const ServiceRuntimeEvent &event)
+        {
+            if (event.service_instance_count <= 1) {
+                return event.service_name;
+            }
+
+            return event.service_name + "[" +
+                   std::to_string(event.service_instance_index) + "/" +
+                   std::to_string(event.service_instance_count) + "]@worker" +
+                   std::to_string(event.worker_index);
+        }
+
         struct BtTaskHistoryItem
         {
             uint64_t ts = 0;
@@ -298,6 +310,10 @@ namespace yuan::server
             }
 #endif
             load_bt_task_history_from_file();
+            if (server_configurator_ && !server_configurator_(*this)) {
+                server_->stop();
+                return false;
+            }
             install_admin_dashboard_routes();
             subscribe_dashboard_events();
             start_dashboard_push_timer();
@@ -311,10 +327,25 @@ namespace yuan::server
         runtime_context_ = context;
         host_.set_runtime_context(context);
         shared_runtime_ = context.shared_runtime;
+        if (context.listener_reuse_port) {
+            config_.listen_options.reuse_port = true;
+            if (server_) {
+                server_->set_listen_options(config_.listen_options);
+            }
+        }
+    }
+
+    void HttpService::set_server_configurator(ServerConfigurator configurator)
+    {
+        server_configurator_ = std::move(configurator);
     }
 
     void HttpService::start()
     {
+        if (shared_runtime_) {
+            host_.start_inline([this]() { server_->serve(); });
+            return;
+        }
         host_.start([this]() { server_->serve(); });
     }
 
@@ -1998,7 +2029,7 @@ namespace yuan::server
         auto service_lifecycle_handler = [this](bool started, const yuan::eventbus::Event &event) {
             if (const auto *payload = std::any_cast<yuan::server::ServiceRuntimeEvent>(&event.payload)) {
                 std::lock_guard<std::mutex> lock(dashboard_mutex_);
-                service_states_[payload->service_name] = started;
+                service_states_[service_state_key(*payload)] = started;
             }
         };
 

@@ -8,6 +8,7 @@
 #include "net/handler/connector_handler.h"
 #include "net/poller/epoll_poller.h"
 #include "net/poller/kqueue_poller.h"
+#include "net/poller/poll_poller.h"
 #include "net/poller/select_poller.h"
 #include "timer/timer_manager_factory.h"
 
@@ -68,7 +69,7 @@ namespace yuan::net
 #elif defined(__APPLE__)
         return new KQueuePoller;
 #else
-        return new SelectPoller;
+        return new PollPoller;
 #endif
     }
 

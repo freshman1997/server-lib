@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <functional>
 #include <deque>
 #include <unordered_map>
 #include <vector>
@@ -23,10 +24,13 @@ namespace yuan::server
         explicit HttpService(int port, yuan::net::http::HttpServerConfig config = {});
         ~HttpService() override;
 
+        using ServerConfigurator = std::function<bool(HttpService &)>;
+
         bool init() override;
         void start() override;
         void stop() override;
         void set_runtime_context(const yuan::app::RuntimeContext &context) override;
+        void set_server_configurator(ServerConfigurator configurator);
 
         yuan::net::http::HttpServer &server();
         const yuan::net::http::HttpServer &server() const;
@@ -64,6 +68,7 @@ namespace yuan::server
         int port_;
         yuan::net::http::HttpServerConfig config_;
         std::unique_ptr<yuan::net::http::HttpServer> server_;
+        ServerConfigurator server_configurator_;
         ServerRuntimeHost host_;
         yuan::app::RuntimeContext runtime_context_{};
         yuan::net::NetworkRuntime *shared_runtime_ = nullptr;

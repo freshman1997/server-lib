@@ -48,7 +48,13 @@ bool ServiceRegistry::register_service(const ServiceDescriptor &descriptor, cons
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    services_[normalized.name] = ServiceEntry{std::move(normalized), service};
+    std::any typed_instance;
+    const auto existing = services_.find(normalized.name);
+    if (existing != services_.end()) {
+        typed_instance = existing->second.typed_instance;
+    }
+    const auto name = normalized.name;
+    services_[name] = ServiceEntry{std::move(normalized), service, std::move(typed_instance)};
     return true;
 }
 

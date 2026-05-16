@@ -164,7 +164,7 @@ namespace yuan::plugin
             return false;
         }
 
-        if (!is_operational(it->second.state)) {
+        if (!is_operational(it->second.state) && it->second.state != PluginState::faulted) {
             return false;
         }
 
@@ -176,7 +176,13 @@ namespace yuan::plugin
         if (suggested == PluginState::quarantined) {
             return do_transition(name, PluginState::quarantined);
         }
-        return do_transition(name, PluginState::faulted);
+        if (suggested == PluginState::faulted) {
+            return do_transition(name, PluginState::faulted);
+        }
+        if (suggested == PluginState::degraded) {
+            return do_transition(name, PluginState::degraded);
+        }
+        return true;
     }
 
     bool PluginLifecycleManager::quarantine(const std::string & name)
@@ -200,7 +206,6 @@ namespace yuan::plugin
         }
 
         if (it->second.state == PluginState::faulted) {
-            call_guard_->reset_faults(name);
             return do_transition(name, PluginState::degraded);
         }
         if (it->second.state == PluginState::degraded) {

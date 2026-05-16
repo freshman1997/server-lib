@@ -29,12 +29,17 @@ inline std::string normalize_relative_path(const std::filesystem::path& path) {
 }
 
 inline bool is_safe_relative_path(const std::string& value) {
-    if (value.empty() || value[0] == '/' || value.find('\\') != std::string::npos) {
+    if (value.empty() || value[0] == '/' || value.find('\\') != std::string::npos ||
+        value.find(':') != std::string::npos) {
         return false;
     }
     std::filesystem::path path(value);
+    if (path.is_absolute() || path.has_root_name() || path.has_root_directory()) {
+        return false;
+    }
     for (const auto& part : path) {
-        if (part == "..") {
+        const auto text = part.generic_string();
+        if (text.empty() || text == "." || text == "..") {
             return false;
         }
     }

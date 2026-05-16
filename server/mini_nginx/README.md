@@ -29,6 +29,7 @@ You can override runtime values with env vars:
 
 - `YUAN_MINI_NGINX_PORT`
 - `YUAN_MINI_NGINX_SERVER_NAME`
+- `YUAN_MINI_NGINX_WORKERS`
 - `YUAN_MINI_NGINX_ACCESS_LOG`
 - `YUAN_MINI_NGINX_ACCESS_LOG_PATH`
 
@@ -47,9 +48,11 @@ Top-level fields:
   - `listen` int
   - `server_name` string
   - `thread_pool_size` int
+  - `worker_processes` int (POSIX: `>1` starts one HTTP listener per worker with `SO_REUSEPORT`)
   - `enable_keep_alive` bool
   - `enable_cors` bool
   - `max_body_size` number
+  - `write_timeout_ms` int (static response/body flush timeout)
   - `max_connections` int
   - `max_connections_per_ip` int
   - `max_inflight_requests_per_ip` int
@@ -84,7 +87,6 @@ Additional top-level fields:
     - `location` URL prefix (example `/static`)
     - `root` local directory path
     - `auto_index` bool
-    - `enable_legacy_embedded_pages` bool
     - `enable_range` bool
     - `index` array of index file names
     - `try_files` array (example `[$uri, $uri/index.html, /index.html, =404]`)
@@ -101,6 +103,7 @@ Only the new structured format is supported (`server` + `upstreams` + `routes`).
 - Auto reload: when config file write time changes, routes are reloaded.
 - Manual reload on non-Windows: send `SIGHUP` to process.
 - Current behavior: route table is reloaded in place; listen port changes require restart.
+- With `worker_processes > 1`, route reload currently requires restart because workers own their proxy tables.
 
 ## Static hosting behavior
 

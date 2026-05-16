@@ -49,6 +49,8 @@ namespace yuan::plugin
                 result = result | PluginPermission::use_network_runtime;
             else if (token == "use_extension_points")
                 result = result | PluginPermission::use_extension_points;
+            else if (token == "register_protocol_service")
+                result = result | PluginPermission::register_protocol_service;
             else if (token == "all")
                 result = result | PluginPermission::all;
         }
@@ -70,6 +72,7 @@ namespace yuan::plugin
         check(PluginPermission::use_storage, "use_storage");
         check(PluginPermission::use_network_runtime, "use_network_runtime");
         check(PluginPermission::use_extension_points, "use_extension_points");
+        check(PluginPermission::register_protocol_service, "register_protocol_service");
         return names;
     }
 

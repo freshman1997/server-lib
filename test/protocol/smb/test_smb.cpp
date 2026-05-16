@@ -1040,7 +1040,7 @@ bool test_key_derivation()
 
     auto signing_key_21 = SmbKeyDerivation::derive_signing_key(
         session_key, DialectRevision::SMB_2_1, {});
-    TEST_ASSERT(!signing_key_21.empty(), "Should derive SMB2.1 signing key");
+    TEST_ASSERT(signing_key_21 == session_key, "SMB2.1 signing should use the session key directly");
 
     TEST_ASSERT(signing_key_30 != signing_key, "Different dialects should produce different keys");
 

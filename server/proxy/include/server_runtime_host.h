@@ -31,6 +31,7 @@ namespace yuan::server
         void set_runtime_context(const yuan::app::RuntimeContext &context);
 
         bool start(std::function<void()> serve_fn);
+        bool start_inline(std::function<void()> start_fn);
         void stop(std::function<void()> stop_fn = nullptr);
 
         bool is_started() const;

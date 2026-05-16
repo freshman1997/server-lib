@@ -16,8 +16,20 @@ $fixtureRoot = $null
 $tmpDir = $null
 
 try {
-    if (-not (Get-Command smbclient -ErrorAction SilentlyContinue)) {
-        Exit-Skip "smbclient is not installed"
+    $smbclientCmd = Get-Command smbclient -ErrorAction SilentlyContinue
+    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    $usePythonClient = $false
+
+    if (-not $smbclientCmd) {
+        if ($pythonCmd) {
+            & $pythonCmd.Source -c "import impacket.smbconnection" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $usePythonClient = $true
+            }
+        }
+        if (-not $usePythonClient) {
+            Exit-Skip "neither smbclient nor Python impacket is installed"
+        }
     }
 
     $smbHost = if ($env:YUAN_SMB_HOST) { $env:YUAN_SMB_HOST } else { '127.0.0.1' }
@@ -33,15 +45,20 @@ try {
         'default' { }
         'auto' { }
         'required' {
-            $helpText = (& smbclient --help 2>&1 | Out-String)
-            if ($helpText -match '--signing') {
-                $signingArgs = @('--signing=required')
-            }
-            elseif ($helpText -match '--client-protection') {
-                $signingArgs = @('--client-protection=sign')
+            if ($usePythonClient) {
+                $signingArgs = @()
             }
             else {
-                Exit-Skip 'smbclient does not support required-signing options'
+                $helpText = (& smbclient --help 2>&1 | Out-String)
+                if ($helpText -match '--signing') {
+                    $signingArgs = @('--signing=required')
+                }
+                elseif ($helpText -match '--client-protection') {
+                    $signingArgs = @('--client-protection=sign')
+                }
+                else {
+                    Exit-Skip 'smbclient does not support required-signing options'
+                }
             }
         }
         default {
@@ -111,6 +128,45 @@ try {
     $smbLog = Join-Path $tmpDir 'smbclient.log'
 
     "yuan smb smoke $PID" | Out-File -FilePath $localFile -Encoding ascii
+
+    if ($usePythonClient) {
+        $pythonClient = Join-Path $PSScriptRoot 'smbclient_nas_smoke.py'
+        $pyArgs = @(
+            $pythonClient,
+            '--host', $smbHost,
+            '--port', $smbPort,
+            '--share', $smbShare,
+            '--domain', $smbDomain,
+            '--user', $smbUser,
+            '--password', $smbPassword,
+            '--signing', $smbSigning,
+            '--local-file', $localFile,
+            '--downloaded-file', $downloadedFile,
+            '--remote-file', $remoteFile,
+            '--renamed-file', $renamedFile
+        )
+
+        $smbErrLog = Join-Path $tmpDir 'impacket.err.log'
+        $pyProc = Start-Process -FilePath $pythonCmd.Source `
+            -ArgumentList $pyArgs `
+            -Wait `
+            -PassThru `
+            -NoNewWindow `
+            -RedirectStandardOutput $smbLog `
+            -RedirectStandardError $smbErrLog
+
+        if ($pyProc.ExitCode -ne 0) {
+            Write-Host "FAIL: impacket SMB client exited with code $($pyProc.ExitCode)"
+            if (Test-Path $smbLog) { Get-Content $smbLog }
+            if (Test-Path $smbErrLog) { Get-Content $smbErrLog }
+            if (Test-Path $fixtureOutLog) { Get-Content $fixtureOutLog }
+            if (Test-Path $fixtureErrLog) { Get-Content $fixtureErrLog }
+            exit 1
+        }
+
+        if (Test-Path $smbLog) { Get-Content $smbLog }
+        exit 0
+    }
 
     $commands = "put `"$localFile`" `"$remoteFile`"; get `"$remoteFile`" `"$downloadedFile`"; rename `"$remoteFile`" `"$renamedFile`"; del `"$renamedFile`"; ls"
     $smbArgs = @(

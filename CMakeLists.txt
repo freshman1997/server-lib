@@ -120,10 +120,6 @@ if (YUAN_BUILD_SERVERS)
     add_subdirectory(server)
 endif()
 
-if (YUAN_BUILD_TESTS)
-    add_subdirectory(test)
-endif()
-
 if (YUAN_ENABLE_PLUGIN_SYSTEM)
     if (YUAN_FORCE_STATIC_LINK)
         set(YUAN_BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
@@ -136,6 +132,10 @@ if (YUAN_ENABLE_PLUGIN_SYSTEM)
         set(BUILD_SHARED_LIBS ${YUAN_BUILD_SHARED_LIBS_SAVED} CACHE BOOL "Build shared libraries" FORCE)
         unset(YUAN_BUILD_SHARED_LIBS_SAVED)
     endif()
+endif()
+
+if (YUAN_BUILD_TESTS)
+    add_subdirectory(test)
 endif()
 
 if (YUAN_BUILD_EXAMPLE)

@@ -57,14 +57,7 @@ namespace yuan::net
 
     UdpAcceptor::~UdpAcceptor()
     {
-        if (channel_) {
-            channel_->disable_all();
-            if (handler_) {
-                handler_->close_channel(ptr_of(channel_));
-            }
-            channel_->clear_handler();
-        }
-
+        close();
         channel_.reset();
         self_handler_owner_.reset();
         instance_.reset();
@@ -99,8 +92,9 @@ namespace yuan::net
             channel_->disable_all();
             if (handler_) {
                 handler_->close_channel(ptr_of(channel_));
-                channel_->clear_handler();
+                handler_ = nullptr;
             }
+            channel_->clear_handler();
         }
     }
 

@@ -67,11 +67,7 @@ namespace yuan::net::smb
                                                               const std::vector<uint8_t> & preauth_hash)
     {
         if (dialect == DialectRevision::SMB_2_002 || dialect == DialectRevision::SMB_2_1) {
-            std::vector<uint8_t> input;
-            const char *label = "SMB2APPKEY";
-            input.insert(input.end(), label, label + 10);
-            input.insert(input.end(), session_key.begin(), session_key.end());
-            return hmac_sha256_internal(session_key, input.data(), input.size());
+            return session_key;
         }
 
         if (dialect == DialectRevision::SMB_3_0 || dialect == DialectRevision::SMB_3_0_2) {

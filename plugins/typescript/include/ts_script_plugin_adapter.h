@@ -70,6 +70,7 @@ namespace yuan::plugin
 
         void set_execution_deadline() const;
         void clear_execution_deadline() const;
+        std::string callback_owner_name() const;
 
         JSRuntime *rt_ = nullptr;
         JSContext *ctx_ = nullptr;

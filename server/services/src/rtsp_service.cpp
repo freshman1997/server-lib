@@ -34,6 +34,10 @@ void RtspService::set_runtime_context(const yuan::app::RuntimeContext &context)
 
 void RtspService::start()
 {
+    if (shared_runtime_) {
+        host_.start_inline([this]() { server_->serve(); });
+        return;
+    }
     host_.start([this]() { server_->serve(); });
 }
 

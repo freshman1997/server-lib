@@ -87,7 +87,10 @@ namespace yuan::plugin
 
     inline bool accepts_callbacks(PluginState state)
     {
-        return state == PluginState::active || state == PluginState::degraded || state == PluginState::initialized;
+        return state == PluginState::loaded ||
+               state == PluginState::initialized ||
+               state == PluginState::active ||
+               state == PluginState::degraded;
     }
 
 } // namespace yuan::plugin

@@ -1,6 +1,7 @@
 #ifndef __SOCKET_H__
 #define __SOCKET_H__
 #include "net/security/ssl_handler.h"
+#include "net/socket/listen_options.h"
 #include <memory>
 #include <string_view>
 
@@ -30,6 +31,8 @@ namespace yuan::net
 
         bool listen() const;
 
+        bool listen(int backlog) const;
+
         int accept(struct sockaddr_storage &peer_addr) const;
 
         bool connect(const std::shared_ptr<SSLHandler> &sslModule = nullptr) const;
@@ -39,6 +42,12 @@ namespace yuan::net
         void set_no_delay(bool on) const;
 
         bool set_reuse(bool on, bool exclude = false) const;
+
+        bool set_reuse_addr(bool on, bool exclusive = false) const;
+
+        bool set_reuse_port(bool on) const;
+
+        bool apply_listen_options(const ListenOptions &options) const;
 
         void set_keep_alive(bool on) const;
 

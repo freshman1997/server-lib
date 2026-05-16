@@ -21,7 +21,7 @@ RuntimePlan derive_runtime_plan(const RuntimeContext &context)
         plan.coroutine_compatible = true;
         plan.implemented = true;
         plan.parallel_service_start = true;
-        plan.note = "reactor remains service-owned; services may start in parallel threads";
+        plan.note = "factory services run on in-process runtime workers; legacy concrete services may still start in parallel service-owned reactors";
         break;
     case RunMode::multi_process:
         plan.event_loop_mode = EventLoopMode::process_reactors;

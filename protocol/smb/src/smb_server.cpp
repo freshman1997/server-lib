@@ -2,6 +2,7 @@
 #include "smb_file_system.h"
 #include "protocol/smb2_constants.h"
 #include "crypto/smb_crypto_openssl.h"
+#include "logger.h"
 #include <random>
 #include <cstring>
 
@@ -22,6 +23,40 @@ namespace yuan::net::smb
                 std::memset(signed_view.data() + 48, 0, SMB2_SIGNATURE_SIZE);
             }
             return signed_view;
+        }
+
+        std::vector<uint8_t> calculate_signature(
+            SmbCrypto &crypto,
+            const SmbSession &session,
+            const uint8_t *data,
+            size_t len)
+        {
+            if (session.dialect() == DialectRevision::SMB_2_002 ||
+                session.dialect() == DialectRevision::SMB_2_1) {
+                auto signature = crypto.hmac_sha256(session.signing_key(), data, len);
+                signature.resize(SMB2_SIGNATURE_SIZE);
+                return signature;
+            }
+
+            return crypto.sign(session.signing_key(), data, len);
+        }
+
+        bool verify_signature(
+            SmbCrypto &crypto,
+            const SmbSession &session,
+            const uint8_t *data,
+            size_t len,
+            const uint8_t *signature)
+        {
+            auto computed = calculate_signature(crypto, session, data, len);
+            if (computed.size() != SMB2_SIGNATURE_SIZE) {
+                return false;
+            }
+            uint8_t diff = 0;
+            for (size_t i = 0; i < SMB2_SIGNATURE_SIZE; ++i) {
+                diff |= static_cast<uint8_t>(computed[i] ^ signature[i]);
+            }
+            return diff == 0;
         }
     }
 
@@ -75,6 +110,7 @@ namespace yuan::net::smb
 
         if (owned_runtime_) {
             owned_runtime_->event_loop()->loop();
+            listener_.close();
         }
 
         accept_task_ = {};
@@ -83,10 +119,16 @@ namespace yuan::net::smb
     void SmbServer::stop()
     {
         running_.store(false);
-        listener_.close();
         if (owned_runtime_) {
-            owned_runtime_->event_loop()->quit();
+            auto *runtime = owned_runtime_.get();
+            runtime->dispatch([this, runtime]() {
+                listener_.close();
+                runtime->stop();
+            });
+            return;
         }
+
+        listener_.close();
     }
 
     coroutine::Task<void> SmbServer::handle_connection(AsyncConnectionContext ctx)
@@ -174,10 +216,17 @@ namespace yuan::net::smb
         if (session->is_signed() && !command_allows_unsigned(header->command)) {
             if ((header->flags & SMB2_FLAGS_SIGNED) != 0) {
                 auto signed_view = copy_with_zero_signature(data, len);
-                if (!crypto_->verify(session->signing_key(), signed_view.data(), signed_view.size(), header->signature)) {
+                if (!verify_signature(*crypto_, *session, signed_view.data(), signed_view.size(), header->signature)) {
+                    LOG_WARN("SMB signature verification failed for command={} dialect=0x{:04x} signing_key_len={}",
+                             header->command,
+                             static_cast<uint16_t>(session->dialect()),
+                             session->signing_key().size());
                     return Smb2Codec::build_error_response(*header, NtStatus::ACCESS_DENIED);
                 }
             } else if (config_.require_signing) {
+                LOG_WARN("SMB unsigned request denied for command={} dialect=0x{:04x}",
+                         header->command,
+                         static_cast<uint16_t>(session->dialect()));
                 return Smb2Codec::build_error_response(*header, NtStatus::ACCESS_DENIED);
             }
         }
@@ -326,7 +375,7 @@ namespace yuan::net::smb
         signed_view[19] = static_cast<uint8_t>((flags >> 24) & 0xFF);
         std::memset(signed_view.data() + 48, 0, SMB2_SIGNATURE_SIZE);
 
-        auto signature = crypto_->sign(session->signing_key(), signed_view.data(), signed_view.size());
+        auto signature = calculate_signature(*crypto_, *session, signed_view.data(), signed_view.size());
         if (signature.size() >= 16) {
             ByteBuffer signed_buf(total);
             signed_buf.append(signed_view.data(), 48);

@@ -7,6 +7,7 @@
 #include "plugin/host_storage.h"
 #include "plugin/host_resource_guard.h"
 #include "plugin_resource_guard.h"
+#include "nlohmann/json.hpp"
 
 #include <cstdlib>
 #include <chrono>
@@ -164,7 +165,7 @@ namespace
             return true;
         }
 
-        std::optional<std::string> get(const std::string &key) override
+        std::optional<std::string> get(const std::string &key) const override
         {
             auto it = kv_.find(key);
             if (it != kv_.end()) {
@@ -179,7 +180,7 @@ namespace
             return true;
         }
 
-        bool exists(const std::string &key) override
+        bool exists(const std::string &key) const override
         {
             return kv_.count(key) > 0;
         }
@@ -190,7 +191,7 @@ namespace
             return true;
         }
 
-        std::optional<std::string> hget(const std::string &key, const std::string &field) override
+        std::optional<std::string> hget(const std::string &key, const std::string &field) const override
         {
             auto it = hash_.find(key);
             if (it != hash_.end()) {
@@ -211,7 +212,7 @@ namespace
             return true;
         }
 
-        std::unordered_map<std::string, std::string> hgetall(const std::string &key) override
+        std::unordered_map<std::string, std::string> hgetall(const std::string &key) const override
         {
             auto it = hash_.find(key);
             if (it != hash_.end()) {

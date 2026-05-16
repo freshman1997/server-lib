@@ -78,7 +78,12 @@ namespace yuan::net
 
     bool Socket::listen() const
     {
-        return socket::listen(fd_, 128) == 0;
+        return listen(128);
+    }
+
+    bool Socket::listen(const int backlog) const
+    {
+        return socket::listen(fd_, backlog) == 0;
     }
 
     int Socket::accept(struct sockaddr_storage & peer_addr) const
@@ -127,6 +132,21 @@ namespace yuan::net
     bool Socket::set_reuse(const bool on, const bool exclude) const
     {
         return socket::set_reuse(fd_, on, exclude);
+    }
+
+    bool Socket::set_reuse_addr(const bool on, const bool exclusive) const
+    {
+        return socket::set_reuse_addr(fd_, on, exclusive);
+    }
+
+    bool Socket::set_reuse_port(const bool on) const
+    {
+        return socket::set_reuse_port(fd_, on);
+    }
+
+    bool Socket::apply_listen_options(const ListenOptions &options) const
+    {
+        return socket::apply_listen_options(fd_, options);
     }
 
     void Socket::set_keep_alive(const bool on) const

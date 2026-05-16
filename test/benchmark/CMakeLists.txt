@@ -1,3 +1,3 @@
 add_executable(core_runtime_benchmark core_runtime_benchmark.cpp)
-target_link_libraries(core_runtime_benchmark PUBLIC Core)
+target_link_libraries(core_runtime_benchmark PUBLIC Core App)
 

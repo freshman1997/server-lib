@@ -34,6 +34,8 @@ namespace yuan::plugin
         /// 按依赖拓扑排序批量加载 (根据 PluginMeta::depends_on)
         bool load_all(const std::vector<std::string> &plugin_names);
 
+        std::vector<ProtocolServiceDescriptor> discover_protocol_services(const std::vector<std::string> &plugin_names) const;
+
         Plugin *get_plugin(const std::string &name);
 
         void release_plugin(const std::string &pluginName);

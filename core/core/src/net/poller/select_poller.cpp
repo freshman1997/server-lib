@@ -188,7 +188,8 @@ namespace yuan::net
             }
 
             if (FD_ISSET(j->first, &data_->excepts_)) {
-                ev |= (j->second->get_events() & Channel::WRITE_EVENT) ? Channel::WRITE_EVENT : Channel::EXCEP_EVENT;
+                const int requested = j->second->get_events() & (Channel::READ_EVENT | Channel::WRITE_EVENT);
+                ev |= requested != Channel::NONE_EVENT ? requested : Channel::EXCEP_EVENT;
             }
 
             if (ev != Channel::NONE_EVENT && j->second) {

@@ -34,12 +34,22 @@ namespace yuan::net
 
         bool bind(uint16_t port, NetworkRuntime &runtime)
         {
-            return setup("", port, runtime);
+            return setup("", port, runtime, {});
         }
 
         bool bind(const std::string &host, uint16_t port, NetworkRuntime &runtime)
         {
-            return setup(host, port, runtime);
+            return setup(host, port, runtime, {});
+        }
+
+        bool bind(uint16_t port, NetworkRuntime &runtime, const ListenOptions &options)
+        {
+            return setup("", port, runtime, options);
+        }
+
+        bool bind(const std::string &host, uint16_t port, NetworkRuntime &runtime, const ListenOptions &options)
+        {
+            return setup(host, port, runtime, options);
         }
 
         void close()
@@ -111,7 +121,7 @@ namespace yuan::net
         }
 
     private:
-        bool setup(const std::string &host, uint16_t port, NetworkRuntime &runtime)
+        bool setup(const std::string &host, uint16_t port, NetworkRuntime &runtime, const ListenOptions &options)
         {
             runtime_ = &runtime;
 
@@ -126,13 +136,12 @@ namespace yuan::net
                 return false;
             }
 
+            if (!sock->apply_listen_options(options)) {
+                return false;
+            }
             if (!sock->bind()) {
                 return false;
             }
-
-            sock->set_no_delay(true);
-            sock->set_reuse(true);
-            sock->set_none_block(true);
 
             acceptor_.reset(create_datagram_acceptor(sock.release(), tm));
             if (!acceptor_->listen()) {

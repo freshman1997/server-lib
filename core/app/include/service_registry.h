@@ -15,12 +15,38 @@ namespace yuan::app
 
 class Service;
 
+enum class PlacementMode
+{
+    singleton,
+    all_workers,
+    sharded,
+    dedicated,
+    disabled,
+};
+
+struct ServicePlacement
+{
+    PlacementMode mode = PlacementMode::singleton;
+    std::size_t instances = 1;
+    bool restart_failed_instances = true;
+};
+
+struct ServiceEndpoint
+{
+    std::string name;
+    std::string host = "0.0.0.0";
+    int port = 0;
+    std::string protocol = "tcp";
+};
+
 struct ServiceDescriptor
 {
     std::string name;
     std::string type_name;
     std::string contract_id;
     int contract_version = 1;
+    ServicePlacement placement;
+    std::vector<ServiceEndpoint> endpoints;
 };
 
 class ServiceRegistry

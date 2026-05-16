@@ -129,8 +129,14 @@ namespace yuan::plugin
         std::string plugin_name;
         PluginRunMode run_mode = PluginRunMode::unknown;
         std::size_t worker_threads = 1;
+        std::size_t runtime_worker_count = 1;
         std::size_t worker_index = 0;
         bool is_worker_process = false;
+        std::string active_service_name;
+        std::size_t service_index = 0;
+        std::size_t service_instance_index = 0;
+        std::size_t service_instance_count = 1;
+        bool listener_reuse_port = false;
     };
 
     struct PluginLoadFailedEvent : public PluginEvent

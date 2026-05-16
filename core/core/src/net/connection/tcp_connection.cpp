@@ -67,6 +67,48 @@ namespace yuan::net
         {
             return owner ? const_cast<T *>(&*owner) : nullptr;
         }
+
+#ifdef _WIN32
+        bool is_transient_send_error(const int err) noexcept
+        {
+            return err == WSAEWOULDBLOCK || err == WSAEINPROGRESS || err == WSAEINTR;
+        }
+#else
+        bool is_transient_send_error(const int err) noexcept
+        {
+            return err == EAGAIN || err == EWOULDBLOCK || err == EINTR;
+        }
+#endif
+
+        bool is_transient_errno(const int err) noexcept
+        {
+            return err == EAGAIN || err == EWOULDBLOCK || err == EINTR;
+        }
+
+        int socket_error_code(const int fd) noexcept
+        {
+            if (fd < 0) {
+#ifdef _WIN32
+                return WSAENOTSOCK;
+#else
+                return EBADF;
+#endif
+            }
+
+            int so_error = 0;
+#ifdef _WIN32
+            int len = static_cast<int>(sizeof(so_error));
+            if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&so_error), &len) != 0) {
+                return WSAGetLastError();
+            }
+#else
+            socklen_t len = static_cast<socklen_t>(sizeof(so_error));
+            if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &len) != 0) {
+                return errno;
+            }
+#endif
+            return so_error;
+        }
     }
 
     TcpConnection::TcpConnection(const std::string ip, int port, int fd)
@@ -75,6 +117,7 @@ namespace yuan::net
         socket_ = std::make_unique<Socket>(ip, port, false, fd);
         init();
         state_ = ConnectionState::connected;
+        channel_->disable_write();
     }
 
     TcpConnection::TcpConnection(Socket * sock)
@@ -162,7 +205,7 @@ namespace yuan::net
             return;
         }
 
-        if ((state_ != ConnectionState::connected && state_ != ConnectionState::closing) || output_shutdown_) {
+        if (state_ != ConnectionState::connected || is_closing_ || output_shutdown_) {
             LOG_WARN("write dropped: state={}, output_shutdown={}, fd={}", static_cast<int>(state_), output_shutdown_, channel_->get_fd());
             return;
         }
@@ -181,7 +224,7 @@ namespace yuan::net
             return;
         }
 
-        if ((state_ != ConnectionState::connected && state_ != ConnectionState::closing) || output_shutdown_) {
+        if (state_ != ConnectionState::connected || is_closing_ || output_shutdown_) {
             return;
         }
 
@@ -195,7 +238,7 @@ namespace yuan::net
 
     void TcpConnection::write_and_flush(const ::yuan::buffer::ByteBuffer & buffer)
     {
-        if (buffer.empty() || (state_ != ConnectionState::connected && state_ != ConnectionState::closing)) {
+        if (buffer.empty() || state_ != ConnectionState::connected || is_closing_) {
             if (!buffer.empty()) {
                 LOG_WARN("write_and_flush dropped: state={}, fd={}", static_cast<int>(state_), channel_->get_fd());
             }
@@ -208,7 +251,7 @@ namespace yuan::net
 
     void TcpConnection::write_owned_and_flush(::yuan::buffer::ByteBuffer buffer)
     {
-        if (buffer.empty() || (state_ != ConnectionState::connected && state_ != ConnectionState::closing)) {
+        if (buffer.empty() || state_ != ConnectionState::connected || is_closing_) {
             return;
         }
 
@@ -218,31 +261,67 @@ namespace yuan::net
 
     void TcpConnection::flush()
     {
+        if (state_ == ConnectionState::closed || is_closing_) {
+            return;
+        }
+
         assert(state_ == ConnectionState::connected || state_ == ConnectionState::closing);
+
+        if (finish_output_drained()) {
+            return;
+        }
 
         auto *front = output_buffer_.front();
         if (!front || front->empty()) {
             return;
         }
 
-        LOG_DEBUG("flush: fd={}, output_chunks={}, first_chunk_readable={}", channel_->get_fd(), output_buffer_.size(), front->readable_bytes());
+        LOG_TRACE("flush: fd={}, output_chunks={}, first_chunk_readable={}", channel_->get_fd(), output_buffer_.size(), front->readable_bytes());
 
         const std::size_t sz = output_buffer_.size();
         for (std::size_t i = 0; i < sz;) {
             int ret;
+            int write_error = 0;
+            bool transient_write_error = false;
             front = output_buffer_.front();
             if (!front || front->empty()) {
                 break;
             }
             if (ssl_handler_) {
                 ret = ssl_handler_->ssl_write(front->read_ptr(), front->readable_bytes());
+                write_error = ret < 0 ? errno : 0;
+                transient_write_error = ret < 0 && is_transient_errno(write_error);
             } else {
 #ifdef _WIN32
                 ret = ::send(channel_->get_fd(), front->read_ptr(), static_cast<int>(front->readable_bytes()), 0);
+                write_error = ret < 0 ? WSAGetLastError() : 0;
 #else
                 ret = ::send(channel_->get_fd(), front->read_ptr(), front->readable_bytes(), MSG_NOSIGNAL);
+                write_error = ret < 0 ? errno : 0;
 #endif
-                LOG_DEBUG("flush send: fd={}, ret={}, readable={}, errno={}", channel_->get_fd(), ret, front->readable_bytes(), ret < 0 ? errno : 0);
+                transient_write_error = ret < 0 && is_transient_send_error(write_error);
+            }
+
+            if (ret < 0 && transient_write_error && !ssl_handler_) {
+                const int socket_error = socket_error_code(channel_->get_fd());
+                if (socket_error != 0) {
+                    write_error = socket_error;
+                    transient_write_error = false;
+                }
+            }
+
+            if (ret < 0 && !transient_write_error) {
+                if (ssl_handler_) {
+                    LOG_DEBUG("flush ssl write failed: fd={}, ret={}, readable={}, errno={}", channel_->get_fd(), ret, front->readable_bytes(), write_error);
+                } else {
+#ifdef _WIN32
+                    LOG_DEBUG("flush send failed: fd={}, ret={}, readable={}, wsa_error={}", channel_->get_fd(), ret, front->readable_bytes(), write_error);
+#else
+                    LOG_DEBUG("flush send failed: fd={}, ret={}, readable={}, errno={}", channel_->get_fd(), ret, front->readable_bytes(), write_error);
+#endif
+                }
+            } else {
+                LOG_TRACE("flush send: fd={}, ret={}, readable={}", channel_->get_fd(), ret, front->readable_bytes());
             }
 
             if (ret > 0) {
@@ -253,12 +332,7 @@ namespace yuan::net
                     front->consume(static_cast<std::size_t>(ret));
                 }
             } else if (ret < 0) {
-#ifdef _WIN32
-                const int err = WSAGetLastError();
-                if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
-#else
-                if (EAGAIN != errno && EWOULDBLOCK != errno && EINTR != errno) {
-#endif
+                if (!transient_write_error) {
                     if (connectionHandlerOwner_) {
                         notify_event_waiters(ConnectionEvent::error);
                         connectionHandlerOwner_->on_error(shared_from_this());
@@ -268,11 +342,11 @@ namespace yuan::net
                 }
 
 #ifdef _WIN32
-                if (err == WSAEINTR) {
+                if (!ssl_handler_ && write_error == WSAEINTR) {
                     continue;
                 }
 #else
-                if (errno == EINTR) {
+                if (write_error == EINTR) {
                     continue;
                 }
 #endif
@@ -287,24 +361,7 @@ namespace yuan::net
             }
         }
 
-        if (output_buffer_.size() == 0) {
-            if (pending_output_shutdown_ && !output_shutdown_) {
-                output_shutdown_ = socket_ && socket_->shutdown_write();
-                pending_output_shutdown_ = false;
-                if (output_shutdown_ && input_shutdown_) {
-                    do_close();
-                    return;
-                }
-            }
-            if (state_ == ConnectionState::closing) {
-                do_close();
-            } else {
-                channel_->disable_write();
-                if (eventHandler_) {
-                    eventHandler_->update_channel(ptr_of(channel_));
-                }
-            }
-        }
+        finish_output_drained();
     }
 
     void TcpConnection::abort()
@@ -343,6 +400,10 @@ namespace yuan::net
 
     void TcpConnection::close()
     {
+        if (state_ == ConnectionState::closed || is_closing_) {
+            return;
+        }
+
         ConnectionState lastState = state_;
         state_ = ConnectionState::closing;
         auto *front = output_buffer_.front();
@@ -417,6 +478,7 @@ namespace yuan::net
                     cb(true);
                 }
             } else if (ssl->ssl_want_read() || ssl->ssl_want_write()) {
+                update_ssl_handshake_interest(*ssl);
                 return;
             } else {
                 ssl_handshaking_ = false;
@@ -515,6 +577,9 @@ namespace yuan::net
             }
 
             if (close_flag) {
+                if (state_ == ConnectionState::closed || is_closing_) {
+                    return;
+                }
                 LOG_INFO("connection closed by peer, ip: {}, port: {}", socket_->get_address()->get_ip(), socket_->get_address()->get_port());
                 input_shutdown_ = true;
                 channel_->disable_read();
@@ -595,6 +660,9 @@ namespace yuan::net
             }
 
             if (close_flag) {
+                if (state_ == ConnectionState::closed || is_closing_) {
+                    return;
+                }
                 LOG_INFO("ssl connection closed by peer, ip: {}, port: {}", socket_->get_address()->get_ip(), socket_->get_address()->get_port());
                 input_shutdown_ = true;
                 channel_->disable_read();
@@ -658,6 +726,7 @@ namespace yuan::net
                     cb(true);
                 }
             } else if (ssl->ssl_want_read() || ssl->ssl_want_write()) {
+                update_ssl_handshake_interest(*ssl);
                 return;
             } else {
                 ssl_handshaking_ = false;
@@ -718,9 +787,22 @@ namespace yuan::net
     void TcpConnection::do_close()
     {
         if (is_closing_) {
+            state_ = ConnectionState::closed;
+            output_buffer_.clear();
+            if (channel_) {
+                channel_->disable_all();
+            }
             return;
         }
         is_closing_ = true;
+        state_ = ConnectionState::closed;
+        input_shutdown_ = true;
+        output_shutdown_ = true;
+        pending_output_shutdown_ = false;
+        output_buffer_.clear();
+        if (channel_) {
+            channel_->disable_all();
+        }
 
         [[maybe_unused]] auto handler_owner = std::move(connectionHandlerOwner_);
         auto *handler = ptr_of(handler_owner);
@@ -744,6 +826,63 @@ namespace yuan::net
                 }
             });
             return;
+        }
+    }
+
+    bool TcpConnection::finish_output_drained()
+    {
+        while (auto *front = output_buffer_.front()) {
+            if (!front->empty()) {
+                break;
+            }
+            output_buffer_.pop_front();
+        }
+
+        if (output_buffer_.size() != 0) {
+            return false;
+        }
+
+        if (pending_output_shutdown_ && !output_shutdown_) {
+            output_shutdown_ = socket_ && socket_->shutdown_write();
+            pending_output_shutdown_ = false;
+            if (output_shutdown_ && input_shutdown_) {
+                do_close();
+                return true;
+            }
+        }
+
+        if (state_ == ConnectionState::closing) {
+            do_close();
+            return true;
+        }
+
+        if (channel_) {
+            const bool had_write_interest = (channel_->get_events() & Channel::WRITE_EVENT) != 0;
+            channel_->disable_write();
+            if (had_write_interest && eventHandler_) {
+                eventHandler_->update_channel(ptr_of(channel_));
+            }
+        }
+        return true;
+    }
+
+    void TcpConnection::update_ssl_handshake_interest(SSLHandler &ssl)
+    {
+        if (!channel_) {
+            return;
+        }
+
+        if (ssl.ssl_want_read()) {
+            channel_->enable_read();
+        }
+        if (ssl.ssl_want_write()) {
+            channel_->enable_write();
+        } else {
+            channel_->disable_write();
+        }
+
+        if (eventHandler_) {
+            eventHandler_->update_channel(ptr_of(channel_));
         }
     }
 

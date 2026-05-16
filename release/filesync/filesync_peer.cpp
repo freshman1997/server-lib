@@ -20,6 +20,8 @@
 
 namespace {
 
+constexpr std::size_t kControlFlushThreshold = 64 * 1024;
+
 struct SyncPath {
     std::filesystem::path local;
     std::string remote_prefix;
@@ -100,7 +102,11 @@ Config load_config(const std::filesystem::path& path) {
             if (!item.contains("local") || !item.at("local").is_string()) {
                 throw std::runtime_error("each path entry requires a string 'local'");
             }
-            config.paths.push_back({item.at("local").get<std::string>(), item.value("remote_prefix", "")});
+            const auto remote_prefix = filesync::normalize_relative_path(item.value("remote_prefix", ""));
+            if (!remote_prefix.empty() && !filesync::is_safe_relative_path(remote_prefix)) {
+                throw std::runtime_error("remote_prefix must be a safe relative path");
+            }
+            config.paths.push_back({item.at("local").get<std::string>(), remote_prefix});
         }
     }
     if (config.paths.empty()) {
@@ -148,6 +154,9 @@ std::string make_remote_path(const SyncPath& sync_path, const std::filesystem::p
 }
 
 std::filesystem::path local_path_for_remote(const Config& config, const std::string& remote) {
+    if (!filesync::is_safe_relative_path(remote)) {
+        throw std::runtime_error("unsafe remote path: " + remote);
+    }
     for (const auto& sync_path : config.paths) {
         const auto prefix = filesync::normalize_relative_path(sync_path.remote_prefix);
         if (std::filesystem::is_regular_file(sync_path.local)) {
@@ -495,7 +504,7 @@ std::string need_message(const Config& config, const Manifest& remote) {
         }
     }
     std::ostringstream out;
-    out << "NEED " << needed.size() << "\n";
+    out << "NEED " << (deleted.size() + needed.size()) << "\n";
     for (const auto& path : deleted) {
         out << "DELETE " << filesync::quote_token(path) << "\n";
     }
@@ -536,9 +545,15 @@ std::set<std::string> parse_need(const std::string& text) {
             continue;
         }
         if (parts.size() == 2 && parts[0] == "GET") {
-            needed.insert(filesync::unquote_token(parts[1]));
+            const auto path = filesync::unquote_token(parts[1]);
+            if (filesync::is_safe_relative_path(path)) {
+                needed.insert(path);
+            }
         } else if (parts.size() == 1) {
-            needed.insert(filesync::unquote_token(parts[0]));
+            const auto path = filesync::unquote_token(parts[0]);
+            if (filesync::is_safe_relative_path(path)) {
+                needed.insert(path);
+            }
         }
     }
     return needed;
@@ -580,30 +595,39 @@ bool is_conflict(const Config& config,
     return true;
 }
 
-void write_file_lines(yuan::net::ConnectionContext& ctx,
-                      const Config& config,
-                      const Manifest& manifest,
-                      const std::set<std::string>& needed) {
+template <typename Writer>
+void write_file_lines_to(Writer& writer,
+                         const Config& config,
+                         const Manifest& manifest,
+                         const std::set<std::string>& needed) {
     std::string text;
-    text.reserve(64 * 1024);
+    text.reserve(kControlFlushThreshold);
     auto flush_text = [&]() {
         if (!text.empty()) {
-            write_text(ctx, text);
+            write_text(writer, text);
             text.clear();
         }
     };
+    auto append_control_line = [&](std::string line) {
+        text += std::move(line);
+        text.push_back('\n');
+        if (text.size() >= kControlFlushThreshold) {
+            flush_text();
+        }
+    };
+
     text += "FILES " + std::to_string(needed.size()) + "\n";
     for (const auto& path : needed) {
         const auto it = manifest.find(path);
         if (it == manifest.end()) continue;
         const auto& state = it->second;
         if (state.is_directory) {
-            text += "DIR " + filesync::quote_token(path) + "\n";
+            append_control_line("DIR " + filesync::quote_token(path));
             continue;
         }
         const auto local_path = local_path_for_remote(config, path);
-        text += "PUT_BEGIN " + filesync::quote_token(path) + " " + std::to_string(state.size) + " " +
-                std::to_string(state.mtime) + " " + std::to_string(state.hash) + "\n";
+        append_control_line("PUT_BEGIN " + filesync::quote_token(path) + " " + std::to_string(state.size) + " " +
+                            std::to_string(state.mtime) + " " + std::to_string(state.hash));
         flush_text();
         std::ifstream in(local_path, std::ios::binary);
         if (!in) {
@@ -615,57 +639,27 @@ void write_file_lines(yuan::net::ConnectionContext& ctx,
             const auto count = in.gcount();
             if (count > 0) {
                 std::vector<char> bytes(chunk.begin(), chunk.begin() + count);
-                write_text(ctx, "CHUNK " + filesync::hex_encode(bytes) + "\n");
+                write_text(writer, "CHUNK " + filesync::hex_encode(bytes) + "\n");
             }
         }
-        text += "PUT_END\n";
+        append_control_line("PUT_END");
     }
     text += "END\n";
     flush_text();
+}
+
+void write_file_lines(yuan::net::ConnectionContext& ctx,
+                      const Config& config,
+                      const Manifest& manifest,
+                      const std::set<std::string>& needed) {
+    write_file_lines_to(ctx, config, manifest, needed);
 }
 
 void write_file_lines(yuan::net::StreamClientSession& session,
                         const Config& config,
                         const Manifest& manifest,
                         const std::set<std::string>& needed) {
-    std::string text;
-    text.reserve(64 * 1024);
-    auto flush_text = [&]() {
-        if (!text.empty()) {
-            write_text(session, text);
-            text.clear();
-        }
-    };
-    text += "FILES " + std::to_string(needed.size()) + "\n";
-    for (const auto& path : needed) {
-        const auto it = manifest.find(path);
-        if (it == manifest.end()) continue;
-        const auto& state = it->second;
-        if (state.is_directory) {
-            text += "DIR " + filesync::quote_token(path) + "\n";
-            continue;
-        }
-        const auto local_path = local_path_for_remote(config, path);
-        text += "PUT_BEGIN " + filesync::quote_token(path) + " " + std::to_string(state.size) + " " +
-                std::to_string(state.mtime) + " " + std::to_string(state.hash) + "\n";
-        flush_text();
-        std::ifstream in(local_path, std::ios::binary);
-        if (!in) {
-            throw std::runtime_error("failed to open file: " + local_path.string());
-        }
-        std::vector<char> chunk(config.chunk_size);
-        while (in) {
-            in.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
-            const auto count = in.gcount();
-            if (count > 0) {
-                std::vector<char> bytes(chunk.begin(), chunk.begin() + count);
-                write_text(session, "CHUNK " + filesync::hex_encode(bytes) + "\n");
-            }
-        }
-        text += "PUT_END\n";
-    }
-    text += "END\n";
-    flush_text();
+    write_file_lines_to(session, config, manifest, needed);
 }
 
 struct FileApplyState {
@@ -679,20 +673,26 @@ struct FileApplyState {
 };
 
 void finish_put(const Config& config, FileApplyState& state) {
+    (void)config;
     state.out.close();
-    if (state.conflict) {
-        std::filesystem::create_directories(state.target.parent_path());
+
+    const bool size_matches = std::filesystem::exists(state.temp) &&
+        std::filesystem::file_size(state.temp) == state.remote_state.size;
+    const bool hash_matches = size_matches && filesync::fnv1a_file_hash(state.temp) == state.remote_state.hash;
+    if (!hash_matches) {
+        std::error_code ec;
+        std::filesystem::remove(state.temp, ec);
+        const auto path = state.path;
+        state = FileApplyState{};
+        throw std::runtime_error("hash mismatch after receiving " + path);
     }
+
     std::filesystem::rename(state.temp, state.target);
-    if (filesync::fnv1a_file_hash(state.target) == state.remote_state.hash) {
-        std::cout << (state.conflict ? "saved conflict " : "applied ") << state.path;
-        if (state.conflict) {
-            std::cout << " -> " << state.target.string();
-        }
-        std::cout << "\n";
-    } else {
-        std::cerr << "hash mismatch after applying " << state.path << "\n";
+    std::cout << (state.conflict ? "saved conflict " : "applied ") << state.path;
+    if (state.conflict) {
+        std::cout << " -> " << state.target.string();
     }
+    std::cout << "\n";
     state = FileApplyState{};
 }
 
@@ -747,10 +747,14 @@ bool apply_files_line(const Config& config,
             std::ofstream out(temp, std::ios::binary | std::ios::trunc);
             out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
         }
-        std::filesystem::rename(temp, target);
-        if (filesync::fnv1a_file_hash(target) != remote_state.hash) {
-            std::cerr << "hash mismatch after applying " << path << "\n";
+        const bool size_matches = std::filesystem::file_size(temp) == remote_state.size;
+        const bool hash_matches = size_matches && filesync::fnv1a_file_hash(temp) == remote_state.hash;
+        if (!hash_matches) {
+            std::error_code ec;
+            std::filesystem::remove(temp, ec);
+            throw std::runtime_error("hash mismatch after receiving " + path);
         }
+        std::filesystem::rename(temp, target);
         return false;
     }
     if (parts.size() != 5 || parts[0] != "PUT_BEGIN") {
@@ -797,6 +801,12 @@ public:
             ctx.set_max_packet_size(100 * 1024 * 1024);
         });
         server_.set_read_callback([this](yuan::net::ConnectionContext& ctx) { on_read(ctx); });
+        server_.set_close_callback([this](yuan::net::ConnectionContext& ctx) {
+            inbound_.erase(ctx.connection_id());
+        });
+        server_.set_error_callback([this](yuan::net::ConnectionContext& ctx) {
+            inbound_.erase(ctx.connection_id());
+        });
         if (!server_.bind(config_.listen_host, config_.listen_port, runtime_)) {
             return false;
         }
@@ -928,9 +938,6 @@ private:
     yuan::coroutine::Task<void> outbound_sync() {
         if (syncing_) co_return;
         const auto manifest = scan_paths(config_);
-        if (last_sync_ok_ && have_last_manifest_ && manifest == last_manifest_) {
-            co_return;
-        }
         syncing_ = true;
         try {
             if (!outbound_session_) {
@@ -994,7 +1001,6 @@ private:
         try {
             if (outbound_task_) {
                 if (!outbound_task_->done()) {
-                    outbound_task_->resume();
                     return;
                 }
                 outbound_task_->get_result();
@@ -1048,7 +1054,9 @@ public:
     }
 };
 
+#ifndef FILESYNC_PEER_TESTING
 int main(int argc, char** argv) {
     ReleaseFileSyncPeerApp app;
     return app.start(argc, argv);
 }
+#endif

@@ -86,6 +86,14 @@ namespace yuan::app
         return ptr_of(network_runtime_);
     }
 
+    plugin::PluginManager &PluginHostService::plugin_manager() const
+    {
+        if (!plugin_manager_) {
+            plugin_manager_ = std::make_unique<plugin::PluginManager>();
+        }
+        return *plugin_manager_;
+    }
+
     PluginServiceRegistryAdapter *PluginHostService::service_registry_adapter() const
     {
         return static_cast<PluginServiceRegistryAdapter *>(service_registry_ptr());
@@ -129,8 +137,18 @@ namespace yuan::app
                 break;
             }
             event.worker_threads = context.worker_threads;
+            event.runtime_worker_count = context.runtime_worker_count == 0
+                ? context.worker_threads
+                : context.runtime_worker_count;
             event.worker_index = context.worker_index;
             event.is_worker_process = context.is_worker_process;
+            event.active_service_name = context.active_service_name;
+            event.service_index = context.service_index;
+            event.service_instance_index = context.service_instance_index;
+            event.service_instance_count = context.service_instance_count == 0
+                ? 1
+                : context.service_instance_count;
+            event.listener_reuse_port = context.listener_reuse_port;
             return event;
         }
 
@@ -149,29 +167,36 @@ namespace yuan::app
 
     plugin::PluginContext PluginHostService::make_base_plugin_context(plugin::HostStorage * storage) const
     {
-        return plugin::PluginContext{
-            runtime_context_.app_name,
-            {},           // plugin_name (per-plugin)
-            plugin_path_, // plugin_root_path
-            {},           // plugin_config_path
-            {},           // config
-            to_plugin_run_mode(runtime_context_.run_mode),
-            runtime_context_.worker_threads,
-            runtime_context_.worker_index,
-            runtime_context_.is_worker_process,
-            event_bus_ptr(),               // event_bus
-            logger_ptr(),                  // logger
-            service_catalog_ptr(),         // service_catalog
-            scheduler_ptr(),               // scheduler
-            service_registry_ptr(),        // service_registry
-            permission_guard_ptr(),        // permission_guard
-            resource_guard_ptr(),          // resource_guard
-            http_interceptor_ptr(),        // http_interceptor
-            storage,                       // storage (per-plugin)
-            network_runtime_ptr(),         // network_runtime
-            nullptr,                       // extension_point_registry (set by PluginManager)
-            plugin::PluginPermission::none // granted_permissions
-        };
+        plugin::PluginContext context;
+        context.app_name = runtime_context_.app_name;
+        context.plugin_root_path = plugin_path_;
+        context.run_mode = to_plugin_run_mode(runtime_context_.run_mode);
+        context.worker_threads = runtime_context_.worker_threads;
+        context.runtime_worker_count = runtime_context_.runtime_worker_count == 0
+            ? runtime_context_.worker_threads
+            : runtime_context_.runtime_worker_count;
+        context.worker_index = runtime_context_.worker_index;
+        context.is_worker_process = runtime_context_.is_worker_process;
+        context.active_service_name = runtime_context_.active_service_name;
+        context.service_index = runtime_context_.service_index;
+        context.service_instance_index = runtime_context_.service_instance_index;
+        context.service_instance_count = runtime_context_.service_instance_count == 0
+            ? 1
+            : runtime_context_.service_instance_count;
+        context.listener_reuse_port = runtime_context_.listener_reuse_port;
+        context.event_bus = event_bus_ptr();
+        context.logger = logger_ptr();
+        context.service_catalog = service_catalog_ptr();
+        context.scheduler = scheduler_ptr();
+        context.service_registry = service_registry_ptr();
+        context.permission_guard = permission_guard_ptr();
+        context.resource_guard = resource_guard_ptr();
+        context.http_interceptor = http_interceptor_ptr();
+        context.storage = storage;
+        context.network_runtime = network_runtime_ptr();
+        context.extension_point_registry = nullptr;
+        context.granted_permissions = plugin::PluginPermission::none;
+        return context;
     }
 
     plugin::HostStorage *PluginHostService::prepare_plugin_storage(const std::string & plugin_name)
@@ -199,6 +224,11 @@ namespace yuan::app
     PluginHostService::PluginHostService(const std::string & plugin_path, const std::vector<std::string> & plugins)
         : plugin_path_(plugin_path), plugin_names_(plugins)
     {
+    }
+
+    PluginHostService::~PluginHostService()
+    {
+        stop();
     }
 
     void PluginHostService::set_plugin_path(const std::string & plugin_path)
@@ -233,8 +263,8 @@ namespace yuan::app
 
     void PluginHostService::setup_lifecycle_callbacks()
     {
-        auto pluginManager = yuan::plugin::PluginManager::get_instance();
-        auto &lcm = pluginManager->lifecycle_manager();
+        auto &pluginManager = plugin_manager();
+        auto &lcm = pluginManager.lifecycle_manager();
 
         lcm.call_guard().set_fault_handler([this](const plugin::FaultEvent &event) {
         LOG_ERROR("plugin '{}' fault in '{}': {}",
@@ -294,12 +324,12 @@ namespace yuan::app
 
     bool PluginHostService::load_plugin(const std::string & plugin_name)
     {
-        auto pluginManager = yuan::plugin::PluginManager::get_instance();
+        auto &pluginManager = plugin_manager();
 
         auto *plugin_storage = prepare_plugin_storage(plugin_name);
-        pluginManager->set_context(make_base_plugin_context(plugin_storage));
+        pluginManager.set_context(make_base_plugin_context(plugin_storage));
 
-        if (!pluginManager->load(plugin_name)) {
+        if (!pluginManager.load(plugin_name)) {
             LOG_ERROR("runtime load plugin '{}' failed", plugin_name);
             if (runtime_context_.event_bus) {
                 runtime_context_.event_bus->publish(
@@ -307,40 +337,40 @@ namespace yuan::app
                     make_plugin_load_failed_event(runtime_context_, plugin_name, "runtime load failed"));
             }
             plugin_storages_.erase(plugin_name);
-            pluginManager->set_context(make_base_plugin_context(nullptr));
+            pluginManager.set_context(make_base_plugin_context(nullptr));
             return false;
         }
 
         if (service_registry_) {
             auto *registry = service_registry_adapter();
-            if (!registry->init_plugin_services(plugin_name, pluginManager->plugin_context(plugin_name))) {
+            if (!registry->init_plugin_services(plugin_name, pluginManager.plugin_context(plugin_name))) {
                 cleanup_plugin_resources(plugin_name);
-                pluginManager->release_plugin(plugin_name);
+                pluginManager.release_plugin(plugin_name);
                 plugin_storages_.erase(plugin_name);
-                pluginManager->set_context(make_base_plugin_context(nullptr));
+                pluginManager.set_context(make_base_plugin_context(nullptr));
                 return false;
             }
         }
 
-        auto &lcm = pluginManager->lifecycle_manager();
+        auto &lcm = pluginManager.lifecycle_manager();
         if (!lcm.activate(plugin_name)) {
             LOG_ERROR("failed to activate plugin '{}'", plugin_name);
             cleanup_plugin_resources(plugin_name);
-            pluginManager->release_plugin(plugin_name);
+            pluginManager.release_plugin(plugin_name);
             plugin_storages_.erase(plugin_name);
-            pluginManager->set_context(make_base_plugin_context(nullptr));
+            pluginManager.set_context(make_base_plugin_context(nullptr));
             return false;
         }
 
-        auto *plugin = pluginManager->get_plugin(plugin_name);
+        auto *plugin = pluginManager.get_plugin(plugin_name);
         if (plugin) {
             if (!lcm.call_guard().guarded_call_void(plugin_name, lcm.state(plugin_name), "on_enable",
                                                     [plugin]() { plugin->on_enable(); })) {
                 LOG_ERROR("plugin '{}' on_enable failed, rolling back", plugin_name);
                 cleanup_plugin_resources(plugin_name);
-                pluginManager->release_plugin(plugin_name);
+                pluginManager.release_plugin(plugin_name);
                 plugin_storages_.erase(plugin_name);
-                pluginManager->set_context(make_base_plugin_context(nullptr));
+                pluginManager.set_context(make_base_plugin_context(nullptr));
                 return false;
             }
         }
@@ -349,9 +379,9 @@ namespace yuan::app
             if (!service_registry_adapter()->start_plugin_services(plugin_name)) {
                 LOG_ERROR("plugin '{}' managed services failed to start, rolling back", plugin_name);
                 cleanup_plugin_resources(plugin_name);
-                pluginManager->release_plugin(plugin_name);
+                pluginManager.release_plugin(plugin_name);
                 plugin_storages_.erase(plugin_name);
-                pluginManager->set_context(make_base_plugin_context(nullptr));
+                pluginManager.set_context(make_base_plugin_context(nullptr));
                 return false;
             }
         }
@@ -372,8 +402,8 @@ namespace yuan::app
             return false;
         }
 
-        auto pluginManager = yuan::plugin::PluginManager::get_instance();
-        auto &lcm = pluginManager->lifecycle_manager();
+        auto &pluginManager = plugin_manager();
+        auto &lcm = pluginManager.lifecycle_manager();
 
         if (runtime_context_.event_bus) {
             runtime_context_.event_bus->publish(
@@ -381,7 +411,7 @@ namespace yuan::app
                 make_plugin_event(plugin_name));
         }
 
-        auto *plugin = pluginManager->get_plugin(plugin_name);
+        auto *plugin = pluginManager.get_plugin(plugin_name);
         if (plugin) {
             lcm.call_guard().guarded_call_void(plugin_name, lcm.state(plugin_name), "on_disable",
                                                [plugin]() { plugin->on_disable(); });
@@ -393,9 +423,9 @@ namespace yuan::app
 
         lcm.stop(plugin_name);
 
-        pluginManager->release_plugin(plugin_name);
+        pluginManager.release_plugin(plugin_name);
         plugin_storages_.erase(plugin_name);
-        pluginManager->set_context(make_base_plugin_context(nullptr));
+        pluginManager.set_context(make_base_plugin_context(nullptr));
         loaded_plugins_.erase(it);
 
         if (runtime_context_.event_bus) {
@@ -409,11 +439,11 @@ namespace yuan::app
     std::vector<std::pair<std::string, bool> > PluginHostService::health_check_all() const
     {
         std::vector<std::pair<std::string, bool> > results;
-        auto pluginManager = yuan::plugin::PluginManager::get_instance();
-        auto &lcm = pluginManager->lifecycle_manager();
+        auto &pluginManager = plugin_manager();
+        auto &lcm = pluginManager.lifecycle_manager();
 
         for (const auto &name : loaded_plugins_) {
-            auto *plugin = pluginManager->get_plugin(name);
+            auto *plugin = pluginManager.get_plugin(name);
             bool healthy = false;
 
             if (plugin && lcm.accepts_callbacks(name)) {
@@ -440,9 +470,9 @@ namespace yuan::app
 
     bool PluginHostService::health_check(const std::string & plugin_name) const
     {
-        auto pluginManager = yuan::plugin::PluginManager::get_instance();
-        auto &lcm = pluginManager->lifecycle_manager();
-        auto *plugin = pluginManager->get_plugin(plugin_name);
+        auto &pluginManager = plugin_manager();
+        auto &lcm = pluginManager.lifecycle_manager();
+        auto *plugin = pluginManager.get_plugin(plugin_name);
         if (!plugin) {
             return false;
         }
@@ -475,15 +505,15 @@ namespace yuan::app
             return false;
         }
 
-        auto pluginManager = yuan::plugin::PluginManager::get_instance();
-        auto &lcm = pluginManager->lifecycle_manager();
-        auto *plugin = pluginManager->get_plugin(plugin_name);
+        auto &pluginManager = plugin_manager();
+        auto &lcm = pluginManager.lifecycle_manager();
+        auto *plugin = pluginManager.get_plugin(plugin_name);
         if (!plugin) {
             return false;
         }
-        auto plugin_context = pluginManager->plugin_context(plugin_name);
+        auto plugin_context = pluginManager.plugin_context(plugin_name);
 
-        auto new_config = pluginManager->reload_plugin_config(plugin_name);
+        auto new_config = pluginManager.reload_plugin_config(plugin_name);
         if (!new_config.loaded()) {
             LOG_WARN("reload config for plugin '{}' failed: config not loaded", plugin_name);
             return false;
@@ -569,14 +599,12 @@ namespace yuan::app
 
     plugin::PluginLifecycleManager &PluginHostService::lifecycle_manager()
     {
-        auto pluginManager = yuan::plugin::PluginManager::get_instance();
-        return pluginManager->lifecycle_manager();
+        return plugin_manager().lifecycle_manager();
     }
 
     const plugin::PluginLifecycleManager &PluginHostService::lifecycle_manager() const
     {
-        auto pluginManager = yuan::plugin::PluginManager::get_instance();
-        return pluginManager->lifecycle_manager();
+        return plugin_manager().lifecycle_manager();
     }
 
     bool PluginHostService::init()
@@ -615,17 +643,17 @@ namespace yuan::app
                 pending_http_route_installer_);
         }
 
-        auto pluginManager = yuan::plugin::PluginManager::get_instance();
-        pluginManager->set_plugin_path(plugin_path_);
+        auto &pluginManager = plugin_manager();
+        pluginManager.set_plugin_path(plugin_path_);
 
         setup_lifecycle_callbacks();
 
         loaded_plugins_.clear();
         for (const auto &pluginName : plugin_names_) {
             auto *plugin_storage = prepare_plugin_storage(pluginName);
-            pluginManager->set_context(make_base_plugin_context(plugin_storage));
+            pluginManager.set_context(make_base_plugin_context(plugin_storage));
 
-            if (!pluginManager->load(pluginName)) {
+            if (!pluginManager.load(pluginName)) {
                 LOG_ERROR("plugin host failed to load plugin '{}'", pluginName);
                 if (runtime_context_.event_bus) {
                     runtime_context_.event_bus->publish(
@@ -635,30 +663,30 @@ namespace yuan::app
                 plugin_storages_.erase(pluginName);
                 for (auto it = loaded_plugins_.rbegin(); it != loaded_plugins_.rend(); ++it) {
                     cleanup_plugin_resources(*it);
-                    pluginManager->release_plugin(*it);
+                    pluginManager.release_plugin(*it);
                     plugin_storages_.erase(*it);
                 }
                 loaded_plugins_.clear();
-                pluginManager->set_context(make_base_plugin_context(nullptr));
+                pluginManager.set_context(make_base_plugin_context(nullptr));
                 return false;
             }
 
-            pluginManager->set_plugin_storage(pluginName, plugin_storage);
+            pluginManager.set_plugin_storage(pluginName, plugin_storage);
 
             if (service_registry_) {
                 auto *registry = service_registry_adapter();
-                if (!registry->init_plugin_services(pluginName, pluginManager->plugin_context(pluginName))) {
+                if (!registry->init_plugin_services(pluginName, pluginManager.plugin_context(pluginName))) {
                     LOG_ERROR("plugin host failed to init services for plugin '{}'", pluginName);
                     cleanup_plugin_resources(pluginName);
-                    pluginManager->release_plugin(pluginName);
+                    pluginManager.release_plugin(pluginName);
                     plugin_storages_.erase(pluginName);
                     for (auto rit = loaded_plugins_.rbegin(); rit != loaded_plugins_.rend(); ++rit) {
                         cleanup_plugin_resources(*rit);
-                        pluginManager->release_plugin(*rit);
+                        pluginManager.release_plugin(*rit);
                         plugin_storages_.erase(*rit);
                     }
                     loaded_plugins_.clear();
-                    pluginManager->set_context(make_base_plugin_context(nullptr));
+                    pluginManager.set_context(make_base_plugin_context(nullptr));
                     return false;
                 }
             }
@@ -680,8 +708,8 @@ namespace yuan::app
             return;
         }
 
-        auto pluginManager = yuan::plugin::PluginManager::get_instance();
-        auto &lcm = pluginManager->lifecycle_manager();
+        auto &pluginManager = plugin_manager();
+        auto &lcm = pluginManager.lifecycle_manager();
 
         for (const auto &plugin_name : loaded_plugins_) {
             if (!lcm.activate(plugin_name)) {
@@ -689,7 +717,7 @@ namespace yuan::app
                 continue;
             }
 
-            auto *plugin = pluginManager->get_plugin(plugin_name);
+            auto *plugin = pluginManager.get_plugin(plugin_name);
             if (plugin) {
                 if (!lcm.call_guard().guarded_call_void(
                     plugin_name, lcm.state(plugin_name), "on_enable",
@@ -712,11 +740,11 @@ namespace yuan::app
 
     void PluginHostService::stop()
     {
-        auto pluginManager = yuan::plugin::PluginManager::get_instance();
-        auto &lcm = pluginManager->lifecycle_manager();
+        auto &pluginManager = plugin_manager();
+        auto &lcm = pluginManager.lifecycle_manager();
 
         for (auto it = loaded_plugins_.rbegin(); it != loaded_plugins_.rend(); ++it) {
-            auto *plugin = pluginManager->get_plugin(*it);
+            auto *plugin = pluginManager.get_plugin(*it);
             if (plugin) {
                 lcm.call_guard().guarded_call_void(
                     *it, lcm.state(*it), "on_disable",
@@ -745,7 +773,7 @@ namespace yuan::app
 
             lcm.stop(*it);
 
-            pluginManager->release_plugin(*it);
+            pluginManager.release_plugin(*it);
             plugin_storages_.erase(*it);
             if (runtime_context_.event_bus) {
                 runtime_context_.event_bus->publish(
@@ -754,7 +782,7 @@ namespace yuan::app
             }
         }
         loaded_plugins_.clear();
-        pluginManager->set_context(make_base_plugin_context(nullptr));
+        pluginManager.set_context(make_base_plugin_context(nullptr));
 
         resource_guard_.reset();
         scheduler_.reset();

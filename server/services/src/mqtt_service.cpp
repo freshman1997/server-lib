@@ -42,6 +42,10 @@ namespace yuan::server
 
     void MqttService::start()
     {
+        if (shared_runtime_) {
+            host_.start_inline([this]() { server_->serve(); });
+            return;
+        }
         host_.start([this]() { server_->serve(); });
     }
 

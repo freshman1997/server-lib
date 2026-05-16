@@ -16,6 +16,7 @@
 #include "net/connection/connection_factory.h"
 #include "net/acceptor/tcp_acceptor.h"
 #include "net/connection/connection.h"
+#include "net/connection/stream_transport.h"
 #include "net/handler/event_handler.h"
 #include "net/channel/channel.h"
 #include "net/socket/inet_address.h"
@@ -78,8 +79,13 @@ namespace yuan::net
 
     bool TcpAcceptor::listen()
     {
+        return listen(128);
+    }
+
+    bool TcpAcceptor::listen(const int backlog)
+    {
         assert(socket_);
-        if (!socket_->listen()) {
+        if (!socket_->listen(backlog)) {
             close();
             return false;
         }
@@ -163,6 +169,15 @@ namespace yuan::net
                 int ret = sslHandler->ssl_init_action();
                 if (ret > 0) {
                     conn->set_ssl_handshaking(false);
+                } else if (sslHandler->ssl_want_write()) {
+                    if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
+                        if (auto *channel = stream->stream_channel()) {
+                            channel->enable_write();
+                            if (handler_) {
+                                handler_->update_channel(channel);
+                            }
+                        }
+                    }
                 } else if (!sslHandler->ssl_want_read() && !sslHandler->ssl_want_write()) {
                     if (auto msg = ssl_module_->get_error_message()) {
                         LOG_ERROR("ssl handshake error: {}", msg->c_str());

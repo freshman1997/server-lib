@@ -67,6 +67,7 @@ namespace
                   << "env overrides:\n"
                   << "  YUAN_MINI_NGINX_PORT\n"
                   << "  YUAN_MINI_NGINX_SERVER_NAME\n"
+                  << "  YUAN_MINI_NGINX_WORKERS\n"
                   << "  YUAN_MINI_NGINX_ACCESS_LOG\n"
                   << "  YUAN_MINI_NGINX_ACCESS_LOG_PATH\n";
     }
@@ -111,6 +112,7 @@ namespace
         int max_connections_per_ip = 0;
         int max_inflight_requests_per_ip = 0;
         int max_concurrent_requests_per_ip = 0;
+        int worker_processes = 1;
         bool expose_stats = true;
         std::vector<yuan::net::http::StaticMount> static_mounts;
         std::vector<nlohmann::json> routes;
@@ -148,9 +150,7 @@ namespace
             if (item.contains("auto_index") && item["auto_index"].is_boolean()) {
                 mount.options.auto_index = item["auto_index"].get<bool>();
             }
-            if (item.contains("enable_legacy_embedded_pages") && item["enable_legacy_embedded_pages"].is_boolean()) {
-                mount.options.enable_legacy_embedded_pages = item["enable_legacy_embedded_pages"].get<bool>();
-            }
+
             if (item.contains("enable_range") && item["enable_range"].is_boolean()) {
                 mount.options.enable_range = item["enable_range"].get<bool>();
             }
@@ -220,6 +220,9 @@ namespace
             if (server.contains("max_body_size") && server["max_body_size"].is_number_unsigned()) {
                 cfg.server_config.max_body_size = server["max_body_size"].get<size_t>();
             }
+            if (server.contains("write_timeout_ms") && server["write_timeout_ms"].is_number_integer()) {
+                cfg.server_config.write_timeout_ms = server["write_timeout_ms"].get<int>();
+            }
             if (server.contains("enable_http2") && server["enable_http2"].is_boolean()) {
                 cfg.server_config.enable_http2 = server["enable_http2"].get<bool>();
             }
@@ -234,6 +237,9 @@ namespace
             }
             if (server.contains("max_concurrent_requests_per_ip") && server["max_concurrent_requests_per_ip"].is_number_integer()) {
                 cfg.server_config.max_inflight_requests_per_ip = server["max_concurrent_requests_per_ip"].get<int>();
+            }
+            if (server.contains("worker_processes") && server["worker_processes"].is_number_integer()) {
+                cfg.worker_processes = server["worker_processes"].get<int>();
             }
         }
 
@@ -436,6 +442,11 @@ namespace
         if (!path.empty()) {
             cfg.access_log_path = path;
         }
+
+        cfg.worker_processes = read_env_int("YUAN_MINI_NGINX_WORKERS", cfg.worker_processes);
+        if (cfg.worker_processes < 1) {
+            cfg.worker_processes = 1;
+        }
     }
 
     void install_routes(yuan::net::http::HttpProxyHandler *proxy, const std::vector<nlohmann::json> &routes)
@@ -602,6 +613,25 @@ namespace
         std::cout << "access log enabled: " << cfg.access_log_path << '\n';
     }
 
+    std::shared_ptr<yuan::server::HttpService> create_http_service(const MiniNginxConfig &cfg)
+    {
+        auto service = std::make_shared<yuan::server::HttpService>(cfg.listen_port, cfg.server_config);
+        install_protection_middlewares(*service, cfg);
+        install_access_log(*service, cfg);
+        service->set_server_configurator([cfg](yuan::server::HttpService &http_service) {
+            auto *proxy = http_service.server().ensure_proxy();
+            if (!proxy) {
+                std::cerr << "http proxy module is unavailable\n";
+                return false;
+            }
+
+            install_static_mounts(http_service.server(), cfg);
+            install_routes(proxy, cfg.routes);
+            return true;
+        });
+        return service;
+    }
+
     bool reload_routes(yuan::net::http::HttpProxyHandler *proxy,
                        const std::string &config_path,
                        yuan::net::http::HttpServer &server,
@@ -665,12 +695,44 @@ int main(int argc, char **argv)
 
     yuan::app::RuntimeContext context;
     context.app_name = "mini-nginx";
+    const int requested_worker_processes = cfg.worker_processes < 1 ? 1 : cfg.worker_processes;
+    int effective_worker_processes = requested_worker_processes;
+    if (requested_worker_processes > 1) {
+#ifdef _WIN32
+        std::cerr << "worker_processes>1 requires POSIX multi-process mode; falling back to one worker on Windows\n";
+        effective_worker_processes = 1;
+#else
+        context.run_mode = yuan::app::RunMode::multi_process;
+        context.worker_threads = static_cast<std::size_t>(requested_worker_processes);
+        context.runtime_workers.worker_count = static_cast<std::size_t>(requested_worker_processes);
+        context.runtime_workers.process_mode = yuan::app::WorkerProcessMode::process_per_worker;
+#endif
+    }
 
     yuan::app::Application application(context);
-    auto http_service = std::make_shared<yuan::server::HttpService>(cfg.listen_port, cfg.server_config);
-    install_protection_middlewares(*http_service, cfg);
-    install_access_log(*http_service, cfg);
-    if (!application.add_typed_service<yuan::server::HttpService>("http", http_service, "server.http", 1)) {
+    yuan::server::HttpService *local_http_service = nullptr;
+
+    yuan::app::ServiceDescriptor http_descriptor;
+    http_descriptor.name = "http";
+    http_descriptor.type_name = "yuan::server::HttpService";
+    http_descriptor.contract_id = "server.http";
+    http_descriptor.contract_version = 1;
+    http_descriptor.placement.mode = effective_worker_processes > 1
+        ? yuan::app::PlacementMode::all_workers
+        : yuan::app::PlacementMode::singleton;
+    http_descriptor.placement.instances = static_cast<std::size_t>(effective_worker_processes);
+    http_descriptor.endpoints.push_back(yuan::app::ServiceEndpoint{
+        "http",
+        "0.0.0.0",
+        cfg.listen_port,
+        "tcp"
+    });
+
+    if (!application.add_service(http_descriptor, [&cfg, &local_http_service]() {
+            auto service = create_http_service(cfg);
+            local_http_service = service.get();
+            return service;
+        })) {
         std::cerr << "failed to register http service\n";
         return 1;
     }
@@ -681,19 +743,16 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    auto *proxy = http_service->server().ensure_proxy();
-    if (!proxy) {
+    auto *proxy = local_http_service ? local_http_service->server().ensure_proxy() : nullptr;
+    if (!proxy && bootstrap.process_role() != yuan::app::ProcessRole::supervisor) {
         std::cerr << "http proxy module is unavailable\n";
         bootstrap.shutdown();
         return 1;
     }
 
-    install_static_mounts(http_service->server(), cfg);
-
-    install_routes(proxy, cfg.routes);
-
     std::cout << "mini_nginx listening on 0.0.0.0:" << cfg.listen_port << " using config " << config_path << '\n';
     std::cout << "routes loaded: " << cfg.routes.size() << '\n';
+    std::cout << "worker processes: " << effective_worker_processes << '\n';
     std::cout << "reload check interval: " << cfg.reload_check_interval_ms << " ms\n";
 
     std::error_code ec;
@@ -720,7 +779,11 @@ int main(int argc, char **argv)
         }
 
         if (g_reload_requested.exchange(false, std::memory_order_relaxed)) {
-            (void)reload_routes(proxy, config_path, http_service->server(), cfg);
+            if (proxy && local_http_service) {
+                (void)reload_routes(proxy, config_path, local_http_service->server(), cfg);
+            } else {
+                std::cerr << "reload note: multi-process route reload requires restart\n";
+            }
         }
 
         if (bootstrap.process_role() == yuan::app::ProcessRole::supervisor &&

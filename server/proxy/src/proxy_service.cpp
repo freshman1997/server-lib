@@ -1553,31 +1553,27 @@ namespace yuan::server
 
     void ProxyService::start()
     {
+        if (shared_runtime_) {
+            host_.start_inline([this]() { serve_loop(); });
+            return;
+        }
         host_.start([this]() { serve_loop(); });
     }
 
     void ProxyService::stop()
     {
         stop_requested_.store(true, std::memory_order_relaxed);
-        data_->listener.close();
-        data_->session_sweep_timer.cancel();
-        data_->session_sweep_timer.reset();
-
-        std::vector<std::shared_ptr<ProxyServiceData::SessionContext>> sessions;
-        {
-            std::lock_guard<std::mutex> lock(data_->mutex);
-            sessions = data_->sessions;
-        }
-        for (const auto &session : sessions) {
-            if (!session) {
-                continue;
-            }
-            if (session->client_connection) {
-                session->client_connection->close();
-            }
-            if (session->upstream_connection) {
-                session->upstream_connection->close();
-            }
+        auto *runtime = data_->listener.runtime();
+        if (runtime) {
+            runtime->dispatch([this]() {
+                data_->listener.close();
+                data_->session_sweep_timer.cancel();
+                data_->session_sweep_timer.reset();
+            });
+        } else {
+            data_->listener.close();
+            data_->session_sweep_timer.cancel();
+            data_->session_sweep_timer.reset();
         }
 
         const auto deadline = std::chrono::steady_clock::now() +
@@ -1598,6 +1594,11 @@ namespace yuan::server
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
 
+        std::vector<std::shared_ptr<ProxyServiceData::SessionContext>> sessions;
+        {
+            std::lock_guard<std::mutex> lock(data_->mutex);
+            sessions = data_->sessions;
+        }
         for (const auto &session : sessions) {
             if (!session || session->finished.load(std::memory_order_acquire)) {
                 continue;
@@ -1605,6 +1606,23 @@ namespace yuan::server
             LOG_WARN("[ProxyService] session #{} did not drain within {} ms",
                      session->session_id,
                      std::max(config_.drain_timeout_ms, 0));
+            if (runtime) {
+                runtime->dispatch([session]() {
+                    if (session->client_connection) {
+                        session->client_connection->close();
+                    }
+                    if (session->upstream_connection) {
+                        session->upstream_connection->close();
+                    }
+                });
+            } else {
+                if (session->client_connection) {
+                    session->client_connection->close();
+                }
+                if (session->upstream_connection) {
+                    session->upstream_connection->close();
+                }
+            }
         }
 
         {
@@ -1612,10 +1630,11 @@ namespace yuan::server
             data_->sessions.clear();
         }
 
-        if (data_->owned_runtime) {
-            data_->owned_runtime->stop();
-        }
-        host_.stop();
+        host_.stop([this]() {
+            if (data_->owned_runtime) {
+                data_->owned_runtime->stop();
+            }
+        });
         data_->accept_task = {};
     }
 

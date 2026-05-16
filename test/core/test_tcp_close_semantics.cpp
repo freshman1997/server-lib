@@ -8,6 +8,7 @@
 #include "net/connection/connection_factory.h"
 #include "net/connection/connection_handle.h"
 #include "net/connection/datagram_transport.h"
+#include "net/connection/stream_transport.h"
 #include "net/connection/udp_connection.h"
 #include "net/runtime/network_runtime.h"
 #include "net/channel/channel.h"
@@ -22,6 +23,7 @@
 #include <string>
 #include <thread>
 #include <atomic>
+#include <vector>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -108,6 +110,31 @@ namespace
 #endif
     }
 
+    void close_with_reset(int fd)
+    {
+        linger l{};
+        l.l_onoff = 1;
+        l.l_linger = 0;
+#ifdef _WIN32
+        (void)::setsockopt(fd, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char *>(&l), sizeof(l));
+#else
+        (void)::setsockopt(fd, SOL_SOCKET, SO_LINGER, &l, sizeof(l));
+#endif
+        close_fd(fd);
+    }
+
+    void set_send_buffer(int fd, int bytes)
+    {
+        if (fd < 0) {
+            return;
+        }
+#ifdef _WIN32
+        (void)::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char *>(&bytes), sizeof(bytes));
+#else
+        (void)::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &bytes, sizeof(bytes));
+#endif
+    }
+
     void shutdown_send(int fd)
     {
 #ifdef _WIN32
@@ -191,6 +218,44 @@ namespace
         int updates = 0;
         yuan::timer::TimerManager *timer_manager_ = nullptr;
     };
+
+    void test_accepted_tcp_connection_write_interest_is_idle()
+    {
+        std::cout << "  [TcpConnection] accepted idle connections do not keep write interest\n";
+
+#ifdef _WIN32
+        int fd = static_cast<int>(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+        check(fd != static_cast<int>(INVALID_SOCKET), "idle write-interest test should create socket");
+#else
+        int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        check(fd >= 0, "idle write-interest test should create socket");
+#endif
+        if (fd < 0) {
+            return;
+        }
+
+        auto conn = yuan::net::create_stream_connection("127.0.0.1", 65000, fd);
+        check(conn != nullptr, "accepted connection factory should create connection");
+        auto stream = std::dynamic_pointer_cast<yuan::net::StreamTransport>(conn);
+        auto *channel = stream ? stream->stream_channel() : nullptr;
+        check(channel != nullptr, "accepted connection should expose stream channel");
+
+        if (channel) {
+            check((channel->get_events() & yuan::net::Channel::READ_EVENT) != 0,
+                  "accepted connection should start with read interest");
+            check((channel->get_events() & yuan::net::Channel::WRITE_EVENT) == 0,
+                  "accepted idle connection should not start with write interest");
+
+            channel->enable_write();
+            conn->flush();
+            check((channel->get_events() & yuan::net::Channel::WRITE_EVENT) == 0,
+                  "idle flush should clear stale write interest");
+        }
+
+        if (conn) {
+            conn->abort();
+        }
+    }
 
     void test_tcp_close_and_address()
     {
@@ -440,6 +505,132 @@ namespace
         }
     }
 
+    void test_peer_reset_during_large_flush_completes()
+    {
+        std::cout << "  [TcpConnection] peer reset during large flush completes\n";
+
+        const uint16_t port = reserve_tcp_port();
+        check(port != 0, "should reserve a TCP port for reset flush test");
+
+        yuan::net::NetworkRuntime runtime;
+        yuan::net::AsyncListenerHost host;
+        std::atomic_bool handler_started{ false };
+        std::atomic_bool handler_done{ false };
+        std::atomic_bool loop_timed_out{ false };
+        std::atomic_bool client_connected{ false };
+        std::atomic_bool client_received{ false };
+        std::atomic_bool server_ready_for_reset{ false };
+        yuan::coroutine::IoStatus flush_status = yuan::coroutine::IoStatus::invalid_state;
+
+        host.set_connection_handler([&](yuan::net::AsyncConnectionContext ctx)->yuan::coroutine::Task<void> {
+            handler_started.store(true, std::memory_order_release);
+
+            auto request = co_await ctx.read_async(3000);
+            if (request.status != yuan::coroutine::IoStatus::success) {
+                flush_status = request.status;
+                handler_done.store(true, std::memory_order_release);
+                runtime.stop();
+                co_return;
+            }
+
+            if (auto conn = ctx.connection()) {
+                if (auto stream = std::dynamic_pointer_cast<yuan::net::StreamTransport>(conn)) {
+                    if (auto *channel = stream->stream_channel()) {
+                        set_send_buffer(channel->get_fd(), 4096);
+                    }
+                }
+            }
+
+            yuan::buffer::ByteBuffer prelude;
+            std::string head(8192, 'h');
+            prelude.append(head.data(), head.size());
+            ctx.write(prelude);
+
+            auto prelude_flush = co_await ctx.flush_async(3000);
+            if (prelude_flush.status != yuan::coroutine::IoStatus::success) {
+                flush_status = prelude_flush.status;
+                handler_done.store(true, std::memory_order_release);
+                ctx.abort();
+                runtime.stop();
+                co_return;
+            }
+
+            server_ready_for_reset.store(true, std::memory_order_release);
+            co_await ctx.runtime_view().sleep_for(100);
+
+            yuan::buffer::ByteBuffer payload;
+            std::string body(16 * 1024 * 1024, 'v');
+            payload.append(body.data(), body.size());
+            ctx.write(payload);
+
+            auto flush = co_await ctx.flush_async(5000);
+            flush_status = flush.status;
+            handler_done.store(true, std::memory_order_release);
+            ctx.abort();
+            runtime.stop();
+            co_return;
+        });
+
+        check(host.bind("127.0.0.1", port, runtime), "reset flush test listener should bind");
+        auto accept_task = host.run_async();
+        accept_task.resume();
+
+        runtime.schedule(7000, [&]() {
+            loop_timed_out.store(true, std::memory_order_release);
+            runtime.stop();
+        });
+
+        std::thread client([&]() {
+            int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (fd < 0) {
+                return;
+            }
+            set_recv_timeout(fd, 5);
+
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            addr.sin_port = htons(port);
+            if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+                close_fd(fd);
+                return;
+            }
+            client_connected.store(true, std::memory_order_release);
+
+            const char request[] = "GET /video HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            (void)::send(fd, request, sizeof(request) - 1, 0);
+
+            std::vector<char> buf(8192);
+            const int n = ::recv(fd, buf.data(), static_cast<int>(buf.size()), 0);
+            if (n > 0) {
+                client_received.store(true, std::memory_order_release);
+            }
+            const auto wait_started = std::chrono::steady_clock::now();
+            while (!server_ready_for_reset.load(std::memory_order_acquire) &&
+                   std::chrono::steady_clock::now() - wait_started < std::chrono::seconds(5)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            close_with_reset(fd);
+        });
+
+        runtime.run();
+
+        if (client.joinable()) {
+            client.join();
+        }
+        host.close();
+
+        check(client_connected.load(std::memory_order_acquire), "reset flush test client should connect");
+        check(client_received.load(std::memory_order_acquire), "reset flush test client should receive initial bytes");
+        check(server_ready_for_reset.load(std::memory_order_acquire), "reset flush server should reach reset point");
+        check(handler_started.load(std::memory_order_acquire), "reset flush handler should start");
+        check(handler_done.load(std::memory_order_acquire), "reset flush handler should finish");
+        check(!loop_timed_out.load(std::memory_order_acquire), "reset flush should not require watchdog timeout");
+        check(flush_status == yuan::coroutine::IoStatus::connection_closed ||
+                  flush_status == yuan::coroutine::IoStatus::connection_error,
+              "flush should complete from close/error instead of success or timeout after peer reset");
+    }
+
     void test_close_and_abort_are_idempotent()
     {
         std::cout << "  [TcpConnection] close and abort are idempotent\n";
@@ -602,9 +793,11 @@ namespace
 
 int main()
 {
+    test_accepted_tcp_connection_write_interest_is_idle();
     test_tcp_close_and_address();
     test_write_then_close_drains_large_payload();
     test_peer_half_close_allows_write_response();
+    test_peer_reset_during_large_flush_completes();
     test_close_and_abort_are_idempotent();
     test_close_while_connecting_resumes();
     test_udp_close_abort_idle_semantics();

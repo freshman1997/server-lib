@@ -30,6 +30,7 @@ namespace yuan::plugin
         {
             std::string plugin_name;
             size_t max_instructions_per_call;
+            HostLogger *logger;
             HostResourceGuard *resource_guard;
             std::recursive_mutex *lua_mutex;
         };
@@ -40,6 +41,7 @@ namespace yuan::plugin
             int ref;
             std::string plugin_name;
             size_t max_instructions_per_call;
+            HostLogger *logger;
             std::recursive_mutex *lua_mutex;
         };
 
@@ -49,6 +51,7 @@ namespace yuan::plugin
             int ref;
             std::string plugin_name;
             size_t max_instructions_per_call;
+            HostLogger *logger;
             std::recursive_mutex *lua_mutex;
         };
 
@@ -111,11 +114,30 @@ namespace yuan::plugin
             return HostLogLevel::info;
         }
 
+        static void log_lua_callback_error(HostLogger *logger, const char *err)
+        {
+            if (logger) {
+                logger->log(
+                    HostLogLevel::error,
+                    __FILE__,
+                    __LINE__,
+                    __func__,
+                    err ? std::string_view(err) : std::string_view("unknown"));
+            }
+        }
+
+        template <typename T>
+        static T *check_host_userdata(lua_State *L, int index, const char *meta_name)
+        {
+            auto **ud = static_cast<void **>(luaL_checkudata(L, index, meta_name));
+            return ud ? static_cast<T *>(*ud) : nullptr;
+        }
+
         // ---- Logger binding ----
 
         static int lua_logger_log(lua_State *L)
         {
-            auto *logger = static_cast<HostLogger *>(luaL_checkudata(L, 1, "yuan.HostLogger"));
+            auto *logger = check_host_userdata<HostLogger>(L, 1, "yuan.HostLogger");
             const char *level_str = luaL_checkstring(L, 2);
             const char *msg = luaL_checkstring(L, 3);
             if (logger) {
@@ -126,7 +148,7 @@ namespace yuan::plugin
 
         static int lua_logger_info(lua_State *L)
         {
-            auto *logger = static_cast<HostLogger *>(luaL_checkudata(L, 1, "yuan.HostLogger"));
+            auto *logger = check_host_userdata<HostLogger>(L, 1, "yuan.HostLogger");
             const char *msg = luaL_checkstring(L, 2);
             if (logger) {
                 logger->log(HostLogLevel::info, "", 0, "", std::string_view(msg));
@@ -136,7 +158,7 @@ namespace yuan::plugin
 
         static int lua_logger_warn(lua_State *L)
         {
-            auto *logger = static_cast<HostLogger *>(luaL_checkudata(L, 1, "yuan.HostLogger"));
+            auto *logger = check_host_userdata<HostLogger>(L, 1, "yuan.HostLogger");
             const char *msg = luaL_checkstring(L, 2);
             if (logger) {
                 logger->log(HostLogLevel::warn, "", 0, "", std::string_view(msg));
@@ -146,7 +168,7 @@ namespace yuan::plugin
 
         static int lua_logger_error(lua_State *L)
         {
-            auto *logger = static_cast<HostLogger *>(luaL_checkudata(L, 1, "yuan.HostLogger"));
+            auto *logger = check_host_userdata<HostLogger>(L, 1, "yuan.HostLogger");
             const char *msg = luaL_checkstring(L, 2);
             if (logger) {
                 logger->log(HostLogLevel::error, "", 0, "", std::string_view(msg));
@@ -156,7 +178,7 @@ namespace yuan::plugin
 
         static int lua_logger_debug(lua_State *L)
         {
-            auto *logger = static_cast<HostLogger *>(luaL_checkudata(L, 1, "yuan.HostLogger"));
+            auto *logger = check_host_userdata<HostLogger>(L, 1, "yuan.HostLogger");
             const char *msg = luaL_checkstring(L, 2);
             if (logger) {
                 logger->log(HostLogLevel::debug, "", 0, "", std::string_view(msg));
@@ -166,7 +188,7 @@ namespace yuan::plugin
 
         static int lua_logger_trace(lua_State *L)
         {
-            auto *logger = static_cast<HostLogger *>(luaL_checkudata(L, 1, "yuan.HostLogger"));
+            auto *logger = check_host_userdata<HostLogger>(L, 1, "yuan.HostLogger");
             const char *msg = luaL_checkstring(L, 2);
             if (logger) {
                 logger->log(HostLogLevel::trace, "", 0, "", std::string_view(msg));
@@ -176,7 +198,7 @@ namespace yuan::plugin
 
         static int lua_logger_fatal(lua_State *L)
         {
-            auto *logger = static_cast<HostLogger *>(luaL_checkudata(L, 1, "yuan.HostLogger"));
+            auto *logger = check_host_userdata<HostLogger>(L, 1, "yuan.HostLogger");
             const char *msg = luaL_checkstring(L, 2);
             if (logger) {
                 logger->log(HostLogLevel::fatal, "", 0, "", std::string_view(msg));
@@ -199,7 +221,7 @@ namespace yuan::plugin
 
         static int lua_storage_set(lua_State *L)
         {
-            auto *storage = static_cast<HostStorage *>(luaL_checkudata(L, 1, "yuan.HostStorage"));
+            auto *storage = check_host_userdata<HostStorage>(L, 1, "yuan.HostStorage");
             const char *key = luaL_checkstring(L, 2);
             const char *value = luaL_checkstring(L, 3);
             if (storage) {
@@ -212,7 +234,7 @@ namespace yuan::plugin
 
         static int lua_storage_get(lua_State *L)
         {
-            auto *storage = static_cast<HostStorage *>(luaL_checkudata(L, 1, "yuan.HostStorage"));
+            auto *storage = check_host_userdata<HostStorage>(L, 1, "yuan.HostStorage");
             const char *key = luaL_checkstring(L, 2);
             if (storage) {
                 auto val = storage->get(key);
@@ -229,7 +251,7 @@ namespace yuan::plugin
 
         static int lua_storage_del(lua_State *L)
         {
-            auto *storage = static_cast<HostStorage *>(luaL_checkudata(L, 1, "yuan.HostStorage"));
+            auto *storage = check_host_userdata<HostStorage>(L, 1, "yuan.HostStorage");
             const char *key = luaL_checkstring(L, 2);
             if (storage) {
                 lua_pushboolean(L, storage->del(key) ? 1 : 0);
@@ -241,7 +263,7 @@ namespace yuan::plugin
 
         static int lua_storage_exists(lua_State *L)
         {
-            auto *storage = static_cast<HostStorage *>(luaL_checkudata(L, 1, "yuan.HostStorage"));
+            auto *storage = check_host_userdata<HostStorage>(L, 1, "yuan.HostStorage");
             const char *key = luaL_checkstring(L, 2);
             if (storage) {
                 lua_pushboolean(L, storage->exists(key) ? 1 : 0);
@@ -253,7 +275,7 @@ namespace yuan::plugin
 
         static int lua_storage_hset(lua_State *L)
         {
-            auto *storage = static_cast<HostStorage *>(luaL_checkudata(L, 1, "yuan.HostStorage"));
+            auto *storage = check_host_userdata<HostStorage>(L, 1, "yuan.HostStorage");
             const char *key = luaL_checkstring(L, 2);
             const char *field = luaL_checkstring(L, 3);
             const char *value = luaL_checkstring(L, 4);
@@ -267,7 +289,7 @@ namespace yuan::plugin
 
         static int lua_storage_hget(lua_State *L)
         {
-            auto *storage = static_cast<HostStorage *>(luaL_checkudata(L, 1, "yuan.HostStorage"));
+            auto *storage = check_host_userdata<HostStorage>(L, 1, "yuan.HostStorage");
             const char *key = luaL_checkstring(L, 2);
             const char *field = luaL_checkstring(L, 3);
             if (storage) {
@@ -285,7 +307,7 @@ namespace yuan::plugin
 
         static int lua_storage_hdel(lua_State *L)
         {
-            auto *storage = static_cast<HostStorage *>(luaL_checkudata(L, 1, "yuan.HostStorage"));
+            auto *storage = check_host_userdata<HostStorage>(L, 1, "yuan.HostStorage");
             const char *key = luaL_checkstring(L, 2);
             const char *field = luaL_checkstring(L, 3);
             if (storage) {
@@ -298,7 +320,7 @@ namespace yuan::plugin
 
         static int lua_storage_hgetall(lua_State *L)
         {
-            auto *storage = static_cast<HostStorage *>(luaL_checkudata(L, 1, "yuan.HostStorage"));
+            auto *storage = check_host_userdata<HostStorage>(L, 1, "yuan.HostStorage");
             const char *key = luaL_checkstring(L, 2);
             if (storage) {
                 auto map = storage->hgetall(key);
@@ -319,7 +341,7 @@ namespace yuan::plugin
 
         static int lua_storage_is_available(lua_State *L)
         {
-            auto *storage = static_cast<HostStorage *>(luaL_checkudata(L, 1, "yuan.HostStorage"));
+            auto *storage = check_host_userdata<HostStorage>(L, 1, "yuan.HostStorage");
             if (storage) {
                 lua_pushboolean(L, storage->is_available() ? 1 : 0);
             } else {
@@ -385,7 +407,7 @@ namespace yuan::plugin
 
         static int lua_eventbus_subscribe(lua_State *L)
         {
-            auto *bus = static_cast<HostEventBus *>(luaL_checkudata(L, 1, "yuan.HostEventBus"));
+            auto *bus = check_host_userdata<HostEventBus>(L, 1, "yuan.HostEventBus");
             const char *event_name = luaL_checkstring(L, 2);
             luaL_checktype(L, 3, LUA_TFUNCTION);
 
@@ -399,7 +421,9 @@ namespace yuan::plugin
             cb.ref = ref;
             cb.plugin_name = ctx_info ? ctx_info->plugin_name : "";
             cb.max_instructions_per_call = ctx_info ? ctx_info->max_instructions_per_call : 0;
+            cb.logger = ctx_info ? ctx_info->logger : nullptr;
             cb.lua_mutex = ctx_info ? ctx_info->lua_mutex : nullptr;
+            const auto tracked_plugin_name = cb.plugin_name;
 
             int cb_id;
             {
@@ -452,6 +476,7 @@ namespace yuan::plugin
                     if (lua_pcall(ls, 1, 0, 0) != LUA_OK) {
                         const char *err = lua_tostring(ls, -1);
                         LOG_ERROR("lua event callback error: {}", err ? err : "unknown");
+                        log_lua_callback_error(ecb.logger, err);
                         lua_pop(ls, 1);
                     }
                     clear_callback_hook(ls);
@@ -459,7 +484,7 @@ namespace yuan::plugin
 
                 auto *guard = ctx_info ? ctx_info->resource_guard : nullptr;
                 if (guard) {
-                    guard->track(cb.plugin_name, PluginResourceType::event_subscription,
+                    guard->track(tracked_plugin_name, PluginResourceType::event_subscription,
                                  [bus, token]() {
                                      if (bus) bus->unsubscribe(token);
                                  },
@@ -472,7 +497,7 @@ namespace yuan::plugin
 
         static int lua_eventbus_publish(lua_State *L)
         {
-            auto *bus = static_cast<HostEventBus *>(luaL_checkudata(L, 1, "yuan.HostEventBus"));
+            auto *bus = check_host_userdata<HostEventBus>(L, 1, "yuan.HostEventBus");
             const char *event_name = luaL_checkstring(L, 2);
 
             if (bus) {
@@ -509,7 +534,7 @@ namespace yuan::plugin
 
         static int lua_eventbus_unsubscribe(lua_State *L)
         {
-            auto *bus = static_cast<HostEventBus *>(luaL_checkudata(L, 1, "yuan.HostEventBus"));
+            auto *bus = check_host_userdata<HostEventBus>(L, 1, "yuan.HostEventBus");
             auto token = static_cast<HostEventSubscription>(lua_tointeger(L, 2));
             if (bus) {
                 lua_pushboolean(L, bus->unsubscribe(token) ? 1 : 0);
@@ -530,7 +555,7 @@ namespace yuan::plugin
 
         static int lua_scheduler_schedule_after(lua_State *L)
         {
-            auto *sched = static_cast<HostScheduler *>(luaL_checkudata(L, 1, "yuan.HostScheduler"));
+            auto *sched = check_host_userdata<HostScheduler>(L, 1, "yuan.HostScheduler");
             auto ms = static_cast<int>(luaL_checkinteger(L, 2));
             luaL_checktype(L, 3, LUA_TFUNCTION);
             const char *name = luaL_optstring(L, 4, "");
@@ -545,7 +570,9 @@ namespace yuan::plugin
             cb.ref = ref;
             cb.plugin_name = ctx_info ? ctx_info->plugin_name : "";
             cb.max_instructions_per_call = ctx_info ? ctx_info->max_instructions_per_call : 0;
+            cb.logger = ctx_info ? ctx_info->logger : nullptr;
             cb.lua_mutex = ctx_info ? ctx_info->lua_mutex : nullptr;
+            const auto tracked_plugin_name = cb.plugin_name;
 
             int cb_id;
             {
@@ -575,6 +602,7 @@ namespace yuan::plugin
                                                     if (lua_pcall(ls, 0, 0, 0) != LUA_OK) {
                                                         const char *err = lua_tostring(ls, -1);
                                                         LOG_ERROR("lua scheduler callback error: {}", err ? err : "unknown");
+                                                        log_lua_callback_error(scb.logger, err);
                                                         lua_pop(ls, 1);
                                                     }
                                                     clear_callback_hook(ls);
@@ -583,7 +611,7 @@ namespace yuan::plugin
 
                 auto *guard = ctx_info ? ctx_info->resource_guard : nullptr;
                 if (guard) {
-                    guard->track(cb.plugin_name, PluginResourceType::scheduler_task,
+                    guard->track(tracked_plugin_name, PluginResourceType::scheduler_task,
                                  [sched, id]() {
                                      if (sched) sched->cancel(id);
                                  },
@@ -599,7 +627,7 @@ namespace yuan::plugin
 
         static int lua_scheduler_schedule_interval(lua_State *L)
         {
-            auto *sched = static_cast<HostScheduler *>(luaL_checkudata(L, 1, "yuan.HostScheduler"));
+            auto *sched = check_host_userdata<HostScheduler>(L, 1, "yuan.HostScheduler");
             auto ms = static_cast<int>(luaL_checkinteger(L, 2));
             luaL_checktype(L, 3, LUA_TFUNCTION);
             const char *name = luaL_optstring(L, 4, "");
@@ -614,7 +642,9 @@ namespace yuan::plugin
             cb.ref = ref;
             cb.plugin_name = ctx_info ? ctx_info->plugin_name : "";
             cb.max_instructions_per_call = ctx_info ? ctx_info->max_instructions_per_call : 0;
+            cb.logger = ctx_info ? ctx_info->logger : nullptr;
             cb.lua_mutex = ctx_info ? ctx_info->lua_mutex : nullptr;
+            const auto tracked_plugin_name = cb.plugin_name;
 
             int cb_id;
             {
@@ -644,6 +674,7 @@ namespace yuan::plugin
                                                        if (lua_pcall(ls, 0, 0, 0) != LUA_OK) {
                                                            const char *err = lua_tostring(ls, -1);
                                                            LOG_ERROR("lua scheduler interval callback error: {}", err ? err : "unknown");
+                                                           log_lua_callback_error(scb.logger, err);
                                                            lua_pop(ls, 1);
                                                        }
                                                        clear_callback_hook(ls);
@@ -652,7 +683,7 @@ namespace yuan::plugin
 
                 auto *guard = ctx_info ? ctx_info->resource_guard : nullptr;
                 if (guard) {
-                    guard->track(cb.plugin_name, PluginResourceType::scheduler_task,
+                    guard->track(tracked_plugin_name, PluginResourceType::scheduler_task,
                                  [sched, id]() {
                                      if (sched) sched->cancel(id);
                                  },
@@ -700,6 +731,7 @@ namespace yuan::plugin
         auto *ctx_info = new LuaCtxInfo();
         ctx_info->plugin_name = context.plugin_name;
         ctx_info->max_instructions_per_call = max_instructions_per_call;
+        ctx_info->logger = context.logger;
         ctx_info->resource_guard = context.resource_guard;
         ctx_info->lua_mutex = lua_mutex;
 

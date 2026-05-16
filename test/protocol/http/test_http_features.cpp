@@ -4,7 +4,13 @@
 #include "request.h"
 #include "response.h"
 #include "http_service.h"
+#include "bootstrap.h"
+#include "eventbus/event_bus.h"
+#include "net/runtime/network_runtime.h"
+#include "runtime_context.h"
+#include "server_service_events.h"
 
+#include <any>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -60,6 +66,23 @@ namespace
 #else
         ::close(s);
 #endif
+    }
+
+    void abortive_close_socket(socket_t s)
+    {
+        if (s == kInvalidSocket) {
+            return;
+        }
+
+        linger opt{};
+        opt.l_onoff = 1;
+        opt.l_linger = 0;
+#ifdef _WIN32
+        (void)::setsockopt(s, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char *>(&opt), sizeof(opt));
+#else
+        (void)::setsockopt(s, SOL_SOCKET, SO_LINGER, &opt, sizeof(opt));
+#endif
+        close_socket(s);
     }
 
     bool send_all(socket_t s, const std::string &data)
@@ -154,7 +177,36 @@ namespace
         return out;
     }
 
-    socket_t connect_loopback(uint16_t port)
+    bool recv_until_http_headers(socket_t s, std::string &out, std::size_t max_bytes = 128 * 1024)
+    {
+        char buf[4096];
+        while (out.find("\r\n\r\n") == std::string::npos && out.size() < max_bytes) {
+#ifdef _WIN32
+            const int rc = ::recv(s, buf, static_cast<int>(sizeof(buf)), 0);
+#else
+            const ssize_t rc = ::recv(s, buf, sizeof(buf), 0);
+#endif
+            if (rc <= 0) {
+                return false;
+            }
+            out.append(buf, static_cast<std::size_t>(rc));
+        }
+        return out.find("\r\n\r\n") != std::string::npos;
+    }
+
+    bool wait_http_connections(yuan::server::HttpService &service, int expected, std::chrono::milliseconds timeout)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (service.server().snapshot_server_stats().active_http_connections == expected) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        return service.server().snapshot_server_stats().active_http_connections == expected;
+    }
+
+    socket_t connect_loopback(uint16_t port, int recv_buffer_bytes = 0)
     {
         socket_t s = ::socket(AF_INET, SOCK_STREAM, 0);
         if (s == kInvalidSocket) {
@@ -173,6 +225,15 @@ namespace
         (void)::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         (void)::setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 #endif
+        if (recv_buffer_bytes > 0) {
+#ifdef _WIN32
+            (void)::setsockopt(s, SOL_SOCKET, SO_RCVBUF,
+                               reinterpret_cast<const char *>(&recv_buffer_bytes),
+                               sizeof(recv_buffer_bytes));
+#else
+            (void)::setsockopt(s, SOL_SOCKET, SO_RCVBUF, &recv_buffer_bytes, sizeof(recv_buffer_bytes));
+#endif
+        }
 
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
@@ -2122,6 +2183,353 @@ namespace
         check(resp.find("content-encoding: br") != std::string::npos, "precompressed br should set br encoding");
         check(resp.find("fake-br-payload") != std::string::npos, "precompressed br should serve .br payload");
     }
+
+    void test_keep_alive_client_close_releases_connection()
+    {
+        const uint16_t port = reserve_tcp_port();
+        check(port != 0, "keep-alive close test should reserve a port");
+        if (port == 0) {
+            return;
+        }
+
+        const auto root = std::filesystem::current_path() / "test_http_keep_alive_close";
+        std::error_code ec;
+        std::filesystem::create_directories(root, ec);
+        {
+            std::ofstream out(root / "ok.txt", std::ios::binary | std::ios::trunc);
+            out << "keep-alive-ok";
+        }
+
+        yuan::net::http::HttpServerConfig cfg;
+        cfg.enable_keep_alive = true;
+        yuan::server::HttpService service(port, cfg);
+        if (!service.init()) {
+            check(false, "keep-alive close test service should init");
+            return;
+        }
+        service.server().mount_static("/static", root.string());
+        service.start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+        socket_t s = connect_loopback(port);
+        check(s != kInvalidSocket, "keep-alive close test should connect");
+        if (s != kInvalidSocket) {
+            const std::string req =
+                "GET /static/ok.txt HTTP/1.1\r\n"
+                "Host: 127.0.0.1:" + std::to_string(port) + "\r\n"
+                "Connection: keep-alive\r\n\r\n";
+            check(send_all(s, req), "keep-alive close test should send request");
+            const std::string resp = recv_all(s);
+            check(resp.find("200") != std::string::npos,
+                  "keep-alive static response should be 200");
+            check(resp.find("keep-alive-ok") != std::string::npos,
+                  "keep-alive static response should include body");
+            check(wait_http_connections(service, 1, std::chrono::milliseconds(1500)),
+                  "keep-alive connection should remain active before client close");
+            abortive_close_socket(s);
+            check(wait_http_connections(service, 0, std::chrono::milliseconds(2500)),
+                  "keep-alive client close should release connection before idle timeout");
+        }
+
+        service.stop();
+        std::filesystem::remove_all(root, ec);
+    }
+
+    void test_static_stream_stalled_reader_uses_write_timeout()
+    {
+        const uint16_t port = reserve_tcp_port();
+        check(port != 0, "stalled static stream test should reserve a port");
+        if (port == 0) {
+            return;
+        }
+
+        const auto root = std::filesystem::current_path() / "test_http_stalled_static";
+        std::error_code ec;
+        std::filesystem::create_directories(root, ec);
+        const auto file = root / "stall-video.mp4";
+        {
+            std::ofstream out(file, std::ios::binary | std::ios::trunc);
+            std::string chunk(256 * 1024, 's');
+            for (int i = 0; i < 256; ++i) {
+                out.write(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+            }
+        }
+
+        yuan::net::http::HttpServerConfig cfg;
+        cfg.enable_keep_alive = true;
+        cfg.write_timeout_ms = 300;
+        yuan::server::HttpService service(port, cfg);
+        if (!service.init()) {
+            check(false, "stalled static stream test service should init");
+            return;
+        }
+        service.server().mount_static("/static", root.string());
+        service.start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+        socket_t s = connect_loopback(port, 4096);
+        check(s != kInvalidSocket, "stalled static stream test should connect");
+        if (s != kInvalidSocket) {
+            const std::string req =
+                "GET /static/stall-video.mp4 HTTP/1.1\r\n"
+                "Host: 127.0.0.1:" + std::to_string(port) + "\r\n"
+                "Connection: keep-alive\r\n\r\n";
+            check(send_all(s, req), "stalled static stream test should send request");
+
+            std::string resp;
+            check(recv_until_http_headers(s, resp), "stalled static stream test should receive headers");
+            check(resp.find("200") != std::string::npos, "stalled static stream response should be 200");
+            check(wait_http_connections(service, 1, std::chrono::milliseconds(1500)),
+                  "stalled static stream should be active before write timeout");
+
+            const bool released = wait_http_connections(service, 0, std::chrono::milliseconds(3500));
+            if (!released) {
+                const auto stats = service.server().snapshot_server_stats();
+                std::cerr << "[DEBUG] stalled static stream left active_http_connections="
+                          << stats.active_http_connections << '\n';
+            }
+            check(released, "stalled static stream should close on write timeout before idle timeout");
+            close_socket(s);
+        }
+
+        service.stop();
+        std::filesystem::remove_all(root, ec);
+    }
+
+    void test_static_stream_client_abort_releases_connection(uint16_t port,
+                                                             const std::filesystem::path &root,
+                                                             yuan::server::HttpService &service)
+    {
+        const auto file = root / "large-video.mp4";
+        {
+            std::ofstream out(file, std::ios::binary | std::ios::trunc);
+            std::string chunk(256 * 1024, '\0');
+            for (std::size_t i = 0; i < chunk.size(); ++i) {
+                chunk[i] = static_cast<char>('A' + (i % 23));
+            }
+            for (int i = 0; i < 256; ++i) {
+                out.write(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+            }
+        }
+
+        socket_t s = connect_loopback(port);
+        check(s != kInvalidSocket, "static stream abort test should connect");
+        if (s == kInvalidSocket) {
+            return;
+        }
+
+        const std::string req =
+            "GET /static/large-video.mp4 HTTP/1.1\r\n"
+            "Host: 127.0.0.1:" + std::to_string(port) + "\r\n"
+            "Connection: keep-alive\r\n\r\n";
+        check(send_all(s, req), "static stream abort test should send request");
+
+        std::string resp;
+        check(recv_until_http_headers(s, resp), "static stream abort test should receive headers");
+        check(resp.find("200") != std::string::npos, "large static response should be 200");
+        const auto header_end = resp.find("\r\n\r\n");
+        const std::size_t content_length = header_end == std::string::npos
+            ? static_cast<std::size_t>(-1)
+            : parse_content_length(resp.substr(0, header_end + 4));
+        check(content_length == 67108864,
+              "large static response should advertise full content length");
+
+        check(wait_http_connections(service, 1, std::chrono::milliseconds(1500)),
+              "large static stream should be active before client abort");
+        abortive_close_socket(s);
+
+        const bool released = wait_http_connections(service, 0, std::chrono::milliseconds(2500));
+        if (!released) {
+            const auto stats = service.server().snapshot_server_stats();
+            std::cerr << "[DEBUG] static stream abort left active_http_connections="
+                      << stats.active_http_connections << '\n';
+        }
+        check(released, "static stream client abort should release connection before idle timeout");
+    }
+
+    void test_http_service_shared_runtime()
+    {
+        const uint16_t port = reserve_tcp_port();
+        check(port != 0, "shared-runtime HTTP service should reserve a port");
+        if (port == 0) {
+            return;
+        }
+
+        yuan::net::NetworkRuntime runtime;
+        auto bus = std::make_shared<yuan::eventbus::EventBus>();
+        std::optional<yuan::server::ServiceRuntimeEvent> activated;
+        std::optional<yuan::server::ServiceRuntimeEvent> stopped;
+
+        bus->subscribe(yuan::server::events::service_activated,
+            [&](const yuan::eventbus::Event &event) {
+                if (const auto *payload = std::any_cast<yuan::server::ServiceRuntimeEvent>(&event.payload)) {
+                    activated = *payload;
+                }
+            });
+        bus->subscribe(yuan::server::events::service_stopped,
+            [&](const yuan::eventbus::Event &event) {
+                if (const auto *payload = std::any_cast<yuan::server::ServiceRuntimeEvent>(&event.payload)) {
+                    stopped = *payload;
+                }
+            });
+
+        yuan::app::RuntimeContext context;
+        context.app_name = "http-shared-runtime-test";
+        context.run_mode = yuan::app::RunMode::multi_thread;
+        context.worker_threads = 8;
+        context.runtime_worker_count = 4;
+        context.worker_index = 1;
+        context.active_service_name = "http";
+        context.service_index = 2;
+        context.service_instance_index = 1;
+        context.service_instance_count = 4;
+        context.shared_runtime = &runtime;
+        context.event_bus = bus;
+
+        yuan::net::http::HttpServerConfig cfg;
+        cfg.enable_keep_alive = false;
+        yuan::server::HttpService service(port, cfg);
+        service.set_runtime_context(context);
+        const bool service_ready = service.init();
+        check(service_ready, "shared-runtime HTTP service should init");
+        if (!service_ready) {
+            return;
+        }
+        service.server().on("/__shared_runtime_ping", [](yuan::net::http::HttpRequest *,
+                                                         yuan::net::http::HttpResponse *resp) {
+            const std::string body = "shared-runtime-ok";
+            resp->set_response_code(yuan::net::http::ResponseCode::ok_);
+            resp->add_header("Content-Type", "text/plain");
+            resp->add_header("Content-Length", std::to_string(body.size()));
+            resp->append_body(body);
+            resp->send();
+        });
+
+        service.start();
+        check(activated.has_value(), "shared-runtime HTTP service should publish activated event");
+        if (activated) {
+            check(activated->runtime_worker_count == 4 &&
+                      activated->worker_index == 1 &&
+                      activated->service_instance_index == 1 &&
+                      activated->service_instance_count == 4,
+                  "shared-runtime HTTP service event should carry worker/service identity");
+        }
+
+        std::atomic_bool runtime_entered{ false };
+        std::thread runtime_thread([&]() {
+            runtime_entered.store(true, std::memory_order_release);
+            runtime.run();
+        });
+
+        std::string resp;
+        for (int i = 0; i < 80; ++i) {
+            resp = http_get(port, "/__shared_runtime_ping");
+            if (resp.find("shared-runtime-ok") != std::string::npos) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+
+        check(runtime_entered.load(std::memory_order_acquire), "shared runtime should enter run loop");
+        check(resp.find("200") != std::string::npos, "shared-runtime HTTP service should return 200");
+        check(resp.find("shared-runtime-ok") != std::string::npos,
+              "shared-runtime HTTP service should process a real request");
+
+        service.stop();
+        runtime.stop();
+        if (runtime_thread.joinable()) {
+            runtime_thread.join();
+        }
+
+        check(stopped.has_value(), "shared-runtime HTTP service should publish stopped event");
+        if (stopped) {
+            check(stopped->service_instance_index == 1 &&
+                      stopped->service_instance_count == 4,
+                  "shared-runtime HTTP stopped event should preserve service identity");
+        }
+    }
+
+    void test_http_service_bootstrap_in_process_worker_runtime()
+    {
+        const uint16_t port = reserve_tcp_port();
+        check(port != 0, "bootstrap in-process HTTP service should reserve a port");
+        if (port == 0) {
+            return;
+        }
+
+        yuan::app::RuntimeContext context;
+        context.app_name = "http-bootstrap-worker-runtime-test";
+        context.run_mode = yuan::app::RunMode::multi_thread;
+        context.worker_threads = 2;
+        context.runtime_workers.worker_count = 1;
+        context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
+
+        yuan::app::Application application(context);
+        yuan::app::ServiceDescriptor descriptor;
+        descriptor.name = "http";
+        descriptor.type_name = "yuan::server::HttpService";
+        descriptor.contract_id = "server.http";
+        descriptor.contract_version = 1;
+        descriptor.placement.mode = yuan::app::PlacementMode::singleton;
+        descriptor.endpoints.push_back(yuan::app::ServiceEndpoint{
+            "http",
+            "127.0.0.1",
+            port,
+            "tcp"
+        });
+
+        yuan::net::http::HttpServerConfig cfg;
+        cfg.enable_keep_alive = false;
+        if (!application.add_service(descriptor, [port, cfg]() {
+                auto service = std::make_shared<yuan::server::HttpService>(port, cfg);
+                service->set_server_configurator([](yuan::server::HttpService &http_service) {
+                    http_service.server().on("/__bootstrap_worker_ping",
+                        [](yuan::net::http::HttpRequest *,
+                           yuan::net::http::HttpResponse *resp) {
+                            const std::string body = "bootstrap-worker-ok";
+                            resp->set_response_code(yuan::net::http::ResponseCode::ok_);
+                            resp->add_header("Content-Type", "text/plain");
+                            resp->add_header("Content-Length", std::to_string(body.size()));
+                            resp->append_body(body);
+                            resp->send();
+                        });
+                    return true;
+                });
+                return service;
+            })) {
+            check(false, "bootstrap in-process HTTP service should register factory");
+            return;
+        }
+
+        yuan::app::Bootstrap bootstrap(application);
+        check(bootstrap.run(), "bootstrap should start HTTP service on in-process worker runtime");
+        if (!bootstrap.has_running_workers()) {
+            check(false, "bootstrap should report a running in-process HTTP worker");
+            bootstrap.shutdown();
+            return;
+        }
+
+        std::string resp;
+        for (int i = 0; i < 80; ++i) {
+            resp = http_get(port, "/__bootstrap_worker_ping");
+            if (resp.find("bootstrap-worker-ok") != std::string::npos) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+
+        if (resp.find("bootstrap-worker-ok") == std::string::npos) {
+            std::cerr << "[DEBUG] bootstrap worker HTTP response:\n" << resp << "\n";
+        }
+        check(resp.find("200") != std::string::npos,
+              "bootstrap in-process HTTP worker should return 200");
+        check(resp.find("bootstrap-worker-ok") != std::string::npos,
+              "bootstrap in-process HTTP worker should process real request");
+
+        bootstrap.shutdown();
+        check(!bootstrap.has_running_workers(),
+              "bootstrap shutdown should stop in-process HTTP worker runtime");
+    }
 }
 
 int main()
@@ -2141,6 +2549,10 @@ int main()
     yuan::net::http::config::load_config();
 
     test_hpack_decoder_regressions();
+    test_http_service_shared_runtime();
+    test_http_service_bootstrap_in_process_worker_runtime();
+    test_keep_alive_client_close_releases_connection();
+    test_static_stream_stalled_reader_uses_write_timeout();
 
     const uint16_t port = reserve_tcp_port();
     check(port != 0, "should reserve test server port");
@@ -2419,6 +2831,7 @@ int main()
     test_static_etag_and_304(port, static_root);
     test_static_gzip(port, static_root);
     test_static_precompressed_br(port, static_root);
+    test_static_stream_client_abort_releases_connection(port, static_root, *service);
 
     std::filesystem::remove("http.json", cleanup_ec);
 

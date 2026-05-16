@@ -77,6 +77,9 @@ namespace yuan::coroutine
             if (!state) {
                 return;
             }
+            if (!conn) {
+                state->acceptor = nullptr;
+            }
             if (state->completed) {
                 if (state->acceptor && conn) {
                     state->acceptor->enqueue_pending_connection(std::move(conn));

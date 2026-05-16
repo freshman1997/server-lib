@@ -318,6 +318,43 @@ static void test_socket_ops_ipv6_bind_loopback()
     PASS();
 }
 
+static void test_socket_listen_options()
+{
+    TEST("socket ListenOptions apply");
+    int fd = socket::create_ipv4_tcp_socket(false);
+    ASSERT_TRUE(fd >= 0);
+
+    ListenOptions options;
+    options.reuse_addr = true;
+    options.reuse_port = false;
+    options.non_block = true;
+    ASSERT_TRUE(socket::apply_listen_options(fd, options));
+
+    InetAddress addr("127.0.0.1", 0);
+    ASSERT_EQ(socket::bind(fd, addr), 0);
+    ASSERT_EQ(socket::listen(fd, options.backlog), 0);
+
+    socket::close_fd(fd);
+    PASS();
+}
+
+static void test_socket_reuse_port_explicit()
+{
+    TEST("socket reuse_port is explicit");
+    int fd = socket::create_ipv4_tcp_socket(false);
+    ASSERT_TRUE(fd >= 0);
+
+    ASSERT_TRUE(socket::set_reuse_addr(fd, true));
+#ifdef _WIN32
+    ASSERT_TRUE(!socket::set_reuse_port(fd, true));
+#else
+    (void)socket::set_reuse_port(fd, false);
+#endif
+
+    socket::close_fd(fd);
+    PASS();
+}
+
 static void test_socket_ipv4_bind()
 {
     TEST("Socket IPv4 bind");
@@ -413,6 +450,8 @@ int main()
     test_socket_ops_ipv4();
     test_socket_ops_ipv6();
     test_socket_ops_ipv6_bind_loopback();
+    test_socket_listen_options();
+    test_socket_reuse_port_explicit();
 
     std::cout << "\n-- Socket tests --" << std::endl;
     test_socket_ipv4_bind();

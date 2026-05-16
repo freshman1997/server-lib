@@ -20,8 +20,12 @@ if(TARGET SmbProto)
             add_test(NAME smb_internal_client_smoke_ioctl COMMAND test_smb_internal_client_smoke --mode ioctl)
         endif()
         if(WIN32)
+            find_program(_smb_powershell NAMES pwsh powershell powershell.exe)
+            if(NOT _smb_powershell)
+                set(_smb_powershell "${CMAKE_COMMAND}" -E false)
+            endif()
             set(_smb_smoke_cmd
-                pwsh -NoProfile -ExecutionPolicy Bypass
+                ${_smb_powershell} -NoProfile -ExecutionPolicy Bypass
                 -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/smbclient_nas_smoke.ps1")
         else()
             set(_smb_smoke_cmd
