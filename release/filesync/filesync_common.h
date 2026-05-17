@@ -20,12 +20,38 @@ inline std::uint64_t file_time_to_seconds(const std::filesystem::file_time_type&
     return static_cast<std::uint64_t>(system_time.time_since_epoch().count());
 }
 
-inline std::string normalize_relative_path(const std::filesystem::path& path) {
-    auto value = path.generic_string();
+inline std::string path_to_utf8(const std::filesystem::path& path) {
+    const auto u8 = path.generic_u8string();
+    std::string value;
+    value.reserve(u8.size());
+    for (const auto ch : u8) {
+        value.push_back(static_cast<char>(ch));
+    }
+    return value;
+}
+
+inline std::filesystem::path path_from_utf8(const std::string& value) {
+#ifdef __cpp_char8_t
+    std::u8string u8;
+    u8.reserve(value.size());
+    for (const unsigned char ch : value) {
+        u8.push_back(static_cast<char8_t>(ch));
+    }
+    return std::filesystem::path(u8);
+#else
+    return std::filesystem::u8path(value);
+#endif
+}
+
+inline std::string normalize_relative_path(std::string value) {
     while (!value.empty() && value.front() == '/') {
         value.erase(value.begin());
     }
     return value;
+}
+
+inline std::string normalize_relative_path(const std::filesystem::path& path) {
+    return normalize_relative_path(path_to_utf8(path));
 }
 
 inline bool is_safe_relative_path(const std::string& value) {
@@ -33,15 +59,17 @@ inline bool is_safe_relative_path(const std::string& value) {
         value.find(':') != std::string::npos) {
         return false;
     }
-    std::filesystem::path path(value);
-    if (path.is_absolute() || path.has_root_name() || path.has_root_directory()) {
-        return false;
-    }
-    for (const auto& part : path) {
-        const auto text = part.generic_string();
-        if (text.empty() || text == "." || text == "..") {
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        const auto end = value.find('/', start);
+        const auto part = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (part.empty() || part == "." || part == "..") {
             return false;
         }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
     }
     return true;
 }

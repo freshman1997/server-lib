@@ -13,6 +13,7 @@
 #include "plugin/plugin_manifest.h"
 #include "plugin/plugin_meta.h"
 #include "plugin/plugin_state.h"
+#include "net/runtime/network_runtime.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -147,6 +148,208 @@ namespace
 
         close_socket(fd);
         return received == payload;
+    }
+
+    socket_t connect_tcp_socket(uint16_t port)
+    {
+        const socket_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd == kInvalidSocket) {
+            return kInvalidSocket;
+        }
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            if (::connect(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) == 0) {
+                return fd;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        close_socket(fd);
+        return kInvalidSocket;
+    }
+
+    bool tcp_send(socket_t fd, const std::string &payload)
+    {
+        if (fd == kInvalidSocket) {
+            return false;
+        }
+
+        std::size_t sent = 0;
+        while (sent < payload.size()) {
+            const auto rc = ::send(fd, payload.data() + sent, payload.size() - sent, 0);
+            if (rc <= 0) {
+                return false;
+            }
+            sent += static_cast<std::size_t>(rc);
+        }
+
+        return true;
+    }
+
+    void append_length_prefix(std::string &buffer, uint32_t payload_size)
+    {
+        buffer.push_back(static_cast<char>((payload_size >> 24u) & 0xffu));
+        buffer.push_back(static_cast<char>((payload_size >> 16u) & 0xffu));
+        buffer.push_back(static_cast<char>((payload_size >> 8u) & 0xffu));
+        buffer.push_back(static_cast<char>(payload_size & 0xffu));
+    }
+
+    std::string make_length_prefixed_frame(const std::string &payload)
+    {
+        std::string frame;
+        frame.reserve(4 + payload.size());
+        append_length_prefix(frame, static_cast<uint32_t>(payload.size()));
+        frame.append(payload);
+        return frame;
+    }
+
+    bool tcp_receive_exact(socket_t fd,
+                           std::size_t expected_bytes,
+                           std::chrono::milliseconds timeout,
+                           std::string &data)
+    {
+        data.clear();
+        if (fd == kInvalidSocket) {
+            return false;
+        }
+
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (data.size() < expected_bytes && std::chrono::steady_clock::now() < deadline) {
+            fd_set read_set;
+            FD_ZERO(&read_set);
+            FD_SET(fd, &read_set);
+
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - std::chrono::steady_clock::now());
+            if (remaining.count() <= 0) {
+                break;
+            }
+
+            timeval tv{};
+            tv.tv_sec = static_cast<long>(remaining.count() / 1000);
+            tv.tv_usec = static_cast<long>((remaining.count() % 1000) * 1000);
+
+            const int ready = ::select(static_cast<int>(fd) + 1, &read_set, nullptr, nullptr, &tv);
+            if (ready <= 0 || !FD_ISSET(fd, &read_set)) {
+                continue;
+            }
+
+            char buffer[256];
+            const auto bytes_to_read = (std::min)(expected_bytes - data.size(), sizeof(buffer));
+            const auto rc = ::recv(fd, buffer, static_cast<int>(bytes_to_read), 0);
+            if (rc <= 0) {
+                return false;
+            }
+            data.append(buffer, static_cast<std::size_t>(rc));
+        }
+
+        return data.size() == expected_bytes;
+    }
+
+    bool tcp_receive_length_prefixed_frame(socket_t fd,
+                                           std::chrono::milliseconds timeout,
+                                           std::string &payload)
+    {
+        std::string header;
+        if (!tcp_receive_exact(fd, 4, timeout, header)) {
+            return false;
+        }
+
+        const auto frame_size =
+            (static_cast<uint32_t>(static_cast<unsigned char>(header[0])) << 24u) |
+            (static_cast<uint32_t>(static_cast<unsigned char>(header[1])) << 16u) |
+            (static_cast<uint32_t>(static_cast<unsigned char>(header[2])) << 8u) |
+            static_cast<uint32_t>(static_cast<unsigned char>(header[3]));
+        return tcp_receive_exact(fd, frame_size, timeout, payload);
+    }
+
+    bool wait_for_socket_close(socket_t fd, std::chrono::milliseconds timeout)
+    {
+        if (fd == kInvalidSocket) {
+            return true;
+        }
+
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            fd_set read_set;
+            FD_ZERO(&read_set);
+            FD_SET(fd, &read_set);
+
+            timeval tv{};
+            tv.tv_sec = 0;
+            tv.tv_usec = 100 * 1000;
+
+            const int ready = ::select(static_cast<int>(fd) + 1, &read_set, nullptr, nullptr, &tv);
+            if (ready < 0) {
+                return false;
+            }
+            if (ready == 0 || !FD_ISSET(fd, &read_set)) {
+                continue;
+            }
+
+            char ch = 0;
+            const auto rc = ::recv(fd, &ch, 1, 0);
+            if (rc == 0) {
+                return true;
+            }
+            if (rc < 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    struct SocketDrainResult
+    {
+        bool closed = false;
+        std::string data;
+    };
+
+    SocketDrainResult drain_socket_until_close(socket_t fd, std::chrono::milliseconds timeout)
+    {
+        SocketDrainResult result;
+        if (fd == kInvalidSocket) {
+            result.closed = true;
+            return result;
+        }
+
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            fd_set read_set;
+            FD_ZERO(&read_set);
+            FD_SET(fd, &read_set);
+
+            timeval tv{};
+            tv.tv_sec = 0;
+            tv.tv_usec = 100 * 1000;
+
+            const int ready = ::select(static_cast<int>(fd) + 1, &read_set, nullptr, nullptr, &tv);
+            if (ready < 0) {
+                result.closed = true;
+                return result;
+            }
+            if (ready == 0 || !FD_ISSET(fd, &read_set)) {
+                continue;
+            }
+
+            char buffer[256];
+            const auto rc = ::recv(fd, buffer, static_cast<int>(sizeof(buffer)), 0);
+            if (rc > 0) {
+                result.data.append(buffer, static_cast<std::size_t>(rc));
+                continue;
+            }
+
+            result.closed = true;
+            return result;
+        }
+
+        return result;
     }
 
     std::filesystem::path resolve_plugin_examples_dir()
@@ -1089,6 +1292,502 @@ namespace
         bootstrap.shutdown();
     }
 
+    void test_protocol_service_handler_fault_events()
+    {
+        const auto plugin_examples_dir = resolve_plugin_examples_dir();
+        require(!plugin_examples_dir.empty(),
+                "C++ protocol plugin examples directory should be resolvable");
+
+        const uint16_t port = reserve_tcp_port();
+        require(port != 0, "C++ protocol fault test should reserve a TCP port");
+
+        yuan::plugin::PluginManager discovery_manager;
+        discovery_manager.set_plugin_path(plugin_examples_dir.string());
+        auto protocol_services = discovery_manager.discover_protocol_services({ "LineEchoProtocol" });
+        require(protocol_services.size() == 1,
+                "LineEchoProtocol manifest should declare one protocol service");
+
+        auto protocol_service = protocol_services[0];
+        protocol_service.host = "127.0.0.1";
+        protocol_service.port = port;
+        protocol_service.handler = "line_echo.throw_on_data";
+
+        auto event_bus = std::make_shared<yuan::eventbus::EventBus>();
+        std::mutex mutex;
+        std::vector<yuan::plugin::PluginFaultEvent> fault_events;
+        int degraded_events = 0;
+
+        event_bus->subscribe(yuan::plugin::events::plugin_faulted, [&](const yuan::eventbus::Event &event) {
+            const auto *fault_event = std::any_cast<yuan::plugin::PluginFaultEvent>(&event.payload);
+            if (!fault_event || fault_event->plugin_name != "LineEchoProtocol") {
+                return;
+            }
+
+            std::lock_guard<std::mutex> lock(mutex);
+            fault_events.push_back(*fault_event);
+        });
+
+        event_bus->subscribe(yuan::plugin::events::plugin_degraded, [&](const yuan::eventbus::Event &event) {
+            const auto *plugin_event = std::any_cast<yuan::plugin::PluginEvent>(&event.payload);
+            if (!plugin_event || plugin_event->plugin_name != "LineEchoProtocol") {
+                return;
+            }
+
+            std::lock_guard<std::mutex> lock(mutex);
+            ++degraded_events;
+        });
+
+        yuan::app::RuntimeContext context;
+        context.app_name = "protocol-service-fault-event-test";
+        context.run_mode = yuan::app::RunMode::multi_thread;
+        context.worker_threads = 1;
+        context.runtime_workers.worker_count = 1;
+        context.event_bus = event_bus;
+
+        yuan::app::Application app(context);
+        yuan::app::ServicePlacement placement;
+        placement.mode = yuan::app::PlacementMode::singleton;
+
+        require(yuan::app::add_plugin_protocol_service(
+                    app,
+                    plugin_examples_dir.string(),
+                    protocol_service,
+                    placement),
+                "C++ line echo plugin protocol fault service should register");
+
+        yuan::app::Bootstrap bootstrap(app);
+        require(bootstrap.run(), "bootstrap should start C++ protocol fault listener");
+
+        const socket_t client = connect_tcp_socket(port);
+        require(client != kInvalidSocket, "fault test client should connect to the protocol listener");
+        require(tcp_send(client, "boom\n"), "fault test payload should be sent");
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < deadline) {
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                if (!fault_events.empty() && degraded_events > 0) {
+                    break;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            require(!fault_events.empty(), "handler exception should publish a plugin_faulted event");
+            require(degraded_events > 0, "first handler exception should degrade the plugin");
+            require(fault_events.back().call_site == "protocol.on_data",
+                    "fault event should identify the protocol on_data call site");
+            require(fault_events.back().fault_message.find("line echo handler test failure") != std::string::npos,
+                    "fault event should include the handler exception message");
+        }
+
+        close_socket(client);
+        bootstrap.shutdown();
+    }
+
+    void test_protocol_service_shutdown_closes_active_connections()
+    {
+        const auto plugin_examples_dir = resolve_plugin_examples_dir();
+        require(!plugin_examples_dir.empty(),
+                "C++ protocol plugin examples directory should be resolvable");
+
+        const uint16_t port = reserve_tcp_port();
+        require(port != 0, "C++ protocol shutdown test should reserve a TCP port");
+
+        yuan::plugin::PluginManager discovery_manager;
+        discovery_manager.set_plugin_path(plugin_examples_dir.string());
+        auto protocol_services = discovery_manager.discover_protocol_services({ "LineEchoProtocol" });
+        require(protocol_services.size() == 1,
+                "LineEchoProtocol manifest should declare one protocol service");
+
+        auto protocol_service = protocol_services[0];
+        protocol_service.host = "127.0.0.1";
+        protocol_service.port = port;
+
+        yuan::app::RuntimeContext context;
+        context.app_name = "protocol-service-close-connection-test";
+        context.run_mode = yuan::app::RunMode::multi_thread;
+        context.worker_threads = 1;
+        context.runtime_workers.worker_count = 1;
+        context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
+
+        yuan::app::Application app(context);
+        yuan::app::ServicePlacement placement;
+        placement.mode = yuan::app::PlacementMode::singleton;
+
+        require(yuan::app::add_plugin_protocol_service(
+                    app,
+                    plugin_examples_dir.string(),
+                    protocol_service,
+                    placement),
+                "C++ line echo plugin protocol service should register for shutdown test");
+
+        yuan::app::Bootstrap bootstrap(app);
+        require(bootstrap.run(), "bootstrap should start C++ protocol shutdown listener");
+
+        const socket_t client = connect_tcp_socket(port);
+        require(client != kInvalidSocket, "shutdown test client should connect to the protocol listener");
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+        bootstrap.shutdown();
+        require(wait_for_socket_close(client, std::chrono::seconds(2)),
+                "plugin protocol shutdown should close active connections");
+
+        close_socket(client);
+    }
+
+    void test_protocol_service_resource_guard_tracking()
+    {
+        const auto plugin_examples_dir = resolve_plugin_examples_dir();
+        require(!plugin_examples_dir.empty(),
+                "C++ protocol plugin examples directory should be resolvable");
+
+        const uint16_t port = reserve_tcp_port();
+        require(port != 0, "C++ protocol resource tracking test should reserve a TCP port");
+
+        yuan::plugin::PluginManager discovery_manager;
+        discovery_manager.set_plugin_path(plugin_examples_dir.string());
+        auto protocol_services = discovery_manager.discover_protocol_services({ "LineEchoProtocol" });
+        require(protocol_services.size() == 1,
+                "LineEchoProtocol manifest should declare one protocol service");
+
+        auto protocol_service = protocol_services[0];
+        protocol_service.host = "127.0.0.1";
+        protocol_service.port = port;
+
+        yuan::net::NetworkRuntime runtime;
+        yuan::app::RuntimeContext context;
+        context.app_name = "protocol-service-resource-guard-test";
+        context.run_mode = yuan::app::RunMode::single_thread;
+        context.worker_threads = 1;
+        context.runtime_worker_count = 1;
+        context.runtime_workers.worker_count = 1;
+        context.shared_runtime = &runtime;
+        context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
+
+        yuan::app::PluginProtocolServiceAdapter adapter(plugin_examples_dir.string(), protocol_service);
+        adapter.set_runtime_context(context);
+        require(adapter.init(), "protocol service adapter should initialize for resource tracking test");
+
+        std::thread loop_thread([&runtime]() {
+            runtime.run();
+        });
+
+        adapter.start();
+        require(adapter.started(), "protocol service adapter should start for resource tracking test");
+
+        auto report = adapter.resource_leak_report();
+        require(report.find("network_listener") != std::string::npos,
+                "resource report should include the tracked protocol listener");
+
+        const socket_t client = connect_tcp_socket(port);
+        require(client != kInvalidSocket, "resource tracking test client should connect to the protocol listener");
+
+        const auto connection_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < connection_deadline) {
+            report = adapter.resource_leak_report();
+            if (report.find("network_connection") != std::string::npos) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        require(report.find("network_connection") != std::string::npos,
+                "resource report should include the tracked active protocol connection");
+
+        close_socket(client);
+
+        const auto disconnect_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < disconnect_deadline) {
+            report = adapter.resource_leak_report();
+            if (report.find("network_connection") == std::string::npos) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        require(report.find("network_connection") == std::string::npos,
+                "resource report should stop listing the connection after peer disconnect");
+
+        adapter.stop();
+        runtime.dispatch([&runtime]() {
+            runtime.stop();
+        });
+        if (loop_thread.joinable()) {
+            loop_thread.join();
+        }
+    }
+
+    void test_protocol_service_idle_timeout_closes_partial_line_connections()
+    {
+        const auto plugin_examples_dir = resolve_plugin_examples_dir();
+        require(!plugin_examples_dir.empty(),
+                "C++ protocol plugin examples directory should be resolvable");
+
+        const uint16_t port = reserve_tcp_port();
+        require(port != 0, "C++ protocol idle-timeout test should reserve a TCP port");
+
+        yuan::plugin::PluginManager discovery_manager;
+        discovery_manager.set_plugin_path(plugin_examples_dir.string());
+        auto protocol_services = discovery_manager.discover_protocol_services({ "LineEchoProtocol" });
+        require(protocol_services.size() == 1,
+                "LineEchoProtocol manifest should declare one protocol service");
+
+        auto protocol_service = protocol_services[0];
+        protocol_service.host = "127.0.0.1";
+        protocol_service.port = port;
+        protocol_service.read_timeout_ms = 0;
+        protocol_service.idle_timeout_ms = 200;
+
+        yuan::app::RuntimeContext context;
+        context.app_name = "protocol-service-idle-timeout-test";
+        context.run_mode = yuan::app::RunMode::multi_thread;
+        context.worker_threads = 1;
+        context.runtime_workers.worker_count = 1;
+        context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
+
+        yuan::app::Application app(context);
+        yuan::app::ServicePlacement placement;
+        placement.mode = yuan::app::PlacementMode::singleton;
+
+        require(yuan::app::add_plugin_protocol_service(
+                    app,
+                    plugin_examples_dir.string(),
+                    protocol_service,
+                    placement),
+                "C++ line echo plugin protocol service should register for idle-timeout test");
+
+        yuan::app::Bootstrap bootstrap(app);
+        require(bootstrap.run(), "bootstrap should start C++ protocol idle-timeout listener");
+
+        const socket_t client = connect_tcp_socket(port);
+        require(client != kInvalidSocket, "idle-timeout test client should connect to the protocol listener");
+        require(tcp_send(client, "partial-line-without-newline"),
+                "idle-timeout test should send a partial line payload");
+
+        const auto drain_result = drain_socket_until_close(client, std::chrono::seconds(2));
+        require(drain_result.closed, "idle-timeout test connection should be closed by the service");
+        require(drain_result.data.empty(),
+                "idle-timeout should not dispatch a partial line frame when the peer goes idle");
+
+        close_socket(client);
+        bootstrap.shutdown();
+    }
+
+    void test_protocol_service_length_prefixed_framing()
+    {
+        const auto plugin_examples_dir = resolve_plugin_examples_dir();
+        require(!plugin_examples_dir.empty(),
+                "C++ protocol plugin examples directory should be resolvable");
+
+        const uint16_t port = reserve_tcp_port();
+        require(port != 0, "C++ protocol length-prefixed test should reserve a TCP port");
+
+        yuan::plugin::PluginManager discovery_manager;
+        discovery_manager.set_plugin_path(plugin_examples_dir.string());
+        auto protocol_services = discovery_manager.discover_protocol_services({ "LineEchoProtocol" });
+        require(protocol_services.size() == 1,
+                "LineEchoProtocol manifest should declare one protocol service");
+
+        auto protocol_service = protocol_services[0];
+        protocol_service.host = "127.0.0.1";
+        protocol_service.port = port;
+        protocol_service.handler = "length_echo.on_connection";
+        protocol_service.framing = "length_prefixed";
+        protocol_service.max_frame_bytes = 4096;
+
+        yuan::app::RuntimeContext context;
+        context.app_name = "protocol-service-length-prefixed-test";
+        context.run_mode = yuan::app::RunMode::multi_thread;
+        context.worker_threads = 1;
+        context.runtime_workers.worker_count = 1;
+        context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
+
+        yuan::app::Application app(context);
+        yuan::app::ServicePlacement placement;
+        placement.mode = yuan::app::PlacementMode::singleton;
+
+        require(yuan::app::add_plugin_protocol_service(
+                    app,
+                    plugin_examples_dir.string(),
+                    protocol_service,
+                    placement),
+                "C++ length-prefixed protocol service should register");
+
+        yuan::app::Bootstrap bootstrap(app);
+        require(bootstrap.run(), "bootstrap should start C++ length-prefixed listener");
+
+        const socket_t client = connect_tcp_socket(port);
+        require(client != kInvalidSocket, "length-prefixed test client should connect to the listener");
+
+        const auto half_packet = make_length_prefixed_frame("half-packet");
+        require(tcp_send(client, half_packet.substr(0, 2)),
+                "length-prefixed test should send the partial header");
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        require(tcp_send(client, half_packet.substr(2)),
+                "length-prefixed test should send the remainder of the half packet");
+
+        std::string received;
+        require(tcp_receive_length_prefixed_frame(client, std::chrono::seconds(2), received),
+                "length-prefixed test should receive the half-packet response");
+        require(received == "half-packet",
+                "length-prefixed framing should reassemble half packets before dispatch");
+
+        std::string sticky_frames;
+        sticky_frames += make_length_prefixed_frame("sticky-one");
+        sticky_frames += make_length_prefixed_frame("sticky-two");
+        require(tcp_send(client, sticky_frames),
+                "length-prefixed test should send two frames in one write");
+
+        require(tcp_receive_length_prefixed_frame(client, std::chrono::seconds(2), received),
+                "length-prefixed test should receive the first sticky-frame response");
+        require(received == "sticky-one",
+                "length-prefixed framing should preserve the first sticky frame boundary");
+        require(tcp_receive_length_prefixed_frame(client, std::chrono::seconds(2), received),
+                "length-prefixed test should receive the second sticky-frame response");
+        require(received == "sticky-two",
+                "length-prefixed framing should preserve the second sticky frame boundary");
+
+        const std::string large_payload(3072, 'x');
+        require(tcp_send(client, make_length_prefixed_frame(large_payload)),
+                "length-prefixed test should send a large in-range frame");
+        require(tcp_receive_length_prefixed_frame(client, std::chrono::seconds(2), received),
+                "length-prefixed test should receive the large-frame response");
+        require(received == large_payload,
+                "length-prefixed framing should pass through large in-range frames");
+
+        close_socket(client);
+
+        const socket_t oversize_client = connect_tcp_socket(port);
+        require(oversize_client != kInvalidSocket,
+                "length-prefixed oversize test client should connect to the listener");
+
+        std::string oversize_header;
+        append_length_prefix(
+            oversize_header,
+            static_cast<uint32_t>(protocol_service.max_frame_bytes + 1));
+        require(tcp_send(oversize_client, oversize_header),
+                "length-prefixed oversize test should send the frame header");
+        require(wait_for_socket_close(oversize_client, std::chrono::seconds(2)),
+                "length-prefixed oversize frame should close the connection");
+
+        close_socket(oversize_client);
+        bootstrap.shutdown();
+    }
+
+    void test_protocol_service_runtime_error_stats_split()
+    {
+        const auto plugin_examples_dir = resolve_plugin_examples_dir();
+        require(!plugin_examples_dir.empty(),
+                "C++ protocol plugin examples directory should be resolvable");
+
+        yuan::plugin::PluginManager discovery_manager;
+        discovery_manager.set_plugin_path(plugin_examples_dir.string());
+        auto protocol_services = discovery_manager.discover_protocol_services({ "LineEchoProtocol" });
+        require(protocol_services.size() == 1,
+                "LineEchoProtocol manifest should declare one protocol service");
+
+        yuan::net::NetworkRuntime runtime;
+        yuan::app::RuntimeContext context;
+        context.app_name = "protocol-service-runtime-stats-test";
+        context.run_mode = yuan::app::RunMode::single_thread;
+        context.worker_threads = 1;
+        context.runtime_worker_count = 1;
+        context.runtime_workers.worker_count = 1;
+        context.shared_runtime = &runtime;
+        context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
+
+        std::thread loop_thread([&runtime]() {
+            runtime.run();
+        });
+
+        {
+            auto protocol_service = protocol_services[0];
+            protocol_service.host = "127.0.0.1";
+            protocol_service.port = reserve_tcp_port();
+            protocol_service.handler = "line_echo.throw_on_data";
+
+            require(protocol_service.port != 0, "handler-error stats test should reserve a TCP port");
+
+            yuan::app::PluginProtocolServiceAdapter adapter(plugin_examples_dir.string(), protocol_service);
+            adapter.set_runtime_context(context);
+            require(adapter.init(), "handler-error stats adapter should initialize");
+            adapter.start();
+            require(adapter.started(), "handler-error stats adapter should start");
+
+            const socket_t client = connect_tcp_socket(protocol_service.port);
+            require(client != kInvalidSocket, "handler-error stats test client should connect");
+            require(tcp_send(client, "boom\n"),
+                    "handler-error stats test should send the failing payload");
+
+            auto stats = adapter.runtime_stats();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (stats.handler_error_count == 0 && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                stats = adapter.runtime_stats();
+            }
+
+            require(stats.handler_error_count > 0,
+                    "handler failures should increment the handler error count");
+            require(stats.framing_error_count == 0,
+                    "handler failures should not increment the framing error count");
+
+            close_socket(client);
+            adapter.stop();
+        }
+
+        {
+            auto protocol_service = protocol_services[0];
+            protocol_service.host = "127.0.0.1";
+            protocol_service.port = reserve_tcp_port();
+            protocol_service.handler = "length_echo.on_connection";
+            protocol_service.framing = "length_prefixed";
+            protocol_service.max_frame_bytes = 64;
+
+            require(protocol_service.port != 0, "framing-error stats test should reserve a TCP port");
+
+            yuan::app::PluginProtocolServiceAdapter adapter(plugin_examples_dir.string(), protocol_service);
+            adapter.set_runtime_context(context);
+            require(adapter.init(), "framing-error stats adapter should initialize");
+            adapter.start();
+            require(adapter.started(), "framing-error stats adapter should start");
+
+            const socket_t client = connect_tcp_socket(protocol_service.port);
+            require(client != kInvalidSocket, "framing-error stats test client should connect");
+
+            std::string oversize_header;
+            append_length_prefix(
+                oversize_header,
+                static_cast<uint32_t>(protocol_service.max_frame_bytes + 1));
+            require(tcp_send(client, oversize_header),
+                    "framing-error stats test should send an oversize frame header");
+            require(wait_for_socket_close(client, std::chrono::seconds(2)),
+                    "framing-error stats test connection should be closed");
+
+            auto stats = adapter.runtime_stats();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (stats.framing_error_count == 0 && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                stats = adapter.runtime_stats();
+            }
+
+            require(stats.framing_error_count > 0,
+                    "framing failures should increment the framing error count");
+            require(stats.handler_error_count == 0,
+                    "framing failures should not increment the handler error count");
+
+            close_socket(client);
+            adapter.stop();
+        }
+
+        runtime.dispatch([&runtime]() {
+            runtime.stop();
+        });
+        if (loop_thread.joinable()) {
+            loop_thread.join();
+        }
+    }
+
     void test_protocol_service_adapter_negative_paths()
     {
         const auto temp_root = std::filesystem::temp_directory_path() /
@@ -1297,6 +1996,12 @@ int main()
     test_protocol_service_worker_local_adapter();
     test_protocol_service_echo_listener();
     test_protocol_service_cpp_line_echo_listener();
+    test_protocol_service_handler_fault_events();
+    test_protocol_service_shutdown_closes_active_connections();
+    test_protocol_service_resource_guard_tracking();
+    test_protocol_service_idle_timeout_closes_partial_line_connections();
+    test_protocol_service_length_prefixed_framing();
+    test_protocol_service_runtime_error_stats_split();
     test_protocol_service_adapter_negative_paths();
     test_resource_guard_cleanup_on_stop();
     std::cout << "  PASSED" << std::endl;

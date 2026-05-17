@@ -169,6 +169,108 @@ namespace
         std::error_code ec;
         std::filesystem::remove_all(root, ec);
     }
+
+    void test_filters_are_relative_and_directory_aware()
+    {
+        const auto root = make_temp_root();
+        auto config = test_config_for(root);
+        config.exclude_patterns = {"build", "third_party/**", "**/.git/**", "*.log"};
+
+        write_text_file(root / "build" / "cache" / "out.o", "object");
+        write_text_file(root / "third_party" / "lib" / "dep.txt", "dep");
+        write_text_file(root / ".git" / "config", "git");
+        write_text_file(root / "logs" / "app.log", "log");
+        write_text_file(root / "src" / "main.cpp", "code");
+        std::filesystem::create_directories(root / "empty" / "child");
+
+        check(any_pattern_matches({"build"}, filter_candidates_for_remote(config, "work/build/cache/out.o")),
+              "relative directory pattern matches below remote_prefix");
+        check(any_pattern_matches({"build/**"}, filter_candidates_for_remote(config, "work/build/cache/out.o")),
+              "relative directory glob matches below remote_prefix");
+        check(any_pattern_matches({"**/build/**"}, filter_candidates_for_remote(config, "work/build")),
+              "globstar directory pattern matches directory itself");
+        check(any_pattern_matches({"*.log"}, filter_candidates_for_remote(config, "work/logs/app.log")),
+              "basename pattern matches nested file");
+
+        const auto manifest = scan_paths(config);
+        check(manifest.count("work/src/main.cpp") == 1, "scan keeps included file");
+        check(manifest.count("work/empty/child") == 1, "scan keeps empty directory");
+        check(manifest.count("work/build") == 0, "scan excludes directory by relative name");
+        check(manifest.count("work/build/cache/out.o") == 0, "scan prunes excluded directory contents");
+        check(manifest.count("work/third_party") == 0, "scan excludes directory by relative glob");
+        check(manifest.count("work/third_party/lib/dep.txt") == 0, "scan prunes excluded glob contents");
+        check(manifest.count("work/.git") == 0, "scan excludes hidden directory by glob");
+        check(manifest.count("work/logs/app.log") == 0, "scan excludes nested basename match");
+
+        std::error_code ec;
+        std::filesystem::remove_all(root, ec);
+    }
+
+    void test_need_message_respects_local_filters()
+    {
+        const auto root = make_temp_root();
+        auto config = test_config_for(root);
+        config.exclude_patterns = {"build", "*.log"};
+
+        Manifest remote;
+        remote["work/build/out.o"] = {false, 6, 2, 22};
+        remote["work/logs/app.log"] = {false, 3, 2, 33};
+        remote["work/src/main.cpp"] = {false, 4, 2, 44};
+
+        const auto need = need_message(config, remote);
+        check(need.find("GET work/src/main.cpp\n") != std::string::npos, "NEED includes allowed remote file");
+        check(need.find("GET work/build/out.o\n") == std::string::npos, "NEED skips excluded directory file");
+        check(need.find("GET work/logs/app.log\n") == std::string::npos, "NEED skips excluded basename file");
+
+        std::error_code ec;
+        std::filesystem::remove_all(root, ec);
+    }
+
+    void test_apply_files_ignores_excluded_payload()
+    {
+        const auto root = make_temp_root();
+        auto config = test_config_for(root);
+        config.exclude_patterns = {"secret"};
+
+        const auto text =
+            std::string("FILES 2\nDIR work/secret\nPUT_BEGIN work/secret/a.txt 7 1 123\n") +
+            "CHUNK " + filesync::hex_encode(bytes_of("blocked")) + "\nPUT_END\nEND\n";
+        apply_files(config, {}, false, text);
+        check(!std::filesystem::exists(root / "secret"), "apply_files ignores excluded directory payload");
+
+        std::error_code ec;
+        std::filesystem::remove_all(root, ec);
+    }
+
+    void test_utf8_paths_roundtrip_through_scan_and_mapping()
+    {
+        const auto root = make_temp_root();
+        auto config = test_config_for(root);
+        const std::string name = std::string({
+            static_cast<char>(0xe4),
+            static_cast<char>(0xb8),
+            static_cast<char>(0xad),
+            static_cast<char>(0xe6),
+            static_cast<char>(0x96),
+            static_cast<char>(0x87),
+            '.',
+            'm',
+            'd',
+        });
+        const auto local = root / filesync::path_from_utf8(name);
+        write_text_file(local, "utf8");
+
+        const auto manifest = scan_paths(config);
+        const auto remote = "work/" + name;
+        const auto it = manifest.find(remote);
+        check(it != manifest.end(), "scan emits UTF-8 remote path");
+        check(it != manifest.end() && std::filesystem::exists(it->second.local_path),
+              "scan keeps real local path for UTF-8 file");
+        check(std::filesystem::exists(local_path_for_remote(config, remote)), "UTF-8 remote maps back to local path");
+
+        std::error_code ec;
+        std::filesystem::remove_all(root, ec);
+    }
 }
 
 int main()
@@ -177,6 +279,10 @@ int main()
     test_config_rejects_unsafe_remote_prefix();
     test_need_message_counts_delete_and_get_actions();
     test_apply_files_commits_only_verified_payload();
+    test_filters_are_relative_and_directory_aware();
+    test_need_message_respects_local_filters();
+    test_apply_files_ignores_excluded_payload();
+    test_utf8_paths_roundtrip_through_scan_and_mapping();
 
     return g_failed == 0 ? 0 : 1;
 }

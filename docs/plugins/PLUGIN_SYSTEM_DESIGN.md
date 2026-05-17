@@ -856,7 +856,7 @@ Manifest 字段参考：
 | `host` | `0.0.0.0` | listener bind 地址。 |
 | `port` | `0` | listener bind 端口，允许 `0` 表示系统分配。 |
 | `handler` | 空 | 自定义 handler 名称，例如 `line_echo.on_connection`。 |
-| `framing` | `raw` | 当前支持 `raw` 和 `line`。 |
+| `framing` | `raw` | 当前支持 `raw`、`line` 和 `length_prefixed`（4 字节大端长度头）。 |
 | `read_timeout_ms` | `30000` | 单次读超时。 |
 | `idle_timeout_ms` | `60000` | 预留给后续 idle 治理。 |
 | `write_timeout_ms` | `30000` | 写入和 flush 超时。 |

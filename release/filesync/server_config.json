@@ -11,8 +11,8 @@
   "include_extensions": [],
   "include_patterns": [],
   "exclude_patterns": [
-    "**/.git/**",
-    "**/node_modules/**",
+    ".git",
+    "node_modules",
     "*.tmp",
     "*.log"
   ],

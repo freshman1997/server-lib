@@ -20,6 +20,8 @@ namespace yuan::plugin
         service_registration,
         http_middleware,
         http_route,
+        network_listener,
+        network_connection,
         callback,
         coroutine_task,
         async_task,
@@ -40,6 +42,10 @@ namespace yuan::plugin
             return "http_middleware";
         case PluginResourceType::http_route:
             return "http_route";
+        case PluginResourceType::network_listener:
+            return "network_listener";
+        case PluginResourceType::network_connection:
+            return "network_connection";
         case PluginResourceType::callback:
             return "callback";
         case PluginResourceType::coroutine_task:

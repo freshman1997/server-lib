@@ -364,6 +364,8 @@ namespace
         guard.track("alpha", yuan::plugin::PluginResourceType::event_subscription, []() {}, "sub1");
         guard.track("alpha", yuan::plugin::PluginResourceType::event_subscription, []() {}, "sub2");
         guard.track("alpha", yuan::plugin::PluginResourceType::scheduler_task, []() {}, "task1");
+        guard.track("alpha", yuan::plugin::PluginResourceType::network_listener, []() {}, "listener1");
+        guard.track("alpha", yuan::plugin::PluginResourceType::network_connection, []() {}, "conn1");
 
         auto snapshot = guard.resource_snapshot("alpha");
         require(snapshot.count(yuan::plugin::PluginResourceType::event_subscription) > 0,
@@ -374,6 +376,14 @@ namespace
                 "snapshot should contain scheduler_task type");
         require(snapshot.at(yuan::plugin::PluginResourceType::scheduler_task) == 1,
                 "snapshot should count 1 scheduler_task");
+        require(snapshot.count(yuan::plugin::PluginResourceType::network_listener) > 0,
+                "snapshot should contain network_listener type");
+        require(snapshot.at(yuan::plugin::PluginResourceType::network_listener) == 1,
+                "snapshot should count 1 network_listener");
+        require(snapshot.count(yuan::plugin::PluginResourceType::network_connection) > 0,
+                "snapshot should contain network_connection type");
+        require(snapshot.at(yuan::plugin::PluginResourceType::network_connection) == 1,
+                "snapshot should count 1 network_connection");
 
         auto report = guard.leak_report("alpha");
         require(!report.empty(), "leak report should not be empty for plugin with tracked resources");
@@ -381,6 +391,10 @@ namespace
                 "leak report should mention event_subscription");
         require(report.find("scheduler_task") != std::string::npos,
                 "leak report should mention scheduler_task");
+        require(report.find("network_listener") != std::string::npos,
+                "leak report should mention network_listener");
+        require(report.find("network_connection") != std::string::npos,
+                "leak report should mention network_connection");
 
         auto empty_snapshot = guard.resource_snapshot("nonexistent");
         require(empty_snapshot.empty(), "snapshot for nonexistent plugin should be empty");

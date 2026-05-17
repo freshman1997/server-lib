@@ -7,6 +7,7 @@
 #include "service.h"
 #include "service_registry.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -15,6 +16,7 @@
 namespace yuan::app
 {
     class PluginHostService;
+    struct PluginProtocolServiceRuntimeStats;
 }
 
 namespace yuan::net
@@ -24,6 +26,11 @@ namespace yuan::net
 
 namespace yuan::app
 {
+    struct ProtocolServiceRuntimeStatsSnapshot
+    {
+        std::uint64_t framing_error_count = 0;
+        std::uint64_t handler_error_count = 0;
+    };
 
     struct PluginProtocolActiveConnectionTracker;
 
@@ -43,6 +50,8 @@ namespace yuan::app
         const plugin::ProtocolServiceDescriptor &protocol_service() const noexcept;
         bool initialized() const noexcept;
         bool started() const noexcept;
+        std::string resource_leak_report() const;
+        ProtocolServiceRuntimeStatsSnapshot runtime_stats() const noexcept;
 
     private:
         bool start_protocol_listener();
@@ -55,6 +64,8 @@ namespace yuan::app
         std::unique_ptr<PluginHostService> host_;
         std::unique_ptr<net::AsyncListenerHost> listener_;
         std::shared_ptr<PluginProtocolActiveConnectionTracker> connection_tracker_;
+        std::shared_ptr<PluginProtocolServiceRuntimeStats> runtime_stats_;
+        uint64_t listener_resource_id_ = 0;
         bool initialized_ = false;
         bool started_ = false;
     };

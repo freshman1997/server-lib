@@ -25,17 +25,44 @@
 
 namespace yuan::app
 {
+    struct PluginProtocolServiceRuntimeStats
+    {
+        std::atomic<std::uint64_t> framing_error_count{0};
+        std::atomic<std::uint64_t> handler_error_count{0};
+    };
+
     struct PluginProtocolActiveConnectionTracker
     {
+        struct TrackedConnection
+        {
+            std::weak_ptr<net::Connection> connection;
+            uint64_t resource_guard_id = 0;
+        };
+
         std::mutex mutex;
         std::condition_variable cv;
-        std::unordered_map<std::uintptr_t, std::weak_ptr<net::Connection> > connections;
+        std::unordered_map<std::uintptr_t, TrackedConnection> connections;
         bool stopping = false;
     };
 
     namespace
     {
         constexpr auto kProtocolConnectionDrainTimeout = std::chrono::seconds(3);
+        constexpr std::size_t kLengthPrefixedHeaderBytes = sizeof(std::uint32_t);
+
+        std::string protocol_listener_resource_description(
+            const plugin::ProtocolServiceDescriptor &protocol_service)
+        {
+            return "protocol-listener:" + protocol_service.plugin_id + "." + protocol_service.name;
+        }
+
+        std::string protocol_connection_resource_description(
+            const plugin::ProtocolServiceDescriptor &protocol_service,
+            std::uintptr_t connection_id)
+        {
+            return "protocol-connection:" + protocol_service.plugin_id + "." +
+                   protocol_service.name + "#" + std::to_string(connection_id);
+        }
 
         bool is_valid_protocol_service(const plugin::ProtocolServiceDescriptor &protocol_service)
         {
@@ -70,6 +97,46 @@ namespace yuan::app
         std::string effective_framing(const plugin::ProtocolServiceDescriptor &protocol_service)
         {
             return lower_copy(protocol_service.framing.empty() ? "raw" : protocol_service.framing);
+        }
+
+        std::size_t decode_length_prefixed_frame_size(std::span<const std::byte> header)
+        {
+            if (header.size() < kLengthPrefixedHeaderBytes) {
+                return 0;
+            }
+
+            return (static_cast<std::size_t>(std::to_integer<std::uint32_t>(header[0])) << 24u) |
+                   (static_cast<std::size_t>(std::to_integer<std::uint32_t>(header[1])) << 16u) |
+                   (static_cast<std::size_t>(std::to_integer<std::uint32_t>(header[2])) << 8u) |
+                   static_cast<std::size_t>(std::to_integer<std::uint32_t>(header[3]));
+        }
+
+        void reset_runtime_stats(const std::shared_ptr<PluginProtocolServiceRuntimeStats> &runtime_stats)
+        {
+            if (!runtime_stats) {
+                return;
+            }
+
+            runtime_stats->framing_error_count.store(0, std::memory_order_relaxed);
+            runtime_stats->handler_error_count.store(0, std::memory_order_relaxed);
+        }
+
+        void record_framing_error(const std::shared_ptr<PluginProtocolServiceRuntimeStats> &runtime_stats)
+        {
+            if (!runtime_stats) {
+                return;
+            }
+
+            runtime_stats->framing_error_count.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        void record_handler_error(const std::shared_ptr<PluginProtocolServiceRuntimeStats> &runtime_stats)
+        {
+            if (!runtime_stats) {
+                return;
+            }
+
+            runtime_stats->handler_error_count.fetch_add(1, std::memory_order_relaxed);
         }
 
         bool is_builtin_echo_demo(const plugin::ProtocolServiceDescriptor &protocol_service)
@@ -198,9 +265,13 @@ namespace yuan::app
         {
         public:
             TrackedConnectionGuard(std::shared_ptr<PluginProtocolActiveConnectionTracker> tracker,
-                                   std::uintptr_t connection_id)
+                                   PluginHostService *host,
+                                   std::uintptr_t connection_id,
+                                   uint64_t resource_guard_id)
                 : tracker_(std::move(tracker)),
-                  connection_id_(connection_id)
+                  host_(host),
+                  connection_id_(connection_id),
+                  resource_guard_id_(resource_guard_id)
             {
             }
 
@@ -214,6 +285,9 @@ namespace yuan::app
                     std::lock_guard<std::mutex> lock(tracker_->mutex);
                     tracker_->connections.erase(connection_id_);
                 }
+                if (host_ && resource_guard_id_ != 0) {
+                    (void)host_->untrack_plugin_resource(resource_guard_id_);
+                }
                 tracker_->cv.notify_all();
             }
 
@@ -222,12 +296,17 @@ namespace yuan::app
 
         private:
             std::shared_ptr<PluginProtocolActiveConnectionTracker> tracker_;
+            PluginHostService *host_ = nullptr;
             std::uintptr_t connection_id_ = 0;
+            uint64_t resource_guard_id_ = 0;
         };
 
         bool track_stream_connection(
             const std::shared_ptr<PluginProtocolActiveConnectionTracker> &tracker,
-            const net::AsyncConnectionContext &ctx)
+            const net::AsyncConnectionContext &ctx,
+            PluginHostService *host,
+            const plugin::ProtocolServiceDescriptor &protocol_service,
+            uint64_t &resource_guard_id)
         {
             if (!tracker) {
                 return true;
@@ -238,11 +317,31 @@ namespace yuan::app
                 return false;
             }
 
+            resource_guard_id = 0;
+            if (host) {
+                resource_guard_id = host->track_plugin_resource(
+                    protocol_service.plugin_id,
+                    plugin::PluginResourceType::network_connection,
+                    [weak = std::weak_ptr<net::Connection>(conn)]() {
+                        if (auto locked = weak.lock()) {
+                            locked->close();
+                        }
+                    },
+                    protocol_connection_resource_description(protocol_service, ctx.connection_id()));
+            }
+
             std::lock_guard<std::mutex> lock(tracker->mutex);
             if (tracker->stopping) {
+                if (host && resource_guard_id != 0) {
+                    (void)host->untrack_plugin_resource(resource_guard_id);
+                    resource_guard_id = 0;
+                }
                 return false;
             }
-            tracker->connections[ctx.connection_id()] = conn;
+            tracker->connections[ctx.connection_id()] = PluginProtocolActiveConnectionTracker::TrackedConnection{
+                conn,
+                resource_guard_id
+            };
             return true;
         }
 
@@ -260,7 +359,7 @@ namespace yuan::app
                 tracker->stopping = true;
                 connections.reserve(tracker->connections.size());
                 for (const auto &entry : tracker->connections) {
-                    if (auto conn = entry.second.lock()) {
+                    if (auto conn = entry.second.connection.lock()) {
                         connections.push_back(std::move(conn));
                     }
                 }
@@ -300,41 +399,284 @@ namespace yuan::app
             });
         }
 
-        void notify_handler_error(plugin::PluginStreamProtocolHandler &handler,
-                                  HostStreamConnectionAdapter &connection,
-                                  std::string message,
-                                  int code = 0)
+        void apply_recorded_fault_policy(PluginHostService *host,
+                                         const std::string &plugin_name)
         {
-            try {
-                handler.on_error(connection, plugin::ProtocolHandlerErrorInfo{ code, std::move(message) });
-            } catch (const std::exception &ex) {
-                LOG_ERROR("plugin protocol handler on_error threw: {}", ex.what());
-            } catch (...) {
-                LOG_ERROR("plugin protocol handler on_error threw an unknown exception");
+            if (!host || plugin_name.empty()) {
+                return;
+            }
+
+            auto &lifecycle = host->lifecycle_manager();
+            auto current_state = lifecycle.state(plugin_name);
+            const auto suggested_state = lifecycle.call_guard().suggested_state(plugin_name);
+
+            if (suggested_state == plugin::PluginState::degraded) {
+                if (current_state == plugin::PluginState::active) {
+                    lifecycle.degrade(plugin_name);
+                }
+                return;
+            }
+
+            if (suggested_state == plugin::PluginState::faulted ||
+                suggested_state == plugin::PluginState::quarantined) {
+                if (current_state == plugin::PluginState::initialized ||
+                    current_state == plugin::PluginState::active ||
+                    current_state == plugin::PluginState::degraded) {
+                    lifecycle.transition(plugin_name, plugin::PluginState::faulted);
+                    current_state = lifecycle.state(plugin_name);
+                }
+
+                if (suggested_state == plugin::PluginState::quarantined &&
+                    current_state == plugin::PluginState::faulted) {
+                    lifecycle.quarantine(plugin_name);
+                }
             }
         }
 
-        bool call_handler_on_data(plugin::PluginStreamProtocolHandler &handler,
+        struct GuardedBoolHandlerResult
+        {
+            bool dispatched = false;
+            bool threw = false;
+            bool value = false;
+            std::string error_message;
+        };
+
+        template <typename Fn>
+        GuardedBoolHandlerResult invoke_guarded_bool_handler(PluginHostService *host,
+                                                             const std::shared_ptr<PluginProtocolServiceRuntimeStats> &runtime_stats,
+                                                             const plugin::ProtocolServiceDescriptor &protocol_service,
+                                                             const char *call_site,
+                                                             const char *callback_name,
+                                                             Fn &&fn)
+        {
+            if (!host) {
+                return GuardedBoolHandlerResult{ true, false, std::forward<Fn>(fn)() };
+            }
+
+            auto &lifecycle = host->lifecycle_manager();
+            const auto state = lifecycle.state(protocol_service.plugin_id);
+            if (!plugin::accepts_callbacks(state)) {
+                return {};
+            }
+
+            try {
+                return GuardedBoolHandlerResult{
+                    true,
+                    false,
+                    lifecycle.call_guard().guarded_call(
+                        protocol_service.plugin_id,
+                        state,
+                        call_site,
+                        std::forward<Fn>(fn)),
+                    {}
+                };
+            } catch (const std::exception &ex) {
+                LOG_ERROR("plugin protocol service '{}.{}' handler threw from {}: {}",
+                          protocol_service.plugin_id,
+                          protocol_service.name,
+                          callback_name,
+                          ex.what());
+                record_handler_error(runtime_stats);
+                apply_recorded_fault_policy(host, protocol_service.plugin_id);
+                return GuardedBoolHandlerResult{ true, true, false, ex.what() };
+            } catch (...) {
+                LOG_ERROR("plugin protocol service '{}.{}' handler threw from {}",
+                          protocol_service.plugin_id,
+                          protocol_service.name,
+                          callback_name);
+                record_handler_error(runtime_stats);
+                apply_recorded_fault_policy(host, protocol_service.plugin_id);
+                return GuardedBoolHandlerResult{ true, true, false, "unknown handler exception" };
+            }
+        }
+
+        template <typename Fn>
+        void invoke_guarded_void_handler(PluginHostService *host,
+                                         const std::shared_ptr<PluginProtocolServiceRuntimeStats> &runtime_stats,
+                                         const plugin::ProtocolServiceDescriptor &protocol_service,
+                                         const char *call_site,
+                                         const char *callback_name,
+                                         Fn &&fn)
+        {
+            if (!host) {
+                std::forward<Fn>(fn)();
+                return;
+            }
+
+            auto &lifecycle = host->lifecycle_manager();
+            const auto state = lifecycle.state(protocol_service.plugin_id);
+            if (!plugin::accepts_callbacks(state)) {
+                return;
+            }
+
+            try {
+                (void)lifecycle.call_guard().guarded_call(
+                    protocol_service.plugin_id,
+                    state,
+                    call_site,
+                    [&]() -> bool {
+                        std::forward<Fn>(fn)();
+                        return true;
+                    });
+            } catch (const std::exception &ex) {
+                LOG_ERROR("plugin protocol service '{}.{}' handler threw from {}: {}",
+                          protocol_service.plugin_id,
+                          protocol_service.name,
+                          callback_name,
+                          ex.what());
+                record_handler_error(runtime_stats);
+                apply_recorded_fault_policy(host, protocol_service.plugin_id);
+            } catch (...) {
+                LOG_ERROR("plugin protocol service '{}.{}' handler threw from {}",
+                          protocol_service.plugin_id,
+                          protocol_service.name,
+                          callback_name);
+                record_handler_error(runtime_stats);
+                apply_recorded_fault_policy(host, protocol_service.plugin_id);
+            }
+        }
+
+        void report_handler_failure(PluginHostService *host,
+                                    const std::shared_ptr<PluginProtocolServiceRuntimeStats> &runtime_stats,
+                                    const plugin::ProtocolServiceDescriptor &protocol_service,
+                                    const char *call_site,
+                                    const char *reason)
+        {
+            record_handler_error(runtime_stats);
+            if (!host) {
+                return;
+            }
+
+            host->lifecycle_manager().fault(
+                protocol_service.plugin_id,
+                std::string(call_site) + ": " + reason);
+        }
+
+        void notify_handler_error(PluginHostService *host,
+                                  const std::shared_ptr<PluginProtocolServiceRuntimeStats> &runtime_stats,
+                                  plugin::PluginStreamProtocolHandler &handler,
+                                  HostStreamConnectionAdapter &connection,
+                                  const plugin::ProtocolServiceDescriptor &protocol_service,
+                                  std::string message,
+                                  int code = 0)
+        {
+            plugin::ProtocolHandlerErrorInfo error;
+            error.code = code;
+            error.message = std::move(message);
+
+            invoke_guarded_void_handler(
+                host,
+                runtime_stats,
+                protocol_service,
+                "protocol.on_error",
+                "on_error",
+                [&]() {
+                    handler.on_error(connection, error);
+                });
+        }
+
+        bool call_handler_on_accept(PluginHostService *host,
+                                    const std::shared_ptr<PluginProtocolServiceRuntimeStats> &runtime_stats,
+                                    plugin::PluginStreamProtocolHandler &handler,
+                                    HostStreamConnectionAdapter &connection,
+                                    const plugin::ProtocolServiceDescriptor &protocol_service)
+        {
+            const auto result = invoke_guarded_bool_handler(
+                host,
+                runtime_stats,
+                protocol_service,
+                "protocol.on_accept",
+                "on_accept",
+                [&]() {
+                    return handler.on_accept(connection);
+                });
+
+            if (result.threw) {
+                notify_handler_error(host, runtime_stats, handler, connection, protocol_service, result.error_message, 1);
+                return false;
+            }
+
+            if (!result.dispatched) {
+                return false;
+            }
+
+            if (!result.value) {
+                report_handler_failure(host, runtime_stats, protocol_service, "protocol.on_accept", "handler returned false");
+                notify_handler_error(host, runtime_stats, handler, connection, protocol_service, "handler returned false", 1);
+                return false;
+            }
+
+            return true;
+        }
+
+        bool call_handler_on_data(PluginHostService *host,
+                                  const std::shared_ptr<PluginProtocolServiceRuntimeStats> &runtime_stats,
+                                  plugin::PluginStreamProtocolHandler &handler,
                                   HostStreamConnectionAdapter &connection,
                                   std::span<const std::byte> bytes,
                                   const plugin::ProtocolServiceDescriptor &protocol_service)
         {
-            try {
-                return handler.on_data(connection, bytes);
-            } catch (const std::exception &ex) {
-                LOG_ERROR("plugin protocol service '{}.{}' handler threw from on_data: {}",
-                          protocol_service.plugin_id,
-                          protocol_service.name,
-                          ex.what());
-                notify_handler_error(handler, connection, ex.what(), 1);
-                return false;
-            } catch (...) {
-                LOG_ERROR("plugin protocol service '{}.{}' handler threw from on_data",
-                          protocol_service.plugin_id,
-                          protocol_service.name);
-                notify_handler_error(handler, connection, "unknown handler exception", 1);
+            const auto result = invoke_guarded_bool_handler(
+                host,
+                runtime_stats,
+                protocol_service,
+                "protocol.on_data",
+                "on_data",
+                [&]() {
+                    return handler.on_data(connection, bytes);
+                });
+
+            if (result.threw) {
+                notify_handler_error(host, runtime_stats, handler, connection, protocol_service, result.error_message, 1);
                 return false;
             }
+
+            if (!result.dispatched) {
+                return false;
+            }
+
+            if (!result.value) {
+                report_handler_failure(host, runtime_stats, protocol_service, "protocol.on_data", "handler returned false");
+                return false;
+            }
+
+            return true;
+        }
+
+        bool idle_timeout_expired(std::chrono::steady_clock::time_point last_activity,
+                                  uint32_t idle_timeout_ms)
+        {
+            if (idle_timeout_ms == 0) {
+                return false;
+            }
+
+            return std::chrono::steady_clock::now() - last_activity >=
+                   std::chrono::milliseconds(idle_timeout_ms);
+        }
+
+        uint32_t effective_read_timeout_ms(uint32_t read_timeout_ms,
+                                           std::chrono::steady_clock::time_point last_activity,
+                                           uint32_t idle_timeout_ms)
+        {
+            if (idle_timeout_ms == 0) {
+                return read_timeout_ms;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            const auto idle_timeout = std::chrono::milliseconds(idle_timeout_ms);
+            if (now - last_activity >= idle_timeout) {
+                return 1;
+            }
+
+            const auto remaining_idle =
+                std::chrono::duration_cast<std::chrono::milliseconds>(idle_timeout - (now - last_activity));
+            const uint32_t remaining_idle_ms =
+                remaining_idle.count() <= 0 ? 1u : static_cast<uint32_t>(remaining_idle.count());
+
+            if (read_timeout_ms == 0) {
+                return remaining_idle_ms;
+            }
+            return std::min(read_timeout_ms, remaining_idle_ms);
         }
 
         coroutine::Task<bool> flush_pending_writes(net::AsyncConnectionContext &ctx,
@@ -365,7 +707,9 @@ namespace yuan::app
             yuan::net::AsyncConnectionContext ctx,
             plugin::PluginStreamProtocolHandlerFactory handler_factory,
             plugin::ProtocolServiceDescriptor protocol_service,
-            std::shared_ptr<std::atomic<int> > active_connections)
+            std::shared_ptr<std::atomic<int> > active_connections,
+            std::shared_ptr<PluginProtocolServiceRuntimeStats> runtime_stats,
+            PluginHostService *host)
         {
             ActiveConnectionGuard active_guard(std::move(active_connections));
             ctx.install_default_handler();
@@ -404,25 +748,8 @@ namespace yuan::app
 
             HostStreamConnectionAdapter connection(ctx);
             const auto write_timeout_ms = static_cast<uint32_t>(protocol_service.write_timeout_ms);
-            bool accepted = false;
-            bool accept_failed = false;
-            try {
-                accepted = handler->on_accept(connection);
-            } catch (const std::exception &ex) {
-                LOG_ERROR("plugin protocol service '{}.{}' handler threw from on_accept: {}",
-                          protocol_service.plugin_id,
-                          protocol_service.name,
-                          ex.what());
-                notify_handler_error(*handler, connection, ex.what(), 1);
-                accept_failed = true;
-            } catch (...) {
-                LOG_ERROR("plugin protocol service '{}.{}' handler threw from on_accept",
-                          protocol_service.plugin_id,
-                          protocol_service.name);
-                notify_handler_error(*handler, connection, "unknown handler exception", 1);
-                accept_failed = true;
-            }
-            if (accept_failed || !accepted) {
+            const bool accepted = call_handler_on_accept(host, runtime_stats, *handler, connection, protocol_service);
+            if (!accepted) {
                 (void)co_await ctx.close_async();
                 co_return;
             }
@@ -434,23 +761,37 @@ namespace yuan::app
 
             const auto framing = effective_framing(protocol_service);
             const auto read_timeout_ms = static_cast<uint32_t>(protocol_service.read_timeout_ms);
+            const auto idle_timeout_ms = static_cast<uint32_t>(protocol_service.idle_timeout_ms);
             const auto max_frame_bytes = static_cast<std::size_t>(protocol_service.max_frame_bytes);
-            std::vector<std::byte> line_buffer;
+            std::vector<std::byte> frame_buffer;
+            auto last_activity = std::chrono::steady_clock::now();
+            bool deliver_partial_line = false;
 
             while (ctx) {
-                auto read = co_await ctx.read_async(read_timeout_ms, true);
-                if (read.status != coroutine::IoStatus::success || read.data.readable_bytes() == 0) {
+                if (idle_timeout_expired(last_activity, idle_timeout_ms)) {
                     break;
                 }
+
+                auto read = co_await ctx.read_async(
+                    effective_read_timeout_ms(read_timeout_ms, last_activity, idle_timeout_ms),
+                    true);
+                if (read.status != coroutine::IoStatus::success || read.data.readable_bytes() == 0) {
+                    deliver_partial_line = read.status == coroutine::IoStatus::connection_closed;
+                    break;
+                }
+                last_activity = std::chrono::steady_clock::now();
 
                 const auto *read_ptr = reinterpret_cast<const std::byte *>(read.data.read_ptr());
                 const auto readable = read.data.readable_bytes();
                 if (framing == "raw") {
                     if (readable > max_frame_bytes) {
-                        notify_handler_error(*handler, connection, "frame too large", 2);
+                        record_framing_error(runtime_stats);
+                        notify_handler_error(host, runtime_stats, *handler, connection, protocol_service, "frame too large", 2);
                         break;
                     }
                     if (!call_handler_on_data(
+                            host,
+                            runtime_stats,
                             *handler,
                             connection,
                             std::span<const std::byte>(read_ptr, readable),
@@ -468,37 +809,40 @@ namespace yuan::app
                 }
 
                 if (framing == "line") {
-                    line_buffer.insert(line_buffer.end(), read_ptr, read_ptr + readable);
-                    if (line_buffer.size() > max_frame_bytes) {
-                        notify_handler_error(*handler, connection, "line frame too large", 2);
+                    frame_buffer.insert(frame_buffer.end(), read_ptr, read_ptr + readable);
+                    if (frame_buffer.size() > max_frame_bytes) {
+                        record_framing_error(runtime_stats);
+                        notify_handler_error(host, runtime_stats, *handler, connection, protocol_service, "line frame too large", 2);
                         break;
                     }
 
                     bool keep_open = true;
-                    auto search_begin = line_buffer.begin();
+                    auto search_begin = frame_buffer.begin();
                     while (keep_open) {
                         auto it = std::find(
                             search_begin,
-                            line_buffer.end(),
+                            frame_buffer.end(),
                             std::byte{ static_cast<unsigned char>('\n') });
-                        if (it == line_buffer.end()) {
+                        if (it == frame_buffer.end()) {
                             break;
                         }
 
                         auto frame_end = it;
-                        if (frame_end != line_buffer.begin() &&
+                        if (frame_end != frame_buffer.begin() &&
                             *(frame_end - 1) == std::byte{ static_cast<unsigned char>('\r') }) {
                             --frame_end;
                         }
 
-                        std::vector<std::byte> frame(line_buffer.begin(), frame_end);
+                        std::vector<std::byte> frame(frame_buffer.begin(), frame_end);
                         keep_open = call_handler_on_data(
+                            host,
+                            runtime_stats,
                             *handler,
                             connection,
                             std::span<const std::byte>(frame.data(), frame.size()),
                             protocol_service);
-                        line_buffer.erase(line_buffer.begin(), it + 1);
-                        search_begin = line_buffer.begin();
+                        frame_buffer.erase(frame_buffer.begin(), it + 1);
+                        search_begin = frame_buffer.begin();
 
                         const bool flushed = co_await flush_pending_writes(ctx, connection, write_timeout_ms);
                         if (!flushed) {
@@ -515,31 +859,90 @@ namespace yuan::app
                     continue;
                 }
 
-                notify_handler_error(*handler, connection, "unsupported framing", 3);
+                if (framing == "length_prefixed") {
+                    frame_buffer.insert(frame_buffer.end(), read_ptr, read_ptr + readable);
+
+                    bool keep_open = true;
+                    while (keep_open) {
+                        if (frame_buffer.size() < kLengthPrefixedHeaderBytes) {
+                            break;
+                        }
+
+                        const auto frame_size = decode_length_prefixed_frame_size(
+                            std::span<const std::byte>(frame_buffer.data(), kLengthPrefixedHeaderBytes));
+                        if (frame_size > max_frame_bytes) {
+                            record_framing_error(runtime_stats);
+                            notify_handler_error(
+                                host,
+                                runtime_stats,
+                                *handler,
+                                connection,
+                                protocol_service,
+                                "length-prefixed frame too large",
+                                2);
+                            keep_open = false;
+                            break;
+                        }
+
+                        const auto total_frame_bytes = kLengthPrefixedHeaderBytes + frame_size;
+                        if (frame_buffer.size() < total_frame_bytes) {
+                            break;
+                        }
+
+                        keep_open = call_handler_on_data(
+                            host,
+                            runtime_stats,
+                            *handler,
+                            connection,
+                            std::span<const std::byte>(
+                                frame_buffer.data() + kLengthPrefixedHeaderBytes,
+                                frame_size),
+                            protocol_service);
+                        frame_buffer.erase(
+                            frame_buffer.begin(),
+                            frame_buffer.begin() + static_cast<std::ptrdiff_t>(total_frame_bytes));
+
+                        const bool flushed = co_await flush_pending_writes(ctx, connection, write_timeout_ms);
+                        if (!flushed) {
+                            keep_open = false;
+                        }
+                        if (connection.close_requested()) {
+                            keep_open = false;
+                        }
+                    }
+
+                    if (!keep_open) {
+                        break;
+                    }
+                    continue;
+                }
+
+                record_framing_error(runtime_stats);
+                notify_handler_error(host, runtime_stats, *handler, connection, protocol_service, "unsupported framing", 3);
                 break;
             }
 
-            if (framing == "line" && !line_buffer.empty() && line_buffer.size() <= max_frame_bytes) {
+            if (framing == "line" && deliver_partial_line &&
+                !frame_buffer.empty() && frame_buffer.size() <= max_frame_bytes) {
                 (void)call_handler_on_data(
+                    host,
+                    runtime_stats,
                     *handler,
                     connection,
-                    std::span<const std::byte>(line_buffer.data(), line_buffer.size()),
+                    std::span<const std::byte>(frame_buffer.data(), frame_buffer.size()),
                     protocol_service);
                 (void)co_await flush_pending_writes(ctx, connection, write_timeout_ms);
             }
 
-            try {
-                handler->on_close(connection);
-            } catch (const std::exception &ex) {
-                LOG_ERROR("plugin protocol service '{}.{}' handler threw from on_close: {}",
-                          protocol_service.plugin_id,
-                          protocol_service.name,
-                          ex.what());
-            } catch (...) {
-                LOG_ERROR("plugin protocol service '{}.{}' handler threw from on_close",
-                          protocol_service.plugin_id,
-                          protocol_service.name);
-            }
+            invoke_guarded_void_handler(
+                host,
+                runtime_stats,
+                protocol_service,
+                "protocol.on_close",
+                "on_close",
+                [&]() {
+                    handler->on_close(connection);
+                });
 
             if (!ctx.is_closed()) {
                 (void)co_await ctx.close_async();
@@ -556,7 +959,7 @@ namespace yuan::app
 
         bool framing_is_supported(const std::string &framing)
         {
-            return framing == "raw" || framing == "line";
+            return framing == "raw" || framing == "line" || framing == "length_prefixed";
         }
 
         bool reserve_connection_slot(std::shared_ptr<std::atomic<int> > active_connections,
@@ -578,14 +981,21 @@ namespace yuan::app
             plugin::PluginStreamProtocolHandlerFactory handler_factory,
             plugin::ProtocolServiceDescriptor protocol_service,
             std::shared_ptr<std::atomic<int> > active_connections,
-            std::shared_ptr<PluginProtocolActiveConnectionTracker> connection_tracker)
+            std::shared_ptr<PluginProtocolActiveConnectionTracker> connection_tracker,
+            std::shared_ptr<PluginProtocolServiceRuntimeStats> runtime_stats,
+            PluginHostService *host)
         {
             const auto connection_id = ctx.connection_id();
-            if (!track_stream_connection(connection_tracker, ctx)) {
+            uint64_t connection_resource_id = 0;
+            if (!track_stream_connection(connection_tracker, ctx, host, protocol_service, connection_resource_id)) {
                 co_await reject_stream_connection(std::move(ctx));
                 co_return;
             }
-            TrackedConnectionGuard tracked_guard(std::move(connection_tracker), connection_id);
+            TrackedConnectionGuard tracked_guard(
+                std::move(connection_tracker),
+                host,
+                connection_id,
+                connection_resource_id);
 
             if (!reserve_connection_slot(active_connections, protocol_service.max_connections)) {
                 LOG_WARN("plugin protocol service '{}.{}' rejected connection: active connection limit {} reached",
@@ -600,7 +1010,9 @@ namespace yuan::app
                 std::move(ctx),
                 std::move(handler_factory),
                 std::move(protocol_service),
-                std::move(active_connections));
+                std::move(active_connections),
+                std::move(runtime_stats),
+                host);
         }
 
         const char *manifest_reason(const plugin::ProtocolServiceDescriptor &protocol_service)
@@ -765,6 +1177,28 @@ namespace yuan::app
         return started_;
     }
 
+    std::string PluginProtocolServiceAdapter::resource_leak_report() const
+    {
+        if (!host_) {
+            return {};
+        }
+        return host_->resource_leak_report(protocol_service_.plugin_id);
+    }
+
+    ProtocolServiceRuntimeStatsSnapshot PluginProtocolServiceAdapter::runtime_stats() const noexcept
+    {
+        ProtocolServiceRuntimeStatsSnapshot snapshot;
+        if (!runtime_stats_) {
+            return snapshot;
+        }
+
+        snapshot.framing_error_count =
+            runtime_stats_->framing_error_count.load(std::memory_order_relaxed);
+        snapshot.handler_error_count =
+            runtime_stats_->handler_error_count.load(std::memory_order_relaxed);
+        return snapshot;
+    }
+
     bool PluginProtocolServiceAdapter::start_protocol_listener()
     {
         if (listener_) {
@@ -841,19 +1275,27 @@ namespace yuan::app
 
         auto active_connections = std::make_shared<std::atomic<int> >(0);
         connection_tracker_ = std::make_shared<PluginProtocolActiveConnectionTracker>();
+        if (!runtime_stats_) {
+            runtime_stats_ = std::make_shared<PluginProtocolServiceRuntimeStats>();
+        }
+        reset_runtime_stats(runtime_stats_);
         auto captured_service = protocol_service_;
         auto captured_handler_factory = std::move(handler_factory);
         auto captured_connection_tracker = connection_tracker_;
+        auto captured_runtime_stats = runtime_stats_;
+        auto *captured_host = host_.get();
         auto listener = std::make_unique<net::AsyncListenerHost>();
         listener->set_connection_handler(
-            [captured_handler_factory, captured_service, active_connections, captured_connection_tracker](
+            [captured_handler_factory, captured_service, active_connections, captured_connection_tracker, captured_runtime_stats, captured_host](
                 net::AsyncConnectionContext ctx) {
                 return run_limited_stream_protocol(
                     std::move(ctx),
                     captured_handler_factory,
                     captured_service,
                     active_connections,
-                    captured_connection_tracker);
+                    captured_connection_tracker,
+                    captured_runtime_stats,
+                    captured_host);
             });
 
         const auto host = protocol_service_.host.empty() ? "0.0.0.0" : protocol_service_.host;
@@ -874,11 +1316,27 @@ namespace yuan::app
         task.detach();
 
         listener_ = std::move(listener);
+        if (host_) {
+            listener_resource_id_ = host_->track_plugin_resource(
+                protocol_service_.plugin_id,
+                plugin::PluginResourceType::network_listener,
+                [this]() {
+                    if (listener_) {
+                        listener_->close();
+                    }
+                },
+                protocol_listener_resource_description(protocol_service_));
+        }
         return true;
     }
 
     void PluginProtocolServiceAdapter::stop_protocol_listener()
     {
+        if (listener_resource_id_ != 0 && host_) {
+            (void)host_->untrack_plugin_resource(listener_resource_id_);
+            listener_resource_id_ = 0;
+        }
+
         auto tracker = connection_tracker_;
         if (listener_) {
             listener_->close();

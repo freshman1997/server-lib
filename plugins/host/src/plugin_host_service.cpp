@@ -554,6 +554,33 @@ namespace yuan::app
         }
     }
 
+    uint64_t PluginHostService::track_plugin_resource(const std::string &plugin_name,
+                                                      plugin::PluginResourceType type,
+                                                      plugin::ResourceCleanupFn cleanup,
+                                                      const std::string &description)
+    {
+        if (!resource_guard_) {
+            return 0;
+        }
+        return resource_guard_->track(plugin_name, type, std::move(cleanup), description);
+    }
+
+    bool PluginHostService::untrack_plugin_resource(uint64_t resource_id)
+    {
+        if (!resource_guard_) {
+            return false;
+        }
+        return resource_guard_->untrack(resource_id);
+    }
+
+    std::string PluginHostService::resource_leak_report(const std::string &plugin_name) const
+    {
+        if (!resource_guard_) {
+            return {};
+        }
+        return resource_guard_->leak_report(plugin_name);
+    }
+
     void PluginHostService::set_http_server_accessor(std::function<void *()> accessor)
     {
         pending_http_server_accessor_ = std::move(accessor);

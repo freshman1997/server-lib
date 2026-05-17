@@ -148,22 +148,22 @@ export function onConnection(conn) {
 
 ### P3：连接生命周期和资源治理
 
-- [ ] 每个 listener 和 active connection 都进入 `HostResourceGuard` 跟踪。
+- [x] 每个 listener 和 active connection 都进入 `HostResourceGuard` 跟踪。
 - [x] 插件停用/卸载时关闭 listener 和 active connections。
-- [ ] 连接回调经过 `PluginCallGuard`，handler 抛错/返回失败时关闭连接并上报 fault event。
+- [x] 连接回调经过 `PluginCallGuard`，handler 抛错/返回失败时关闭连接并上报 fault event。
 - [x] 加入 per-service 连接上限和拒绝策略。
-- [ ] 加入 read/write/idle timeout。
+- [x] 加入 read/write/idle timeout。
 - [ ] 加入 write buffer 上限和 backpressure 策略。
-- [ ] 增加停用时 active connection 自动关闭的回归测试。
+- [x] 增加停用时 active connection 自动关闭的回归测试。
 
 ### P4：framing 层
 
 - [x] 支持 `raw` framing。
 - [x] 支持 `line` framing。
-- [ ] 支持 `length_prefixed` framing。
+- [x] 支持 `length_prefixed` framing。
 - [x] 支持 `max_frame_bytes`，超限关闭连接并上报。
-- [ ] 将 framing 错误和 plugin handler 错误分开统计。
-- [ ] 增加半包、粘包、大包、超限包测试。
+- [x] 将 framing 错误和 plugin handler 错误分开统计。
+- [x] 增加半包、粘包、大包、超限包测试。
 
 ### P5：Lua 绑定
 
@@ -227,8 +227,8 @@ export function onConnection(conn) {
 - [x] 宿主不再只根据 `type = "echo"` hard-code handler。
 - [x] C++ 插件可以实现一个自定义 TCP line protocol。
 - [ ] Lua 插件可以实现一个 TCP echo/line protocol。
-- [ ] 插件卸载时 listener 和 active connections 被自动关闭。
-- [ ] handler 异常不会打穿宿主，并能产生 fault event。
+- [x] 插件卸载时 listener 和 active connections 被自动关闭。
+- [x] handler 异常不会打穿宿主，并能产生 fault event。
 - [ ] multi-worker + `reuse_port` 下每个 worker 拥有独立 plugin context 和 listener。
 
 ## 推荐落地顺序

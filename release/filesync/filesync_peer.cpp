@@ -48,6 +48,7 @@ struct FileState {
     std::uintmax_t size = 0;
     std::uint64_t mtime = 0;
     std::uint64_t hash = 0;
+    std::filesystem::path local_path;
 
     bool operator==(const FileState& other) const {
         return is_directory == other.is_directory && size == other.size && mtime == other.mtime && hash == other.hash;
@@ -55,6 +56,15 @@ struct FileState {
 };
 
 using Manifest = std::map<std::string, FileState>;
+
+struct HashCacheEntry {
+    std::uintmax_t size = 0;
+    std::uint64_t mtime = 0;
+    std::uint64_t hash = 0;
+};
+
+std::mutex g_hash_cache_mutex;
+std::unordered_map<std::string, HashCacheEntry> g_hash_cache;
 
 std::vector<std::string> json_string_array(const nlohmann::json& json, const char* key) {
     std::vector<std::string> values;
@@ -150,7 +160,10 @@ std::string make_remote_path(const SyncPath& sync_path, const std::filesystem::p
     if (sync_path.remote_prefix.empty()) {
         return rel;
     }
-    return filesync::normalize_relative_path(std::filesystem::path(sync_path.remote_prefix) / rel);
+    if (rel.empty()) {
+        return sync_path.remote_prefix;
+    }
+    return sync_path.remote_prefix + "/" + rel;
 }
 
 std::filesystem::path local_path_for_remote(const Config& config, const std::string& remote) {
@@ -165,14 +178,14 @@ std::filesystem::path local_path_for_remote(const Config& config, const std::str
             continue;
         }
         if (prefix.empty()) {
-            return sync_path.local / remote;
+            return sync_path.local / filesync::path_from_utf8(remote);
         }
         if (remote == prefix) {
             return sync_path.local;
         }
         const auto marker = prefix + "/";
         if (remote.rfind(marker, 0) == 0) {
-            return sync_path.local / remote.substr(marker.size());
+            return sync_path.local / filesync::path_from_utf8(remote.substr(marker.size()));
         }
     }
     throw std::runtime_error("cannot map remote path: " + remote);
@@ -198,14 +211,40 @@ bool is_internal_file(const std::filesystem::path& path) {
         (name.size() >= 13 && name.rfind(".filesync.tmp") == name.size() - 13);
 }
 
+std::string normalize_filter_pattern(std::string pattern) {
+    std::replace(pattern.begin(), pattern.end(), '\\', '/');
+    while (pattern.rfind("./", 0) == 0) {
+        pattern.erase(0, 2);
+    }
+    while (!pattern.empty() && pattern.front() == '/') {
+        pattern.erase(pattern.begin());
+    }
+    while (pattern.size() > 1 && pattern.back() == '/') {
+        pattern.pop_back();
+    }
+    return pattern;
+}
+
 std::string glob_to_regex(const std::string& glob) {
+    const auto normalized = normalize_filter_pattern(glob);
     std::string out = "^";
-    for (std::size_t i = 0; i < glob.size(); ++i) {
-        const char ch = glob[i];
+    for (std::size_t i = 0; i < normalized.size(); ++i) {
+        const char ch = normalized[i];
+        if (ch == '/' && i + 2 < normalized.size() && normalized[i + 1] == '*' && normalized[i + 2] == '*' &&
+            i + 3 == normalized.size()) {
+            out += "(?:/.*)?";
+            i += 2;
+            continue;
+        }
         if (ch == '*') {
-            if (i + 1 < glob.size() && glob[i + 1] == '*') {
-                out += ".*";
-                ++i;
+            if (i + 1 < normalized.size() && normalized[i + 1] == '*') {
+                if (i + 2 < normalized.size() && normalized[i + 2] == '/') {
+                    out += "(?:.*/)?";
+                    i += 2;
+                } else {
+                    out += ".*";
+                    ++i;
+                }
             } else {
                 out += "[^/]*";
             }
@@ -230,9 +269,64 @@ bool glob_match(const std::string& pattern, const std::string& value) {
     }
 }
 
-bool any_pattern_matches(const std::vector<std::string>& patterns, const std::string& remote) {
+std::string basename_of(const std::string& value) {
+    const auto pos = value.find_last_of('/');
+    return pos == std::string::npos ? value : value.substr(pos + 1);
+}
+
+std::vector<std::string> path_and_ancestors(const std::string& value) {
+    std::vector<std::string> paths;
+    auto current = filesync::normalize_relative_path(value);
+    while (!current.empty()) {
+        paths.push_back(current);
+        const auto pos = current.find_last_of('/');
+        if (pos == std::string::npos) {
+            break;
+        }
+        current.erase(pos);
+    }
+    return paths;
+}
+
+std::vector<std::string> filter_candidates_for_remote(const Config& config, const std::string& remote) {
+    std::vector<std::string> candidates{filesync::normalize_relative_path(remote)};
+    for (const auto& sync_path : config.paths) {
+        const auto prefix = filesync::normalize_relative_path(sync_path.remote_prefix);
+        if (prefix.empty()) {
+            continue;
+        }
+        const auto marker = prefix + "/";
+        if (remote.rfind(marker, 0) == 0) {
+            candidates.push_back(remote.substr(marker.size()));
+        }
+    }
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    return candidates;
+}
+
+bool pattern_matches_path(const std::string& raw_pattern, const std::string& value) {
+    const auto pattern = normalize_filter_pattern(raw_pattern);
+    if (pattern.empty()) {
+        return false;
+    }
+    const bool pattern_has_slash = pattern.find('/') != std::string::npos;
+    for (const auto& candidate : path_and_ancestors(value)) {
+        if (glob_match(pattern, candidate)) {
+            return true;
+        }
+        if (!pattern_has_slash && glob_match(pattern, basename_of(candidate))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool any_pattern_matches(const std::vector<std::string>& patterns, const std::vector<std::string>& candidates) {
     return std::any_of(patterns.begin(), patterns.end(), [&](const std::string& pattern) {
-        return glob_match(pattern, remote);
+        return std::any_of(candidates.begin(), candidates.end(), [&](const std::string& candidate) {
+            return pattern_matches_path(pattern, candidate);
+        });
     });
 }
 
@@ -250,17 +344,57 @@ bool extension_allowed(const Config& config, const std::filesystem::path& path) 
     });
 }
 
-bool should_include_file(const Config& config, const std::filesystem::path& local, const std::string& remote) {
-    if (is_internal_file(local)) {
+bool should_include_path(const Config& config,
+                         const std::filesystem::path& local,
+                         const std::string& remote,
+                         bool is_directory) {
+    if (is_internal_file(local) || is_internal_file(filesync::path_from_utf8(remote))) {
         return false;
     }
-    if (!extension_allowed(config, local)) {
+    if (!is_directory && !extension_allowed(config, local)) {
         return false;
     }
-    if (!config.include_patterns.empty() && !any_pattern_matches(config.include_patterns, remote)) {
+    const auto candidates = filter_candidates_for_remote(config, remote);
+    if (!config.include_patterns.empty() && !any_pattern_matches(config.include_patterns, candidates)) {
         return false;
     }
-    if (any_pattern_matches(config.exclude_patterns, remote)) {
+    if (any_pattern_matches(config.exclude_patterns, candidates)) {
+        return false;
+    }
+    return true;
+}
+
+std::uint64_t cached_file_hash(const std::filesystem::path& path, std::uintmax_t size, std::uint64_t mtime) {
+    const auto key = filesync::path_to_utf8(path);
+    {
+        std::lock_guard<std::mutex> lock(g_hash_cache_mutex);
+        const auto it = g_hash_cache.find(key);
+        if (it != g_hash_cache.end() && it->second.size == size && it->second.mtime == mtime) {
+            return it->second.hash;
+        }
+    }
+
+    const auto hash = filesync::fnv1a_file_hash(path);
+    {
+        std::lock_guard<std::mutex> lock(g_hash_cache_mutex);
+        g_hash_cache[key] = {size, mtime, hash};
+    }
+    return hash;
+}
+
+bool should_include_remote_path(const Config& config, const std::string& remote, bool is_directory) {
+    const auto remote_path = filesync::path_from_utf8(remote);
+    if (is_internal_file(remote_path)) {
+        return false;
+    }
+    if (!is_directory && !extension_allowed(config, remote_path)) {
+        return false;
+    }
+    const auto candidates = filter_candidates_for_remote(config, remote);
+    if (!config.include_patterns.empty() && !any_pattern_matches(config.include_patterns, candidates)) {
+        return false;
+    }
+    if (any_pattern_matches(config.exclude_patterns, candidates)) {
         return false;
     }
     return true;
@@ -276,31 +410,43 @@ Manifest scan_paths(const Config& config) {
             const auto remote = sync_path.remote_prefix.empty()
                 ? sync_path.local.filename().generic_string()
                 : filesync::normalize_relative_path(sync_path.remote_prefix);
-            if (!should_include_file(config, sync_path.local, remote)) {
+            if (!should_include_path(config, sync_path.local, remote, false)) {
                 continue;
             }
             manifest[remote] = {
                 false,
                 std::filesystem::file_size(sync_path.local),
                 filesync::file_time_to_seconds(std::filesystem::last_write_time(sync_path.local)),
-                filesync::fnv1a_file_hash(sync_path.local),
+                0,
+                sync_path.local,
             };
+            manifest[remote].hash = cached_file_hash(sync_path.local, manifest[remote].size, manifest[remote].mtime);
             continue;
         }
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(sync_path.local)) {
+        for (auto it = std::filesystem::recursive_directory_iterator(sync_path.local);
+             it != std::filesystem::recursive_directory_iterator();
+             ++it) {
+            const auto& entry = *it;
             const auto relative = std::filesystem::relative(entry.path(), sync_path.local);
             const auto remote = make_remote_path(sync_path, relative);
             if (entry.is_directory()) {
-                manifest[remote] = {true, 0, 0, 0};
-            } else if (entry.is_regular_file()) {
-                if (!should_include_file(config, entry.path(), remote)) {
+                if (!should_include_path(config, entry.path(), remote, true)) {
+                    it.disable_recursion_pending();
                     continue;
                 }
+                manifest[remote] = {true, 0, 0, 0, entry.path()};
+            } else if (entry.is_regular_file()) {
+                if (!should_include_path(config, entry.path(), remote, false)) {
+                    continue;
+                }
+                const auto size = entry.file_size();
+                const auto mtime = filesync::file_time_to_seconds(entry.last_write_time());
                 manifest[remote] = {
                     false,
-                    entry.file_size(),
-                    filesync::file_time_to_seconds(entry.last_write_time()),
-                    filesync::fnv1a_file_hash(entry.path()),
+                    size,
+                    mtime,
+                    cached_file_hash(entry.path(), size, mtime),
+                    entry.path(),
                 };
             }
         }
@@ -331,6 +477,9 @@ std::filesystem::path state_file_path(const Config& config) {
 }
 
 void save_state(const Config& config, const Manifest& manifest) {
+    if (!config.sync_deletes) {
+        return;
+    }
     nlohmann::json json = nlohmann::json::object();
     json["manifest"] = nlohmann::json::array();
     for (const auto& [path, state] : manifest) {
@@ -429,6 +578,46 @@ std::string manifest_message(const Config& config, const Manifest& manifest) {
     return out.str();
 }
 
+void write_text(yuan::net::ConnectionContext& ctx, const std::string& text);
+void write_text(yuan::net::StreamClientSession& session, const std::string& text);
+
+template <typename Writer>
+void write_manifest_to(Writer& writer, const Config& config, const Manifest& manifest) {
+    std::string text;
+    text.reserve(kControlFlushThreshold);
+    auto flush_text = [&]() {
+        if (!text.empty()) {
+            write_text(writer, text);
+            text.clear();
+        }
+    };
+    auto append_line = [&](std::string line) {
+        text += std::move(line);
+        text.push_back('\n');
+        if (text.size() >= kControlFlushThreshold) {
+            flush_text();
+        }
+    };
+
+    append_line("HELLO filesync/2 " + filesync::quote_token(config.token));
+    append_line("MANIFEST " + std::to_string(manifest.size()));
+    for (const auto& [path, state] : manifest) {
+        append_line(std::string(state.is_directory ? "D " : "F ") + filesync::quote_token(path) + " " +
+                    std::to_string(state.size) + " " + std::to_string(state.mtime) + " " +
+                    std::to_string(state.hash));
+    }
+    append_line("END");
+    flush_text();
+}
+
+void write_manifest(yuan::net::ConnectionContext& ctx, const Config& config, const Manifest& manifest) {
+    write_manifest_to(ctx, config, manifest);
+}
+
+void write_manifest(yuan::net::StreamClientSession& session, const Config& config, const Manifest& manifest) {
+    write_manifest_to(session, config, manifest);
+}
+
 void write_text(yuan::net::ConnectionContext& ctx, const std::string& text) {
     yuan::buffer::ByteBuffer buffer{std::string_view(text)};
     ctx.write_and_flush(buffer);
@@ -496,6 +685,9 @@ std::string need_message(const Config& config, const Manifest& remote) {
     const auto deleted = deleted_paths(config, remote, local);
     std::set<std::string> deleted_set(deleted.begin(), deleted.end());
     for (const auto& [path, state] : remote) {
+        if (!should_include_remote_path(config, path, state.is_directory)) {
+            continue;
+        }
         if (deleted_set.find(path) != deleted_set.end()) {
             continue;
         }
@@ -523,8 +715,13 @@ void apply_delete(const Config& config, const std::string& path) {
     if (!std::filesystem::exists(target)) {
         return;
     }
+    std::error_code type_ec;
+    const bool is_directory = std::filesystem::is_directory(target, type_ec);
+    if (!should_include_remote_path(config, path, is_directory)) {
+        return;
+    }
     std::error_code ec;
-    if (std::filesystem::is_directory(target, ec)) {
+    if (is_directory) {
         std::filesystem::remove_all(target, ec);
     } else {
         std::filesystem::remove(target, ec);
@@ -569,6 +766,15 @@ void apply_need_deletes(const Config& config, const std::string& text) {
     }
 }
 
+bool is_ready_frame(const std::string& text) {
+    const auto lines = split_lines(text);
+    if (lines.empty()) {
+        return false;
+    }
+    const auto parts = filesync::split_line(lines.front());
+    return !parts.empty() && parts.front() == "READY";
+}
+
 bool is_conflict(const Config& config,
                  const Manifest& last_manifest,
                  bool have_last_manifest,
@@ -595,6 +801,102 @@ bool is_conflict(const Config& config,
     return true;
 }
 
+std::string format_percent(double value) {
+    if (value < 0.0) value = 0.0;
+    if (value > 100.0) value = 100.0;
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(1) << value << "%";
+    return out.str();
+}
+
+std::string format_bytes(std::uintmax_t bytes) {
+    static constexpr const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+    double value = static_cast<double>(bytes);
+    std::size_t unit = 0;
+    while (value >= 1024.0 && unit + 1 < std::size(units)) {
+        value /= 1024.0;
+        ++unit;
+    }
+    std::ostringstream out;
+    if (unit == 0) {
+        out << bytes << units[unit];
+    } else {
+        out << std::fixed << std::setprecision(1) << value << units[unit];
+    }
+    return out.str();
+}
+
+double percent_of(std::uintmax_t done, std::uintmax_t total) {
+    if (total == 0) {
+        return 100.0;
+    }
+    return (static_cast<double>(done) * 100.0) / static_cast<double>(total);
+}
+
+double percent_of(double done, double total) {
+    if (total <= 0.0) {
+        return 100.0;
+    }
+    return (done * 100.0) / total;
+}
+
+void print_sync_progress(const std::string& phase,
+                         double total_percent,
+                         const std::string& path,
+                         double file_percent,
+                         std::uintmax_t file_done,
+                         std::uintmax_t file_total) {
+    std::cout << "sync " << phase << " total=" << format_percent(total_percent)
+              << " file=" << filesync::quote_token(path)
+              << " file_progress=" << format_percent(file_percent)
+              << " (" << format_bytes(file_done) << "/" << format_bytes(file_total) << ")" << std::endl;
+}
+
+struct ProgressThrottle {
+    int last_bucket = -1;
+    std::chrono::steady_clock::time_point last_report = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+
+    bool should_report(std::uintmax_t done, std::uintmax_t total, bool force) {
+        if (force) {
+            last_bucket = 100;
+            last_report = std::chrono::steady_clock::now();
+            return true;
+        }
+        if (total > 0 && done >= total) {
+            return false;
+        }
+        const auto percent = total == 0 ? 100.0 : percent_of(done, total);
+        const int bucket = static_cast<int>(percent / 5.0);
+        const auto now = std::chrono::steady_clock::now();
+        if (bucket != last_bucket || now - last_report >= std::chrono::seconds(1)) {
+            last_bucket = bucket;
+            last_report = now;
+            return true;
+        }
+        return false;
+    }
+
+    void reset() {
+        last_bucket = -1;
+        last_report = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+    }
+};
+
+struct SendProgress {
+    std::size_t total_files = 0;
+    std::size_t completed_files = 0;
+    std::uintmax_t total_bytes = 0;
+    std::uintmax_t completed_bytes = 0;
+    ProgressThrottle file_throttle;
+
+    double total_percent(std::uintmax_t current_file_done = 0) const {
+        if (total_bytes > 0) {
+            return percent_of(completed_bytes + current_file_done, total_bytes);
+        }
+        return percent_of(static_cast<double>(completed_files), static_cast<double>(total_files));
+    }
+};
+
 template <typename Writer>
 void write_file_lines_to(Writer& writer,
                          const Config& config,
@@ -616,6 +918,18 @@ void write_file_lines_to(Writer& writer,
         }
     };
 
+    SendProgress progress;
+    for (const auto& path : needed) {
+        const auto it = manifest.find(path);
+        if (it == manifest.end() || it->second.is_directory) continue;
+        ++progress.total_files;
+        progress.total_bytes += it->second.size;
+    }
+
+    std::cout << "sync send start entries=" << needed.size()
+              << " files=" << progress.total_files
+              << " bytes=" << format_bytes(progress.total_bytes) << std::endl;
+
     text += "FILES " + std::to_string(needed.size()) + "\n";
     for (const auto& path : needed) {
         const auto it = manifest.find(path);
@@ -623,29 +937,46 @@ void write_file_lines_to(Writer& writer,
         const auto& state = it->second;
         if (state.is_directory) {
             append_control_line("DIR " + filesync::quote_token(path));
+            std::cout << "sync send directory=" << filesync::quote_token(path)
+                      << " total=" << format_percent(progress.total_percent()) << std::endl;
             continue;
         }
-        const auto local_path = local_path_for_remote(config, path);
+        const auto local_path = state.local_path.empty() ? local_path_for_remote(config, path) : state.local_path;
         append_control_line("PUT_BEGIN " + filesync::quote_token(path) + " " + std::to_string(state.size) + " " +
                             std::to_string(state.mtime) + " " + std::to_string(state.hash));
         flush_text();
+        progress.file_throttle.reset();
+        print_sync_progress("send", progress.total_percent(), path, percent_of(0, state.size), 0, state.size);
         std::ifstream in(local_path, std::ios::binary);
         if (!in) {
             throw std::runtime_error("failed to open file: " + local_path.string());
         }
         std::vector<char> chunk(config.chunk_size);
+        std::uintmax_t sent = 0;
         while (in) {
             in.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
             const auto count = in.gcount();
             if (count > 0) {
                 std::vector<char> bytes(chunk.begin(), chunk.begin() + count);
                 write_text(writer, "CHUNK " + filesync::hex_encode(bytes) + "\n");
+                sent += static_cast<std::uintmax_t>(count);
+                if (progress.file_throttle.should_report(sent, state.size, false)) {
+                    print_sync_progress("send", progress.total_percent(sent), path, percent_of(sent, state.size), sent, state.size);
+                }
             }
         }
         append_control_line("PUT_END");
+        progress.completed_bytes += state.size;
+        ++progress.completed_files;
+        if (sent == 0 || sent != state.size || progress.file_throttle.should_report(state.size, state.size, true)) {
+            print_sync_progress("send", progress.total_percent(), path, 100.0, state.size, state.size);
+        }
     }
     text += "END\n";
     flush_text();
+    std::cout << "sync send complete entries=" << needed.size()
+              << " files=" << progress.completed_files
+              << " bytes=" << format_bytes(progress.completed_bytes) << std::endl;
 }
 
 void write_file_lines(yuan::net::ConnectionContext& ctx,
@@ -670,7 +1001,51 @@ struct FileApplyState {
     std::filesystem::path temp;
     bool conflict = false;
     std::ofstream out;
+    std::size_t total_entries = 0;
+    std::size_t completed_entries = 0;
+    std::uintmax_t bytes_received = 0;
+    ProgressThrottle file_throttle;
 };
+
+void reset_active_put(FileApplyState& state) {
+    state.active = false;
+    state.path.clear();
+    state.remote_state = FileState{};
+    state.target.clear();
+    state.temp.clear();
+    state.conflict = false;
+    state.out = std::ofstream{};
+    state.bytes_received = 0;
+    state.file_throttle.reset();
+}
+
+double receive_total_percent(const FileApplyState& state, std::uintmax_t current_file_done = 0) {
+    if (state.total_entries == 0) {
+        return 100.0;
+    }
+    double done = static_cast<double>(state.completed_entries);
+    if (state.active && state.remote_state.size > 0) {
+        done += static_cast<double>(current_file_done) / static_cast<double>(state.remote_state.size);
+    } else if (state.active && state.remote_state.size == 0) {
+        done += 1.0;
+    }
+    return percent_of(done, static_cast<double>(state.total_entries));
+}
+
+void print_receive_progress(FileApplyState& state, bool force) {
+    if (!state.active) {
+        return;
+    }
+    if (!state.file_throttle.should_report(state.bytes_received, state.remote_state.size, force)) {
+        return;
+    }
+    print_sync_progress("receive",
+                        receive_total_percent(state, state.bytes_received),
+                        state.path,
+                        percent_of(state.bytes_received, state.remote_state.size),
+                        state.bytes_received,
+                        state.remote_state.size);
+}
 
 void finish_put(const Config& config, FileApplyState& state) {
     (void)config;
@@ -683,17 +1058,20 @@ void finish_put(const Config& config, FileApplyState& state) {
         std::error_code ec;
         std::filesystem::remove(state.temp, ec);
         const auto path = state.path;
-        state = FileApplyState{};
+        reset_active_put(state);
         throw std::runtime_error("hash mismatch after receiving " + path);
     }
 
     std::filesystem::rename(state.temp, state.target);
+    state.bytes_received = state.remote_state.size;
+    print_receive_progress(state, true);
     std::cout << (state.conflict ? "saved conflict " : "applied ") << state.path;
     if (state.conflict) {
         std::cout << " -> " << state.target.string();
     }
     std::cout << "\n";
-    state = FileApplyState{};
+    ++state.completed_entries;
+    reset_active_put(state);
 }
 
 bool apply_files_line(const Config& config,
@@ -708,13 +1086,23 @@ bool apply_files_line(const Config& config,
         return true;
     }
     const auto parts = filesync::split_line(line);
-    if (parts.empty() || parts[0] == "FILES") {
+    if (parts.empty()) {
+        return false;
+    }
+    if (parts[0] == "FILES") {
+        if (parts.size() >= 2) {
+            state.total_entries = static_cast<std::size_t>(std::stoull(parts[1]));
+            state.completed_entries = 0;
+            std::cout << "sync receive start entries=" << state.total_entries << std::endl;
+        }
         return false;
     }
     if (state.active) {
         if (parts.size() == 2 && parts[0] == "CHUNK") {
             const auto bytes = filesync::hex_decode(parts[1]);
             state.out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            state.bytes_received += bytes.size();
+            print_receive_progress(state, false);
             return false;
         }
         if (parts.size() == 1 && parts[0] == "PUT_END") {
@@ -725,14 +1113,19 @@ bool apply_files_line(const Config& config,
     }
     if (parts.size() == 2 && parts[0] == "DIR") {
         const auto path = filesync::unquote_token(parts[1]);
-        if (filesync::is_safe_relative_path(path)) {
+        if (filesync::is_safe_relative_path(path) && should_include_remote_path(config, path, true)) {
             std::filesystem::create_directories(local_path_for_remote(config, path));
+            ++state.completed_entries;
+            std::cout << "sync receive directory=" << filesync::quote_token(path)
+                      << " total=" << format_percent(percent_of(static_cast<double>(state.completed_entries),
+                                                                 static_cast<double>(state.total_entries))) << std::endl;
         }
         return false;
     }
     if (parts.size() == 6 && parts[0] == "PUT") {
         const auto path = filesync::unquote_token(parts[1]);
         if (!filesync::is_safe_relative_path(path)) return false;
+        if (!should_include_remote_path(config, path, false)) return false;
         const FileState remote_state{false,
                                      static_cast<std::uintmax_t>(std::stoull(parts[2])),
                                      static_cast<std::uint64_t>(std::stoull(parts[3])),
@@ -755,6 +1148,13 @@ bool apply_files_line(const Config& config,
             throw std::runtime_error("hash mismatch after receiving " + path);
         }
         std::filesystem::rename(temp, target);
+        ++state.completed_entries;
+        print_sync_progress("receive",
+                            percent_of(static_cast<double>(state.completed_entries), static_cast<double>(state.total_entries)),
+                            path,
+                            100.0,
+                            remote_state.size,
+                            remote_state.size);
         return false;
     }
     if (parts.size() != 5 || parts[0] != "PUT_BEGIN") {
@@ -762,6 +1162,7 @@ bool apply_files_line(const Config& config,
     }
     const auto path = filesync::unquote_token(parts[1]);
     if (!filesync::is_safe_relative_path(path)) return false;
+    if (!should_include_remote_path(config, path, false)) return false;
     FileState remote_state{false,
                            static_cast<std::uintmax_t>(std::stoull(parts[2])),
                            static_cast<std::uint64_t>(std::stoull(parts[3])),
@@ -776,10 +1177,13 @@ bool apply_files_line(const Config& config,
     state.target = target;
     state.temp = target.string() + ".filesync.tmp";
     state.conflict = conflict;
+    state.bytes_received = 0;
+    state.file_throttle.reset();
     state.out.open(state.temp, std::ios::binary | std::ios::trunc);
     if (!state.out) {
         throw std::runtime_error("failed to open temp file: " + state.temp.string());
     }
+    print_receive_progress(state, true);
     return false;
 }
 
@@ -869,7 +1273,7 @@ private:
                         state.upload_manifest = scan_paths(config_);
                         state.have_upload_manifest = true;
                         save_state(config_, state.upload_manifest);
-                        write_text(ctx, manifest_message(config_, state.upload_manifest));
+                        write_manifest(ctx, config_, state.upload_manifest);
                         state.state = InState::WaitingNeedForUpload;
                     }
                 } else if (state.state == InState::WaitingNeedForUpload) {
@@ -881,9 +1285,15 @@ private:
                     write_file_lines(ctx, config_, state.upload_manifest, needed);
                     state.state = InState::WaitingAck;
                 } else {
+                    const auto lines = split_lines(frame);
+                    if (lines.empty() || filesync::split_line(lines.front()).empty() ||
+                        filesync::split_line(lines.front()).front() != "OK") {
+                        throw std::runtime_error("bad sync ack");
+                    }
                     state.state = InState::WaitingManifest;
                     state.have_upload_manifest = false;
                     state.upload_manifest.clear();
+                    write_text(ctx, "READY\nEND\n");
                 }
             } catch (const std::exception& ex) {
                 std::cerr << "inbound sync error: " << ex.what() << "\n";
@@ -961,9 +1371,7 @@ private:
 
             std::string receive_buffer;
 
-            const auto manifest_text = manifest_message(config_, manifest);
-            yuan::buffer::ByteBuffer manifest_buffer{std::string_view(manifest_text)};
-            outbound_session_->write_and_flush(manifest_buffer);
+            write_manifest(*outbound_session_, config_, manifest);
 
             const auto need_text = co_await read_frame(*outbound_session_, receive_buffer);
             apply_need_deletes(config_, need_text);
@@ -980,6 +1388,10 @@ private:
 
             yuan::buffer::ByteBuffer ack{std::string_view("OK\nEND\n")};
             outbound_session_->write_and_flush(ack);
+            const auto ready_text = co_await read_frame(*outbound_session_, receive_buffer);
+            if (!is_ready_frame(ready_text)) {
+                throw std::runtime_error("peer did not finish sync round");
+            }
 
             last_manifest_ = scan_paths(config_);
             have_last_manifest_ = true;

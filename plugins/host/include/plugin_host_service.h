@@ -4,6 +4,7 @@
 #include "service.h"
 #include "plugin/plugin_context.h"
 #include "plugin/plugin_events.h"
+#include "plugin/host_resource_guard.h"
 #include "plugin/plugin_lifecycle_manager.h"
 #include "plugin/plugin_permission.h"
 
@@ -58,6 +59,12 @@ namespace yuan::app
 
         void set_default_permissions(plugin::PluginPermission perm);
         void set_plugin_permissions(const std::string &plugin_name, plugin::PluginPermission perm);
+        uint64_t track_plugin_resource(const std::string &plugin_name,
+                                       plugin::PluginResourceType type,
+                                       plugin::ResourceCleanupFn cleanup,
+                                       const std::string &description = "");
+        bool untrack_plugin_resource(uint64_t resource_id);
+        std::string resource_leak_report(const std::string &plugin_name) const;
 
         void set_http_server_accessor(std::function<void *()> accessor);
         void set_http_installers(
