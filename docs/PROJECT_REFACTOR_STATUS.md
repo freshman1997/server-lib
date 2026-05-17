@@ -278,8 +278,9 @@ Practical judgment:
 
 Current judgment:
 
-- run-mode metadata is present
-- full runtime switching is not complete
+- runtime-worker placement is now implemented for the current in-process worker target
+- same-port HTTP worker ownership is validated through the `EndpointManager` plan and `reuse_port`
+- full production hardening of every runtime mode is still a broader project target
 
 What is concretely finished:
 
@@ -317,23 +318,28 @@ What is concretely finished:
   - a first supervisor state model now exists (`idle / starting / running / recovering / degraded / stopping / stopped`)
   - `Bootstrap` now exposes a structured `SupervisorSnapshot` instead of requiring every caller to recompute aggregate worker state
   - supervisor snapshot and state events now also expose both `recovering_workers` and `suppressed_workers`, so delayed restart backoff and restart-window suppression are visible separately to entrypoints and plugins
-  - supervisor state and snapshot now also carry a structured reason code (plus its string form), and successful restart / no-recovery-window limit-hit are now distinguished as separate reasons
-  - key entrypoints now print role / supervisor-state / worker identity / supervisor snapshot for runtime inspection
+- supervisor state and snapshot now also carry a structured reason code (plus its string form), and successful restart / no-recovery-window limit-hit are now distinguished as separate reasons
+- key entrypoints now print role / supervisor-state / worker identity / supervisor snapshot for runtime inspection
+- `RuntimeWorkerPool`-style placement now materializes worker-local service instances from factory-based `ServiceDefinition` entries.
+- `EndpointManager` now owns listener placement decisions for fixed, internal, ephemeral, replicated, and conflicting endpoints.
+- In-process workers now receive their own `NetworkRuntime` and expose worker/service-instance identity through app, service, plugin, and server-service events.
+- The worker restart path now includes restart-window suppression and a supervisor circuit breaker with regression coverage.
+- Plugin protocol service declarations can now materialize into worker-local app services, initialize plugin runtime per worker, and bind a concrete TCP echo protocol handler to a worker-owned listener.
+- Linux HTTP shared-port proof and worker-pool throughput checks have been run and recorded.
   - Windows/MinGW still remains unsupported for this mode
 
 What is not finished:
 
-- there is still no repository-level worker-runtime orchestration for `RunMode::multi_thread`
-- there is still no fully robust process supervisor / restart manager for `RunMode::multi_process`
-- the current multi-process shape is still `service-per-process`, not prefork same-port workers
-- the current restart policy is still intentionally minimal even though it now has delayed recovery, restart suppression, backoff, and a bounded restart window
-- the current network layer does not yet provide prefork-ready same-listener foundations such as `SO_REUSEPORT`, shared listener injection, or fork-safe listener re-registration
-- service startup is still mostly per-service thread ownership, not a unified app-level execution model
+- production-grade `multi_process` supervision still needs more soak, observability, and deployment validation
+- the current POSIX process shape is worker-plan based, not a fully tuned prefork production server model
+- plugin protocol services currently have a concrete echo-handler proof; a richer plugin-defined protocol handler SDK is still future work
+- HTTP throughput still shows request-complete stack overhead compared with simpler event-library responders
 
 Practical judgment:
 
-- `multi_thread` has started to become a real app-level mode, but it is still early and incomplete
-- `multi_process` has a first POSIX host skeleton, but it is still far from a completed runtime mode
+- the runtime-worker placement refactor track can be treated as complete
+- `multi_thread` is now a real app-level worker mode for factory-defined services
+- `multi_process` has a useful POSIX worker-plan skeleton, but should still be treated as less production-hardened than the in-process worker path
 - in the current repository, reactor should remain the event-loop model
 - the correct near-term execution stance is "service-owned reactors with app-level startup policy", not "one global loop for every subsystem"
 

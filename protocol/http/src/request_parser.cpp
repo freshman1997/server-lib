@@ -5,6 +5,7 @@
 #include "url.h"
 
 #include <cctype>
+#include <cstring>
 #include <string>
 
 namespace yuan::net::http
@@ -15,13 +16,14 @@ namespace yuan::net::http
             return false;
         }
 
-        HttpRequest *req = dynamic_cast<HttpRequest *>(packet_);
-        if (!req) {
+        if (!packet_) {
             return false;
         }
+        HttpRequest *req = static_cast<HttpRequest *>(packet_);
 
         header_state = HeaderState::metohd;
-        std::string method;
+        char method[16];
+        std::size_t method_size = 0;
         bool saw_space = false;
         while (buff.readable_bytes()) {
             char ch = buff.read_i8();
@@ -29,45 +31,63 @@ namespace yuan::net::http
                 saw_space = true;
                 break;
             }
-            method.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
-            if (method.size() > 16) {
+            if (method_size == sizeof(method)) {
                 return false;
             }
+            method[method_size++] = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
         }
 
-        if (method.empty() || !saw_space) {
+        if (method_size == 0 || !saw_space) {
             return false;
         }
 
-        if (method == "GET") req->method_ = HttpMethod::get_;
-        else if (method == "POST") req->method_ = HttpMethod::post_;
-        else if (method == "PUT") req->method_ = HttpMethod::put_;
-        else if (method == "DELETE") req->method_ = HttpMethod::delete_;
-        else if (method == "OPTIONS") req->method_ = HttpMethod::options_;
-        else if (method == "HEAD") req->method_ = HttpMethod::head_;
-        else if (method == "COMMENT") req->method_ = HttpMethod::comment_;
-        else if (method == "TRACE") req->method_ = HttpMethod::trace_;
-        else if (method == "PATCH") req->method_ = HttpMethod::patch_;
-        else if (method == "PROPFIND") req->method_ = HttpMethod::propfind_;
-        else if (method == "PROPPATCH") req->method_ = HttpMethod::proppatch_;
-        else if (method == "MKCOL") req->method_ = HttpMethod::mkcol_;
-        else if (method == "COPY") req->method_ = HttpMethod::copy_;
-        else if (method == "MOVE") req->method_ = HttpMethod::move_;
-        else if (method == "LOCK") req->method_ = HttpMethod::lock_;
-        else if (method == "UNLOCK") req->method_ = HttpMethod::unlock_;
-        else if (method == "REPORT") req->method_ = HttpMethod::report_;
-        else if (method == "ACL") req->method_ = HttpMethod::acl_;
-        else if (method == "SEARCH") req->method_ = HttpMethod::search_;
+        switch (method_size) {
+        case 3:
+            if (std::memcmp(method, "GET", 3) == 0) req->method_ = HttpMethod::get_;
+            else if (std::memcmp(method, "PUT", 3) == 0) req->method_ = HttpMethod::put_;
+            else if (std::memcmp(method, "ACL", 3) == 0) req->method_ = HttpMethod::acl_;
+            break;
+        case 4:
+            if (std::memcmp(method, "POST", 4) == 0) req->method_ = HttpMethod::post_;
+            else if (std::memcmp(method, "HEAD", 4) == 0) req->method_ = HttpMethod::head_;
+            else if (std::memcmp(method, "COPY", 4) == 0) req->method_ = HttpMethod::copy_;
+            else if (std::memcmp(method, "MOVE", 4) == 0) req->method_ = HttpMethod::move_;
+            else if (std::memcmp(method, "LOCK", 4) == 0) req->method_ = HttpMethod::lock_;
+            break;
+        case 5:
+            if (std::memcmp(method, "TRACE", 5) == 0) req->method_ = HttpMethod::trace_;
+            else if (std::memcmp(method, "PATCH", 5) == 0) req->method_ = HttpMethod::patch_;
+            else if (std::memcmp(method, "MKCOL", 5) == 0) req->method_ = HttpMethod::mkcol_;
+            break;
+        case 6:
+            if (std::memcmp(method, "DELETE", 6) == 0) req->method_ = HttpMethod::delete_;
+            else if (std::memcmp(method, "UNLOCK", 6) == 0) req->method_ = HttpMethod::unlock_;
+            else if (std::memcmp(method, "REPORT", 6) == 0) req->method_ = HttpMethod::report_;
+            else if (std::memcmp(method, "SEARCH", 6) == 0) req->method_ = HttpMethod::search_;
+            break;
+        case 7:
+            if (std::memcmp(method, "OPTIONS", 7) == 0) req->method_ = HttpMethod::options_;
+            else if (std::memcmp(method, "COMMENT", 7) == 0) req->method_ = HttpMethod::comment_;
+            break;
+        case 8:
+            if (std::memcmp(method, "PROPFIND", 8) == 0) req->method_ = HttpMethod::propfind_;
+            break;
+        case 9:
+            if (std::memcmp(method, "PROPPATCH", 9) == 0) req->method_ = HttpMethod::proppatch_;
+            break;
+        default:
+            break;
+        }
 
         return req->method_ != HttpMethod::invalid_;
     }
 
     bool HttpRequestParser::parse_url(::yuan::buffer::ByteBuffer & buff)
     {
-        HttpRequest *req = dynamic_cast<HttpRequest *>(packet_);
-        if (!req) {
+        if (!packet_) {
             return false;
         }
+        HttpRequest *req = static_cast<HttpRequest *>(packet_);
 
         if (header_state != HeaderState::method_gap || buff.readable_bytes() == 0) {
             return false;
@@ -75,12 +95,15 @@ namespace yuan::net::http
 
         header_state = HeaderState::url;
         std::string url;
+        bool needs_decode = false;
         char ch = buff.read_i8();
         url.push_back(ch);
+        needs_decode = needs_decode || ch == '%';
         while (ch != ' ' && buff.readable_bytes()) {
             ch = buff.read_i8();
             if (ch != ' ') {
                 url.push_back(ch);
+                needs_decode = needs_decode || ch == '%';
             }
 
             if (buff.read_offset() > config::max_header_length) {
@@ -90,14 +113,17 @@ namespace yuan::net::http
         }
 
         size_t query_pos = url.find_first_of('?');
-        req->url_ = url::url_decode(url);
+        std::string query_part;
+        if (query_pos != std::string::npos) {
+            query_part = url.substr(query_pos);
+        }
+        req->url_ = needs_decode ? url::url_decode(url) : std::move(url);
 
         if (!url::decode_url_domain(req->url_, req->url_domain_)) {
             return false;
         }
 
-        if (query_pos != std::string::npos) {
-            std::string query_part = url.substr(query_pos);
+        if (!query_part.empty()) {
             if (!url::decode_parameters(query_part, req->params_)) {
                 return false;
             }

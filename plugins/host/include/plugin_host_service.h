@@ -14,6 +14,7 @@
 
 namespace yuan::plugin
 {
+    class Plugin;
     class PluginManager;
     class HostScheduler;
     class HostServiceRegistry;
@@ -48,6 +49,7 @@ namespace yuan::app
 
         bool load_plugin(const std::string &plugin_name);
         bool unload_plugin(const std::string &plugin_name);
+        plugin::Plugin *get_plugin(const std::string &plugin_name) const;
 
         std::vector<std::pair<std::string, bool> > health_check_all() const;
         bool health_check(const std::string &plugin_name) const;

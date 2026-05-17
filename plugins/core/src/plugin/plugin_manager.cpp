@@ -7,6 +7,9 @@
 #include "logger.h"
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -67,6 +70,69 @@ namespace yuan::plugin
             return PluginRunMode::unknown;
         }
 
+        static std::string lower_copy(std::string value)
+        {
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            return value;
+        }
+
+        static std::string service_label(const std::string &name)
+        {
+            return name.empty() ? std::string("<unnamed>") : name;
+        }
+
+        static std::string read_string_field(const nlohmann::json &item,
+                                             const char *field,
+                                             const std::string &fallback,
+                                             const std::string &plugin_name,
+                                             const std::string &service_name)
+        {
+            if (!item.contains(field)) {
+                return fallback;
+            }
+            if (!item[field].is_string()) {
+                LOG_WARN("plugin '{}' protocol service '{}' field '{}' must be a string",
+                         plugin_name, service_label(service_name), field);
+                return fallback;
+            }
+            return item[field].get<std::string>();
+        }
+
+        static bool read_int_field(const nlohmann::json &item,
+                                   const char *field,
+                                   int &target,
+                                   int min_value,
+                                   int max_value,
+                                   const std::string &plugin_name,
+                                   const std::string &service_name)
+        {
+            if (!item.contains(field)) {
+                return true;
+            }
+            if (!item[field].is_number_integer()) {
+                LOG_WARN("plugin '{}' protocol service '{}' field '{}' must be an integer",
+                         plugin_name, service_label(service_name), field);
+                return false;
+            }
+
+            const auto value = item[field].get<int64_t>();
+            if (value < min_value || value > max_value) {
+                LOG_WARN("plugin '{}' protocol service '{}' field '{}'={} is outside [{}, {}]",
+                         plugin_name,
+                         service_label(service_name),
+                         field,
+                         value,
+                         min_value,
+                         max_value);
+                return false;
+            }
+
+            target = static_cast<int>(value);
+            return true;
+        }
+
         static std::vector<ProtocolServiceDescriptor> parse_protocol_services(
             const PluginConfigView &config,
             const std::string &plugin_name)
@@ -88,23 +154,59 @@ namespace yuan::plugin
 
                 ProtocolServiceDescriptor service;
                 service.plugin_id = plugin_name;
-                service.name = item.value("name", "");
-                service.type = item.value("type", item.value("service_type", ""));
-                service.protocol = item.value("protocol", "tcp");
-                service.host = item.value("host", "0.0.0.0");
-                service.port = item.value("port", 0);
-                service.contract_id = item.value("contract_id", "");
-                service.contract_version = item.value("contract_version", 1);
+                service.name = read_string_field(item, "name", "", plugin_name, "");
+                service.type = read_string_field(
+                    item,
+                    "type",
+                    read_string_field(item, "service_type", "", plugin_name, service.name),
+                    plugin_name,
+                    service.name);
+
+                const auto legacy_protocol = read_string_field(item, "protocol", "", plugin_name, service.name);
+                const auto declared_transport = read_string_field(item, "transport", "", plugin_name, service.name);
+                service.transport = lower_copy(!declared_transport.empty()
+                    ? declared_transport
+                    : (!legacy_protocol.empty() ? legacy_protocol : "tcp"));
+                service.protocol = service.transport;
+                if (!legacy_protocol.empty() &&
+                    !declared_transport.empty() &&
+                    lower_copy(legacy_protocol) != service.transport) {
+                    LOG_WARN("plugin '{}' protocol service '{}' declares both protocol='{}' and transport='{}'; transport wins",
+                             plugin_name,
+                             service_label(service.name),
+                             legacy_protocol,
+                             declared_transport);
+                }
+
+                service.host = read_string_field(item, "host", "0.0.0.0", plugin_name, service.name);
+                service.handler = read_string_field(item, "handler", "", plugin_name, service.name);
+                service.framing = lower_copy(read_string_field(item, "framing", "raw", plugin_name, service.name));
+                service.contract_id = read_string_field(item, "contract_id", "", plugin_name, service.name);
                 service.run_mode = run_mode;
                 service.language = language;
                 service.entry = entry;
 
+                bool numeric_fields_are_valid = true;
+                numeric_fields_are_valid &= read_int_field(item, "port", service.port, 0, 65535, plugin_name, service.name);
+                numeric_fields_are_valid &= read_int_field(item, "contract_version", service.contract_version, 1, 1000000, plugin_name, service.name);
+                numeric_fields_are_valid &= read_int_field(item, "read_timeout_ms", service.read_timeout_ms, 0, 86400000, plugin_name, service.name);
+                numeric_fields_are_valid &= read_int_field(item, "idle_timeout_ms", service.idle_timeout_ms, 0, 86400000, plugin_name, service.name);
+                numeric_fields_are_valid &= read_int_field(item, "write_timeout_ms", service.write_timeout_ms, 0, 86400000, plugin_name, service.name);
+                numeric_fields_are_valid &= read_int_field(item, "max_connections", service.max_connections, 0, 1000000, plugin_name, service.name);
+                numeric_fields_are_valid &= read_int_field(item, "max_frame_bytes", service.max_frame_bytes, 1, 134217728, plugin_name, service.name);
+                if (!numeric_fields_are_valid) {
+                    continue;
+                }
+
                 if (service.type.empty()) {
                     service.type = service.name;
                 }
-                if (service.name.empty() || service.contract_id.empty() || service.port < 0) {
+                if (service.framing.empty()) {
+                    service.framing = "raw";
+                }
+                if (service.name.empty() || service.contract_id.empty() || service.port < 0 || service.port > 65535) {
                     LOG_WARN("plugin '{}' has invalid protocol service declaration '{}'",
-                             plugin_name, service.name);
+                             plugin_name, service_label(service.name));
                     continue;
                 }
 

@@ -995,12 +995,19 @@ namespace yuan::net::http
 
     void HttpServer::cleanup_stale_upload_sessions()
     {
-        std::lock_guard<std::mutex> upload_lock(upload_mutex_);
-        const uint64_t now_ms = yuan::base::time::steady_now_ms();
-        if (upload_cleanup_last_ms_ != 0 && now_ms < upload_cleanup_last_ms_ + kUploadCleanupIntervalMs) {
+        const uint64_t observed_last_ms = upload_cleanup_last_ms_.load(std::memory_order_relaxed);
+        const uint64_t observed_now_ms = yuan::base::time::steady_now_ms();
+        if (observed_last_ms != 0 && observed_now_ms < observed_last_ms + kUploadCleanupIntervalMs) {
             return;
         }
-        upload_cleanup_last_ms_ = now_ms;
+
+        std::lock_guard<std::mutex> upload_lock(upload_mutex_);
+        const uint64_t now_ms = yuan::base::time::steady_now_ms();
+        const uint64_t last_ms = upload_cleanup_last_ms_.load(std::memory_order_relaxed);
+        if (last_ms != 0 && now_ms < last_ms + kUploadCleanupIntervalMs) {
+            return;
+        }
+        upload_cleanup_last_ms_.store(now_ms, std::memory_order_relaxed);
 
         std::vector<std::string> stale_ids;
         stale_ids.reserve(uploaded_chunks_.size());
@@ -1652,7 +1659,11 @@ namespace yuan::net::http
         conn->set_max_packet_size(HttpPacket::get_max_packet_size());
 
         auto httpCtx = std::make_unique<HttpSessionContext>(conn);
-        auto session = std::make_unique<HttpSession>(sessionId, std::move(httpCtx), listener_.runtime()->runtime_view());
+        auto session = std::make_unique<HttpSession>(
+            sessionId,
+            std::move(httpCtx),
+            listener_.runtime()->runtime_view(),
+            false);
         auto *session_ptr = ptr_of(session);
         sessions_[sessionId] = std::move(session);
 

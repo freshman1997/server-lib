@@ -1,0 +1,23 @@
+{
+  "name": "LineEchoProtocol",
+  "version": "1.0.0",
+  "permissions": "register_protocol_service,use_network_runtime",
+  "protocol_services": [
+    {
+      "name": "line_echo",
+      "type": "custom",
+      "transport": "tcp",
+      "host": "127.0.0.1",
+      "port": 9000,
+      "handler": "line_echo.on_connection",
+      "framing": "line",
+      "read_timeout_ms": 30000,
+      "idle_timeout_ms": 60000,
+      "write_timeout_ms": 30000,
+      "max_connections": 1024,
+      "max_frame_bytes": 65536,
+      "contract_id": "plugin.line_echo",
+      "contract_version": 1
+    }
+  ]
+}

@@ -31,6 +31,16 @@ namespace yuan::net::http
             return normalized;
         }
 
+        bool is_normalized_header_key(std::string_view key) noexcept
+        {
+            for (const char ch : key) {
+                if (ch >= 'A' && ch <= 'Z') {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         std::filesystem::path make_body_spool_path()
         {
             const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -258,7 +268,8 @@ namespace yuan::net::http
 
     void HttpPacket::add_header(std::string && k, std::string && v)
     {
-        headers_[normalize_header_key(k)] = std::move(v);
+        std::string key = is_normalized_header_key(k) ? std::move(k) : normalize_header_key(k);
+        headers_[std::move(key)] = std::move(v);
     }
 
     void HttpPacket::add_header(const char * k, const char * v)

@@ -50,7 +50,7 @@ This checklist tracks the implementation of `SERVICE_INSTANCE_RUNTIME_REFACTOR.m
 - [x] Add HTTP listen options.
 - [x] Support HTTP `all_workers` with explicit `reuse_port` on Linux code path.
 - [x] Add Linux integration proof target for multi-worker shared-port HTTP.
-- [ ] Run Linux shared-port proof on a Linux host/CI runner.
+- [x] Run Linux shared-port proof on a Linux host/CI runner.
 - [x] Avoid private service thread when a worker-owned runtime is provided.
 - [x] Add HTTP shared-runtime request regression.
 - [x] Add `ServerRuntimeHost::start_inline()` lifecycle regression.
@@ -76,6 +76,7 @@ This checklist tracks the implementation of `SERVICE_INSTANCE_RUNTIME_REFACTOR.m
 - [x] Initialize plugin runtime inside worker-local service instances.
 - [x] Give each `PluginHostService` instance its own `PluginManager` so in-process workers do not overwrite one another's plugin context.
 - [x] Add a worker-local plugin protocol service regression that starts two Bootstrap workers and verifies distinct plugin-loaded worker/service-instance identities.
+- [x] Bind a concrete plugin protocol service handler to a worker-owned TCP listener and cover it with an echo roundtrip regression.
 
 ## Phase 8: Runtime and Release Hardening
 
@@ -103,9 +104,20 @@ This checklist tracks the implementation of `SERVICE_INSTANCE_RUNTIME_REFACTOR.m
 
 ## Next TODO
 
-- [ ] Run Linux shared-port HTTP proof on a Linux host/CI runner.
-- [ ] Replace remaining service-local endpoint decisions with `EndpointManager` binding plans.
-- [ ] Bind concrete plugin protocol handlers to network listeners beyond runtime initialization.
-- [ ] Add HTTP worker-pool throughput benchmark for `all_workers + reuse_port` on Linux.
-- [ ] Re-check the HTTP request-complete CPU tail after the runtime worker supervisor path is stable.
-- [ ] Add an in-process worker circuit-breaker regression once the recovery policy is finalized.
+- [x] Run Linux shared-port HTTP proof on a Linux host/CI runner.
+- [x] Replace remaining service-local endpoint decisions with `EndpointManager` binding plans.
+- [x] Bind concrete plugin protocol handlers to network listeners beyond runtime initialization.
+- [x] Add HTTP worker-pool throughput benchmark for `all_workers + reuse_port` on Linux.
+- [x] Re-check the HTTP request-complete CPU tail after the runtime worker supervisor path is stable.
+- [x] Add an in-process worker circuit-breaker regression once the recovery policy is finalized.
+
+## Completion Verification
+
+Date: 2026-05-17
+
+- Built `test_endpoint_manager`, `test_in_process_worker_runtime`, `test_plugin_governance`, `test_http_shared_reuse_port`, `core_runtime_benchmark`, and `http_worker_pool_benchmark`.
+- Full local build passed with `cmake --build build -j 4`.
+- Ran the core/runtime/plugin/http regression subset: 25/25 passed.
+- Ran build-fix smoke tests for `mini_nginx_config`, `ssh_packet_codec_fuzz`, and `server_runtime_host`: 3/3 passed.
+- Ran `core_runtime_benchmark` and `http_worker_pool_benchmark` after the final worker-placement changes.
+- HTTP worker-pool re-check still points at request-complete stack overhead as an optimization topic, not a blocker for the runtime-worker placement refactor.

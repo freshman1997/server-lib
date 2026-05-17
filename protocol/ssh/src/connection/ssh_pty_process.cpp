@@ -261,7 +261,7 @@ namespace yuan::net::ssh
 #else
         int master = -1;
         int slave = -1;
-        if (openpty(&master, &slave, nullptr, nullptr, nullptr) != 0) {
+        if (::openpty(&master, &slave, nullptr, nullptr, nullptr) != 0) {
             maybe_set_error(error_message, std::string("openpty failed: ") + std::strerror(errno));
             return false;
         }

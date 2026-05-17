@@ -80,6 +80,7 @@ namespace yuan::url
             return true;
         }
 
+        const bool needs_decode = url.find('%', pos + 1) != std::string::npos;
         size_t i = pos + 1;
         size_t sz = url.size();
         for (; i < sz; ++i) {
@@ -87,7 +88,11 @@ namespace yuan::url
             while (j < sz && url[j] != '/' && url[j] != '?') ++j;
 
             if (j > i) {
-                urlDomain.push_back(url_decode(url.c_str() + i, url.c_str() + j));
+                if (needs_decode) {
+                    urlDomain.push_back(url_decode(url.c_str() + i, url.c_str() + j));
+                } else {
+                    urlDomain.emplace_back(url.c_str() + i, j - i);
+                }
             }
 
             i = j;

@@ -604,7 +604,7 @@ bool Bootstrap::run_local_worker_process(const WorkerPlan &worker)
         runtime.service_index = instance.service_index;
         runtime.service_instance_index = instance.service_instance_index;
         runtime.service_instance_count = instance.service_instance_count;
-        runtime.listener_reuse_port = service_instance_requires_reuse_port(instance);
+        runtime.listener_reuse_port = service_instance_requires_reuse_port(endpoint_plan_, instance);
 
         if (!local_worker_application_->add_service_instance(instance.definition->descriptor, std::move(service), runtime)) {
             LOG_ERROR(
@@ -634,8 +634,9 @@ bool Bootstrap::start_in_process_worker(const WorkerPlan &worker)
     worker_state->restart_window_started_at_ms = now_ms();
     auto *state = worker_state.get();
     const auto base_context = application_.context();
+    const auto endpoint_plan = endpoint_plan_;
 
-    state->thread = std::thread([state, worker, base_context]() {
+    state->thread = std::thread([state, worker, base_context, endpoint_plan]() {
         auto mark_ready = [state]() {
             state->ready.store(true, std::memory_order_release);
             state->ready_cv.notify_all();
@@ -681,7 +682,7 @@ bool Bootstrap::start_in_process_worker(const WorkerPlan &worker)
                 runtime.service_index = instance.service_index;
                 runtime.service_instance_index = instance.service_instance_index;
                 runtime.service_instance_count = instance.service_instance_count;
-                runtime.listener_reuse_port = service_instance_requires_reuse_port(instance);
+                runtime.listener_reuse_port = service_instance_requires_reuse_port(endpoint_plan, instance);
 
                 if (!state->application->add_service_instance(instance.definition->descriptor, std::move(service), runtime)) {
                     fail("failed to register service '" + instance.definition->descriptor.name + "'");
@@ -760,9 +761,9 @@ bool Bootstrap::run_in_process_worker_plan()
         LOG_WARN("in-process worker plan produced no workers");
         return false;
     }
-    const auto endpoint_plan = EndpointManager::build_plan(worker_plans_);
-    if (!endpoint_plan.valid()) {
-        for (const auto &diagnostic : endpoint_plan.diagnostics) {
+    endpoint_plan_ = EndpointManager::build_plan(worker_plans_);
+    if (!endpoint_plan_.valid()) {
+        for (const auto &diagnostic : endpoint_plan_.diagnostics) {
             LOG_ERROR("in-process worker endpoint plan invalid: {}", diagnostic);
         }
         return false;
@@ -1060,6 +1061,7 @@ void Bootstrap::shutdown_in_process_workers()
 
     in_process_workers_.clear();
     worker_plans_.clear();
+    endpoint_plan_ = {};
     local_service_names_.clear();
     set_supervisor_state(SupervisorState::stopped, SupervisorReason::shutdown_complete);
 }
@@ -1145,9 +1147,9 @@ bool Bootstrap::run_worker_plan_multi_process()
         LOG_WARN("worker-plan multi-process mode produced no workers");
         return false;
     }
-    const auto endpoint_plan = EndpointManager::build_plan(worker_plans_);
-    if (!endpoint_plan.valid()) {
-        for (const auto &diagnostic : endpoint_plan.diagnostics) {
+    endpoint_plan_ = EndpointManager::build_plan(worker_plans_);
+    if (!endpoint_plan_.valid()) {
+        for (const auto &diagnostic : endpoint_plan_.diagnostics) {
             LOG_ERROR("worker-plan multi-process endpoint plan invalid: {}", diagnostic);
         }
         return false;
@@ -1203,6 +1205,7 @@ bool Bootstrap::run_multi_process()
 
     worker_processes_.clear();
     worker_plans_.clear();
+    endpoint_plan_ = {};
     local_service_names_.clear();
     worker_failure_detected_ = false;
     supervisor_shutdown_started_ = false;

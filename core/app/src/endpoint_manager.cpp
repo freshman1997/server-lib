@@ -216,17 +216,27 @@ EndpointPlan EndpointManager::build_plan(const std::vector<WorkerPlan> &workers)
     return plan;
 }
 
-bool service_instance_requires_reuse_port(const ServiceInstancePlan &instance)
+bool service_instance_requires_reuse_port(const EndpointPlan &plan, const ServiceInstancePlan &instance)
 {
-    if (!instance.definition || instance.service_instance_count <= 1) {
+    if (!instance.definition) {
         return false;
     }
 
-    for (const auto &endpoint : instance.definition->descriptor.endpoints) {
-        if (is_listening_endpoint(endpoint) && endpoint.port > 0) {
-            return true;
+    const auto &service_name = instance.definition->descriptor.name;
+    for (const auto &binding : plan.bindings) {
+        if (!binding.requires_reuse_port()) {
+            continue;
+        }
+
+        for (const auto &owner : binding.owners) {
+            if (owner.service_index == instance.service_index &&
+                owner.service_instance_index == instance.service_instance_index &&
+                owner.service_name == service_name) {
+                return true;
+            }
         }
     }
+
     return false;
 }
 

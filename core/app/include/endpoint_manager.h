@@ -63,7 +63,7 @@ public:
     static EndpointPlan build_plan(const std::vector<WorkerPlan> &workers);
 };
 
-bool service_instance_requires_reuse_port(const ServiceInstancePlan &instance);
+bool service_instance_requires_reuse_port(const EndpointPlan &plan, const ServiceInstancePlan &instance);
 
 } // namespace yuan::app
 

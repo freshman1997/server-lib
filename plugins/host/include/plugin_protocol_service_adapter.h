@@ -3,6 +3,7 @@
 
 #include "application.h"
 #include "plugin/plugin_manifest.h"
+#include "plugin/plugin_protocol_handler.h"
 #include "service.h"
 #include "service_registry.h"
 
@@ -14,6 +15,17 @@
 namespace yuan::app
 {
     class PluginHostService;
+}
+
+namespace yuan::net
+{
+    class AsyncListenerHost;
+}
+
+namespace yuan::app
+{
+
+    struct PluginProtocolActiveConnectionTracker;
 
     class PluginProtocolServiceAdapter final : public Service, public RuntimeContextAwareService
     {
@@ -33,10 +45,16 @@ namespace yuan::app
         bool started() const noexcept;
 
     private:
+        bool start_protocol_listener();
+        void stop_protocol_listener();
+
         std::string plugin_path_;
         plugin::ProtocolServiceDescriptor protocol_service_;
         RuntimeContext runtime_context_{};
+        plugin::PluginProtocolHandlerRegistry handler_registry_;
         std::unique_ptr<PluginHostService> host_;
+        std::unique_ptr<net::AsyncListenerHost> listener_;
+        std::shared_ptr<PluginProtocolActiveConnectionTracker> connection_tracker_;
         bool initialized_ = false;
         bool started_ = false;
     };

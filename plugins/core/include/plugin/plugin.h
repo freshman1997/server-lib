@@ -3,6 +3,7 @@
 #include "plugin/plugin_context.h"
 #include "plugin/plugin_manifest.h"
 #include "plugin/plugin_meta.h"
+#include "plugin/plugin_protocol_handler.h"
 
 namespace yuan::plugin
 {
@@ -51,6 +52,10 @@ namespace yuan::plugin
         virtual PluginManifest manifest() const
         {
             return meta().to_manifest();
+        }
+
+        virtual void register_protocol_handlers(PluginProtocolHandlerRegistry & /*registry*/)
+        {
         }
     };
 }

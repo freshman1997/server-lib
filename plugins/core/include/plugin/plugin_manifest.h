@@ -32,8 +32,16 @@ namespace yuan::plugin
         std::string name;
         std::string type;
         std::string protocol = "tcp";
+        std::string transport = "tcp";
         std::string host = "0.0.0.0";
         int port = 0;
+        std::string handler;
+        std::string framing = "raw";
+        int read_timeout_ms = 30000;
+        int idle_timeout_ms = 60000;
+        int write_timeout_ms = 30000;
+        int max_connections = 1024;
+        int max_frame_bytes = 65536;
         std::string contract_id;
         int contract_version = 1;
         PluginRunMode run_mode = PluginRunMode::unknown;

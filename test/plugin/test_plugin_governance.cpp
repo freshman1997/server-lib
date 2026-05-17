@@ -26,6 +26,20 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+using socket_t = SOCKET;
+constexpr socket_t kInvalidSocket = INVALID_SOCKET;
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+using socket_t = int;
+constexpr socket_t kInvalidSocket = -1;
+#endif
+
 namespace
 {
 
@@ -35,6 +49,162 @@ namespace
             std::cerr << "FAIL: " << message << '\n';
             std::exit(1);
         }
+    }
+
+    void close_socket(socket_t fd)
+    {
+        if (fd == kInvalidSocket) {
+            return;
+        }
+#ifdef _WIN32
+        closesocket(fd);
+#else
+        ::close(fd);
+#endif
+    }
+
+    uint16_t reserve_tcp_port()
+    {
+        const socket_t listener = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listener == kInvalidSocket) {
+            return 0;
+        }
+
+        int reuse = 1;
+#ifdef _WIN32
+        (void)::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&reuse), sizeof(reuse));
+#else
+        (void)::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#endif
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = 0;
+        if (::bind(listener, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) != 0) {
+            close_socket(listener);
+            return 0;
+        }
+
+        sockaddr_in bound{};
+        socklen_t len = sizeof(bound);
+        if (::getsockname(listener, reinterpret_cast<sockaddr *>(&bound), &len) != 0) {
+            close_socket(listener);
+            return 0;
+        }
+
+        const uint16_t port = ntohs(bound.sin_port);
+        close_socket(listener);
+        return port;
+    }
+
+    bool tcp_echo_roundtrip(uint16_t port, const std::string &payload)
+    {
+        const socket_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd == kInvalidSocket) {
+            return false;
+        }
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+        bool connected = false;
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            if (::connect(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) == 0) {
+                connected = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (!connected) {
+            close_socket(fd);
+            return false;
+        }
+
+        std::size_t sent = 0;
+        while (sent < payload.size()) {
+            const auto rc = ::send(fd, payload.data() + sent, payload.size() - sent, 0);
+            if (rc <= 0) {
+                close_socket(fd);
+                return false;
+            }
+            sent += static_cast<std::size_t>(rc);
+        }
+
+        std::string received;
+        received.resize(payload.size());
+        std::size_t used = 0;
+        while (used < received.size()) {
+            const auto rc = ::recv(fd, received.data() + used, received.size() - used, 0);
+            if (rc <= 0) {
+                close_socket(fd);
+                return false;
+            }
+            used += static_cast<std::size_t>(rc);
+        }
+
+        close_socket(fd);
+        return received == payload;
+    }
+
+    std::filesystem::path resolve_plugin_examples_dir()
+    {
+#ifdef YUAN_TEST_PLUGIN_EXAMPLES_DIR
+        const std::filesystem::path configured = YUAN_TEST_PLUGIN_EXAMPLES_DIR;
+        if (std::filesystem::exists(configured / "LineEchoProtocol.plugin")) {
+            return configured;
+        }
+#endif
+
+        const auto cwd = std::filesystem::current_path();
+        const std::vector<std::filesystem::path> candidates{
+            cwd / "plugins" / "examples",
+            cwd / "build" / "plugins" / "examples",
+            cwd / ".." / ".." / "plugins" / "examples",
+            cwd / ".." / ".." / ".." / "plugins" / "examples",
+        };
+
+        for (const auto &candidate : candidates) {
+            std::error_code ec;
+            if (std::filesystem::exists(candidate / "LineEchoProtocol.plugin", ec) && !ec) {
+                return std::filesystem::canonical(candidate, ec);
+            }
+        }
+
+        return {};
+    }
+
+    void write_script_protocol_plugin(const std::filesystem::path &root,
+                                      const std::string &plugin_name,
+                                      const std::string &protocol_service_json)
+    {
+        const auto plugin_dir = root / plugin_name;
+        std::filesystem::create_directories(plugin_dir);
+
+        std::ofstream manifest(plugin_dir / "plugin.json");
+        require(static_cast<bool>(manifest), "protocol plugin manifest should be creatable");
+        manifest << "{\n";
+        manifest << "  \"run_mode\": \"script\",\n";
+        manifest << "  \"language\": \"lua\",\n";
+        manifest << "  \"entry\": \"main.lua\",\n";
+        manifest << "  \"permissions\": \"register_protocol_service,use_logger,use_network_runtime\",\n";
+        manifest << "  \"protocol_services\": [\n";
+        manifest << protocol_service_json << "\n";
+        manifest << "  ]\n";
+        manifest << "}\n";
+        manifest.close();
+
+        std::ofstream script(plugin_dir / "main.lua");
+        require(static_cast<bool>(script), "protocol plugin script should be creatable");
+        script << "local plugin = {}\n";
+        script << "function plugin.on_init(ctx) return ctx ~= nil end\n";
+        script << "function plugin.on_enable() end\n";
+        script << "function plugin.on_disable() end\n";
+        script << "function plugin.on_health_check() return true end\n";
+        script << "function plugin.on_release() end\n";
+        script << "return plugin\n";
     }
 
     class FakeEventBus : public yuan::plugin::HostEventBus
@@ -546,8 +716,10 @@ namespace
                                                                 std::chrono::steady_clock::now().time_since_epoch().count())));
         const auto allowed_dir = temp_root / "proto_allowed";
         const auto denied_dir = temp_root / "proto_denied";
+        const auto invalid_dir = temp_root / "proto_invalid";
         std::filesystem::create_directories(allowed_dir);
         std::filesystem::create_directories(denied_dir);
+        std::filesystem::create_directories(invalid_dir);
 
         {
             std::ofstream manifest(allowed_dir / "plugin.json");
@@ -559,10 +731,18 @@ namespace
             manifest << "  \"permissions\": \"register_protocol_service,use_network_runtime\",\n";
             manifest << "  \"protocol_services\": [{\n";
             manifest << "    \"name\": \"echo_proto\",\n";
-            manifest << "    \"type\": \"echo\",\n";
+            manifest << "    \"type\": \"custom\",\n";
             manifest << "    \"protocol\": \"tcp\",\n";
+            manifest << "    \"transport\": \"tcp\",\n";
             manifest << "    \"host\": \"127.0.0.1\",\n";
             manifest << "    \"port\": 19090,\n";
+            manifest << "    \"handler\": \"main.on_connection\",\n";
+            manifest << "    \"framing\": \"line\",\n";
+            manifest << "    \"read_timeout_ms\": 31000,\n";
+            manifest << "    \"idle_timeout_ms\": 62000,\n";
+            manifest << "    \"write_timeout_ms\": 32000,\n";
+            manifest << "    \"max_connections\": 2048,\n";
+            manifest << "    \"max_frame_bytes\": 32768,\n";
             manifest << "    \"contract_id\": \"plugin.echo\",\n";
             manifest << "    \"contract_version\": 2\n";
             manifest << "  }]\n";
@@ -585,16 +765,40 @@ namespace
             manifest << "}\n";
         }
 
+        {
+            std::ofstream manifest(invalid_dir / "plugin.json");
+            require(static_cast<bool>(manifest), "invalid protocol service manifest should be creatable");
+            manifest << "{\n";
+            manifest << "  \"run_mode\": \"script\",\n";
+            manifest << "  \"language\": \"lua\",\n";
+            manifest << "  \"permissions\": \"register_protocol_service,use_network_runtime\",\n";
+            manifest << "  \"protocol_services\": [{\n";
+            manifest << "    \"name\": \"bad_proto\",\n";
+            manifest << "    \"transport\": \"tcp\",\n";
+            manifest << "    \"port\": 70000,\n";
+            manifest << "    \"contract_id\": \"plugin.bad\"\n";
+            manifest << "  }]\n";
+            manifest << "}\n";
+        }
+
         manager.set_plugin_path(temp_root.string());
 
         const auto allowed = manager.discover_protocol_services({ "proto_allowed" });
         require(allowed.size() == 1, "plugin manager should discover allowed protocol service");
         require(allowed[0].plugin_id == "proto_allowed", "protocol service should carry plugin id");
         require(allowed[0].name == "echo_proto", "protocol service should carry name");
-        require(allowed[0].type == "echo", "protocol service should carry type");
+        require(allowed[0].type == "custom", "protocol service should carry type");
         require(allowed[0].protocol == "tcp", "protocol service should carry protocol");
+        require(allowed[0].transport == "tcp", "protocol service should carry transport");
         require(allowed[0].host == "127.0.0.1", "protocol service should carry host");
         require(allowed[0].port == 19090, "protocol service should carry port");
+        require(allowed[0].handler == "main.on_connection", "protocol service should carry handler");
+        require(allowed[0].framing == "line", "protocol service should carry framing");
+        require(allowed[0].read_timeout_ms == 31000, "protocol service should carry read timeout");
+        require(allowed[0].idle_timeout_ms == 62000, "protocol service should carry idle timeout");
+        require(allowed[0].write_timeout_ms == 32000, "protocol service should carry write timeout");
+        require(allowed[0].max_connections == 2048, "protocol service should carry max connections");
+        require(allowed[0].max_frame_bytes == 32768, "protocol service should carry max frame size");
         require(allowed[0].contract_id == "plugin.echo", "protocol service should carry contract id");
         require(allowed[0].contract_version == 2, "protocol service should carry contract version");
         require(allowed[0].run_mode == yuan::plugin::PluginRunMode::script,
@@ -605,6 +809,9 @@ namespace
         const auto denied = manager.discover_protocol_services({ "proto_denied" });
         require(denied.empty(), "plugin manager should reject protocol services without permission");
 
+        const auto invalid = manager.discover_protocol_services({ "proto_invalid" });
+        require(invalid.empty(), "plugin manager should reject protocol services with invalid numeric ranges");
+
         yuan::app::ServicePlacement placement;
         placement.mode = yuan::app::PlacementMode::sharded;
         placement.instances = 2;
@@ -612,7 +819,7 @@ namespace
         require(descriptor.has_value(), "allowed protocol service should convert to app service descriptor");
         require(descriptor->name == "proto_allowed.echo_proto",
                 "plugin protocol descriptor should be namespaced by plugin id");
-        require(descriptor->type_name == "plugin.protocol.echo",
+        require(descriptor->type_name == "plugin.protocol.custom",
                 "plugin protocol descriptor should carry plugin protocol type");
         require(descriptor->contract_id == "plugin.echo",
                 "plugin protocol descriptor should carry contract id");
@@ -751,6 +958,218 @@ namespace
         std::filesystem::remove_all(temp_root, ec);
     }
 
+    void test_protocol_service_echo_listener()
+    {
+        const uint16_t port = reserve_tcp_port();
+        require(port != 0, "plugin protocol echo test should reserve a TCP port");
+
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-protocol-echo-listener-" + std::to_string(static_cast<unsigned long long>(
+                                                                std::chrono::steady_clock::now().time_since_epoch().count())));
+        const auto plugin_dir = temp_root / "proto_echo";
+        std::filesystem::create_directories(plugin_dir);
+
+        {
+            std::ofstream manifest(plugin_dir / "plugin.json");
+            require(static_cast<bool>(manifest), "echo protocol plugin manifest should be creatable");
+            manifest << "{\n";
+            manifest << "  \"run_mode\": \"script\",\n";
+            manifest << "  \"language\": \"lua\",\n";
+            manifest << "  \"entry\": \"main.lua\",\n";
+            manifest << "  \"permissions\": \"register_protocol_service,use_logger,use_network_runtime\",\n";
+            manifest << "  \"protocol_services\": [{\n";
+            manifest << "    \"name\": \"echo_proto\",\n";
+            manifest << "    \"type\": \"echo\",\n";
+            manifest << "    \"protocol\": \"tcp\",\n";
+            manifest << "    \"host\": \"127.0.0.1\",\n";
+            manifest << "    \"port\": " << port << ",\n";
+            manifest << "    \"contract_id\": \"plugin.echo.listener\",\n";
+            manifest << "    \"contract_version\": 1\n";
+            manifest << "  }]\n";
+            manifest << "}\n";
+        }
+
+        {
+            std::ofstream script(plugin_dir / "main.lua");
+            require(static_cast<bool>(script), "echo protocol plugin script should be creatable");
+            script << "local plugin = {}\n";
+            script << "function plugin.on_init(ctx)\n";
+            script << "  if not ctx.logger then return false end\n";
+            script << "  ctx.logger:info('protocol echo listener init')\n";
+            script << "  return true\n";
+            script << "end\n";
+            script << "function plugin.on_enable() end\n";
+            script << "function plugin.on_disable() end\n";
+            script << "function plugin.on_health_check() return true end\n";
+            script << "function plugin.on_release() end\n";
+            script << "return plugin\n";
+        }
+
+        yuan::plugin::PluginManager discovery_manager;
+        discovery_manager.set_plugin_path(temp_root.string());
+        const auto protocol_services = discovery_manager.discover_protocol_services({ "proto_echo" });
+        require(protocol_services.size() == 1, "echo protocol service should be discoverable");
+
+        yuan::app::RuntimeContext context;
+        context.app_name = "protocol-service-echo-listener-test";
+        context.run_mode = yuan::app::RunMode::multi_thread;
+        context.worker_threads = 1;
+        context.runtime_workers.worker_count = 1;
+        context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
+
+        yuan::app::Application app(context);
+        yuan::app::ServicePlacement placement;
+        placement.mode = yuan::app::PlacementMode::singleton;
+
+        require(yuan::app::add_plugin_protocol_service(
+                    app,
+                    temp_root.string(),
+                    protocol_services[0],
+                    placement),
+                "echo plugin protocol service should register");
+
+        yuan::app::Bootstrap bootstrap(app);
+        require(bootstrap.run(), "bootstrap should start plugin protocol echo listener");
+        require(tcp_echo_roundtrip(port, "plugin-echo-payload"),
+                "plugin protocol echo listener should serve a TCP roundtrip");
+        bootstrap.shutdown();
+
+        std::error_code ec;
+        std::filesystem::remove_all(temp_root, ec);
+    }
+
+    void test_protocol_service_cpp_line_echo_listener()
+    {
+        const auto plugin_examples_dir = resolve_plugin_examples_dir();
+        require(!plugin_examples_dir.empty(),
+                "C++ protocol plugin examples directory should be resolvable");
+
+        const uint16_t port = reserve_tcp_port();
+        require(port != 0, "C++ protocol line echo test should reserve a TCP port");
+
+        yuan::plugin::PluginManager discovery_manager;
+        discovery_manager.set_plugin_path(plugin_examples_dir.string());
+        auto protocol_services = discovery_manager.discover_protocol_services({ "LineEchoProtocol" });
+        require(protocol_services.size() == 1,
+                "LineEchoProtocol manifest should declare one protocol service");
+
+        auto protocol_service = protocol_services[0];
+        require(protocol_service.type == "custom",
+                "LineEchoProtocol should be declared as a custom protocol service");
+        require(protocol_service.handler == "line_echo.on_connection",
+                "LineEchoProtocol should name its C++ stream handler");
+        require(protocol_service.framing == "line",
+                "LineEchoProtocol should use line framing");
+
+        protocol_service.host = "127.0.0.1";
+        protocol_service.port = port;
+
+        yuan::app::RuntimeContext context;
+        context.app_name = "protocol-service-cpp-line-echo-test";
+        context.run_mode = yuan::app::RunMode::multi_thread;
+        context.worker_threads = 1;
+        context.runtime_workers.worker_count = 1;
+        context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
+
+        yuan::app::Application app(context);
+        yuan::app::ServicePlacement placement;
+        placement.mode = yuan::app::PlacementMode::singleton;
+
+        require(yuan::app::add_plugin_protocol_service(
+                    app,
+                    plugin_examples_dir.string(),
+                    protocol_service,
+                    placement),
+                "C++ line echo plugin protocol service should register");
+
+        yuan::app::Bootstrap bootstrap(app);
+        require(bootstrap.run(), "bootstrap should start C++ plugin protocol line echo listener");
+        require(tcp_echo_roundtrip(port, "cpp-line-echo-payload\n"),
+                "C++ plugin protocol line echo listener should serve a TCP line roundtrip");
+        bootstrap.shutdown();
+    }
+
+    void test_protocol_service_adapter_negative_paths()
+    {
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-protocol-negative-" + std::to_string(static_cast<unsigned long long>(
+                                                        std::chrono::steady_clock::now().time_since_epoch().count())));
+        std::filesystem::create_directories(temp_root);
+
+        write_script_protocol_plugin(
+            temp_root,
+            "proto_udp",
+            "    {\n"
+            "      \"name\": \"udp_proto\",\n"
+            "      \"type\": \"echo\",\n"
+            "      \"transport\": \"udp\",\n"
+            "      \"host\": \"127.0.0.1\",\n"
+            "      \"port\": 0,\n"
+            "      \"contract_id\": \"plugin.udp\"\n"
+            "    }");
+
+        write_script_protocol_plugin(
+            temp_root,
+            "proto_missing_handler",
+            "    {\n"
+            "      \"name\": \"custom_proto\",\n"
+            "      \"type\": \"custom\",\n"
+            "      \"transport\": \"tcp\",\n"
+            "      \"host\": \"127.0.0.1\",\n"
+            "      \"port\": 0,\n"
+            "      \"handler\": \"main.on_connection\",\n"
+            "      \"contract_id\": \"plugin.custom\"\n"
+            "    }");
+
+        write_script_protocol_plugin(
+            temp_root,
+            "proto_no_runtime",
+            "    {\n"
+            "      \"name\": \"echo_proto\",\n"
+            "      \"type\": \"echo\",\n"
+            "      \"protocol\": \"tcp\",\n"
+            "      \"host\": \"127.0.0.1\",\n"
+            "      \"port\": 0,\n"
+            "      \"contract_id\": \"plugin.echo.no_runtime\"\n"
+            "    }");
+
+        yuan::plugin::PluginManager discovery_manager;
+        discovery_manager.set_plugin_path(temp_root.string());
+
+        const auto udp_services = discovery_manager.discover_protocol_services({ "proto_udp" });
+        require(udp_services.size() == 1, "unsupported transport service should still be discoverable");
+        {
+            yuan::app::PluginProtocolServiceAdapter adapter(temp_root.string(), udp_services[0]);
+            require(adapter.init(), "unsupported transport adapter should initialize plugin runtime");
+            adapter.start();
+            require(!adapter.started(), "unsupported transport should not start listener");
+            adapter.stop();
+        }
+
+        const auto missing_handler_services = discovery_manager.discover_protocol_services({ "proto_missing_handler" });
+        require(missing_handler_services.size() == 1, "missing handler service should still be discoverable");
+        {
+            yuan::app::PluginProtocolServiceAdapter adapter(temp_root.string(), missing_handler_services[0]);
+            require(adapter.init(), "missing handler adapter should initialize plugin runtime");
+            adapter.start();
+            require(!adapter.started(), "unregistered handler should not start listener");
+            adapter.stop();
+        }
+
+        const auto no_runtime_services = discovery_manager.discover_protocol_services({ "proto_no_runtime" });
+        require(no_runtime_services.size() == 1, "runtime-missing echo service should be discoverable");
+        {
+            yuan::app::PluginProtocolServiceAdapter adapter(temp_root.string(), no_runtime_services[0]);
+            require(adapter.init(), "runtime-missing adapter should initialize plugin runtime");
+            adapter.start();
+            require(!adapter.started(), "missing worker runtime should not start listener");
+            adapter.stop();
+        }
+
+        std::error_code ec;
+        std::filesystem::remove_all(temp_root, ec);
+    }
+
     void test_resource_guard_cleanup_on_stop()
     {
         yuan::app::PluginResourceGuard guard;
@@ -876,6 +1295,9 @@ int main()
     test_protocol_service_permission_names();
     test_protocol_service_manifest_discovery();
     test_protocol_service_worker_local_adapter();
+    test_protocol_service_echo_listener();
+    test_protocol_service_cpp_line_echo_listener();
+    test_protocol_service_adapter_negative_paths();
     test_resource_guard_cleanup_on_stop();
     std::cout << "  PASSED" << std::endl;
 

@@ -375,3 +375,146 @@ async_listener_persistent_echo ops=5000         elapsed_ms=384.577    ops_per_s=
 async_listener_concurrent_echo ops=2000         elapsed_ms=356.664    ops_per_s=5607.52        MiB_per_s=10.9522
 in_process_worker_lifecycle    ops=100          elapsed_ms=368.905    ops_per_s=271.073
 ```
+
+## Linux HTTP Worker-Pool Throughput Check
+
+Date: 2026-05-17
+
+Host: Linux, Ubuntu 20.04, kernel `5.15.0-125-generic`, x86_64, 4 logical CPUs.
+
+Build:
+
+- Yuan benchmark: `build-release-gcc14`, `CMAKE_BUILD_TYPE=Release`, GCC/G++ 14.3.0.
+- libuv: local `/home/yuan/codes/repos/network/libuv/build-release`, `CMAKE_BUILD_TYPE=Release`.
+- workflow: local `/home/yuan/codes/repos/network/workflow/build-release`, `CMAKE_BUILD_TYPE=Release`.
+- libevent: local `/home/yuan/codes/repos/network/libevent/build` debug static libraries. A Release configure attempt was blocked by this host's CMake 3.16 missing `CheckLinkerFlag`, so the libevent comparison is conservative and not strictly release-to-release.
+
+Benchmark shape:
+
+- one process
+- 4 server workers/listeners
+- loopback HTTP/1.1 keep-alive
+- `GET /bench`
+- fixed `Content-Length: 2` body: `OK`
+- same built-in load generator for every implementation
+
+Commands:
+
+```sh
+cmake -S . -B build-release-gcc14 -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER=/usr/bin/g++-14 -DCMAKE_C_COMPILER=/usr/bin/gcc-14
+cmake --build build-release-gcc14 --target \
+  http_worker_pool_benchmark test_http_shared_reuse_port \
+  test_endpoint_manager test_in_process_worker_runtime -j 4
+
+./build-release-gcc14/test/protocol/http/test_http_shared_reuse_port
+./build-release-gcc14/test/core/test_endpoint_manager
+./build-release-gcc14/test/core/test_in_process_worker_runtime
+
+./build-release-gcc14/test/benchmark/http_worker_pool_benchmark yuan 4 3 1,2,4,8,16,32,64,128,256
+./build-release-gcc14/test/benchmark/http_worker_pool_benchmark libevent 4 3 1,2,4,8,16,32,64,128,256
+./build-release-gcc14/test/benchmark/http_worker_pool_benchmark libuv 4 3 1,2,4,8,16,32,64,128,256
+./build-release-gcc14/test/benchmark/http_worker_pool_benchmark workflow 4 3 1,2,4,8,16,32,64,128,256
+```
+
+Peak observed RPS:
+
+| Implementation | Best concurrency | Best RPS | Notes |
+| --- | ---: | ---: | --- |
+| `yuan` | 16 | 59,511 | 3-second sweep; focused 5-second retest peaked at concurrency 12 with 67,746 RPS, with repeated concurrency-12 runs at 67,552 / 61,266 / 58,259 RPS. Treat the current practical ceiling as roughly 60k-68k RPS on this host. |
+| `libevent` | 8 | 116,418 | Uses existing debug static libevent build; release build unavailable on this host. |
+| `libuv` | 256 | 169,606 | Release build. A short 256/512/1024 follow-up peaked at 256 with 140,316 RPS, so 256 is near the knee for this client/server shape. |
+| `workflow` | 256 | 105,102 | Release build. A short 256/512/1024 follow-up peaked at 512 with 103,747 RPS. |
+
+Raw Yuan output:
+
+```text
+http worker-pool benchmark implementation=yuan workers=4 duration_s=3
+concurrency,requests,requests_per_second
+1,49404,16467
+2,107494,35827.9
+4,126671,42215.5
+8,139901,46621.7
+16,178630,59510.6
+32,133436,44413.7
+64,133565,44402.7
+128,91586,30134.6
+256,93325,30626.3
+best_concurrency=16 best_requests_per_second=59510.6
+```
+
+Raw comparison output:
+
+```text
+http worker-pool benchmark implementation=libevent workers=4 duration_s=3
+concurrency,requests,requests_per_second
+1,72925,24306.8
+2,106406,35458
+4,197151,65709
+8,349336,116418
+16,283410,94435.4
+32,305959,101934
+64,303171,100915
+128,314490,103865
+256,298892,98648.6
+best_concurrency=8 best_requests_per_second=116418
+
+http worker-pool benchmark implementation=libuv workers=4 duration_s=3
+concurrency,requests,requests_per_second
+1,124774,41587.9
+2,187014,62330.3
+4,246153,82043.8
+8,353406,117776
+16,404244,134710
+32,463629,154469
+64,473788,157778
+128,502211,167079
+256,516395,169606
+best_concurrency=256 best_requests_per_second=169606
+
+http worker-pool benchmark implementation=workflow workers=4 duration_s=3
+concurrency,requests,requests_per_second
+1,38379,12791.6
+2,70742,23578
+4,115913,38631.7
+8,162644,54201.5
+16,186900,62277.5
+32,241253,80367.6
+64,265515,88343.5
+128,299647,99091.9
+256,317374,105102
+best_concurrency=256 best_requests_per_second=105102
+```
+
+Interpretation:
+
+The current Yuan HTTP worker-pool path is functional on Linux with `reuse_port`, but its throughput ceiling is well below the simpler libuv/libevent responders under the same load generator. The drop after the 12-16 concurrency range points at per-request HTTP stack/runtime overhead rather than listener scaling failure. Next profiling should focus on the HTTP request-complete path, route dispatch, response send/close scheduling, and per-request allocations/timers before changing the worker placement model again.
+
+## Final Local Runtime-Worker Refactor Smoke
+
+Date: 2026-05-17
+
+Build targets:
+
+```sh
+cmake --build build --target \
+  test_endpoint_manager test_in_process_worker_runtime test_plugin_governance \
+  test_http_shared_reuse_port core_runtime_benchmark http_worker_pool_benchmark -j 4
+```
+
+Regression subset:
+
+```sh
+ctest -R "^(logger_auto|net_logger_auto|coroutine_runtime|connection_handle|event_bus|buffer_model|byte_buffer_reader|time_api|timer_lifecycle|timer_backends|supervisor_reason|async_facades|ipv6_dual_stack|base64|event_token|tcp_close_semantics|async_listener_shutdown|compressed_trie|udp_kcp_adapter|service_definition_registration|worker_plan|endpoint_manager|in_process_worker_runtime|plugin_governance|http_shared_reuse_port)$" --output-on-failure --timeout 180
+```
+
+Result: 25/25 passed.
+
+Local benchmark smoke:
+
+```text
+core_runtime_benchmark: completed buffer/event/runtime/coroutine/connection/worker lifecycle coverage.
+http_worker_pool_benchmark yuan workers=4 duration_s=3: best_concurrency=16 best_requests_per_second=29859.5
+```
+
+This final smoke was run from the normal local build tree, so it is a functional/regression check rather than a release-grade throughput comparison. The release comparison above remains the useful HTTP CPU-tail reference.

@@ -263,7 +263,7 @@ namespace yuan::net::http
         AccessLogHook access_log_hook_;
         std::unordered_map<std::string, UploadFileMapping> uploaded_chunks_;
         mutable std::mutex upload_mutex_;
-        uint64_t upload_cleanup_last_ms_ = 0;
+        std::atomic<uint64_t> upload_cleanup_last_ms_{ 0 };
         std::unique_ptr<thread::ThreadPool> thread_pool_;
         HttpServerConfig config_;
         MiddlewarePipeline global_pipeline_;

@@ -839,3 +839,37 @@ TypeScript 插件和 Lua 采用同一套脚本插件机制：`script` run_mode +
 - 这两个测试会直接加载 `plugins/examples/lua_greeter/plugin.json` 和 `plugins/examples/ts_greeter/plugin.json`。
 - `ts_greeter` 的入口文件是 `plugins/examples/ts_greeter/main.ts`，保持与 `language = "typescript"` 一致。
 
+### 21. 插件协议服务
+
+`protocol_services` 现在用于声明由宿主管理 listener/worker/runtime、由插件提供协议业务逻辑的网络服务。宿主仍负责端口绑定、worker-local runtime、连接循环、framing、超时和连接数限制；插件侧通过 C++ `PluginProtocolHandlerRegistry` 注册 stream handler。
+
+`type = "echo"` 只保留为内置 demo handler，内部映射到 `builtin.echo`。它用于验证 listener 和 worker-local runtime 的端到端链路，不代表脚本插件已经具备自定义协议能力。新的自定义协议应使用 `type = "custom"` 并显式声明 `handler`。
+
+Manifest 字段参考：
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `name` | 必填 | 协议服务名，会与 plugin id 组成 app service 名称。 |
+| `type` | `name` | `echo` 为内置 demo；自定义协议建议用 `custom`。 |
+| `transport` | `tcp` | 新字段；当前仅支持 `tcp`。 |
+| `protocol` | `transport` | 旧字段，短期兼容并映射到 `transport`。 |
+| `host` | `0.0.0.0` | listener bind 地址。 |
+| `port` | `0` | listener bind 端口，允许 `0` 表示系统分配。 |
+| `handler` | 空 | 自定义 handler 名称，例如 `line_echo.on_connection`。 |
+| `framing` | `raw` | 当前支持 `raw` 和 `line`。 |
+| `read_timeout_ms` | `30000` | 单次读超时。 |
+| `idle_timeout_ms` | `60000` | 预留给后续 idle 治理。 |
+| `write_timeout_ms` | `30000` | 写入和 flush 超时。 |
+| `max_connections` | `1024` | 单 service 活跃连接上限。 |
+| `max_frame_bytes` | `65536` | 单 frame 上限，超限关闭连接。 |
+| `contract_id` | 必填 | 服务契约 id。 |
+| `contract_version` | `1` | 服务契约版本。 |
+
+C++ 插件通过覆盖 `Plugin::register_protocol_handlers()` 注册 handler factory。示例见 `plugins/examples/line_echo`：manifest 声明 `handler = "line_echo.on_connection"`，插件注册同名 factory，handler 在 `on_data()` 中写回一行。
+
+迁移方式：
+
+1. 旧的 demo manifest 可以继续使用 `type = "echo"`，宿主会绑定 `builtin.echo`。
+2. 真正的自定义协议改为 `type = "custom"`，补充 `handler`、`framing` 和资源限制字段。
+3. C++ 插件在 `register_protocol_handlers()` 中注册与 manifest `handler` 同名的 stream handler。
+4. Lua / TypeScript 连接对象绑定仍在后续阶段，当前脚本协议服务只能继续使用内置 echo demo。

@@ -147,7 +147,10 @@ namespace yuan::net::http
     class HttpSession
     {
     public:
-        HttpSession(uint64_t id, std::unique_ptr<HttpSessionContext> context, coroutine::RuntimeView runtime);
+        HttpSession(uint64_t id,
+                    std::unique_ptr<HttpSessionContext> context,
+                    coroutine::RuntimeView runtime,
+                    bool enable_idle_timer = true);
         ~HttpSession();
 
         HttpSession(const HttpSession &) = delete;

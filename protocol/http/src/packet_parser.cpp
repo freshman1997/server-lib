@@ -194,7 +194,7 @@ namespace yuan::net::http
                 return false;
             }
 
-            packet_->add_header(key, val);
+            packet_->add_header(std::move(key), std::move(val));
         }
 
         if (buff.readable_bytes() == 0 || buff.read_i8() != '\n') {

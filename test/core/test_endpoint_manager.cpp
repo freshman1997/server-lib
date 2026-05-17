@@ -83,7 +83,7 @@ namespace
                 "replicated HTTP endpoint should require reuse_port");
         require(endpoint_plan.bindings[0].owners.size() == 4,
                 "replicated HTTP endpoint should have four owners");
-        require(yuan::app::service_instance_requires_reuse_port(workers[0].service_instances[0]),
+        require(yuan::app::service_instance_requires_reuse_port(endpoint_plan, workers[0].service_instances[0]),
                 "replicated service instance should request listener reuse_port");
     }
 
@@ -106,7 +106,7 @@ namespace
                 "singleton endpoint should use private bind");
         require(endpoint_plan.bindings[0].owners.size() == 1,
                 "singleton endpoint should have one owner");
-        require(!yuan::app::service_instance_requires_reuse_port(workers[0].service_instances[0]),
+        require(!yuan::app::service_instance_requires_reuse_port(endpoint_plan, workers[0].service_instances[0]),
                 "singleton service instance should not request listener reuse_port");
     }
 
@@ -151,7 +151,7 @@ namespace
 
         require(endpoint_plan.valid(), "internal endpoints should not invalidate endpoint plan");
         require(endpoint_plan.bindings.empty(), "internal endpoints should not create listener bindings");
-        require(!yuan::app::service_instance_requires_reuse_port(workers[0].service_instances[0]),
+        require(!yuan::app::service_instance_requires_reuse_port(endpoint_plan, workers[0].service_instances[0]),
                 "internal replicated endpoint should not request reuse_port");
     }
 
@@ -175,8 +175,35 @@ namespace
                     "ephemeral port binding should be private");
             require(binding.owners.size() == 1, "ephemeral port binding should have one owner");
         }
-        require(!yuan::app::service_instance_requires_reuse_port(workers[0].service_instances[0]),
+        require(!yuan::app::service_instance_requires_reuse_port(endpoint_plan, workers[0].service_instances[0]),
                 "ephemeral replicated endpoint should not request reuse_port");
+    }
+
+    void test_sharded_same_worker_endpoint_uses_binding_plan()
+    {
+        std::vector<yuan::app::ServiceDefinition> definitions;
+        definitions.push_back(make_definition(
+            "mqtt",
+            yuan::app::PlacementMode::sharded,
+            {
+                yuan::app::ServiceEndpoint{ "mqtt", "127.0.0.1", 1883, "tcp" }
+            },
+            2));
+
+        const auto workers = yuan::app::build_worker_plan(worker_config(1), definitions);
+        const auto endpoint_plan = yuan::app::EndpointManager::build_plan(workers);
+
+        require(endpoint_plan.valid(), "same-service sharded endpoint plan should be valid");
+        require(endpoint_plan.bindings.size() == 1,
+                "same-worker sharded service instances should share one binding");
+        require(endpoint_plan.bindings[0].strategy == yuan::app::EndpointBindingStrategy::reuse_port,
+                "same-worker sharded fixed endpoint should require reuse_port");
+        require(endpoint_plan.bindings[0].owners.size() == 2,
+                "same-worker sharded fixed endpoint should have two binding owners");
+        require(yuan::app::service_instance_requires_reuse_port(endpoint_plan, workers[0].service_instances[0]),
+                "first sharded service instance should use endpoint-plan reuse_port");
+        require(yuan::app::service_instance_requires_reuse_port(endpoint_plan, workers[0].service_instances[1]),
+                "second sharded service instance should use endpoint-plan reuse_port");
     }
 
     void test_bootstrap_rejects_conflicting_endpoint_plan()
@@ -219,6 +246,7 @@ int main()
     test_different_services_same_endpoint_conflict();
     test_internal_endpoint_is_not_listening_binding();
     test_ephemeral_port_is_private_per_owner();
+    test_sharded_same_worker_endpoint_uses_binding_plan();
     test_bootstrap_rejects_conflicting_endpoint_plan();
     std::cout << "endpoint manager tests passed\n";
     return 0;

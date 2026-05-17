@@ -8,6 +8,7 @@ target_link_libraries(http_server PUBLIC HttpProto ServerServices)
 target_link_libraries(http_client PUBLIC HttpProto)
 target_link_libraries(test_http_features PUBLIC HttpProto ServerServices)
 target_link_libraries(test_http_shared_reuse_port PUBLIC HttpProto ServerServices)
+target_link_libraries(test_mini_nginx_config PRIVATE Threads::Threads)
 add_dependencies(test_mini_nginx_config mini_nginx)
 target_compile_definitions(test_mini_nginx_config PRIVATE MINI_NGINX_BIN_PATH="$<TARGET_FILE:mini_nginx>")
 

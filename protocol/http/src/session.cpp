@@ -5,12 +5,15 @@
 
 namespace yuan::net::http
 {
-    HttpSession::HttpSession(uint64_t id, std::unique_ptr<HttpSessionContext> context, coroutine::RuntimeView runtime)
+    HttpSession::HttpSession(uint64_t id,
+                             std::unique_ptr<HttpSessionContext> context,
+                             coroutine::RuntimeView runtime,
+                             bool enable_idle_timer)
         : session_id_(id), context_(std::move(context)), runtime_(runtime), close_cb_(nullptr)
     {
         context_->set_session(this);
 
-        if (config::close_idle_connection && config::connection_idle_timeout > 0) {
+        if (enable_idle_timer && config::close_idle_connection && config::connection_idle_timeout > 0) {
             conn_timer_ = runtime_.schedule(config::connection_idle_timeout, [this]() { on_idle_timeout(); });
         }
     }

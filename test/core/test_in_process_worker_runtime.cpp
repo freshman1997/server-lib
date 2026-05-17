@@ -290,6 +290,37 @@ namespace
         }
         return false;
     }
+
+    bool wait_for_supervisor_circuit_open(yuan::app::Bootstrap &bootstrap)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline) {
+            bootstrap.poll_workers();
+            const auto snapshot = bootstrap.supervisor_snapshot();
+            if (RestartLimitProbeService::started() == 1 &&
+                snapshot.circuit_open &&
+                snapshot.recovering_workers == 1 &&
+                snapshot.suppressed_workers == 1 &&
+                bootstrap.supervisor_reason() == yuan::app::SupervisorReason::supervisor_circuit_opened) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return false;
+    }
+
+    bool wait_for_supervisor_circuit_recovery_restart(yuan::app::Bootstrap &bootstrap)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline) {
+            bootstrap.poll_workers();
+            if (RestartLimitProbeService::started() >= 2) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return false;
+    }
 }
 
 int main()
@@ -474,6 +505,68 @@ int main()
         bootstrap.shutdown();
         if (!require(RestartLimitProbeService::stopped() >= 2,
                      "restart limit probe service should stop failed generations")) {
+            return 1;
+        }
+    }
+
+    {
+        RestartLimitProbeService::reset();
+
+        yuan::app::RuntimeContext context;
+        context.app_name = "in-process-worker-circuit-breaker-test";
+        context.run_mode = yuan::app::RunMode::multi_thread;
+        context.worker_threads = 1;
+        context.runtime_workers.worker_count = 1;
+        context.restart_failed_workers = true;
+        context.runtime_workers.restart_failed_workers = true;
+        context.max_worker_restarts = 5;
+        context.worker_restart_backoff_ms = 1;
+        context.worker_restart_window_ms = 10000;
+        context.supervisor_failure_threshold = 1;
+        context.supervisor_failure_window_ms = 10000;
+        context.supervisor_circuit_backoff_ms = 50;
+        context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
+
+        yuan::app::Application app(context);
+
+        yuan::app::ServiceDescriptor descriptor;
+        descriptor.name = "circuit-breaker-probe";
+        descriptor.type_name = "RestartLimitProbeService";
+        descriptor.contract_id = "test.circuit-breaker-probe";
+        descriptor.contract_version = 1;
+        descriptor.placement.mode = yuan::app::PlacementMode::all_workers;
+
+        if (!require(app.add_service(descriptor, []() {
+                return std::make_shared<RestartLimitProbeService>();
+            }), "circuit breaker probe factory service should register")) {
+            return 1;
+        }
+
+        yuan::app::Bootstrap bootstrap(app);
+        if (!require(bootstrap.run(), "bootstrap should start circuit breaker probe worker")) {
+            return 1;
+        }
+
+        if (!require(wait_for_supervisor_circuit_open(bootstrap),
+                     "supervisor circuit should open and suppress immediate in-process restart")) {
+            return 1;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        bootstrap.poll_workers();
+        if (!require(RestartLimitProbeService::started() == 1,
+                     "supervisor circuit should defer restart while backoff is active")) {
+            return 1;
+        }
+
+        if (!require(wait_for_supervisor_circuit_recovery_restart(bootstrap),
+                     "supervisor circuit should allow restart after backoff")) {
+            return 1;
+        }
+
+        bootstrap.shutdown();
+        if (!require(RestartLimitProbeService::stopped() >= 2,
+                     "circuit breaker probe service should stop failed generations")) {
             return 1;
         }
     }

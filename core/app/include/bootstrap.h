@@ -2,6 +2,7 @@
 #define __YUAN_APP_BOOTSTRAP_H__
 
 #include "application.h"
+#include "endpoint_manager.h"
 #include "native_platform.h"
 #include "worker_plan.h"
 
@@ -143,6 +144,7 @@ private:
     std::unique_ptr<Application> local_worker_application_;
     std::vector<std::unique_ptr<InProcessWorker>> in_process_workers_;
     std::vector<WorkerPlan> worker_plans_;
+    EndpointPlan endpoint_plan_;
 #ifndef _WIN32
     std::vector<WorkerProcessInfo> worker_processes_;
 #endif

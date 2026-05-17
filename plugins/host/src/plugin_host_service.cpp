@@ -436,6 +436,11 @@ namespace yuan::app
         return true;
     }
 
+    plugin::Plugin *PluginHostService::get_plugin(const std::string & plugin_name) const
+    {
+        return plugin_manager().get_plugin(plugin_name);
+    }
+
     std::vector<std::pair<std::string, bool> > PluginHostService::health_check_all() const
     {
         std::vector<std::pair<std::string, bool> > results;

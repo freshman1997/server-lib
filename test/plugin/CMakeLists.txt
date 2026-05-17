@@ -11,6 +11,11 @@ if(TARGET PluginHost)
     if(TARGET HelloWorld)
         add_dependencies(test_plugin HelloWorld)
     endif()
+    if(TARGET LineEchoProtocol)
+        add_dependencies(test_plugin_governance LineEchoProtocol)
+        target_compile_definitions(test_plugin_governance PRIVATE
+            YUAN_TEST_PLUGIN_EXAMPLES_DIR="$<TARGET_FILE_DIR:LineEchoProtocol>")
+    endif()
 
     function(yuan_copy_plugin_runtime_dlls target_name)
         if(WIN32)
