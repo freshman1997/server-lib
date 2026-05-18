@@ -21,6 +21,11 @@ namespace yuan::plugin
         use_network_runtime = 1 << 7,  ///< 使用网络运行时 (定时器/调度)
         use_extension_points = 1 << 8, ///< 解析扩展点
         register_protocol_service = 1 << 9,
+        listen_tcp = 1 << 10,
+        listen_udp = 1 << 11,
+        open_outbound_connection = 1 << 12,
+        bind_privileged_port = 1 << 13,
+        use_tls = 1 << 14,
         all = ~0u,
     };
 
@@ -65,6 +70,16 @@ namespace yuan::plugin
                 return "use_extension_points";
             case PluginPermission::register_protocol_service:
                 return "register_protocol_service";
+            case PluginPermission::listen_tcp:
+                return "listen_tcp";
+            case PluginPermission::listen_udp:
+                return "listen_udp";
+            case PluginPermission::open_outbound_connection:
+                return "open_outbound_connection";
+            case PluginPermission::bind_privileged_port:
+                return "bind_privileged_port";
+            case PluginPermission::use_tls:
+                return "use_tls";
             case PluginPermission::all:
                 return "all";
             default:

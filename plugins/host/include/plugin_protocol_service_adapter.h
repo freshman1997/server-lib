@@ -22,14 +22,33 @@ namespace yuan::app
 namespace yuan::net
 {
     class AsyncListenerHost;
+    class DatagramAcceptor;
 }
 
 namespace yuan::app
 {
     struct ProtocolServiceRuntimeStatsSnapshot
     {
+        std::uint64_t active_connection_count = 0;
+        std::uint64_t accepted_connection_count = 0;
+        std::uint64_t closed_connection_count = 0;
+        std::uint64_t bytes_received = 0;
+        std::uint64_t bytes_sent = 0;
         std::uint64_t framing_error_count = 0;
         std::uint64_t handler_error_count = 0;
+        std::uint64_t backpressure_drop_count = 0;
+    };
+
+    struct ProtocolServiceHealthSnapshot
+    {
+        bool listener_present = false;
+        std::uint64_t active_connection_count = 0;
+        std::uint64_t max_connection_limit = 0;
+        bool connection_at_capacity = false;
+        bool connection_over_limit = false;
+        std::uint64_t handler_fault_count = 0;
+        std::uint64_t total_fault_count = 0;
+        bool healthy = false;
     };
 
     struct PluginProtocolActiveConnectionTracker;
@@ -52,6 +71,7 @@ namespace yuan::app
         bool started() const noexcept;
         std::string resource_leak_report() const;
         ProtocolServiceRuntimeStatsSnapshot runtime_stats() const noexcept;
+        ProtocolServiceHealthSnapshot health_snapshot() const noexcept;
 
     private:
         bool start_protocol_listener();
@@ -63,6 +83,7 @@ namespace yuan::app
         plugin::PluginProtocolHandlerRegistry handler_registry_;
         std::unique_ptr<PluginHostService> host_;
         std::unique_ptr<net::AsyncListenerHost> listener_;
+        std::unique_ptr<net::DatagramAcceptor> datagram_acceptor_;
         std::shared_ptr<PluginProtocolActiveConnectionTracker> connection_tracker_;
         std::shared_ptr<PluginProtocolServiceRuntimeStats> runtime_stats_;
         uint64_t listener_resource_id_ = 0;

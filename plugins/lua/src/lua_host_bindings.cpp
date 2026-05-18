@@ -65,6 +65,68 @@ namespace yuan::plugin
         static int g_next_callback_id = 1;
         static std::mutex g_callbacks_mutex;
 
+        static bool cleanup_event_callback_by_id(int cb_id)
+        {
+            lua_State *L = nullptr;
+            int ref = LUA_NOREF;
+            std::recursive_mutex *lua_mutex = nullptr;
+
+            {
+                std::lock_guard<std::mutex> lock(g_callbacks_mutex);
+                auto it = g_event_callbacks.find(cb_id);
+                if (it == g_event_callbacks.end()) {
+                    return false;
+                }
+                L = it->second.L;
+                ref = it->second.ref;
+                lua_mutex = it->second.lua_mutex;
+                g_event_callbacks.erase(it);
+            }
+
+            if (!L || ref == LUA_NOREF) {
+                return false;
+            }
+
+            if (lua_mutex) {
+                std::lock_guard<std::recursive_mutex> lua_lock(*lua_mutex);
+                luaL_unref(L, LUA_REGISTRYINDEX, ref);
+            } else {
+                luaL_unref(L, LUA_REGISTRYINDEX, ref);
+            }
+            return true;
+        }
+
+        static bool cleanup_scheduler_callback_by_id(int cb_id)
+        {
+            lua_State *L = nullptr;
+            int ref = LUA_NOREF;
+            std::recursive_mutex *lua_mutex = nullptr;
+
+            {
+                std::lock_guard<std::mutex> lock(g_callbacks_mutex);
+                auto it = g_scheduler_callbacks.find(cb_id);
+                if (it == g_scheduler_callbacks.end()) {
+                    return false;
+                }
+                L = it->second.L;
+                ref = it->second.ref;
+                lua_mutex = it->second.lua_mutex;
+                g_scheduler_callbacks.erase(it);
+            }
+
+            if (!L || ref == LUA_NOREF) {
+                return false;
+            }
+
+            if (lua_mutex) {
+                std::lock_guard<std::recursive_mutex> lua_lock(*lua_mutex);
+                luaL_unref(L, LUA_REGISTRYINDEX, ref);
+            } else {
+                luaL_unref(L, LUA_REGISTRYINDEX, ref);
+            }
+            return true;
+        }
+
         static LuaCtxInfo *get_ctx_info(lua_State *L)
         {
             lua_pushstring(L, CTX_REGISTRY_KEY);
@@ -484,12 +546,20 @@ namespace yuan::plugin
 
                 auto *guard = ctx_info ? ctx_info->resource_guard : nullptr;
                 if (guard) {
+                    guard->track(tracked_plugin_name,
+                                 PluginResourceType::callback,
+                                 [cb_id]() {
+                                     (void)cleanup_event_callback_by_id(cb_id);
+                                 },
+                                 "callback:event:" + std::string(event_name));
                     guard->track(tracked_plugin_name, PluginResourceType::event_subscription,
                                  [bus, token]() {
-                                     if (bus) bus->unsubscribe(token);
-                                 },
-                                 "event:" + std::string(event_name));
+                                      if (bus) bus->unsubscribe(token);
+                                  },
+                                  "event:" + std::string(event_name));
                 }
+            } else {
+                (void)cleanup_event_callback_by_id(cb_id);
             }
 
             return 0;
@@ -611,15 +681,22 @@ namespace yuan::plugin
 
                 auto *guard = ctx_info ? ctx_info->resource_guard : nullptr;
                 if (guard) {
+                    guard->track(tracked_plugin_name,
+                                 PluginResourceType::callback,
+                                 [cb_id]() {
+                                     (void)cleanup_scheduler_callback_by_id(cb_id);
+                                 },
+                                 "callback:scheduler:after:" + std::string(name));
                     guard->track(tracked_plugin_name, PluginResourceType::scheduler_task,
                                  [sched, id]() {
-                                     if (sched) sched->cancel(id);
-                                 },
-                                 "task:" + std::string(name));
+                                      if (sched) sched->cancel(id);
+                                  },
+                                  "task:" + std::string(name));
                 }
 
                 lua_pushinteger(L, static_cast<lua_Integer>(id));
             } else {
+                (void)cleanup_scheduler_callback_by_id(cb_id);
                 lua_pushinteger(L, 0);
             }
             return 1;
@@ -683,15 +760,22 @@ namespace yuan::plugin
 
                 auto *guard = ctx_info ? ctx_info->resource_guard : nullptr;
                 if (guard) {
+                    guard->track(tracked_plugin_name,
+                                 PluginResourceType::callback,
+                                 [cb_id]() {
+                                     (void)cleanup_scheduler_callback_by_id(cb_id);
+                                 },
+                                 "callback:scheduler:interval:" + std::string(name));
                     guard->track(tracked_plugin_name, PluginResourceType::scheduler_task,
                                  [sched, id]() {
-                                     if (sched) sched->cancel(id);
-                                 },
-                                 "interval:" + std::string(name));
+                                      if (sched) sched->cancel(id);
+                                  },
+                                  "interval:" + std::string(name));
                 }
 
                 lua_pushinteger(L, static_cast<lua_Integer>(id));
             } else {
+                (void)cleanup_scheduler_callback_by_id(cb_id);
                 lua_pushinteger(L, 0);
             }
             return 1;

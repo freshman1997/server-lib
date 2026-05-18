@@ -1,15 +1,21 @@
 {
-  "name": "LineEchoProtocol",
+  "plugin_id": "lua_line_echo",
+  "name": "LuaLineEchoProtocol",
   "version": "1.0.0",
-  "permissions": "register_protocol_service,listen_tcp,use_network_runtime",
+  "description": "Lua demo plugin for custom TCP line protocol handler",
+  "api_version": 1,
+  "run_mode": "script",
+  "language": "lua",
+  "entry": "main.lua",
+  "permissions": "register_protocol_service,listen_tcp,use_network_runtime,use_logger",
   "protocol_services": [
     {
       "name": "line_echo",
       "type": "custom",
       "transport": "tcp",
       "host": "127.0.0.1",
-      "port": 9000,
-      "handler": "line_echo.on_connection",
+      "port": 9001,
+      "handler": "main.on_connection",
       "framing": "line",
       "read_timeout_ms": 30000,
       "idle_timeout_ms": 60000,
@@ -17,7 +23,7 @@
       "max_connections": 1024,
       "max_frame_bytes": 65536,
       "max_write_buffer_bytes": 1048576,
-      "contract_id": "plugin.line_echo",
+      "contract_id": "plugin.lua_line_echo",
       "contract_version": 1
     }
   ]

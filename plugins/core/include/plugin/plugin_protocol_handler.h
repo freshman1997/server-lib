@@ -42,6 +42,23 @@ namespace yuan::plugin
         }
     };
 
+    class HostDatagramEndpoint
+    {
+    public:
+        virtual ~HostDatagramEndpoint() = default;
+
+        virtual std::string local_address() const = 0;
+        virtual bool send_to(std::string_view peer, std::span<const std::byte> bytes) = 0;
+
+        bool send_to(std::string_view peer, std::string_view text)
+        {
+            return send_to(peer,
+                           std::span<const std::byte>(
+                               reinterpret_cast<const std::byte *>(text.data()),
+                               text.size()));
+        }
+    };
+
     class PluginStreamProtocolHandler
     {
     public:
@@ -70,17 +87,44 @@ namespace yuan::plugin
     using PluginStreamProtocolHandlerFactory =
         std::function<std::unique_ptr<PluginStreamProtocolHandler>(const ProtocolServiceDescriptor &)>;
 
+    class PluginDatagramProtocolHandler
+    {
+    public:
+        virtual ~PluginDatagramProtocolHandler() = default;
+
+        virtual bool on_datagram(HostDatagramEndpoint &endpoint,
+                                 std::string_view peer,
+                                 std::span<const std::byte> bytes) = 0;
+
+        virtual void on_error(HostDatagramEndpoint &endpoint,
+                              std::string_view peer,
+                              const ProtocolHandlerErrorInfo &error)
+        {
+            (void)endpoint;
+            (void)peer;
+            (void)error;
+        }
+    };
+
+    using PluginDatagramProtocolHandlerFactory =
+        std::function<std::unique_ptr<PluginDatagramProtocolHandler>(const ProtocolServiceDescriptor &)>;
+
     class PluginProtocolHandlerRegistry
     {
     public:
         bool register_stream_handler(std::string name, PluginStreamProtocolHandlerFactory factory);
         bool has_stream_handler(const std::string &name) const;
         PluginStreamProtocolHandlerFactory find_stream_handler(const std::string &name) const;
+        bool register_datagram_handler(std::string name, PluginDatagramProtocolHandlerFactory factory);
+        bool has_datagram_handler(const std::string &name) const;
+        PluginDatagramProtocolHandlerFactory find_datagram_handler(const std::string &name) const;
         std::size_t stream_handler_count() const;
+        std::size_t datagram_handler_count() const;
         void clear();
 
     private:
         std::unordered_map<std::string, PluginStreamProtocolHandlerFactory> stream_handlers_;
+        std::unordered_map<std::string, PluginDatagramProtocolHandlerFactory> datagram_handlers_;
     };
 
     void register_builtin_protocol_handlers(PluginProtocolHandlerRegistry &registry);

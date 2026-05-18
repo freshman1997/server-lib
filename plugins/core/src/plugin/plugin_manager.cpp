@@ -194,6 +194,7 @@ namespace yuan::plugin
                 numeric_fields_are_valid &= read_int_field(item, "write_timeout_ms", service.write_timeout_ms, 0, 86400000, plugin_name, service.name);
                 numeric_fields_are_valid &= read_int_field(item, "max_connections", service.max_connections, 0, 1000000, plugin_name, service.name);
                 numeric_fields_are_valid &= read_int_field(item, "max_frame_bytes", service.max_frame_bytes, 1, 134217728, plugin_name, service.name);
+                numeric_fields_are_valid &= read_int_field(item, "max_write_buffer_bytes", service.max_write_buffer_bytes, 1024, 134217728, plugin_name, service.name);
                 if (!numeric_fields_are_valid) {
                     continue;
                 }
@@ -220,6 +221,42 @@ namespace yuan::plugin
         {
             const std::string perm_str = config.get_string("permissions", "");
             return perm_str.empty() ? PluginPermission::none : PluginPermissionNames::parse(perm_str);
+        }
+
+        static bool has_listen_permission_for_transport(PluginPermission permissions,
+                                                        const std::string &transport)
+        {
+            const auto normalized = lower_copy(transport);
+            if (normalized == "udp") {
+                return has_permission(permissions, PluginPermission::listen_udp);
+            }
+            if (normalized == "tcp") {
+                return has_permission(permissions, PluginPermission::listen_tcp);
+            }
+            return true;
+        }
+
+        static const char *listen_permission_name_for_transport(const std::string &transport)
+        {
+            const auto normalized = lower_copy(transport);
+            if (normalized == "udp") {
+                return "listen_udp";
+            }
+            if (normalized == "tcp") {
+                return "listen_tcp";
+            }
+            return "listen_<transport>";
+        }
+
+        static bool requires_privileged_port_permission(const ProtocolServiceDescriptor &service)
+        {
+            return service.port > 0 && service.port < 1024;
+        }
+
+        static bool is_wildcard_bind_host(const std::string &host)
+        {
+            const auto normalized = lower_copy(host);
+            return normalized == "0.0.0.0" || normalized == "::";
         }
 
         static std::string find_manifest_config_path(const std::string &base_path,
@@ -878,9 +915,39 @@ namespace yuan::plugin
                 continue;
             }
 
-            out.insert(out.end(),
-                       std::make_move_iterator(declarations.begin()),
-                       std::make_move_iterator(declarations.end()));
+            for (auto &declaration : declarations) {
+                if (!has_listen_permission_for_transport(permissions, declaration.transport)) {
+                    LOG_ERROR("plugin '{}' declares protocol service '{}.{}' with transport '{}' without {} permission",
+                              plugin_name,
+                              declaration.plugin_id,
+                              declaration.name,
+                              declaration.transport,
+                              listen_permission_name_for_transport(declaration.transport));
+                    continue;
+                }
+
+                if (requires_privileged_port_permission(declaration) &&
+                    !has_permission(permissions, PluginPermission::bind_privileged_port)) {
+                    LOG_ERROR("plugin '{}' declares protocol service '{}.{}' on privileged port {} without bind_privileged_port permission",
+                              plugin_name,
+                              declaration.plugin_id,
+                              declaration.name,
+                              declaration.port);
+                    continue;
+                }
+
+                if (is_wildcard_bind_host(declaration.host) &&
+                    !has_permission(permissions, PluginPermission::bind_privileged_port)) {
+                    LOG_ERROR("plugin '{}' declares protocol service '{}.{}' with wildcard host '{}' without bind_privileged_port permission",
+                              plugin_name,
+                              declaration.plugin_id,
+                              declaration.name,
+                              declaration.host.empty() ? "0.0.0.0" : declaration.host);
+                    continue;
+                }
+
+                out.push_back(std::move(declaration));
+            }
         }
         return out;
     }

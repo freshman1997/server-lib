@@ -25,7 +25,7 @@
 - 协议处理逻辑已从 adapter 的 `run_echo_protocol()` 移到 stream handler registry；`type = "echo"` 现在映射到内置 demo handler `builtin.echo`。
 - `PluginProtocolServiceAdapter` 目前只支持 `transport = "tcp"`，framing 支持 `raw` / `line`；UDP 和脚本侧连接对象仍待实现。
 - `HostNetworkRuntime` 只暴露 timer / dispatch，不暴露 listener、connection、read/write。
-- Lua / TypeScript 插件还不能拿到连接对象处理字节流。
+- Lua / TypeScript 插件已可拿到连接对象处理字节流（Lua: `read_line`，TypeScript: `readLine`）。
 - UDP/datagram 协议服务还没有 handler SDK。
 
 ## 目标形态
@@ -153,7 +153,7 @@ export function onConnection(conn) {
 - [x] 连接回调经过 `PluginCallGuard`，handler 抛错/返回失败时关闭连接并上报 fault event。
 - [x] 加入 per-service 连接上限和拒绝策略。
 - [x] 加入 read/write/idle timeout。
-- [ ] 加入 write buffer 上限和 backpressure 策略。
+- [x] 加入 write buffer 上限和 backpressure 策略。
 - [x] 增加停用时 active connection 自动关闭的回归测试。
 
 ### P4：framing 层
@@ -167,55 +167,72 @@ export function onConnection(conn) {
 
 ### P5：Lua 绑定
 
-- [ ] 为 Lua 暴露 `HostStreamConnection` userdata。
-- [ ] 绑定 `read` / `read_line` / `write` / `flush` / `close` / `is_open`。
-- [ ] Lua 回调执行沿用现有内存预算和指令计数限制。
-- [ ] Lua callback 引用进入 ResourceGuard，插件释放时清理。
-- [ ] 增加 Lua TCP line echo 示例插件。
-- [ ] 增加 Lua 协议服务 roundtrip、handler error、timeout 测试。
+- [x] 为 Lua 暴露 `HostStreamConnection` userdata。
+- [x] 绑定 `read` / `read_line` / `write` / `flush` / `close` / `is_open`。
+- [x] Lua 回调执行沿用现有内存预算和指令计数限制。
+- [x] Lua callback 引用进入 ResourceGuard，插件释放时清理。
+- [x] 增加 Lua TCP line echo 示例插件。
+- [x] 增加 Lua 协议服务测试：
+  - [x] roundtrip（`test_protocol_service_lua_custom_line_echo_listener`）
+  - [x] example roundtrip（`test_protocol_service_lua_example_line_echo_listener`）
+  - [x] handler error / handler returned false
+  - [x] timeout（`test_protocol_service_lua_idle_timeout_closes_partial_line_connections`）
 
 ### P6：TypeScript 绑定
 
-- [ ] 为 QuickJS/TypeScript 暴露连接对象。
-- [ ] 绑定 `read` / `readLine` / `write` / `flush` / `close`。
-- [ ] JS callback 引用进入 ResourceGuard，插件释放时清理。
-- [ ] 增加 TypeScript 协议服务示例。
-- [ ] 增加 TypeScript 协议服务 smoke test。
+- [x] 为 QuickJS/TypeScript 暴露连接对象。
+- [x] 绑定 `read` / `readLine` / `write` / `flush` / `close`。
+- [x] JS callback 引用进入 ResourceGuard，插件释放时清理。
+- [x] 增加 TypeScript 协议服务示例。
+- [x] 增加 TypeScript 协议服务 smoke test。
 
 ### P7：UDP/datagram 协议服务
 
-- [ ] 新增 `HostDatagramEndpoint`。
-- [ ] 新增 `PluginDatagramProtocolHandler`。
-- [ ] manifest 支持 `transport = "udp"`。
-- [ ] 支持 `on_datagram(peer, bytes)` 和 `send_to(peer, bytes)`。
-- [ ] 增加 UDP echo roundtrip 测试。
-- [ ] 增加 per-peer 状态和 idle cleanup 策略。
+- [x] 新增 `HostDatagramEndpoint`。
+- [x] 新增 `PluginDatagramProtocolHandler`。
+- [x] manifest 支持 `transport = "udp"`。
+- [x] 支持 `on_datagram(peer, bytes)` 和 `send_to(peer, bytes)`。
+- [x] 增加 UDP echo roundtrip 测试。
+- [x] 增加 per-peer 状态和 idle cleanup 策略。
 
 ### P8：权限和安全边界
 
 - [ ] 将粗粒度权限拆细：
-  - [ ] `listen_tcp`
-  - [ ] `listen_udp`
-  - [ ] `open_outbound_connection`
-  - [ ] `bind_privileged_port`
-  - [ ] `use_tls`
-- [ ] 默认禁止绑定 privileged port，除非显式授权。
-- [ ] 限制 `host = 0.0.0.0` 的使用策略。
-- [ ] 明确 outbound connect 是否属于本阶段范围。
-- [ ] 对每个插件协议服务记录 capability snapshot。
+  - [x] `listen_tcp`
+  - [x] `listen_udp`
+  - [x] `open_outbound_connection`
+  - [x] `bind_privileged_port`
+  - [x] `use_tls`
+- [x] 默认禁止绑定 privileged port，除非显式授权。
+- [x] 限制 `host = 0.0.0.0` 的使用策略。
+- [x] 明确 outbound connect 是否属于本阶段范围（当前仅完成权限位与命名；`HostNetworkRuntime` 尚未提供 connect API，P8 不落地主动外连执行路径）。
+- [x] 对每个插件协议服务记录 capability snapshot。
 
 ### P9：观测和治理
 
-- [ ] 增加 protocol service started/stopped/bind_failed/connection_accepted/connection_closed/faulted 事件。
-- [ ] 暴露每个插件协议服务的连接数、读写字节数、错误数。
-- [ ] 日志带上 plugin、service、worker、service_instance。
-- [ ] 增加健康检查：listener 是否存在、连接数是否超限、handler fault 计数。
+- [x] 增加 protocol service started/stopped/bind_failed/connection_accepted/connection_closed/faulted 事件。
+- [x] 暴露每个插件协议服务的连接数、读写字节数、错误数。
+- [x] 日志带上 plugin、service、worker、service_instance。
+- [x] 增加健康检查：listener 是否存在、连接数是否超限、handler fault 计数。
+
+建议拆分：
+
+- [x] P9.1 先补 listener 生命周期事件：`started` / `stopped` / `bind_failed`。
+- [x] P9.2 再补连接事件：`connection_accepted` / `connection_closed` / `faulted`（先 TCP，后 UDP）。
+- [x] P9.3 给事件与日志统一补齐 `plugin/service/worker/service_instance` 维度。
+- [x] P9.4 在治理测试中补事件顺序与字段完整性断言（包含负向路径）。
+
+补充验收覆盖：
+
+- [x] 健康快照语义细化：区分 `connection_at_capacity` 与严格 `connection_over_limit`。
+- [x] 增加 multi-worker + `reuse_port` 下协议服务事件身份隔离断言（worker/service_instance/reuse_port）。
+- [x] fault 事件分类补齐 `reason_code`（如 `runtime_handler_error`、`udp_frame_too_large`）并在治理测试断言。
 
 ### P10：文档和验收
 
 - [x] 更新 `PLUGIN_SYSTEM_DESIGN.md` 中的协议服务章节。
 - [x] 增加 C++ 插件协议示例 README。
-- [ ] 增加 Lua 插件协议示例 README。
+- [x] 增加 Lua 插件协议示例 README。
 - [x] 增加 manifest 字段参考表。
 - [x] 增加迁移说明：当前 `type = "echo"` demo 到自定义 handler 的迁移方式。
 
@@ -226,10 +243,10 @@ export function onConnection(conn) {
 - [x] 插件 manifest 可以声明 `handler`。
 - [x] 宿主不再只根据 `type = "echo"` hard-code handler。
 - [x] C++ 插件可以实现一个自定义 TCP line protocol。
-- [ ] Lua 插件可以实现一个 TCP echo/line protocol。
+- [x] Lua 插件可以实现一个 TCP echo/line protocol。
 - [x] 插件卸载时 listener 和 active connections 被自动关闭。
 - [x] handler 异常不会打穿宿主，并能产生 fault event。
-- [ ] multi-worker + `reuse_port` 下每个 worker 拥有独立 plugin context 和 listener。
+- [x] multi-worker + `reuse_port` 下每个 worker 拥有独立 plugin context 和 listener。
 
 ## 推荐落地顺序
 

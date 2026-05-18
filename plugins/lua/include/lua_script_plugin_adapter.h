@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <mutex>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -35,6 +36,12 @@ namespace yuan::plugin
         ~LuaScriptPluginAdapter() override;
 
         bool load_script(const std::string &script_path) override;
+        void register_protocol_handlers(PluginProtocolHandlerRegistry &registry) override;
+
+        bool has_stream_protocol_handler(const std::string &handler_name) const;
+        bool call_stream_protocol_handler(const std::string &handler_name,
+                                          HostStreamConnection &connection,
+                                          std::span<const std::byte> bytes);
 
         const LuaMemoryBudget &memory_budget() const
         {
@@ -62,6 +69,10 @@ namespace yuan::plugin
         void call_lua_void(const char *func_name);
         bool call_lua_init(const PluginContext &context);
         void call_lua_config_changed(const PluginConfigView &config);
+        bool call_lua_stream_handler(const std::string &handler_name,
+                                     HostStreamConnection &connection,
+                                     std::span<const std::byte> bytes,
+                                     bool *function_missing = nullptr) const;
         void log_host_error(std::string_view message) const;
         std::string callback_owner_name() const;
 

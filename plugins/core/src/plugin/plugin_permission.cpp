@@ -51,6 +51,16 @@ namespace yuan::plugin
                 result = result | PluginPermission::use_extension_points;
             else if (token == "register_protocol_service")
                 result = result | PluginPermission::register_protocol_service;
+            else if (token == "listen_tcp")
+                result = result | PluginPermission::listen_tcp;
+            else if (token == "listen_udp")
+                result = result | PluginPermission::listen_udp;
+            else if (token == "open_outbound_connection")
+                result = result | PluginPermission::open_outbound_connection;
+            else if (token == "bind_privileged_port")
+                result = result | PluginPermission::bind_privileged_port;
+            else if (token == "use_tls")
+                result = result | PluginPermission::use_tls;
             else if (token == "all")
                 result = result | PluginPermission::all;
         }
@@ -73,6 +83,11 @@ namespace yuan::plugin
         check(PluginPermission::use_network_runtime, "use_network_runtime");
         check(PluginPermission::use_extension_points, "use_extension_points");
         check(PluginPermission::register_protocol_service, "register_protocol_service");
+        check(PluginPermission::listen_tcp, "listen_tcp");
+        check(PluginPermission::listen_udp, "listen_udp");
+        check(PluginPermission::open_outbound_connection, "open_outbound_connection");
+        check(PluginPermission::bind_privileged_port, "bind_privileged_port");
+        check(PluginPermission::use_tls, "use_tls");
         return names;
     }
 

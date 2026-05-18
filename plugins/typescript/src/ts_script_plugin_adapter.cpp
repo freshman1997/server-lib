@@ -7,14 +7,304 @@
 #include "nlohmann/json.hpp"
 
 #include <chrono>
+#include <cstring>
 #include <cstdint>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace yuan::plugin
 {
+
+    namespace
+    {
+        class TsStreamProtocolHandler final : public PluginStreamProtocolHandler
+        {
+        public:
+            TsStreamProtocolHandler(TsScriptPluginAdapter *adapter, std::string handler_name)
+                : adapter_(adapter),
+                  handler_name_(std::move(handler_name))
+            {
+            }
+
+            bool on_data(HostStreamConnection &connection, std::span<const std::byte> bytes) override
+            {
+                return adapter_ &&
+                       adapter_->call_stream_protocol_handler(handler_name_, connection, bytes);
+            }
+
+        private:
+            TsScriptPluginAdapter *adapter_ = nullptr;
+            std::string handler_name_;
+        };
+
+        struct PendingTsStreamPayload
+        {
+            std::string payload;
+            bool consumed = false;
+        };
+
+        std::mutex g_pending_stream_payloads_mutex;
+        std::unordered_map<const HostStreamConnection *, PendingTsStreamPayload> g_pending_stream_payloads;
+
+        void set_pending_stream_payload(HostStreamConnection &connection, std::span<const std::byte> bytes)
+        {
+            PendingTsStreamPayload payload;
+            payload.payload.assign(
+                reinterpret_cast<const char *>(bytes.data()),
+                reinterpret_cast<const char *>(bytes.data()) + bytes.size());
+            std::lock_guard<std::mutex> lock(g_pending_stream_payloads_mutex);
+            g_pending_stream_payloads[&connection] = std::move(payload);
+        }
+
+        void clear_pending_stream_payload(HostStreamConnection &connection)
+        {
+            std::lock_guard<std::mutex> lock(g_pending_stream_payloads_mutex);
+            g_pending_stream_payloads.erase(&connection);
+        }
+
+        bool consume_pending_stream_payload(HostStreamConnection &connection, std::string &payload)
+        {
+            std::lock_guard<std::mutex> lock(g_pending_stream_payloads_mutex);
+            auto it = g_pending_stream_payloads.find(&connection);
+            if (it == g_pending_stream_payloads.end() || it->second.consumed) {
+                return false;
+            }
+            payload = it->second.payload;
+            it->second.consumed = true;
+            return true;
+        }
+
+        JSClassID g_ts_stream_connection_class_id = 0;
+
+        static JSValue js_stream_connection_id(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            (void)argc;
+            (void)argv;
+            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            if (!conn) {
+                return JS_NewInt64(ctx, 0);
+            }
+            return JS_NewInt64(ctx, static_cast<int64_t>(conn->id()));
+        }
+
+        static JSValue js_stream_connection_peer_address(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            (void)argc;
+            (void)argv;
+            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            if (!conn) {
+                return JS_NewString(ctx, "");
+            }
+            const auto peer = conn->peer_address();
+            return JS_NewStringLen(ctx, peer.data(), peer.size());
+        }
+
+        static JSValue js_stream_connection_local_address(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            (void)argc;
+            (void)argv;
+            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            if (!conn) {
+                return JS_NewString(ctx, "");
+            }
+            const auto local = conn->local_address();
+            return JS_NewStringLen(ctx, local.data(), local.size());
+        }
+
+        static JSValue js_stream_connection_read(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            (void)argc;
+            (void)argv;
+            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            if (!conn) {
+                return JS_NULL;
+            }
+            std::string payload;
+            if (!consume_pending_stream_payload(*conn, payload)) {
+                return JS_NULL;
+            }
+            return JS_NewStringLen(ctx, payload.data(), payload.size());
+        }
+
+        static JSValue js_stream_connection_read_line(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            (void)argc;
+            (void)argv;
+            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            if (!conn) {
+                return JS_NULL;
+            }
+            std::string payload;
+            if (!consume_pending_stream_payload(*conn, payload)) {
+                return JS_NULL;
+            }
+            if (!payload.empty() && payload.back() == '\n') {
+                payload.pop_back();
+            }
+            if (!payload.empty() && payload.back() == '\r') {
+                payload.pop_back();
+            }
+            return JS_NewStringLen(ctx, payload.data(), payload.size());
+        }
+
+        static JSValue js_stream_connection_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            if (argc < 1) {
+                return JS_ThrowTypeError(ctx, "connection.write requires 1 argument");
+            }
+            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            if (!conn) {
+                return JS_NewBool(ctx, false);
+            }
+            size_t len = 0;
+            const char *text = JS_ToCStringLen(ctx, &len, argv[0]);
+            if (!text) {
+                return JS_NewBool(ctx, false);
+            }
+            const auto *ptr = reinterpret_cast<const std::byte *>(text);
+            const bool ok = conn->write(std::span<const std::byte>(ptr, len));
+            JS_FreeCString(ctx, text);
+            return JS_NewBool(ctx, ok);
+        }
+
+        static JSValue js_stream_connection_flush(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            (void)argc;
+            (void)argv;
+            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            return JS_NewBool(ctx, conn && conn->flush());
+        }
+
+        static JSValue js_stream_connection_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            (void)argc;
+            (void)argv;
+            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            if (conn) {
+                conn->close();
+            }
+            return JS_UNDEFINED;
+        }
+
+        static JSValue js_stream_connection_is_open(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            (void)argc;
+            (void)argv;
+            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            return JS_NewBool(ctx, conn && conn->is_open());
+        }
+
+        static void js_stream_connection_finalizer(JSRuntime *rt, JSValue val)
+        {
+            (void)rt;
+            (void)val;
+        }
+
+        void ensure_stream_connection_class(JSContext *ctx)
+        {
+            if (g_ts_stream_connection_class_id == 0) {
+                JS_NewClassID(&g_ts_stream_connection_class_id);
+            }
+
+            JSValue existing_proto = JS_GetClassProto(ctx, g_ts_stream_connection_class_id);
+            if (!JS_IsUndefined(existing_proto) && !JS_IsNull(existing_proto)) {
+                JS_FreeValue(ctx, existing_proto);
+                return;
+            }
+            JS_FreeValue(ctx, existing_proto);
+
+            JSClassDef class_def{};
+            class_def.class_name = "TsHostStreamConnection";
+            class_def.finalizer = js_stream_connection_finalizer;
+            (void)JS_NewClass(JS_GetRuntime(ctx), g_ts_stream_connection_class_id, &class_def);
+
+            JSValue proto = JS_NewObject(ctx);
+            static const JSCFunctionListEntry funcs[] = {
+                JS_CFUNC_DEF("id", 0, js_stream_connection_id),
+                JS_CFUNC_DEF("peerAddress", 0, js_stream_connection_peer_address),
+                JS_CFUNC_DEF("localAddress", 0, js_stream_connection_local_address),
+                JS_CFUNC_DEF("read", 1, js_stream_connection_read),
+                JS_CFUNC_DEF("readLine", 1, js_stream_connection_read_line),
+                JS_CFUNC_DEF("write", 1, js_stream_connection_write),
+                JS_CFUNC_DEF("flush", 0, js_stream_connection_flush),
+                JS_CFUNC_DEF("close", 0, js_stream_connection_close),
+                JS_CFUNC_DEF("isOpen", 0, js_stream_connection_is_open),
+            };
+            JS_SetPropertyFunctionList(ctx, proto, funcs, sizeof(funcs) / sizeof(funcs[0]));
+            JS_SetClassProto(ctx, g_ts_stream_connection_class_id, proto);
+        }
+
+        JSValue make_stream_connection_instance(JSContext *ctx, HostStreamConnection &connection)
+        {
+            ensure_stream_connection_class(ctx);
+            JSValue proto = JS_GetClassProto(ctx, g_ts_stream_connection_class_id);
+            JSValue obj = JS_NewObjectProtoClass(ctx, proto, g_ts_stream_connection_class_id);
+            JS_FreeValue(ctx, proto);
+            JS_SetOpaque(obj, &connection);
+            return obj;
+        }
+
+        std::string fallback_handler_name(const std::string &handler_name)
+        {
+            const auto pos = handler_name.find_last_of('.');
+            if (pos == std::string::npos || pos + 1 >= handler_name.size()) {
+                return {};
+            }
+            return handler_name.substr(pos + 1);
+        }
+
+        bool resolve_handler_function(JSContext *ctx,
+                                      const std::string &handler_name,
+                                      JSValue *out_function,
+                                      bool *function_missing)
+        {
+            if (out_function) {
+                *out_function = JS_UNDEFINED;
+            }
+            if (function_missing) {
+                *function_missing = false;
+            }
+
+            JSValue global = JS_GetGlobalObject(ctx);
+            JSValue fn = JS_GetPropertyStr(ctx, global, handler_name.c_str());
+            if (JS_IsFunction(ctx, fn)) {
+                if (out_function) {
+                    *out_function = fn;
+                } else {
+                    JS_FreeValue(ctx, fn);
+                }
+                JS_FreeValue(ctx, global);
+                return true;
+            }
+            JS_FreeValue(ctx, fn);
+
+            const auto fallback = fallback_handler_name(handler_name);
+            if (!fallback.empty()) {
+                JSValue fallback_fn = JS_GetPropertyStr(ctx, global, fallback.c_str());
+                if (JS_IsFunction(ctx, fallback_fn)) {
+                    if (out_function) {
+                        *out_function = fallback_fn;
+                    } else {
+                        JS_FreeValue(ctx, fallback_fn);
+                    }
+                    JS_FreeValue(ctx, global);
+                    return true;
+                }
+                JS_FreeValue(ctx, fallback_fn);
+            }
+
+            JS_FreeValue(ctx, global);
+            if (function_missing) {
+                *function_missing = true;
+            }
+            return false;
+        }
+    } // namespace
 
     TsScriptPluginAdapter::TsScriptPluginAdapter(const PluginManifest & manifest)
         : ScriptPluginAdapter(manifest)
@@ -218,6 +508,56 @@ namespace yuan::plugin
         return true;
     }
 
+    void TsScriptPluginAdapter::register_protocol_handlers(PluginProtocolHandlerRegistry &registry)
+    {
+        std::unordered_set<std::string> seen_handlers;
+        for (const auto &service : manifest_.protocol_services) {
+            if (service.handler.empty() || service.language != "typescript") {
+                continue;
+            }
+            if (!seen_handlers.insert(service.handler).second) {
+                continue;
+            }
+
+            const std::string handler_name = service.handler;
+            if (!has_stream_protocol_handler(handler_name)) {
+                LOG_WARN("ts plugin '{}' skipped protocol handler '{}' because function is missing",
+                         manifest_.name,
+                         handler_name);
+                continue;
+            }
+
+            (void)registry.register_stream_handler(
+                handler_name,
+                [this, handler_name](const ProtocolServiceDescriptor &) {
+                    return std::make_unique<TsStreamProtocolHandler>(this, handler_name);
+                });
+        }
+    }
+
+    bool TsScriptPluginAdapter::has_stream_protocol_handler(const std::string &handler_name) const
+    {
+        std::lock_guard<std::recursive_mutex> lock(js_mutex_);
+        if (!ctx_ || !rt_) {
+            return false;
+        }
+
+        bool function_missing = false;
+        JSValue fn = JS_UNDEFINED;
+        const bool found = resolve_handler_function(ctx_, handler_name, &fn, &function_missing);
+        if (found) {
+            JS_FreeValue(ctx_, fn);
+        }
+        return found && !function_missing;
+    }
+
+    bool TsScriptPluginAdapter::call_stream_protocol_handler(const std::string &handler_name,
+                                                             HostStreamConnection &connection,
+                                                             std::span<const std::byte> bytes)
+    {
+        return call_js_stream_handler(handler_name, connection, bytes, nullptr);
+    }
+
     void TsScriptPluginAdapter::call_js_void(const char * func_name)
     {
         std::lock_guard<std::recursive_mutex> lock(js_mutex_);
@@ -355,6 +695,82 @@ namespace yuan::plugin
         JS_FreeValue(ctx_, fn);
         JS_FreeAtom(ctx_, atom);
         JS_FreeValue(ctx_, global);
+    }
+
+    bool TsScriptPluginAdapter::call_js_stream_handler(const std::string &handler_name,
+                                                       HostStreamConnection &connection,
+                                                       std::span<const std::byte> bytes,
+                                                       bool *function_missing) const
+    {
+        std::lock_guard<std::recursive_mutex> lock(js_mutex_);
+        if (!ctx_ || !rt_) {
+            if (function_missing) {
+                *function_missing = true;
+            }
+            return false;
+        }
+
+        JSValue fn = JS_UNDEFINED;
+        if (!resolve_handler_function(ctx_, handler_name, &fn, function_missing)) {
+            return false;
+        }
+
+        set_pending_stream_payload(connection, bytes);
+        JSValue conn_obj = make_stream_connection_instance(ctx_, connection);
+        const char *payload = reinterpret_cast<const char *>(bytes.data());
+        JSValue payload_val = JS_NewStringLen(ctx_, payload ? payload : "", bytes.size());
+        JSValue argv[2] = { conn_obj, payload_val };
+
+        set_execution_deadline();
+        JSValue ret = JS_Call(ctx_, fn, JS_UNDEFINED, 2, argv);
+        clear_execution_deadline();
+
+        if (interrupt_data_.timeout_triggered.load(std::memory_order_relaxed)) {
+            LOG_ERROR("ts plugin '{}' protocol handler '{}' timed out", manifest_.name, handler_name);
+            if (JS_IsException(ret)) {
+                JSValue exception = JS_GetException(ctx_);
+                JS_FreeValue(ctx_, exception);
+            }
+            JS_FreeValue(ctx_, ret);
+            JS_FreeValue(ctx_, payload_val);
+            JS_FreeValue(ctx_, conn_obj);
+            JS_FreeValue(ctx_, fn);
+            clear_pending_stream_payload(connection);
+            return false;
+        }
+
+        if (JS_IsException(ret)) {
+            JSValue exception = JS_GetException(ctx_);
+            const char *err = JS_ToCString(ctx_, exception);
+            LOG_ERROR("ts plugin '{}' protocol handler '{}' error: {}",
+                      manifest_.name,
+                      handler_name,
+                      err ? err : "unknown");
+            JS_FreeCString(ctx_, err);
+            JS_FreeValue(ctx_, exception);
+            JS_FreeValue(ctx_, ret);
+            JS_FreeValue(ctx_, payload_val);
+            JS_FreeValue(ctx_, conn_obj);
+            JS_FreeValue(ctx_, fn);
+            clear_pending_stream_payload(connection);
+            return false;
+        }
+
+        bool keep_open = true;
+        if (JS_IsBool(ret)) {
+            keep_open = JS_ToBool(ctx_, ret) > 0;
+        } else if (JS_IsNull(ret) || JS_IsUndefined(ret)) {
+            keep_open = true;
+        } else {
+            keep_open = JS_ToBool(ctx_, ret) > 0;
+        }
+
+        JS_FreeValue(ctx_, ret);
+        JS_FreeValue(ctx_, payload_val);
+        JS_FreeValue(ctx_, conn_obj);
+        JS_FreeValue(ctx_, fn);
+        clear_pending_stream_payload(connection);
+        return keep_open;
     }
 
     bool TsScriptPluginAdapter::do_init(const PluginContext & context)

@@ -38,6 +38,12 @@ namespace yuan::plugin
         inline constexpr const char *plugin_config_changed = "plugin.config_changed";
         inline constexpr const char *plugin_service_registered = "plugin.service_registered";
         inline constexpr const char *plugin_service_unregistered = "plugin.service_unregistered";
+        inline constexpr const char *plugin_protocol_service_started = "plugin.protocol_service.started";
+        inline constexpr const char *plugin_protocol_service_stopped = "plugin.protocol_service.stopped";
+        inline constexpr const char *plugin_protocol_service_bind_failed = "plugin.protocol_service.bind_failed";
+        inline constexpr const char *plugin_protocol_connection_accepted = "plugin.protocol_connection.accepted";
+        inline constexpr const char *plugin_protocol_connection_closed = "plugin.protocol_connection.closed";
+        inline constexpr const char *plugin_protocol_connection_faulted = "plugin.protocol_connection.faulted";
     }
 
     struct PluginEventDescriptor
@@ -121,6 +127,36 @@ namespace yuan::plugin
             events::plugin_service_unregistered, "domain", "PluginServiceEvent",
             EventScope::global, EventDeliverySemantics::async, PluginPermission::use_service_registry
         };
+
+        inline constexpr PluginEventDescriptor protocol_service_started{
+            events::plugin_protocol_service_started, "domain", "PluginProtocolServiceEvent",
+            EventScope::global, EventDeliverySemantics::async, PluginPermission::register_protocol_service
+        };
+
+        inline constexpr PluginEventDescriptor protocol_service_stopped{
+            events::plugin_protocol_service_stopped, "domain", "PluginProtocolServiceEvent",
+            EventScope::global, EventDeliverySemantics::async, PluginPermission::register_protocol_service
+        };
+
+        inline constexpr PluginEventDescriptor protocol_service_bind_failed{
+            events::plugin_protocol_service_bind_failed, "domain", "PluginProtocolServiceEvent",
+            EventScope::global, EventDeliverySemantics::sync, PluginPermission::register_protocol_service
+        };
+
+        inline constexpr PluginEventDescriptor protocol_connection_accepted{
+            events::plugin_protocol_connection_accepted, "domain", "PluginProtocolConnectionEvent",
+            EventScope::global, EventDeliverySemantics::async, PluginPermission::register_protocol_service
+        };
+
+        inline constexpr PluginEventDescriptor protocol_connection_closed{
+            events::plugin_protocol_connection_closed, "domain", "PluginProtocolConnectionEvent",
+            EventScope::global, EventDeliverySemantics::async, PluginPermission::register_protocol_service
+        };
+
+        inline constexpr PluginEventDescriptor protocol_connection_faulted{
+            events::plugin_protocol_connection_faulted, "domain", "PluginProtocolConnectionEvent",
+            EventScope::global, EventDeliverySemantics::sync, PluginPermission::register_protocol_service
+        };
     }
 
     struct PluginEvent
@@ -164,6 +200,23 @@ namespace yuan::plugin
     {
         std::string service_name;
         std::string type_name;
+    };
+
+    struct PluginProtocolServiceEvent : public PluginEvent
+    {
+        std::string protocol_service_name;
+        std::string transport;
+        std::string host;
+        int port = 0;
+        std::string reason;
+    };
+
+    struct PluginProtocolConnectionEvent : public PluginProtocolServiceEvent
+    {
+        std::uintptr_t connection_id = 0;
+        std::string peer_address;
+        std::string local_address;
+        std::string reason_code;
     };
 
 } // namespace yuan::plugin

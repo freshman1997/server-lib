@@ -87,6 +87,7 @@ namespace
             meta.api_version = 1;
             meta.required_permissions =
                 yuan::plugin::PluginPermission::register_protocol_service |
+                yuan::plugin::PluginPermission::listen_tcp |
                 yuan::plugin::PluginPermission::use_network_runtime;
             return meta;
         }

@@ -65,6 +65,68 @@ namespace yuan::plugin
         static int g_ts_next_callback_id = 1;
         static std::mutex g_ts_callbacks_mutex;
 
+        static bool cleanup_event_callback_by_id(int cb_id)
+        {
+            JSContext *ctx = nullptr;
+            JSValue callback = JS_UNDEFINED;
+            std::recursive_mutex *js_mutex = nullptr;
+
+            {
+                std::lock_guard<std::mutex> lock(g_ts_callbacks_mutex);
+                auto it = g_ts_event_callbacks.find(cb_id);
+                if (it == g_ts_event_callbacks.end()) {
+                    return false;
+                }
+                ctx = it->second.ctx;
+                callback = it->second.callback;
+                js_mutex = it->second.js_mutex;
+                g_ts_event_callbacks.erase(it);
+            }
+
+            if (!ctx) {
+                return false;
+            }
+
+            if (js_mutex) {
+                std::lock_guard<std::recursive_mutex> js_lock(*js_mutex);
+                JS_FreeValue(ctx, callback);
+            } else {
+                JS_FreeValue(ctx, callback);
+            }
+            return true;
+        }
+
+        static bool cleanup_scheduler_callback_by_id(int cb_id)
+        {
+            JSContext *ctx = nullptr;
+            JSValue callback = JS_UNDEFINED;
+            std::recursive_mutex *js_mutex = nullptr;
+
+            {
+                std::lock_guard<std::mutex> lock(g_ts_callbacks_mutex);
+                auto it = g_ts_scheduler_callbacks.find(cb_id);
+                if (it == g_ts_scheduler_callbacks.end()) {
+                    return false;
+                }
+                ctx = it->second.ctx;
+                callback = it->second.callback;
+                js_mutex = it->second.js_mutex;
+                g_ts_scheduler_callbacks.erase(it);
+            }
+
+            if (!ctx) {
+                return false;
+            }
+
+            if (js_mutex) {
+                std::lock_guard<std::recursive_mutex> js_lock(*js_mutex);
+                JS_FreeValue(ctx, callback);
+            } else {
+                JS_FreeValue(ctx, callback);
+            }
+            return true;
+        }
+
         static JSClassID js_logger_class_id = 0;
         static JSClassID js_storage_class_id = 0;
         static JSClassID js_eventbus_class_id = 0;
@@ -567,11 +629,17 @@ namespace yuan::plugin
 
             auto *guard = ctx_info ? ctx_info->resource_guard : nullptr;
             if (guard) {
+                guard->track(tracked_plugin_name,
+                             PluginResourceType::callback,
+                             [cb_id]() {
+                                 (void)cleanup_event_callback_by_id(cb_id);
+                             },
+                             "callback:event:" + std::string(event_name));
                 guard->track(tracked_plugin_name, PluginResourceType::event_subscription,
                              [bus, token]() {
-                                 if (bus) bus->unsubscribe(token);
-                             },
-                             "event:" + std::string(event_name));
+                                  if (bus) bus->unsubscribe(token);
+                              },
+                              "event:" + std::string(event_name));
             }
 
             JS_FreeCString(ctx, event_name);
@@ -744,11 +812,17 @@ namespace yuan::plugin
 
             auto *guard = ctx_info ? ctx_info->resource_guard : nullptr;
             if (guard) {
+                guard->track(tracked_plugin_name,
+                             PluginResourceType::callback,
+                             [cb_id]() {
+                                 (void)cleanup_scheduler_callback_by_id(cb_id);
+                             },
+                             "callback:scheduler:after:" + name_str);
                 guard->track(tracked_plugin_name, PluginResourceType::scheduler_task,
                              [sched, id]() {
-                                 if (sched) sched->cancel(id);
-                             },
-                             "task:" + name_str);
+                                  if (sched) sched->cancel(id);
+                              },
+                              "task:" + name_str);
             }
 
             if (name)
@@ -843,11 +917,17 @@ namespace yuan::plugin
 
             auto *guard = ctx_info ? ctx_info->resource_guard : nullptr;
             if (guard) {
+                guard->track(tracked_plugin_name,
+                             PluginResourceType::callback,
+                             [cb_id]() {
+                                 (void)cleanup_scheduler_callback_by_id(cb_id);
+                             },
+                             "callback:scheduler:interval:" + name_str);
                 guard->track(tracked_plugin_name, PluginResourceType::scheduler_task,
                              [sched, id]() {
-                                 if (sched) sched->cancel(id);
-                             },
-                             "interval:" + name_str);
+                                  if (sched) sched->cancel(id);
+                              },
+                              "interval:" + name_str);
             }
 
             if (name)

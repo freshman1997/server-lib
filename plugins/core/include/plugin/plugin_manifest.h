@@ -42,6 +42,7 @@ namespace yuan::plugin
         int write_timeout_ms = 30000;
         int max_connections = 1024;
         int max_frame_bytes = 65536;
+        int max_write_buffer_bytes = 1048576;
         std::string contract_id;
         int contract_version = 1;
         PluginRunMode run_mode = PluginRunMode::unknown;

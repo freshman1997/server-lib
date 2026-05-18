@@ -22,4 +22,26 @@ endforeach(target ${targets})
 add_custom_command(TARGET LineEchoProtocol POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${CMAKE_CURRENT_SOURCE_DIR}/line_echo/plugin.json
-            $<TARGET_FILE_DIR:LineEchoProtocol>/LineEchoProtocol.json)
+            $<TARGET_FILE_DIR:LineEchoProtocol>/LineEchoProtocol.json
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            $<TARGET_FILE_DIR:LineEchoProtocol>/lua_line_echo
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/lua_line_echo/plugin.json
+            $<TARGET_FILE_DIR:LineEchoProtocol>/lua_line_echo/plugin.json
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/lua_line_echo/main.lua
+            $<TARGET_FILE_DIR:LineEchoProtocol>/lua_line_echo/main.lua
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/lua_line_echo/README.md
+            $<TARGET_FILE_DIR:LineEchoProtocol>/lua_line_echo/README.md
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            $<TARGET_FILE_DIR:LineEchoProtocol>/ts_line_echo
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/ts_line_echo/plugin.json
+            $<TARGET_FILE_DIR:LineEchoProtocol>/ts_line_echo/plugin.json
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/ts_line_echo/main.ts
+            $<TARGET_FILE_DIR:LineEchoProtocol>/ts_line_echo/main.ts
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/ts_line_echo/README.md
+            $<TARGET_FILE_DIR:LineEchoProtocol>/ts_line_echo/README.md)

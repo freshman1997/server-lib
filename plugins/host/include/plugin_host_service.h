@@ -51,6 +51,7 @@ namespace yuan::app
         bool load_plugin(const std::string &plugin_name);
         bool unload_plugin(const std::string &plugin_name);
         plugin::Plugin *get_plugin(const std::string &plugin_name) const;
+        plugin::PluginContext plugin_context(const std::string &plugin_name) const;
 
         std::vector<std::pair<std::string, bool> > health_check_all() const;
         bool health_check(const std::string &plugin_name) const;
@@ -72,6 +73,7 @@ namespace yuan::app
             std::function<bool(std::shared_ptr<plugin::HttpRouteCallback>, std::string, std::string, std::string)> route_installer);
 
         void set_runtime_context(const RuntimeContext &context) override;
+        const RuntimeContext &runtime_context() const;
 
         bool init() override;
         void start() override;

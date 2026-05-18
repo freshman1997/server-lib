@@ -851,7 +851,7 @@ Manifest 字段参考：
 | --- | --- | --- |
 | `name` | 必填 | 协议服务名，会与 plugin id 组成 app service 名称。 |
 | `type` | `name` | `echo` 为内置 demo；自定义协议建议用 `custom`。 |
-| `transport` | `tcp` | 新字段；当前仅支持 `tcp`。 |
+| `transport` | `tcp` | 新字段；manifest 可声明 `tcp` / `udp`，当前 listener runtime 已支持 `tcp` 与 `udp`。 |
 | `protocol` | `transport` | 旧字段，短期兼容并映射到 `transport`。 |
 | `host` | `0.0.0.0` | listener bind 地址。 |
 | `port` | `0` | listener bind 端口，允许 `0` 表示系统分配。 |
@@ -862,6 +862,7 @@ Manifest 字段参考：
 | `write_timeout_ms` | `30000` | 写入和 flush 超时。 |
 | `max_connections` | `1024` | 单 service 活跃连接上限。 |
 | `max_frame_bytes` | `65536` | 单 frame 上限，超限关闭连接。 |
+| `max_write_buffer_bytes` | `1048576` | 单连接插件待发送缓冲上限，超限触发 backpressure 丢弃并关闭连接。 |
 | `contract_id` | 必填 | 服务契约 id。 |
 | `contract_version` | `1` | 服务契约版本。 |
 
@@ -872,4 +873,16 @@ C++ 插件通过覆盖 `Plugin::register_protocol_handlers()` 注册 handler fac
 1. 旧的 demo manifest 可以继续使用 `type = "echo"`，宿主会绑定 `builtin.echo`。
 2. 真正的自定义协议改为 `type = "custom"`，补充 `handler`、`framing` 和资源限制字段。
 3. C++ 插件在 `register_protocol_handlers()` 中注册与 manifest `handler` 同名的 stream handler。
-4. Lua / TypeScript 连接对象绑定仍在后续阶段，当前脚本协议服务只能继续使用内置 echo demo。
+4. Lua / TypeScript 脚本协议服务已支持连接对象绑定：
+   - Lua: `handler = "main.on_connection"`，可用 `conn:read(timeout_ms)` / `conn:read_line(timeout_ms)` / `conn:write(...)` / `conn:flush()` / `conn:close()` / `conn:is_open()`。
+   - TypeScript: `handler = "main.onConnection"`，可用 `conn.read(timeoutMs)` / `conn.readLine(timeoutMs)` / `conn.write(...)` / `conn.flush()` / `conn.close()` / `conn.isOpen()`。
+
+UDP/datagram 路径已支持 `HostDatagramEndpoint` + `PluginDatagramProtocolHandler`：
+
+- `on_datagram(endpoint, peer, bytes)` 用于处理单个 datagram。
+- `endpoint.send_to(peer, bytes)` 用于向 peer 回包。
+- 内置 `builtin.echo` 已覆盖 stream 与 datagram 两种 transport 的 demo 回显路径。
+
+Lua 协议示例见 `plugins/examples/lua_line_echo`。该示例 manifest 使用 `type = "custom"`、`transport = "tcp"`、`framing = "line"`，并通过 `main.on_connection` 回调回显每行数据。
+
+TypeScript 协议示例见 `plugins/examples/ts_line_echo`。该示例 manifest 使用 `type = "custom"`、`transport = "tcp"`、`framing = "line"`，并通过 `main.onConnection` 回调回显每行数据。

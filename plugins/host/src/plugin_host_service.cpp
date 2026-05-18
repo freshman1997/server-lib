@@ -441,6 +441,11 @@ namespace yuan::app
         return plugin_manager().get_plugin(plugin_name);
     }
 
+    plugin::PluginContext PluginHostService::plugin_context(const std::string &plugin_name) const
+    {
+        return plugin_manager().plugin_context(plugin_name);
+    }
+
     std::vector<std::pair<std::string, bool> > PluginHostService::health_check_all() const
     {
         std::vector<std::pair<std::string, bool> > results;
@@ -608,6 +613,11 @@ namespace yuan::app
     void PluginHostService::set_runtime_context(const RuntimeContext & context)
     {
         runtime_context_ = context;
+    }
+
+    const RuntimeContext &PluginHostService::runtime_context() const
+    {
+        return runtime_context_;
     }
 
     plugin::PluginRunMode PluginHostService::to_plugin_run_mode(RunMode mode) const
