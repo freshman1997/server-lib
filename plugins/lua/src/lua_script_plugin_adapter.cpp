@@ -25,6 +25,7 @@ namespace yuan::plugin
     {
         constexpr const char *kLuaPluginTableGlobal = "plugin_table";
         constexpr const char *kLuaStreamConnectionMetaName = "yuan.HostStreamConnection";
+        constexpr const char *kLuaDatagramEndpointMetaName = "yuan.HostDatagramEndpoint";
 
         struct PendingLuaStreamPayload
         {
@@ -76,6 +77,28 @@ namespace yuan::plugin
             {
                 return adapter_ &&
                        adapter_->call_stream_protocol_handler(handler_name_, connection, bytes);
+            }
+
+        private:
+            LuaScriptPluginAdapter *adapter_ = nullptr;
+            std::string handler_name_;
+        };
+
+        class LuaDatagramProtocolHandler final : public PluginDatagramProtocolHandler
+        {
+        public:
+            LuaDatagramProtocolHandler(LuaScriptPluginAdapter *adapter, std::string handler_name)
+                : adapter_(adapter),
+                  handler_name_(std::move(handler_name))
+            {
+            }
+
+            bool on_datagram(HostDatagramEndpoint &endpoint,
+                             std::string_view peer,
+                             std::span<const std::byte> bytes) override
+            {
+                return adapter_ &&
+                       adapter_->call_datagram_protocol_handler(handler_name_, endpoint, peer, bytes);
             }
 
         private:
@@ -236,6 +259,69 @@ namespace yuan::plugin
             auto **ud = static_cast<void **>(lua_newuserdata(L, sizeof(void *)));
             *ud = static_cast<void *>(&connection);
             luaL_setmetatable(L, kLuaStreamConnectionMetaName);
+        }
+
+        HostDatagramEndpoint *check_datagram_endpoint_userdata(lua_State *L, int index)
+        {
+            auto **ud = static_cast<void **>(luaL_checkudata(L, index, kLuaDatagramEndpointMetaName));
+            return ud ? static_cast<HostDatagramEndpoint *>(*ud) : nullptr;
+        }
+
+        int lua_datagram_endpoint_local_address(lua_State *L)
+        {
+            auto *endpoint = check_datagram_endpoint_userdata(L, 1);
+            if (!endpoint) {
+                lua_pushliteral(L, "");
+                return 1;
+            }
+            const auto local = endpoint->local_address();
+            lua_pushlstring(L, local.c_str(), local.size());
+            return 1;
+        }
+
+        int lua_datagram_endpoint_send_to(lua_State *L)
+        {
+            auto *endpoint = check_datagram_endpoint_userdata(L, 1);
+            size_t peer_len = 0;
+            size_t payload_len = 0;
+            const char *peer = luaL_checklstring(L, 2, &peer_len);
+            const char *payload = luaL_checklstring(L, 3, &payload_len);
+            if (!endpoint) {
+                lua_pushboolean(L, 0);
+                return 1;
+            }
+            const auto *payload_ptr = reinterpret_cast<const std::byte *>(payload);
+            lua_pushboolean(
+                L,
+                endpoint->send_to(
+                    std::string_view(peer ? peer : "", peer_len),
+                    std::span<const std::byte>(payload_ptr, payload_len))
+                    ? 1
+                    : 0);
+            return 1;
+        }
+
+        void ensure_datagram_endpoint_metatable(lua_State *L)
+        {
+            if (luaL_newmetatable(L, kLuaDatagramEndpointMetaName) == 1) {
+                static const luaL_Reg methods[] = {
+                    { "local_address", lua_datagram_endpoint_local_address },
+                    { "send_to", lua_datagram_endpoint_send_to },
+                    { nullptr, nullptr }
+                };
+                lua_pushvalue(L, -1);
+                lua_setfield(L, -2, "__index");
+                luaL_setfuncs(L, methods, 0);
+            }
+            lua_pop(L, 1);
+        }
+
+        void push_datagram_endpoint_userdata(lua_State *L, HostDatagramEndpoint &endpoint)
+        {
+            ensure_datagram_endpoint_metatable(L);
+            auto **ud = static_cast<void **>(lua_newuserdata(L, sizeof(void *)));
+            *ud = static_cast<void *>(&endpoint);
+            luaL_setmetatable(L, kLuaDatagramEndpointMetaName);
         }
 
         std::string fallback_handler_name(const std::string &handler_name)
@@ -677,17 +763,37 @@ namespace yuan::plugin
 
     void LuaScriptPluginAdapter::register_protocol_handlers(PluginProtocolHandlerRegistry &registry)
     {
-        std::unordered_set<std::string> seen_handlers;
+        std::unordered_set<std::string> seen_stream_handlers;
+        std::unordered_set<std::string> seen_datagram_handlers;
         for (const auto &service : manifest_.protocol_services) {
             if (service.handler.empty() || service.language != "lua") {
                 continue;
             }
 
-            if (!seen_handlers.insert(service.handler).second) {
+            const std::string handler_name = service.handler;
+            const std::string transport =
+                !service.transport.empty() ? service.transport : service.protocol;
+            if (transport == "udp") {
+                if (!seen_datagram_handlers.insert(handler_name).second) {
+                    continue;
+                }
+                if (!has_datagram_protocol_handler(handler_name)) {
+                    LOG_WARN("lua plugin '{}' skipped datagram protocol handler '{}' because function is missing",
+                             manifest_.name,
+                             handler_name);
+                    continue;
+                }
+                (void)registry.register_datagram_handler(
+                    handler_name,
+                    [this, handler_name](const ProtocolServiceDescriptor &) {
+                        return std::make_unique<LuaDatagramProtocolHandler>(this, handler_name);
+                    });
                 continue;
             }
 
-            const std::string handler_name = service.handler;
+            if (!seen_stream_handlers.insert(handler_name).second) {
+                continue;
+            }
             if (!has_stream_protocol_handler(handler_name)) {
                 LOG_WARN("lua plugin '{}' skipped protocol handler '{}' because function is missing",
                          manifest_.name,
@@ -722,6 +828,29 @@ namespace yuan::plugin
                                                               std::span<const std::byte> bytes)
     {
         return call_lua_stream_handler(handler_name, connection, bytes, nullptr);
+    }
+
+    bool LuaScriptPluginAdapter::has_datagram_protocol_handler(const std::string &handler_name) const
+    {
+        std::lock_guard<std::recursive_mutex> lock(lua_mutex_);
+        if (!L_) {
+            return false;
+        }
+
+        bool function_missing = false;
+        const bool found = resolve_handler_function(L_, handler_name, &function_missing);
+        if (found) {
+            lua_pop(L_, 1);
+        }
+        return found && !function_missing;
+    }
+
+    bool LuaScriptPluginAdapter::call_datagram_protocol_handler(const std::string &handler_name,
+                                                                HostDatagramEndpoint &endpoint,
+                                                                std::string_view peer,
+                                                                std::span<const std::byte> bytes)
+    {
+        return call_lua_datagram_handler(handler_name, endpoint, peer, bytes, nullptr);
     }
 
     bool LuaScriptPluginAdapter::call_lua_stream_handler(const std::string &handler_name,
@@ -771,6 +900,55 @@ namespace yuan::plugin
         }
         lua_pop(L_, 1);
         clear_pending_stream_payload(connection);
+        return keep_open;
+    }
+
+    bool LuaScriptPluginAdapter::call_lua_datagram_handler(const std::string &handler_name,
+                                                           HostDatagramEndpoint &endpoint,
+                                                           std::string_view peer,
+                                                           std::span<const std::byte> bytes,
+                                                           bool *function_missing) const
+    {
+        std::lock_guard<std::recursive_mutex> lock(lua_mutex_);
+        if (!L_) {
+            if (function_missing) {
+                *function_missing = true;
+            }
+            return false;
+        }
+
+        if (!resolve_handler_function(L_, handler_name, function_missing)) {
+            return false;
+        }
+
+        push_datagram_endpoint_userdata(L_, endpoint);
+        lua_pushlstring(L_, peer.data(), peer.size());
+        const auto *payload = reinterpret_cast<const char *>(bytes.data());
+        lua_pushlstring(L_, payload ? payload : "", bytes.size());
+
+        set_execution_hook();
+        const int ret = lua_pcall(L_, 3, 1, 0);
+        clear_execution_hook();
+
+        if (ret != LUA_OK) {
+            const char *err = lua_tostring(L_, -1);
+            std::string message = "lua plugin '" + manifest_.name + "' protocol datagram handler '" +
+                                  handler_name + "' error: " + (err ? err : "unknown");
+            LOG_ERROR("{}", message);
+            log_host_error(message);
+            lua_pop(L_, 1);
+            return false;
+        }
+
+        bool keep_open = true;
+        if (lua_isboolean(L_, -1)) {
+            keep_open = lua_toboolean(L_, -1) != 0;
+        } else if (lua_isnil(L_, -1)) {
+            keep_open = true;
+        } else {
+            keep_open = lua_toboolean(L_, -1) != 0;
+        }
+        lua_pop(L_, 1);
         return keep_open;
     }
 

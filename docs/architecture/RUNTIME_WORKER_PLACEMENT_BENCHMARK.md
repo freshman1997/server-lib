@@ -518,3 +518,77 @@ http_worker_pool_benchmark yuan workers=4 duration_s=3: best_concurrency=16 best
 ```
 
 This final smoke was run from the normal local build tree, so it is a functional/regression check rather than a release-grade throughput comparison. The release comparison above remains the useful HTTP CPU-tail reference.
+
+## Windows MinGW Core Throughput Pass
+
+Date: 2026-05-18
+
+Host/build:
+
+- Windows, MinGW GCC 12.2.0, `build-mingw-release`, `CMAKE_BUILD_TYPE=Release`.
+- External root: `D:/code/repos/network`.
+- libuv was built locally with MinGW static release output at `D:/code/repos/network/libuv/build-release/libuv.a`.
+- workflow was not included because its CMake currently rejects MinGW.
+- libevent was not included because the available `libevent-2.1.8-stable/lib/*.lib` artifacts are MSVC/Windows libraries and the benchmark's libevent implementation currently targets the pthread-style path.
+- Windows does not support the current `reuse_port` worker-pool path, so HTTP comparison below is single worker only.
+
+Changes validated in this pass:
+
+- `BufferChain` now uses `std::deque` for FIFO storage, removing `vector::erase(begin)` from real output queue pop paths.
+- `HttpService::stop()` dispatches `HttpServer::stop()` onto the service runtime thread before host shutdown, preventing concurrent `sessions_` mutation during high-concurrency shutdown.
+- `PollPoller` now maintains fd-to-index state for O(1) channel updates/removals instead of scanning the poll fd vector on each write-interest change.
+- Core now has small Windows IOCP primitives used by the benchmark path, covering completion-port lifecycle, socket association, posted completions, blocking waits, overlapped socket creation, `AcceptEx` function loading/posting/address parsing, `WSARecv`/`WSASend` posting, and IO cancellation.
+- The benchmark CMake links libuv with Windows system libraries when building on Win32.
+
+Regression subset:
+
+```text
+ctest -R "^(event_token|tcp_close_semantics|async_facades|buffer_model|byte_buffer_reader|http_shared_reuse_port)$" --output-on-failure --timeout 180
+100% tests passed, 0 tests failed out of 6
+
+ctest -R "^(iocp_completion_port|event_token|tcp_close_semantics|async_facades|buffer_model|byte_buffer_reader|http_shared_reuse_port)$" --output-on-failure --timeout 180
+100% tests passed, 0 tests failed out of 7
+```
+
+Core benchmark observations:
+
+- `buffer_chain_push_pop` improved from roughly 7.5-7.7M ops/s to roughly 8.2-8.6M ops/s immediately after the deque change.
+- TCP echo and HTTP throughput did not materially improve from the poller maintenance change on this host; the remaining gap is more likely the Windows `WSAPoll` model plus HTTP request/response stack overhead.
+
+HTTP worker-pool benchmark, single worker, sequential 3 second sweep:
+
+```text
+http_worker_pool_benchmark yuan 1 3 1,2,4,8,16,24,32,64,128
+best_concurrency=16 best_requests_per_second=29434.8
+
+http_worker_pool_benchmark libuv 1 3 1,2,4,8,16,24,32,64,128
+best_concurrency=16 best_requests_per_second=89632.9
+
+http_worker_pool_benchmark iocp 1 3 1,2,4,8,16,24,32,64,128
+best_concurrency=16 best_requests_per_second=94606.6
+
+http_worker_pool_benchmark iocp 4 3 1,2,4,8,16,24,32,64,128,256
+best_concurrency=24 best_requests_per_second=229683
+
+http_worker_pool_benchmark iocp 4 2 1,2,4,8,16,24,32,64,128
+best_concurrency=24 best_requests_per_second=217270
+
+http_worker_pool_benchmark iocp 1 3 1,2,4,8,16,24,32,64,128
+best_concurrency=16 best_requests_per_second=93745.5
+
+http_worker_pool_benchmark iocp 4 3 1,2,4,8,16,24,32,64,128,256
+best_concurrency=16 best_requests_per_second=230366
+
+http_worker_pool_benchmark iocp 4 3 1,2,4,8,16,24,32,64,128,256
+best_concurrency=32 best_requests_per_second=228239
+```
+
+The benchmark-only IOCP server is intentionally minimal: it now pre-posts overlapped `AcceptEx` operations and uses core IOCP helpers for `WSARecv`/`WSASend` completion workers. It avoids the Yuan HTTP stack and therefore is not a drop-in production optimization, but it is a useful direction check. Single-worker IOCP is close to libuv on the same machine, and four IOCP completion workers scale to roughly 2.6x the single-worker libuv baseline. Current `yuan 4` and `libuv 4` Windows runs fail to start through the benchmark's worker-pool/reuse-port path, so the multi-worker comparison is IOCP-only for now.
+
+Practical blocker summary:
+
+- Windows core networking still uses the readiness-style poller path. The remaining HTTP gap is dominated by the platform backend and request/response stack path, not by `BufferChain` FIFO behavior.
+- The first real core IOCP step should now move from primitives to a native backend/runtime adapter with operation lifetime, cancellation, accepted-socket handoff, and wakeup semantics. The benchmark POC proves direction, but it should not be copied into production as an HTTP-specific fast path.
+- A production IOCP backend should reuse the current `IocpCompletionPort`, `IocpAcceptEx`, and `IocpTcpIo` primitives, keep per-operation ownership explicit, and share the existing runtime dispatch contract so TCP, HTTP, and later SSL/UDP integrations do not diverge.
+
+Before the stop-path fix, `http_worker_pool_benchmark yuan 1 1 24/32` intermittently crashed with Windows heap corruption during `HttpServer::stop()`. After dispatching stop onto the runtime thread, concurrency 24/32/64 completed cleanly.

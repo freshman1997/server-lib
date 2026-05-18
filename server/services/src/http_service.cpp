@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 
 #include <nlohmann/json.hpp>
 
@@ -353,7 +354,31 @@ namespace yuan::server
     {
         stop_dashboard_push_timer();
         unsubscribe_dashboard_events();
-        host_.stop([this]() { server_->stop(); });
+
+        auto stop_server = [server = server_.get()]() {
+            if (server) {
+                server->stop();
+            }
+        };
+
+        auto *runtime = shared_runtime_;
+        if (!runtime && server_) {
+            runtime = server_->runtime();
+        }
+
+        if (runtime && runtime->event_loop() && host_.is_started()) {
+            auto done = std::make_shared<std::promise<void>>();
+            auto future = done->get_future();
+            runtime->dispatch([stop_server, done]() mutable {
+                stop_server();
+                done->set_value();
+            });
+            future.wait();
+            host_.stop();
+            return;
+        }
+
+        host_.stop(std::move(stop_server));
     }
 
     yuan::net::http::HttpServer &HttpService::server()

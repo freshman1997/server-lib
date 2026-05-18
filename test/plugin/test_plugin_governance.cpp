@@ -1109,7 +1109,7 @@ namespace
                     "protocol lifecycle should publish started event");
             require(!stopped_events.empty(),
                     "protocol lifecycle should publish stopped event");
-            require(!bind_failed_events.empty(),
+            require(bind_failed_events.size() == 1,
                     "protocol lifecycle should publish bind_failed event");
 
             const auto &started = started_events.back();
@@ -3825,14 +3825,15 @@ namespace
 
         write_script_protocol_plugin(
             temp_root,
-            "proto_udp",
+            "proto_udp_bad_framing",
             {
-                {"name", "udp_proto"},
+                {"name", "udp_bad_framing"},
                 {"type", "echo"},
                 {"transport", "udp"},
                 {"host", "127.0.0.1"},
                 {"port", 0},
-                {"contract_id", "plugin.udp"},
+                {"framing", "line"},
+                {"contract_id", "plugin.udp.bad_framing"},
             });
 
         write_script_protocol_plugin(
@@ -3850,6 +3851,19 @@ namespace
 
         write_script_protocol_plugin(
             temp_root,
+            "proto_udp_missing_handler",
+            {
+                {"name", "udp_custom_proto"},
+                {"type", "custom"},
+                {"transport", "udp"},
+                {"host", "127.0.0.1"},
+                {"port", 0},
+                {"handler", "main.on_datagram"},
+                {"contract_id", "plugin.udp.custom"},
+            });
+
+        write_script_protocol_plugin(
+            temp_root,
             "proto_no_runtime",
             {
                 {"name", "echo_proto"},
@@ -3863,13 +3877,41 @@ namespace
         yuan::plugin::PluginManager discovery_manager;
         discovery_manager.set_plugin_path(temp_root.string());
 
-        const auto udp_services = discovery_manager.discover_protocol_services({ "proto_udp" });
-        require(udp_services.size() == 1, "unsupported transport service should still be discoverable");
+        yuan::net::NetworkRuntime runtime;
+        yuan::app::RuntimeContext runtime_context;
+        runtime_context.app_name = "protocol-service-negative-path-test";
+        runtime_context.run_mode = yuan::app::RunMode::single_thread;
+        runtime_context.worker_threads = 1;
+        runtime_context.runtime_worker_count = 1;
+        runtime_context.runtime_workers.worker_count = 1;
+        runtime_context.shared_runtime = &runtime;
+        runtime_context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
+
+        std::mutex event_mutex;
+        std::vector<yuan::plugin::PluginProtocolServiceEvent> bind_failed_events;
+        runtime_context.event_bus->subscribe(
+            yuan::plugin::events::plugin_protocol_service_bind_failed,
+            [&](const yuan::eventbus::Event &event) {
+                const auto *payload = std::any_cast<yuan::plugin::PluginProtocolServiceEvent>(&event.payload);
+                if (!payload) {
+                    return;
+                }
+                std::lock_guard<std::mutex> lock(event_mutex);
+                bind_failed_events.push_back(*payload);
+            });
+
+        std::thread loop_thread([&runtime]() {
+            runtime.run();
+        });
+
+        const auto udp_bad_framing_services = discovery_manager.discover_protocol_services({ "proto_udp_bad_framing" });
+        require(udp_bad_framing_services.size() == 1, "udp bad-framing service should still be discoverable");
         {
-            yuan::app::PluginProtocolServiceAdapter adapter(temp_root.string(), udp_services[0]);
-            require(adapter.init(), "unsupported transport adapter should initialize plugin runtime");
+            yuan::app::PluginProtocolServiceAdapter adapter(temp_root.string(), udp_bad_framing_services[0]);
+            adapter.set_runtime_context(runtime_context);
+            require(adapter.init(), "udp bad-framing adapter should initialize plugin runtime");
             adapter.start();
-            require(!adapter.started(), "unsupported transport should not start listener");
+            require(!adapter.started(), "unsupported udp framing should not start listener");
             adapter.stop();
         }
 
@@ -3877,9 +3919,21 @@ namespace
         require(missing_handler_services.size() == 1, "missing handler service should still be discoverable");
         {
             yuan::app::PluginProtocolServiceAdapter adapter(temp_root.string(), missing_handler_services[0]);
+            adapter.set_runtime_context(runtime_context);
             require(adapter.init(), "missing handler adapter should initialize plugin runtime");
             adapter.start();
             require(!adapter.started(), "unregistered handler should not start listener");
+            adapter.stop();
+        }
+
+        const auto udp_missing_handler_services = discovery_manager.discover_protocol_services({ "proto_udp_missing_handler" });
+        require(udp_missing_handler_services.size() == 1, "udp missing-handler service should still be discoverable");
+        {
+            yuan::app::PluginProtocolServiceAdapter adapter(temp_root.string(), udp_missing_handler_services[0]);
+            adapter.set_runtime_context(runtime_context);
+            require(adapter.init(), "udp missing-handler adapter should initialize plugin runtime");
+            adapter.start();
+            require(!adapter.started(), "unregistered udp datagram handler should not start listener");
             adapter.stop();
         }
 
@@ -3887,10 +3941,26 @@ namespace
         require(no_runtime_services.size() == 1, "runtime-missing echo service should be discoverable");
         {
             yuan::app::PluginProtocolServiceAdapter adapter(temp_root.string(), no_runtime_services[0]);
+            auto no_runtime_context = runtime_context;
+            no_runtime_context.shared_runtime = nullptr;
+            adapter.set_runtime_context(no_runtime_context);
             require(adapter.init(), "runtime-missing adapter should initialize plugin runtime");
             adapter.start();
             require(!adapter.started(), "missing worker runtime should not start listener");
             adapter.stop();
+        }
+
+        runtime.dispatch([&runtime]() {
+            runtime.stop();
+        });
+        if (loop_thread.joinable()) {
+            loop_thread.join();
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(event_mutex);
+            require(bind_failed_events.empty(),
+                    "non-bind protocol listener failures should not publish bind_failed events");
         }
 
         std::error_code ec;
@@ -3969,6 +4039,188 @@ namespace
 
         require(udp_send_and_expect_echo(port, "udp-echo-payload", std::chrono::seconds(2)),
                 "udp protocol echo should roundtrip payload");
+
+        adapter.stop();
+        runtime.dispatch([&runtime]() {
+            runtime.stop();
+        });
+        if (loop_thread.joinable()) {
+            loop_thread.join();
+        }
+
+        std::error_code ec;
+        std::filesystem::remove_all(temp_root, ec);
+    }
+
+    void test_protocol_service_lua_custom_udp_echo_listener()
+    {
+        const uint16_t port = reserve_tcp_port();
+        require(port != 0, "lua custom udp test should reserve a port");
+
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-protocol-lua-custom-udp-" + std::to_string(static_cast<unsigned long long>(
+                                                        std::chrono::steady_clock::now().time_since_epoch().count())));
+        const auto plugin_dir = temp_root / "proto_lua_custom_udp";
+        std::filesystem::create_directories(plugin_dir);
+
+        {
+            std::ofstream manifest(plugin_dir / "plugin.json");
+            require(static_cast<bool>(manifest), "lua custom udp manifest should be creatable");
+            const auto doc = nlohmann::json{
+                {"run_mode", "script"},
+                {"language", "lua"},
+                {"entry", "main.lua"},
+                {"permissions", "register_protocol_service,listen_udp,use_logger,use_network_runtime"},
+                {"protocol_services", nlohmann::json::array({
+                    {
+                        {"name", "udp_proto"},
+                        {"type", "custom"},
+                        {"transport", "udp"},
+                        {"host", "127.0.0.1"},
+                        {"port", port},
+                        {"framing", "raw"},
+                        {"handler", "main.on_datagram"},
+                        {"contract_id", "plugin.lua.custom.udp"},
+                        {"contract_version", 1},
+                    },
+                })},
+            };
+            manifest << doc.dump(2) << "\n";
+        }
+
+        {
+            std::ofstream script(plugin_dir / "main.lua");
+            require(static_cast<bool>(script), "lua custom udp script should be creatable");
+            script << "local plugin = {}\n";
+            script << "function plugin.on_init(ctx) return ctx ~= nil end\n";
+            script << "function plugin.on_datagram(endpoint, peer, data)\n";
+            script << "  return endpoint:send_to(peer, data)\n";
+            script << "end\n";
+            script << "function plugin.on_enable() end\n";
+            script << "function plugin.on_disable() end\n";
+            script << "function plugin.on_health_check() return true end\n";
+            script << "function plugin.on_release() end\n";
+            script << "return plugin\n";
+        }
+
+        yuan::plugin::PluginManager discovery_manager;
+        discovery_manager.set_plugin_path(temp_root.string());
+        const auto protocol_services = discovery_manager.discover_protocol_services({ "proto_lua_custom_udp" });
+        require(protocol_services.size() == 1, "lua custom udp protocol service should be discoverable");
+
+        yuan::net::NetworkRuntime runtime;
+        yuan::app::RuntimeContext context;
+        context.app_name = "protocol-service-lua-custom-udp-test";
+        context.run_mode = yuan::app::RunMode::single_thread;
+        context.worker_threads = 1;
+        context.runtime_worker_count = 1;
+        context.runtime_workers.worker_count = 1;
+        context.shared_runtime = &runtime;
+        context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
+
+        std::thread loop_thread([&runtime]() {
+            runtime.run();
+        });
+
+        yuan::app::PluginProtocolServiceAdapter adapter(temp_root.string(), protocol_services[0]);
+        adapter.set_runtime_context(context);
+        require(adapter.init(), "lua custom udp adapter should initialize");
+        adapter.start();
+        require(adapter.started(), "lua custom udp adapter should start listener");
+
+        require(udp_send_and_expect_echo(port, "lua-custom-udp-echo", std::chrono::seconds(2)),
+                "lua custom udp protocol listener should echo datagrams");
+
+        adapter.stop();
+        runtime.dispatch([&runtime]() {
+            runtime.stop();
+        });
+        if (loop_thread.joinable()) {
+            loop_thread.join();
+        }
+
+        std::error_code ec;
+        std::filesystem::remove_all(temp_root, ec);
+    }
+
+    void test_protocol_service_ts_custom_udp_echo_listener()
+    {
+        const uint16_t port = reserve_tcp_port();
+        require(port != 0, "ts custom udp test should reserve a port");
+
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-protocol-ts-custom-udp-" + std::to_string(static_cast<unsigned long long>(
+                                                        std::chrono::steady_clock::now().time_since_epoch().count())));
+        const auto plugin_dir = temp_root / "proto_ts_custom_udp";
+        std::filesystem::create_directories(plugin_dir);
+
+        {
+            std::ofstream manifest(plugin_dir / "plugin.json");
+            require(static_cast<bool>(manifest), "ts custom udp manifest should be creatable");
+            const auto doc = nlohmann::json{
+                {"run_mode", "script"},
+                {"language", "typescript"},
+                {"entry", "main.ts"},
+                {"permissions", "register_protocol_service,listen_udp,use_logger,use_network_runtime"},
+                {"protocol_services", nlohmann::json::array({
+                    {
+                        {"name", "udp_proto"},
+                        {"type", "custom"},
+                        {"transport", "udp"},
+                        {"host", "127.0.0.1"},
+                        {"port", port},
+                        {"framing", "raw"},
+                        {"handler", "main.onDatagram"},
+                        {"contract_id", "plugin.ts.custom.udp"},
+                        {"contract_version", 1},
+                    },
+                })},
+            };
+            manifest << doc.dump(2) << "\n";
+        }
+
+        {
+            std::ofstream script(plugin_dir / "main.ts");
+            require(static_cast<bool>(script), "ts custom udp script should be creatable");
+            script << "function on_init(host) {\n";
+            script << "    return host != null;\n";
+            script << "}\n";
+            script << "function onDatagram(endpoint, peer, data) {\n";
+            script << "    return endpoint.sendTo(peer, data);\n";
+            script << "}\n";
+            script << "function on_enable() {}\n";
+            script << "function on_disable() { return; }\n";
+            script << "function on_health_check() { return true; }\n";
+            script << "function on_release() { return; }\n";
+        }
+
+        yuan::plugin::PluginManager discovery_manager;
+        discovery_manager.set_plugin_path(temp_root.string());
+        const auto protocol_services = discovery_manager.discover_protocol_services({ "proto_ts_custom_udp" });
+        require(protocol_services.size() == 1, "ts custom udp protocol service should be discoverable");
+
+        yuan::net::NetworkRuntime runtime;
+        yuan::app::RuntimeContext context;
+        context.app_name = "protocol-service-ts-custom-udp-test";
+        context.run_mode = yuan::app::RunMode::single_thread;
+        context.worker_threads = 1;
+        context.runtime_worker_count = 1;
+        context.runtime_workers.worker_count = 1;
+        context.shared_runtime = &runtime;
+        context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
+
+        std::thread loop_thread([&runtime]() {
+            runtime.run();
+        });
+
+        yuan::app::PluginProtocolServiceAdapter adapter(temp_root.string(), protocol_services[0]);
+        adapter.set_runtime_context(context);
+        require(adapter.init(), "ts custom udp adapter should initialize");
+        adapter.start();
+        require(adapter.started(), "ts custom udp adapter should start listener");
+
+        require(udp_send_and_expect_echo(port, "ts-custom-udp-echo", std::chrono::seconds(2)),
+                "ts custom udp protocol listener should echo datagrams");
 
         adapter.stop();
         runtime.dispatch([&runtime]() {
@@ -4230,6 +4482,8 @@ int main()
     test_protocol_service_backpressure_write_buffer_limit();
     test_protocol_service_health_snapshot();
     test_protocol_service_udp_echo_listener();
+    test_protocol_service_lua_custom_udp_echo_listener();
+    test_protocol_service_ts_custom_udp_echo_listener();
     test_protocol_service_udp_peer_idle_cleanup();
     test_protocol_service_adapter_negative_paths();
     test_resource_guard_cleanup_on_stop();

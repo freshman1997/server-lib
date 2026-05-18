@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <unordered_map>
 #include <vector>
 
@@ -40,9 +39,28 @@ namespace yuan::net
     class PollPoller::HelperData
     {
     public:
+        void erase_fd(int fd)
+        {
+            auto index_it = fd_indices_.find(fd);
+            if (index_it == fd_indices_.end()) {
+                channels_.erase(fd);
+                return;
+            }
+
+            const std::size_t index = index_it->second;
+            const std::size_t last_index = fds_.size() - 1;
+            if (index != last_index) {
+                fds_[index] = fds_[last_index];
+                fd_indices_[static_cast<int>(fds_[index].fd)] = index;
+            }
+            fds_.pop_back();
+            fd_indices_.erase(index_it);
+            channels_.erase(fd);
+        }
+
         std::vector<NativePollFd> fds_;
         std::unordered_map<int, net::Channel *> channels_;
-        std::vector<int> removed_fds_;
+        std::unordered_map<int, std::size_t> fd_indices_;
     };
 
     PollPoller::PollPoller()
@@ -62,22 +80,6 @@ namespace yuan::net
     uint64_t PollPoller::poll(uint32_t timeout, std::vector<PollEvent> & events)
     {
         uint64_t tm = base::time::get_tick_count();
-
-        if (!data_->removed_fds_.empty()) {
-            for (auto &fd : data_->removed_fds_) {
-                auto it = data_->channels_.find(fd);
-                if (it != data_->channels_.end()) {
-                    data_->channels_.erase(fd);
-                    data_->fds_.erase(std::remove_if(data_->fds_.begin(), data_->fds_.end(),
-                                                     [fd](const NativePollFd &pfd)->bool {
-                        return fd == static_cast<int>(pfd.fd);
-                                       }),
-                                       data_->fds_.end());
-                }
-            }
-
-            data_->removed_fds_.clear();
-        }
 
         if (data_->fds_.empty()) {
             return tm;
@@ -160,6 +162,7 @@ namespace yuan::net
         pfd.events &= REQUEST_MASK;
 
         data_->fds_.push_back(pfd);
+        data_->fd_indices_[channel->get_fd()] = data_->fds_.size() - 1;
     }
 
     void PollPoller::update_channel(Channel * channel)
@@ -178,22 +181,21 @@ namespace yuan::net
                 remove_channel(channel);
             } else {
                 int fd = channel->get_fd();
-                auto it = std::find_if(data_->fds_.begin(), data_->fds_.end(), [fd](const NativePollFd &pfd)->bool {
-                    return static_cast<int>(pfd.fd) == fd;
-                });
+                auto index_it = data_->fd_indices_.find(fd);
 
                 data_->channels_[channel->get_fd()] = channel;
-                if (it != data_->fds_.end()) {
-                    it->events = 0;
-                    it->revents = 0;
+                if (index_it != data_->fd_indices_.end()) {
+                    auto &pfd = data_->fds_[index_it->second];
+                    pfd.events = 0;
+                    pfd.revents = 0;
                     if (channel->get_events() & Channel::READ_EVENT) {
-                        it->events |= READ_MASK;
+                        pfd.events |= READ_MASK;
                     }
 
                     if (channel->get_events() & Channel::WRITE_EVENT) {
-                        it->events |= WRITE_MASK;
+                        pfd.events |= WRITE_MASK;
                     }
-                    it->events &= REQUEST_MASK;
+                    pfd.events &= REQUEST_MASK;
                 } else {
                     do_add_channel(channel);
                 }
@@ -207,7 +209,6 @@ namespace yuan::net
             return;
         }
 
-        data_->removed_fds_.push_back(channel->get_fd());
-        data_->channels_[channel->get_fd()] = nullptr;
+        data_->erase_fd(channel->get_fd());
     }
 }

@@ -86,6 +86,8 @@ namespace yuan::app
         std::unique_ptr<net::DatagramAcceptor> datagram_acceptor_;
         std::shared_ptr<PluginProtocolActiveConnectionTracker> connection_tracker_;
         std::shared_ptr<PluginProtocolServiceRuntimeStats> runtime_stats_;
+        std::string last_start_failure_reason_;
+        bool last_start_failure_is_bind_ = false;
         uint64_t listener_resource_id_ = 0;
         bool initialized_ = false;
         bool started_ = false;

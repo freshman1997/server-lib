@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -64,6 +65,7 @@ namespace yuan::app
     namespace
     {
         constexpr auto kProtocolConnectionDrainTimeout = std::chrono::seconds(3);
+        constexpr auto kProtocolStopDispatchTimeout = std::chrono::seconds(1);
         constexpr std::size_t kLengthPrefixedHeaderBytes = sizeof(std::uint32_t);
 
         std::string protocol_listener_resource_description(
@@ -146,6 +148,41 @@ namespace yuan::app
                 joined += names[i];
             }
             return joined;
+        }
+
+        bool dispatch_to_runtime_and_wait(net::NetworkRuntime *runtime,
+                                          std::function<void()> callback,
+                                          std::chrono::steady_clock::duration timeout = kProtocolStopDispatchTimeout)
+        {
+            if (!callback) {
+                return true;
+            }
+            if (!runtime) {
+                callback();
+                return true;
+            }
+
+            struct DispatchState
+            {
+                std::mutex mutex;
+                std::condition_variable cv;
+                bool completed = false;
+            };
+
+            auto state = std::make_shared<DispatchState>();
+            runtime->dispatch([callback = std::move(callback), state]() mutable {
+                callback();
+                {
+                    std::lock_guard<std::mutex> lock(state->mutex);
+                    state->completed = true;
+                }
+                state->cv.notify_one();
+            });
+
+            std::unique_lock<std::mutex> lock(state->mutex);
+            return state->cv.wait_for(lock, timeout, [&]() {
+                return state->completed;
+            });
         }
 
         plugin::PluginRunMode to_plugin_run_mode(RunMode mode)
@@ -1515,6 +1552,7 @@ namespace yuan::app
             {
                 std::chrono::steady_clock::time_point last_activity;
                 uint64_t resource_id = 0;
+                std::weak_ptr<net::Connection> connection;
             };
 
             PluginDatagramConnectionHandler(plugin::ProtocolServiceDescriptor protocol_service,
@@ -1595,9 +1633,9 @@ namespace yuan::app
                 }
                 record_bytes_received(runtime_stats_, packet.readable_bytes());
 
-                cleanup_idle_peers();
                 const auto peer = conn->get_remote_address().to_address_key();
-                touch_peer_state(peer);
+                touch_peer_state(conn, peer);
+                cleanup_idle_peers();
 
                 const auto framing = effective_framing(protocol_service_);
                 if (framing != "raw") {
@@ -1681,7 +1719,7 @@ namespace yuan::app
             }
 
         private:
-            void touch_peer_state(std::string_view peer)
+            void touch_peer_state(const std::shared_ptr<net::Connection> &conn, std::string_view peer)
             {
                 auto it = peer_states_.find(std::string(peer));
                 const bool is_new_peer = it == peer_states_.end();
@@ -1689,6 +1727,7 @@ namespace yuan::app
                     ? peer_states_[std::string(peer)]
                     : it->second;
                 state.last_activity = std::chrono::steady_clock::now();
+                state.connection = conn;
                 if (state.resource_id == 0 && host_) {
                     state.resource_id = host_->track_plugin_resource(
                         protocol_service_.plugin_id,
@@ -1737,17 +1776,27 @@ namespace yuan::app
 
                 const auto now = std::chrono::steady_clock::now();
                 const auto idle_window = std::chrono::milliseconds(idle_timeout_ms_);
-                for (auto it = peer_states_.begin(); it != peer_states_.end();) {
+                std::vector<std::shared_ptr<net::Connection> > expired_connections;
+                std::vector<std::string> expired_peers_without_connection;
+                for (auto it = peer_states_.begin(); it != peer_states_.end(); ++it) {
                     if (now - it->second.last_activity < idle_window) {
-                        ++it;
                         continue;
                     }
-
-                    if (host_ && it->second.resource_id != 0) {
-                        (void)host_->untrack_plugin_resource(it->second.resource_id);
+                    if (auto conn = it->second.connection.lock()) {
+                        expired_connections.push_back(std::move(conn));
+                    } else {
+                        expired_peers_without_connection.push_back(it->first);
                     }
-                    record_connection_closed(runtime_stats_);
-                    it = peer_states_.erase(it);
+                }
+
+                for (const auto &conn : expired_connections) {
+                    if (conn && conn->get_connection_state() != net::ConnectionState::closed) {
+                        conn->close();
+                    }
+                }
+
+                for (const auto &peer : expired_peers_without_connection) {
+                    remove_peer_state(peer);
                 }
             }
 
@@ -1775,15 +1824,14 @@ namespace yuan::app
 
             void clear_peer_states()
             {
-                if (host_) {
-                    for (const auto &entry : peer_states_) {
-                        if (entry.second.resource_id != 0) {
-                            (void)host_->untrack_plugin_resource(entry.second.resource_id);
-                        }
-                        record_connection_closed(runtime_stats_);
-                    }
+                std::vector<std::string> peers;
+                peers.reserve(peer_states_.size());
+                for (const auto &entry : peer_states_) {
+                    peers.push_back(entry.first);
                 }
-                peer_states_.clear();
+                for (const auto &peer : peers) {
+                    remove_peer_state(peer);
+                }
             }
 
             void ensure_handler()
@@ -1964,13 +2012,15 @@ namespace yuan::app
             host_->start();
         }
         if (!start_protocol_listener()) {
-            if (runtime_context_.event_bus) {
+            if (runtime_context_.event_bus && last_start_failure_is_bind_) {
                 runtime_context_.event_bus->publish(
                     plugin::events::plugin_protocol_service_bind_failed,
                     make_protocol_service_event(
                         runtime_context_,
                         protocol_service_,
-                        "failed to start protocol listener"));
+                        last_start_failure_reason_.empty()
+                            ? "failed to bind protocol listener"
+                            : last_start_failure_reason_));
             }
             handler_registry_.clear();
             if (host_) {
@@ -2092,6 +2142,14 @@ namespace yuan::app
             return true;
         }
 
+        last_start_failure_reason_.clear();
+        last_start_failure_is_bind_ = false;
+        auto fail_start = [this](std::string reason, bool bind_failure = false) {
+            last_start_failure_reason_ = std::move(reason);
+            last_start_failure_is_bind_ = bind_failure;
+            return false;
+        };
+
         if (!is_valid_protocol_service(protocol_service_)) {
             LOG_ERROR(
                 "plugin protocol service '{}.{}' manifest validation failed: {} [{}]",
@@ -2099,7 +2157,7 @@ namespace yuan::app
                 protocol_service_.name,
                 manifest_reason(protocol_service_),
                 runtime_identity_text(runtime_context_));
-            return false;
+            return fail_start("manifest validation failed");
         }
 
         const auto handler_name = resolve_handler_name(protocol_service_);
@@ -2109,7 +2167,7 @@ namespace yuan::app
                 protocol_service_.plugin_id,
                 protocol_service_.name,
                 runtime_identity_text(runtime_context_));
-            return false;
+            return fail_start("protocol service handler was not configured");
         }
 
         const auto transport = effective_transport(protocol_service_);
@@ -2121,7 +2179,7 @@ namespace yuan::app
                 protocol_service_.name,
                 framing,
                 runtime_identity_text(runtime_context_));
-            return false;
+            return fail_start("unsupported tcp framing '" + framing + "'");
         }
         if (transport == "udp" && framing != "raw") {
             LOG_ERROR(
@@ -2130,18 +2188,7 @@ namespace yuan::app
                 protocol_service_.name,
                 framing,
                 runtime_identity_text(runtime_context_));
-            return false;
-        }
-
-        auto handler_factory = handler_registry_.find_stream_handler(handler_name);
-        if (!handler_factory) {
-            LOG_ERROR(
-                "plugin protocol service '{}.{}' handler '{}' was not registered [{}]",
-                protocol_service_.plugin_id,
-                protocol_service_.name,
-                handler_name,
-                runtime_identity_text(runtime_context_));
-            return false;
+            return fail_start("unsupported udp framing '" + framing + "'");
         }
 
         if (is_builtin_echo_demo(protocol_service_)) {
@@ -2160,7 +2207,7 @@ namespace yuan::app
                 protocol_service_.plugin_id,
                 protocol_service_.name,
                 runtime_identity_text(runtime_context_));
-            return false;
+            return fail_start("worker-owned NetworkRuntime is required");
         }
 
         net::ListenOptions options;
@@ -2175,7 +2222,7 @@ namespace yuan::app
                     protocol_service_.name,
                     handler_name,
                     runtime_identity_text(runtime_context_));
-                return false;
+                return fail_start("datagram handler '" + handler_name + "' was not registered");
             }
 
             auto socket = std::make_unique<net::Socket>(
@@ -2188,7 +2235,7 @@ namespace yuan::app
                     protocol_service_.plugin_id,
                     protocol_service_.name,
                     runtime_identity_text(runtime_context_));
-                return false;
+                return fail_start("failed to create udp socket");
             }
 
             if (!socket->apply_listen_options(options)) {
@@ -2197,7 +2244,7 @@ namespace yuan::app
                     protocol_service_.plugin_id,
                     protocol_service_.name,
                     runtime_identity_text(runtime_context_));
-                return false;
+                return fail_start("failed to apply udp listen options");
             }
             socket->set_none_block(true);
             if (!socket->bind()) {
@@ -2209,7 +2256,11 @@ namespace yuan::app
                     protocol_service_.host.empty() ? "0.0.0.0" : protocol_service_.host,
                     protocol_service_.port,
                     runtime_identity_text(runtime_context_));
-                return false;
+                return fail_start(
+                    "failed to bind " + transport + "://" +
+                    (protocol_service_.host.empty() ? std::string("0.0.0.0") : protocol_service_.host) +
+                    ":" + std::to_string(protocol_service_.port),
+                    true);
             }
 
             const auto local_endpoint = socket->get_local_address().to_address_key();
@@ -2221,7 +2272,7 @@ namespace yuan::app
                     protocol_service_.plugin_id,
                     protocol_service_.name,
                     runtime_identity_text(runtime_context_));
-                return false;
+                return fail_start("failed to start udp acceptor");
             }
 
             if (!runtime_stats_) {
@@ -2269,7 +2320,18 @@ namespace yuan::app
                 protocol_service_.name,
                 transport,
                 runtime_identity_text(runtime_context_));
-            return false;
+            return fail_start("unsupported transport '" + transport + "'");
+        }
+
+        auto handler_factory = handler_registry_.find_stream_handler(handler_name);
+        if (!handler_factory) {
+            LOG_ERROR(
+                "plugin protocol service '{}.{}' handler '{}' was not registered [{}]",
+                protocol_service_.plugin_id,
+                protocol_service_.name,
+                handler_name,
+                runtime_identity_text(runtime_context_));
+            return fail_start("stream handler '" + handler_name + "' was not registered");
         }
 
         auto active_connections = std::make_shared<std::atomic<int> >(0);
@@ -2310,7 +2372,9 @@ namespace yuan::app
                 protocol_service_.port,
                 runtime_identity_text(runtime_context_));
             connection_tracker_.reset();
-            return false;
+            return fail_start(
+                "failed to bind " + transport + "://" + host + ":" + std::to_string(protocol_service_.port),
+                true);
         }
 
         auto task = listener->run_async();
@@ -2339,17 +2403,34 @@ namespace yuan::app
             listener_resource_id_ = 0;
         }
 
+        auto *runtime = runtime_context_.shared_runtime;
         auto tracker = connection_tracker_;
         if (datagram_acceptor_) {
-            datagram_acceptor_->close();
-            datagram_acceptor_.reset();
+            std::shared_ptr<net::DatagramAcceptor> datagram_acceptor(datagram_acceptor_.release());
+            const bool closed_on_runtime = dispatch_to_runtime_and_wait(
+                runtime,
+                [datagram_acceptor]() {
+                    datagram_acceptor->close();
+                });
+            if (!closed_on_runtime) {
+                datagram_acceptor->close();
+            }
+            datagram_acceptor.reset();
         }
         if (listener_) {
-            listener_->close();
-            listener_.reset();
+            std::shared_ptr<net::AsyncListenerHost> listener(listener_.release());
+            const bool closed_on_runtime = dispatch_to_runtime_and_wait(
+                runtime,
+                [listener]() {
+                    listener->close();
+                });
+            if (!closed_on_runtime) {
+                listener->close();
+            }
+            listener.reset();
         }
         if (tracker) {
-            request_tracked_connection_shutdown(tracker, runtime_context_.shared_runtime);
+            request_tracked_connection_shutdown(tracker, runtime);
             if (!wait_for_tracked_connections(tracker, kProtocolConnectionDrainTimeout)) {
                 LOG_WARN(
                     "plugin protocol service '{}.{}' still has active connections after shutdown drain timeout [{}]",

@@ -12,6 +12,7 @@
 #include <mutex>
 #include <span>
 #include <string>
+#include <string_view>
 
 struct JSRuntime;
 struct JSContext;
@@ -46,6 +47,11 @@ namespace yuan::plugin
         bool call_stream_protocol_handler(const std::string &handler_name,
                                           HostStreamConnection &connection,
                                           std::span<const std::byte> bytes);
+        bool has_datagram_protocol_handler(const std::string &handler_name) const;
+        bool call_datagram_protocol_handler(const std::string &handler_name,
+                                            HostDatagramEndpoint &endpoint,
+                                            std::string_view peer,
+                                            std::span<const std::byte> bytes);
 
         const TsMemoryBudget &memory_budget() const
         {
@@ -78,6 +84,11 @@ namespace yuan::plugin
                                     HostStreamConnection &connection,
                                     std::span<const std::byte> bytes,
                                     bool *function_missing = nullptr) const;
+        bool call_js_datagram_handler(const std::string &handler_name,
+                                      HostDatagramEndpoint &endpoint,
+                                      std::string_view peer,
+                                      std::span<const std::byte> bytes,
+                                      bool *function_missing = nullptr) const;
 
         void set_execution_deadline() const;
         void clear_execution_deadline() const;

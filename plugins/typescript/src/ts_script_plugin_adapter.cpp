@@ -42,6 +42,28 @@ namespace yuan::plugin
             std::string handler_name_;
         };
 
+        class TsDatagramProtocolHandler final : public PluginDatagramProtocolHandler
+        {
+        public:
+            TsDatagramProtocolHandler(TsScriptPluginAdapter *adapter, std::string handler_name)
+                : adapter_(adapter),
+                  handler_name_(std::move(handler_name))
+            {
+            }
+
+            bool on_datagram(HostDatagramEndpoint &endpoint,
+                             std::string_view peer,
+                             std::span<const std::byte> bytes) override
+            {
+                return adapter_ &&
+                       adapter_->call_datagram_protocol_handler(handler_name_, endpoint, peer, bytes);
+            }
+
+        private:
+            TsScriptPluginAdapter *adapter_ = nullptr;
+            std::string handler_name_;
+        };
+
         struct PendingTsStreamPayload
         {
             std::string payload;
@@ -80,6 +102,7 @@ namespace yuan::plugin
         }
 
         JSClassID g_ts_stream_connection_class_id = 0;
+        JSClassID g_ts_datagram_endpoint_class_id = 0;
 
         static JSValue js_stream_connection_id(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
         {
@@ -246,6 +269,100 @@ namespace yuan::plugin
             JSValue obj = JS_NewObjectProtoClass(ctx, proto, g_ts_stream_connection_class_id);
             JS_FreeValue(ctx, proto);
             JS_SetOpaque(obj, &connection);
+            return obj;
+        }
+
+        static JSValue js_datagram_endpoint_local_address(JSContext *ctx,
+                                                          JSValueConst this_val,
+                                                          int argc,
+                                                          JSValueConst *argv)
+        {
+            (void)argc;
+            (void)argv;
+            auto *endpoint =
+                static_cast<HostDatagramEndpoint *>(JS_GetOpaque2(ctx, this_val, g_ts_datagram_endpoint_class_id));
+            if (!endpoint) {
+                return JS_NewString(ctx, "");
+            }
+            const auto local = endpoint->local_address();
+            return JS_NewStringLen(ctx, local.data(), local.size());
+        }
+
+        static JSValue js_datagram_endpoint_send_to(JSContext *ctx,
+                                                    JSValueConst this_val,
+                                                    int argc,
+                                                    JSValueConst *argv)
+        {
+            if (argc < 2) {
+                return JS_ThrowTypeError(ctx, "endpoint.sendTo requires 2 arguments");
+            }
+            auto *endpoint =
+                static_cast<HostDatagramEndpoint *>(JS_GetOpaque2(ctx, this_val, g_ts_datagram_endpoint_class_id));
+            if (!endpoint) {
+                return JS_NewBool(ctx, false);
+            }
+
+            size_t peer_len = 0;
+            size_t payload_len = 0;
+            const char *peer = JS_ToCStringLen(ctx, &peer_len, argv[0]);
+            if (!peer) {
+                return JS_NewBool(ctx, false);
+            }
+            const char *payload = JS_ToCStringLen(ctx, &payload_len, argv[1]);
+            if (!payload) {
+                JS_FreeCString(ctx, peer);
+                return JS_NewBool(ctx, false);
+            }
+
+            const auto *payload_ptr = reinterpret_cast<const std::byte *>(payload);
+            const bool sent = endpoint->send_to(
+                std::string_view(peer, peer_len),
+                std::span<const std::byte>(payload_ptr, payload_len));
+            JS_FreeCString(ctx, payload);
+            JS_FreeCString(ctx, peer);
+            return JS_NewBool(ctx, sent);
+        }
+
+        static void js_datagram_endpoint_finalizer(JSRuntime *rt, JSValue val)
+        {
+            (void)rt;
+            (void)val;
+        }
+
+        void ensure_datagram_endpoint_class(JSContext *ctx)
+        {
+            if (g_ts_datagram_endpoint_class_id == 0) {
+                JS_NewClassID(&g_ts_datagram_endpoint_class_id);
+            }
+
+            JSValue existing_proto = JS_GetClassProto(ctx, g_ts_datagram_endpoint_class_id);
+            if (!JS_IsUndefined(existing_proto) && !JS_IsNull(existing_proto)) {
+                JS_FreeValue(ctx, existing_proto);
+                return;
+            }
+            JS_FreeValue(ctx, existing_proto);
+
+            JSClassDef class_def{};
+            class_def.class_name = "TsHostDatagramEndpoint";
+            class_def.finalizer = js_datagram_endpoint_finalizer;
+            (void)JS_NewClass(JS_GetRuntime(ctx), g_ts_datagram_endpoint_class_id, &class_def);
+
+            JSValue proto = JS_NewObject(ctx);
+            static const JSCFunctionListEntry funcs[] = {
+                JS_CFUNC_DEF("localAddress", 0, js_datagram_endpoint_local_address),
+                JS_CFUNC_DEF("sendTo", 2, js_datagram_endpoint_send_to),
+            };
+            JS_SetPropertyFunctionList(ctx, proto, funcs, sizeof(funcs) / sizeof(funcs[0]));
+            JS_SetClassProto(ctx, g_ts_datagram_endpoint_class_id, proto);
+        }
+
+        JSValue make_datagram_endpoint_instance(JSContext *ctx, HostDatagramEndpoint &endpoint)
+        {
+            ensure_datagram_endpoint_class(ctx);
+            JSValue proto = JS_GetClassProto(ctx, g_ts_datagram_endpoint_class_id);
+            JSValue obj = JS_NewObjectProtoClass(ctx, proto, g_ts_datagram_endpoint_class_id);
+            JS_FreeValue(ctx, proto);
+            JS_SetOpaque(obj, &endpoint);
             return obj;
         }
 
@@ -510,23 +627,43 @@ namespace yuan::plugin
 
     void TsScriptPluginAdapter::register_protocol_handlers(PluginProtocolHandlerRegistry &registry)
     {
-        std::unordered_set<std::string> seen_handlers;
+        std::unordered_set<std::string> seen_stream_handlers;
+        std::unordered_set<std::string> seen_datagram_handlers;
         for (const auto &service : manifest_.protocol_services) {
             if (service.handler.empty() || service.language != "typescript") {
                 continue;
             }
-            if (!seen_handlers.insert(service.handler).second) {
+
+            const std::string handler_name = service.handler;
+            const std::string transport =
+                !service.transport.empty() ? service.transport : service.protocol;
+            if (transport == "udp") {
+                if (!seen_datagram_handlers.insert(handler_name).second) {
+                    continue;
+                }
+                if (!has_datagram_protocol_handler(handler_name)) {
+                    LOG_WARN("ts plugin '{}' skipped datagram protocol handler '{}' because function is missing",
+                             manifest_.name,
+                             handler_name);
+                    continue;
+                }
+                (void)registry.register_datagram_handler(
+                    handler_name,
+                    [this, handler_name](const ProtocolServiceDescriptor &) {
+                        return std::make_unique<TsDatagramProtocolHandler>(this, handler_name);
+                    });
                 continue;
             }
 
-            const std::string handler_name = service.handler;
+            if (!seen_stream_handlers.insert(handler_name).second) {
+                continue;
+            }
             if (!has_stream_protocol_handler(handler_name)) {
                 LOG_WARN("ts plugin '{}' skipped protocol handler '{}' because function is missing",
                          manifest_.name,
                          handler_name);
                 continue;
             }
-
             (void)registry.register_stream_handler(
                 handler_name,
                 [this, handler_name](const ProtocolServiceDescriptor &) {
@@ -556,6 +693,30 @@ namespace yuan::plugin
                                                              std::span<const std::byte> bytes)
     {
         return call_js_stream_handler(handler_name, connection, bytes, nullptr);
+    }
+
+    bool TsScriptPluginAdapter::has_datagram_protocol_handler(const std::string &handler_name) const
+    {
+        std::lock_guard<std::recursive_mutex> lock(js_mutex_);
+        if (!ctx_ || !rt_) {
+            return false;
+        }
+
+        bool function_missing = false;
+        JSValue fn = JS_UNDEFINED;
+        const bool found = resolve_handler_function(ctx_, handler_name, &fn, &function_missing);
+        if (found) {
+            JS_FreeValue(ctx_, fn);
+        }
+        return found && !function_missing;
+    }
+
+    bool TsScriptPluginAdapter::call_datagram_protocol_handler(const std::string &handler_name,
+                                                               HostDatagramEndpoint &endpoint,
+                                                               std::string_view peer,
+                                                               std::span<const std::byte> bytes)
+    {
+        return call_js_datagram_handler(handler_name, endpoint, peer, bytes, nullptr);
     }
 
     void TsScriptPluginAdapter::call_js_void(const char * func_name)
@@ -770,6 +931,83 @@ namespace yuan::plugin
         JS_FreeValue(ctx_, conn_obj);
         JS_FreeValue(ctx_, fn);
         clear_pending_stream_payload(connection);
+        return keep_open;
+    }
+
+    bool TsScriptPluginAdapter::call_js_datagram_handler(const std::string &handler_name,
+                                                         HostDatagramEndpoint &endpoint,
+                                                         std::string_view peer,
+                                                         std::span<const std::byte> bytes,
+                                                         bool *function_missing) const
+    {
+        std::lock_guard<std::recursive_mutex> lock(js_mutex_);
+        if (!ctx_ || !rt_) {
+            if (function_missing) {
+                *function_missing = true;
+            }
+            return false;
+        }
+
+        JSValue fn = JS_UNDEFINED;
+        if (!resolve_handler_function(ctx_, handler_name, &fn, function_missing)) {
+            return false;
+        }
+
+        JSValue endpoint_obj = make_datagram_endpoint_instance(ctx_, endpoint);
+        JSValue peer_val = JS_NewStringLen(ctx_, peer.data(), peer.size());
+        const char *payload = reinterpret_cast<const char *>(bytes.data());
+        JSValue payload_val = JS_NewStringLen(ctx_, payload ? payload : "", bytes.size());
+        JSValue argv[3] = { endpoint_obj, peer_val, payload_val };
+
+        set_execution_deadline();
+        JSValue ret = JS_Call(ctx_, fn, JS_UNDEFINED, 3, argv);
+        clear_execution_deadline();
+
+        if (interrupt_data_.timeout_triggered.load(std::memory_order_relaxed)) {
+            LOG_ERROR("ts plugin '{}' protocol datagram handler '{}' timed out", manifest_.name, handler_name);
+            if (JS_IsException(ret)) {
+                JSValue exception = JS_GetException(ctx_);
+                JS_FreeValue(ctx_, exception);
+            }
+            JS_FreeValue(ctx_, ret);
+            JS_FreeValue(ctx_, payload_val);
+            JS_FreeValue(ctx_, peer_val);
+            JS_FreeValue(ctx_, endpoint_obj);
+            JS_FreeValue(ctx_, fn);
+            return false;
+        }
+
+        if (JS_IsException(ret)) {
+            JSValue exception = JS_GetException(ctx_);
+            const char *err = JS_ToCString(ctx_, exception);
+            LOG_ERROR("ts plugin '{}' protocol datagram handler '{}' error: {}",
+                      manifest_.name,
+                      handler_name,
+                      err ? err : "unknown");
+            JS_FreeCString(ctx_, err);
+            JS_FreeValue(ctx_, exception);
+            JS_FreeValue(ctx_, ret);
+            JS_FreeValue(ctx_, payload_val);
+            JS_FreeValue(ctx_, peer_val);
+            JS_FreeValue(ctx_, endpoint_obj);
+            JS_FreeValue(ctx_, fn);
+            return false;
+        }
+
+        bool keep_open = true;
+        if (JS_IsBool(ret)) {
+            keep_open = JS_ToBool(ctx_, ret) > 0;
+        } else if (JS_IsNull(ret) || JS_IsUndefined(ret)) {
+            keep_open = true;
+        } else {
+            keep_open = JS_ToBool(ctx_, ret) > 0;
+        }
+
+        JS_FreeValue(ctx_, ret);
+        JS_FreeValue(ctx_, payload_val);
+        JS_FreeValue(ctx_, peer_val);
+        JS_FreeValue(ctx_, endpoint_obj);
+        JS_FreeValue(ctx_, fn);
         return keep_open;
     }
 

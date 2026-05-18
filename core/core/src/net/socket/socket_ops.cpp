@@ -72,6 +72,22 @@ namespace yuan::net::socket
         return fd;
     }
 
+    int create_ipv4_overlapped_tcp_socket(bool noneBlock)
+    {
+#ifdef _WIN32
+        if (!ensure_winsock_initialized()) {
+            return -1;
+        }
+        int fd = static_cast<int>(::WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED));
+#else
+        int fd = create_ipv4_socket(SOCK_STREAM, IPPROTO_TCP);
+#endif
+        if (fd >= 0 && noneBlock) {
+            set_none_block(fd, true);
+        }
+        return fd;
+    }
+
     int create_ipv4_udp_socket(bool noneBlock)
     {
         int fd = create_ipv4_socket(SOCK_DGRAM, IPPROTO_UDP);
@@ -89,6 +105,25 @@ namespace yuan::net::socket
         }
 #endif
         int fd = ::socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+        if (fd >= 0) {
+            set_ipv6_only(fd, false);
+            if (noneBlock) {
+                set_none_block(fd, true);
+            }
+        }
+        return fd;
+    }
+
+    int create_ipv6_overlapped_tcp_socket(bool noneBlock)
+    {
+#ifdef _WIN32
+        if (!ensure_winsock_initialized()) {
+            return -1;
+        }
+        int fd = static_cast<int>(::WSASocketW(AF_INET6, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED));
+#else
+        int fd = ::socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+#endif
         if (fd >= 0) {
             set_ipv6_only(fd, false);
             if (noneBlock) {

@@ -1,8 +1,13 @@
 #include "eventbus/event_bus.h"
 #include "http_service.h"
+#include "log.h"
 #include "registry.h"
+#include "net/iocp/iocp_accept.h"
+#include "net/iocp/iocp_completion_port.h"
+#include "net/iocp/iocp_tcp_io.h"
 #include "net/runtime/network_runtime.h"
 #include "response.h"
+#include "net/socket/socket_ops.h"
 #include "runtime_context.h"
 
 #include <algorithm>
@@ -17,6 +22,7 @@
 #include <iostream>
 #include <mutex>
 #include <memory>
+#include <array>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -52,6 +58,10 @@ constexpr socket_t kInvalidSocket = -1;
 #ifdef YUAN_BENCH_WITH_WORKFLOW
 #include <workflow/WFGlobal.h>
 #include <workflow/WFHttpServer.h>
+#endif
+
+#ifdef _WIN32
+#include <mswsock.h>
 #endif
 
 namespace
@@ -269,6 +279,7 @@ namespace
     {
         auto log_registry = yuan::log::LogRegistry::get_instance();
         log_registry->disable_file_log();
+        log_registry->set_global_level(yuan::log::Level::fatal);
         log_registry->set_default(nullptr);
 
         auto bus = std::make_shared<yuan::eventbus::EventBus>();
@@ -633,6 +644,278 @@ namespace
     };
 #endif
 
+#ifdef _WIN32
+    struct IocpServer
+    {
+        enum class OperationKind
+        {
+            accept,
+            recv,
+            send
+        };
+
+        struct Client;
+
+        struct Operation
+        {
+            OVERLAPPED overlapped{};
+            OperationKind kind = OperationKind::recv;
+            Client *client = nullptr;
+            socket_t accepted_fd = kInvalidSocket;
+            std::array<char, yuan::net::kIocpAcceptBufferBytes> accept_buffer{};
+            std::array<char, 4096> storage{};
+        };
+
+        struct Client
+        {
+            socket_t fd = kInvalidSocket;
+            IocpServer *server = nullptr;
+            std::string input;
+        };
+
+        yuan::net::IocpCompletionPort iocp;
+        yuan::net::IocpAcceptEx accept_ex;
+        socket_t listener = kInvalidSocket;
+        std::atomic_bool stopping{false};
+        std::atomic_uint32_t pending_accepts{0};
+        std::vector<std::thread> workers;
+
+        bool start(uint16_t port, std::size_t worker_count)
+        {
+            stopping.store(false, std::memory_order_release);
+            if (!iocp.init()) {
+                return false;
+            }
+
+            listener = yuan::net::socket::create_ipv4_overlapped_tcp_socket(false);
+            if (listener == kInvalidSocket) {
+                stop();
+                return false;
+            }
+
+            int flag = 1;
+            (void)::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&flag), sizeof(flag));
+            (void)::setsockopt(listener, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char *>(&flag), sizeof(flag));
+
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            addr.sin_port = htons(port);
+            if (::bind(listener, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) != 0 ||
+                ::listen(listener, SOMAXCONN) != 0) {
+                stop();
+                return false;
+            }
+            if (!iocp.associate_socket(listener, reinterpret_cast<uintptr_t>(this)) ||
+                !accept_ex.load(listener)) {
+                stop();
+                return false;
+            }
+
+            const std::size_t actual_workers = (std::max<std::size_t>)(1, worker_count);
+            workers.reserve(actual_workers);
+            for (std::size_t i = 0; i < actual_workers; ++i) {
+                workers.emplace_back([this]() { worker_loop(); });
+            }
+
+            const std::size_t accept_count = (std::max<std::size_t>)(16, actual_workers * 8);
+            for (std::size_t i = 0; i < accept_count; ++i) {
+                post_accept();
+            }
+            return true;
+        }
+
+        void stop()
+        {
+            stopping.store(true, std::memory_order_release);
+            if (listener != kInvalidSocket) {
+                close_socket(listener);
+                listener = kInvalidSocket;
+            }
+            for (int i = 0; pending_accepts.load(std::memory_order_acquire) != 0 && i < 200; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (iocp.valid()) {
+                for (std::size_t i = 0; i < workers.size(); ++i) {
+                    iocp.post();
+                }
+            }
+            for (auto &worker : workers) {
+                if (worker.joinable()) {
+                    worker.join();
+                }
+            }
+            workers.clear();
+            iocp.close();
+            pending_accepts.store(0, std::memory_order_release);
+        }
+
+        void post_accept()
+        {
+            if (stopping.load(std::memory_order_acquire) || listener == kInvalidSocket) {
+                return;
+            }
+
+            auto *operation = new Operation{};
+            operation->kind = OperationKind::accept;
+            operation->accepted_fd = yuan::net::socket::create_ipv4_overlapped_tcp_socket(false);
+            if (operation->accepted_fd == kInvalidSocket) {
+                delete operation;
+                return;
+            }
+
+            pending_accepts.fetch_add(1, std::memory_order_acq_rel);
+            if (!accept_ex.post(listener,
+                                operation->accepted_fd,
+                                operation->accept_buffer.data(),
+                                operation->accept_buffer.size(),
+                                &operation->overlapped)) {
+                pending_accepts.fetch_sub(1, std::memory_order_acq_rel);
+                close_socket(operation->accepted_fd);
+                delete operation;
+            }
+        }
+
+        void worker_loop()
+        {
+            for (;;) {
+                yuan::net::IocpCompletion completion;
+                iocp.wait(INFINITE, completion);
+                auto *overlapped = static_cast<OVERLAPPED *>(completion.operation);
+                if (!overlapped) {
+                    break;
+                }
+
+                auto *operation = reinterpret_cast<Operation *>(overlapped);
+                auto *client = operation->client;
+                if (operation->kind == OperationKind::accept) {
+                    pending_accepts.fetch_sub(1, std::memory_order_acq_rel);
+                    handle_accept_completion(operation, completion.ok);
+                    continue;
+                }
+
+                if (!completion.ok || !client) {
+                    delete operation;
+                    close_client(client);
+                    continue;
+                }
+
+                if (operation->kind == OperationKind::recv) {
+                    if (completion.bytes == 0) {
+                        delete operation;
+                        close_client(client);
+                        continue;
+                    }
+
+                    client->input.append(operation->storage.data(), completion.bytes);
+                    delete operation;
+
+                    const auto request_end = client->input.find("\r\n\r\n");
+                    if (request_end != std::string::npos) {
+                        client->input.erase(0, request_end + 4);
+                        post_send(client);
+                    } else {
+                        post_recv(client);
+                    }
+                } else {
+                    delete operation;
+                    post_recv(client);
+                }
+            }
+        }
+
+        void handle_accept_completion(Operation *operation, bool ok)
+        {
+            const socket_t accepted_fd = operation ? operation->accepted_fd : kInvalidSocket;
+            if (!operation) {
+                return;
+            }
+
+            if (!ok || stopping.load(std::memory_order_acquire) || accepted_fd == kInvalidSocket ||
+                !accept_ex.update_accept_context(accepted_fd, listener)) {
+                if (accepted_fd != kInvalidSocket) {
+                    close_socket(accepted_fd);
+                }
+                delete operation;
+                if (!stopping.load(std::memory_order_acquire)) {
+                    post_accept();
+                }
+                return;
+            }
+
+            set_client_socket_options(accepted_fd);
+            auto *client = new Client{};
+            client->fd = accepted_fd;
+            client->server = this;
+            if (!iocp.associate_socket(accepted_fd, reinterpret_cast<uintptr_t>(client))) {
+                close_socket(accepted_fd);
+                delete client;
+                delete operation;
+                if (!stopping.load(std::memory_order_acquire)) {
+                    post_accept();
+                }
+                return;
+            }
+
+            operation->accepted_fd = kInvalidSocket;
+            delete operation;
+            post_recv(client);
+            if (!stopping.load(std::memory_order_acquire)) {
+                post_accept();
+            }
+        }
+
+        void post_recv(Client *client)
+        {
+            if (!client || stopping.load(std::memory_order_acquire)) {
+                close_client(client);
+                return;
+            }
+
+            auto *operation = new Operation{};
+            operation->kind = OperationKind::recv;
+            operation->client = client;
+
+            if (!yuan::net::IocpTcpIo::post_recv(client->fd,
+                                                 operation->storage.data(),
+                                                 static_cast<uint32_t>(operation->storage.size()),
+                                                 &operation->overlapped)) {
+                delete operation;
+                close_client(client);
+            }
+        }
+
+        void post_send(Client *client)
+        {
+            if (!client || stopping.load(std::memory_order_acquire)) {
+                close_client(client);
+                return;
+            }
+
+            auto *operation = new Operation{};
+            operation->kind = OperationKind::send;
+            operation->client = client;
+
+            if (!yuan::net::IocpTcpIo::post_send(client->fd,
+                                                 kHttpResponse,
+                                                 static_cast<uint32_t>(std::strlen(kHttpResponse)),
+                                                 &operation->overlapped)) {
+                delete operation;
+                close_client(client);
+            }
+        }
+
+        void close_client(Client *client)
+        {
+            if (!client) {
+                return;
+            }
+            close_socket(client->fd);
+            delete client;
+        }
+    };
+#endif
+
 #ifdef YUAN_BENCH_WITH_WORKFLOW
     struct WorkflowServer
     {
@@ -675,6 +958,9 @@ namespace
 #ifdef YUAN_BENCH_WITH_LIBUV
         LibuvServer libuv;
 #endif
+#ifdef _WIN32
+        IocpServer iocp;
+#endif
 #ifdef YUAN_BENCH_WITH_WORKFLOW
         WorkflowServer workflow;
 #endif
@@ -693,6 +979,11 @@ namespace
 #ifdef YUAN_BENCH_WITH_LIBUV
             if (name == "libuv") {
                 return libuv.start(port, worker_count);
+            }
+#endif
+#ifdef _WIN32
+            if (name == "iocp" || name == "yuan_iocp") {
+                return iocp.start(port, worker_count);
             }
 #endif
 #ifdef YUAN_BENCH_WITH_WORKFLOW
@@ -716,6 +1007,11 @@ namespace
 #ifdef YUAN_BENCH_WITH_LIBUV
             else if (implementation == "libuv") {
                 libuv.stop();
+            }
+#endif
+#ifdef _WIN32
+            else if (implementation == "iocp" || implementation == "yuan_iocp") {
+                iocp.stop();
             }
 #endif
 #ifdef YUAN_BENCH_WITH_WORKFLOW
@@ -780,7 +1076,7 @@ int main(int argc, char **argv)
     }
 #endif
 
-    const auto hardware = std::max(1u, std::thread::hardware_concurrency());
+    const auto hardware = std::max<>(1u, std::thread::hardware_concurrency());
     const auto implementation = argc > 1 ? std::string(argv[1]) : std::string("yuan");
     const auto worker_count = argc > 2 ? static_cast<std::size_t>(std::stoul(argv[2]))
                                        : static_cast<std::size_t>((std::min)(hardware, 4u));

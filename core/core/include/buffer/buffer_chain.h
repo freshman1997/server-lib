@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
-#include <vector>
+#include <deque>
 
 #include "byte_buffer.h"
 
@@ -79,7 +79,7 @@ public:
         }
 
         auto front = std::move(buffers_.front());
-        buffers_.erase(buffers_.begin());
+        buffers_.pop_front();
         return front;
     }
 
@@ -102,7 +102,7 @@ public:
     }
 
 private:
-    std::vector<BufferPtr> buffers_;
+    std::deque<BufferPtr> buffers_;
 };
 
 } // namespace yuan::buffer

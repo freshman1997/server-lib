@@ -42,10 +42,12 @@ endif()
 if (YUAN_LIBUV_LIBRARY)
     target_compile_definitions(http_worker_pool_benchmark PRIVATE YUAN_BENCH_WITH_LIBUV=1)
     target_include_directories(http_worker_pool_benchmark PRIVATE "${YUAN_LIBUV_ROOT}/include")
-    target_link_libraries(http_worker_pool_benchmark PRIVATE
-        "${YUAN_LIBUV_LIBRARY}"
-        pthread
-        dl)
+    target_link_libraries(http_worker_pool_benchmark PRIVATE "${YUAN_LIBUV_LIBRARY}")
+    if (WIN32)
+        target_link_libraries(http_worker_pool_benchmark PRIVATE ws2_32 iphlpapi psapi userenv dbghelp)
+    else()
+        target_link_libraries(http_worker_pool_benchmark PRIVATE pthread dl)
+    endif()
 endif()
 
 set(YUAN_WORKFLOW_ROOT "${YUAN_NETWORK_REPOS_ROOT}/workflow")

@@ -9,9 +9,13 @@ namespace yuan::net::socket
 
     int create_ipv4_tcp_socket(bool noneBlock = false);
 
+    int create_ipv4_overlapped_tcp_socket(bool noneBlock = false);
+
     int create_ipv4_udp_socket(bool noneBlock = false);
 
     int create_ipv6_tcp_socket(bool noneBlock = false);
+
+    int create_ipv6_overlapped_tcp_socket(bool noneBlock = false);
 
     int create_ipv6_udp_socket(bool noneBlock = false);
 
