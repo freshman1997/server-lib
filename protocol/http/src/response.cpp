@@ -64,18 +64,26 @@ namespace yuan::net::http
             return false;
         }
 
-        target->append_output("HTTP/1.1 ");
-        target->append_output(descIt->second);
-        target->append_output("\r\n");
-
+        std::size_t header_size = std::string_view("HTTP/1.1 ").size() + descIt->second.size() + 2;
         for (const auto &item : headers_) {
-            target->append_output(item.first);
-            target->append_output(": ");
-            target->append_output(item.second);
-            target->append_output("\r\n");
+            header_size += item.first.size() + 2 + item.second.size() + 2;
         }
+        header_size += 2;
 
-        target->append_output("\r\n");
+        std::string header;
+        header.reserve(header_size);
+        header.append("HTTP/1.1 ");
+        header.append(descIt->second);
+        header.append("\r\n");
+        for (const auto &item : headers_) {
+            header.append(item.first);
+            header.append(": ");
+            header.append(item.second);
+            header.append("\r\n");
+        }
+        header.append("\r\n");
+
+        target->append_output(header);
         headers_sent_ = true;
         return true;
     }

@@ -521,7 +521,7 @@ This final smoke was run from the normal local build tree, so it is a functional
 
 ## Windows MinGW Core Throughput Pass
 
-Date: 2026-05-18
+Date: 2026-05-18 to 2026-05-19
 
 Host/build:
 
@@ -530,14 +530,32 @@ Host/build:
 - libuv was built locally with MinGW static release output at `D:/code/repos/network/libuv/build-release/libuv.a`.
 - workflow was not included because its CMake currently rejects MinGW.
 - libevent was not included because the available `libevent-2.1.8-stable/lib/*.lib` artifacts are MSVC/Windows libraries and the benchmark's libevent implementation currently targets the pthread-style path.
-- Windows does not support the current `reuse_port` worker-pool path, so HTTP comparison below is single worker only.
+- Windows does not support the current `reuse_port` worker-pool path, so the existing Yuan/libuv worker-pool comparison fails for multi-worker runs. The IOCP backend below uses one completion port with multiple completion workers instead of port reuse.
 
 Changes validated in this pass:
 
 - `BufferChain` now uses `std::deque` for FIFO storage, removing `vector::erase(begin)` from real output queue pop paths.
 - `HttpService::stop()` dispatches `HttpServer::stop()` onto the service runtime thread before host shutdown, preventing concurrent `sessions_` mutation during high-concurrency shutdown.
 - `PollPoller` now maintains fd-to-index state for O(1) channel updates/removals instead of scanning the poll fd vector on each write-interest change.
-- Core now has small Windows IOCP primitives used by the benchmark path, covering completion-port lifecycle, socket association, posted completions, blocking waits, overlapped socket creation, `AcceptEx` function loading/posting/address parsing, `WSARecv`/`WSASend` posting, and IO cancellation.
+- Core now has small Windows IOCP primitives used by the benchmark path, covering completion-port lifecycle, socket association, posted completions, blocking waits, overlapped socket creation, `AcceptEx` function loading/posting/address parsing, `ConnectEx` function loading/posting/context update, `WSARecv`/`WSASend` posting, IO cancellation, reusable completion-worker dispatch, a common `IocpOperation` carrier for native `OVERLAPPED` plus operation metadata, `IocpSocketContext` for per-socket generation/pending/closing state, and a reusable `IocpTcpEngine` that owns listener/connection accept-read-write-close dispatch.
+- `IocpTcpConnection` now implements the existing `Connection` and `StreamTransport` contracts enough for direct `ConnectionHandler` notification, event waiters, user data, close/error notification, shared response sends, and loopback engine coverage. It intentionally has no readiness `Channel`; IOCP completion dispatch is the transport event source.
+- `IocpStreamAcceptor` plugs the IOCP engine into the existing `StreamAcceptor`/`AsyncListenerHost` path behind `ListenOptions::use_iocp`, so HTTP services can opt into IOCP without going through a benchmark-only server. Handler notification is dispatched back through `NetworkRuntime` to preserve the existing event-loop thread model.
+- `IocpTcpConnection::write()` now preserves the existing `Connection` contract by queueing into `output_buffer_`; `flush()` submits ordered overlapped sends and keeps output queued until completion. This is required because the HTTP stack writes headers through `append_output()`, writes the body through `write()`, and then calls `flush()`.
+- IOCP async listener coverage now includes coroutine `read_async`, `write_async`, and explicit `flush_async`, plus close-after-write drain semantics. The TCP engine also accepts IPv6 loopback listeners by creating listener and accepted sockets from the resolved address family.
+- `IocpTcpEngine::connect()` now wraps `ConnectEx` into the same `IocpTcpConnection` completion model, so outbound IOCP TCP no longer stops at the syscall wrapper. The test suite covers active connect, connected callback, read, and write round trip.
+- `Connection` output buffering now has a shared lock around base `append_output()` and `output_readable_bytes()` so IOCP completion workers cannot race the HTTP event-loop thread while draining queued headers/body.
+- `Connection` input buffering now has the same shared lock around base readable/copy/take/clear paths, and IOCP recv completion appends under that lock. This keeps completion workers from racing runtime-thread coroutine reads.
+- `IocpStreamAcceptor` coalesces runtime-dispatched readable notifications per IOCP connection while preserving low-level `IocpTcpEngineCallbacks::on_read` completion callbacks. This avoids redundant event-loop wakeups when multiple recv completions arrive before the runtime thread drains the input buffer.
+- `IocpTcpConnection` now stores fd, connection state, shutdown flags, close-notified state, and read-dispatch pending state with atomics where those values cross IOCP completion workers and runtime/user threads. The close path also closes via `close_now()` from engine terminal events so a pre-set closed state cannot skip fd removal.
+- IOCP accept/connect/read paths now treat a failed follow-up recv post as a terminal connection event instead of leaving a connection alive with no outstanding read.
+- `Connection` event waiters now use vector-backed small-set storage instead of `unordered_map`, reducing per-await allocation/hash overhead for the common async read/write path where each connection has only a few waiters.
+- Stream async read/write/flush/close awaiters now register and remove their event waiters in batches, reducing waiter mutex traffic on the IOCP coroutine bridge.
+- IOCP read completion now always buffers received bytes before checking whether a handler or waiter is present. This fixes early-arrival data when the coroutine has not registered its next read waiter yet, and lets `AsyncListenerHost` avoid installing a no-op default handler for completion-based transports.
+- The HTTP benchmark now includes `yuan_iocp_min`, a diagnostic core stack using `AsyncListenerHost`, IOCP, and coroutine read/write/flush with a minimal fixed HTTP response. It is used to split IOCP transport cost from full `HttpServer` request/session/routing cost.
+- HTTP response headers are now assembled into one output append before flush, avoiding repeated output-buffer locks and `BufferChain` touches for each header fragment.
+- When HTTP/2 is disabled, HTTP/1 connections skip the HTTP/2 preface probe. HTTP request finalization also avoids a redundant `sessions_` hash lookup when the current session pointer is already owned by the connection coroutine.
+- The HTTP benchmark retries startup on a fresh reserved port to reduce Windows reserve-then-bind races during repeated short runs.
+- `Connection` now keeps an atomic event-waiter count so hot paths with no waiters can skip the waiter mutex and map scan.
 - The benchmark CMake links libuv with Windows system libraries when building on Win32.
 
 Regression subset:
@@ -581,14 +599,107 @@ best_concurrency=16 best_requests_per_second=230366
 
 http_worker_pool_benchmark iocp 4 3 1,2,4,8,16,24,32,64,128,256
 best_concurrency=32 best_requests_per_second=228239
+
+http_worker_pool_benchmark iocp 4 3 1,2,4,8,16,24,32,64,128,256
+best_concurrency=24 best_requests_per_second=235068
+
+http_worker_pool_benchmark iocp 4 3 1,2,4,8,16,24,32,64,128,256
+best_concurrency=24 best_requests_per_second=221953
+
+http_worker_pool_benchmark iocp 4 3 1,2,4,8,16,24,32,64,128,256
+best_concurrency=24 best_requests_per_second=217444
+
+http_worker_pool_benchmark iocp 4 3 1,2,4,8,16,24,32,64,128,256
+best_concurrency=16 best_requests_per_second=231709
+
+http_worker_pool_benchmark iocp 4 3 1,2,4,8,16,24,32,64,128,256
+best_concurrency=24 best_requests_per_second=218942
+
+http_worker_pool_benchmark iocp 1 2 1,2,4,8,16,32
+best_concurrency=16 best_requests_per_second=82306
+
+http_worker_pool_benchmark iocp 4 3 1,2,4,8,16,24,32,64,128,256
+best_concurrency=16 best_requests_per_second=216263
+
+http_worker_pool_benchmark iocp 4 3 1,2,4,8,16,24,32,64,128,256
+best_concurrency=16 best_requests_per_second=215657
+
+http_worker_pool_benchmark iocp 4 2 1,2,4,8,16,32,64
+best_concurrency=16 best_requests_per_second=219172
+
+http_worker_pool_benchmark yuan_iocp 1 2 1,2,4,8,16,32
+best_concurrency=8 best_requests_per_second=60501.8
+
+http_worker_pool_benchmark yuan_iocp 4 2 1,2,4,8
+best_concurrency=8 best_requests_per_second=60322.9
+
+http_worker_pool_benchmark yuan_iocp 4 2 16,32,64
+best_concurrency=16 best_requests_per_second=59838.8
+
+http_worker_pool_benchmark yuan_iocp 1 2 1,2,4,8,16,32
+best_concurrency=16 best_requests_per_second=59420
+
+http_worker_pool_benchmark iocp 4 2 1,2,4,8,16,32,64
+best_concurrency=8 best_requests_per_second=204653
+
+http_worker_pool_benchmark yuan_iocp 1 2 1,2,4,8,16,32
+best_concurrency=16 best_requests_per_second=56699.5
+
+http_worker_pool_benchmark iocp 4 2 1,2,4,8,16,32,64
+best_concurrency=8 best_requests_per_second=210560
+
+http_worker_pool_benchmark yuan_iocp 1 2 1,2,4,8,16,32
+best_concurrency=8 best_requests_per_second=57668.6
+
+http_worker_pool_benchmark iocp 4 2 1,2,4,8,16,32,64
+best_concurrency=8 best_requests_per_second=207262
+
+http_worker_pool_benchmark yuan_iocp 1 2 1,2,4,8,16,32
+best_concurrency=32 best_requests_per_second=57496.9
+
+http_worker_pool_benchmark iocp 4 2 1,2,4,8,16,32,64
+best_concurrency=8 best_requests_per_second=208445
+
+http_worker_pool_benchmark yuan_iocp 1 2 1,2,4,8,16,32
+best_concurrency=16 best_requests_per_second=58621.9
+
+http_worker_pool_benchmark iocp 4 2 1,2,4,8,16,32,64
+best_concurrency=8 best_requests_per_second=208789
+
+http_worker_pool_benchmark yuan_iocp_min 4 2 1,2,4,8,16,32,64
+best_concurrency=16 best_requests_per_second=79872.5
+
+http_worker_pool_benchmark yuan_iocp 1 2 1,2,4,8,16,32
+best_concurrency=16 best_requests_per_second=58041.5
+
+http_worker_pool_benchmark yuan_iocp 1 2 1,2,4,8,16,32
+best_concurrency=8 best_requests_per_second=58394.2
+
+http_worker_pool_benchmark yuan_iocp_min 4 2 1,2,4,8,16,32,64
+best_concurrency=16 best_requests_per_second=77779
+
+http_worker_pool_benchmark yuan_iocp_min 4 2 1,2,4,8,16,32,64
+best_concurrency=16 best_requests_per_second=84745.6
+
+http_worker_pool_benchmark yuan_iocp 1 2 1,2,4,8,16,32
+best_concurrency=16 best_requests_per_second=62551
+
+http_worker_pool_benchmark yuan_iocp_min 4 2 1,2,4,8,16,32,64
+best_concurrency=16 best_requests_per_second=84214.7
+
+http_worker_pool_benchmark yuan_iocp 1 2 1,2,4,8,16,32
+best_concurrency=16 best_requests_per_second=61792.2
 ```
 
-The benchmark-only IOCP server is intentionally minimal: it now pre-posts overlapped `AcceptEx` operations and uses core IOCP helpers for `WSARecv`/`WSASend` completion workers. It avoids the Yuan HTTP stack and therefore is not a drop-in production optimization, but it is a useful direction check. Single-worker IOCP is close to libuv on the same machine, and four IOCP completion workers scale to roughly 2.6x the single-worker libuv baseline. Current `yuan 4` and `libuv 4` Windows runs fail to start through the benchmark's worker-pool/reuse-port path, so the multi-worker comparison is IOCP-only for now.
+The `iocp` benchmark path uses the reusable core `IocpTcpEngine` with a minimal HTTP parser and is still the low-level direction check. The `yuan_iocp_min` path uses the production async listener/coroutine transport path with IOCP but skips full `HttpServer` request/session/routing work. The `yuan_iocp` path runs the real Yuan `HttpService`/`HttpServer` stack with `ListenOptions::use_iocp=true`. On this host, the full Yuan HTTP stack improves from the old Windows readiness baseline of roughly 29K RPS to roughly 57K-60K RPS, while the low-level IOCP path remains roughly 207K-219K RPS. The diagnostic split shows roughly 208K RPS for bare IOCP, roughly 80K RPS after the single-runtime coroutine/async bridge, and roughly 58K RPS through full HTTP. Therefore the largest remaining gap is not `AcceptEx`/`WSARecv`/`WSASend`; it is the intentional marshal back to one `NetworkRuntime` thread plus async waiter/coroutine scheduling. Full HTTP parsing/session/routing adds a smaller but still visible second-stage cost.
 
 Practical blocker summary:
 
 - Windows core networking still uses the readiness-style poller path. The remaining HTTP gap is dominated by the platform backend and request/response stack path, not by `BufferChain` FIFO behavior.
-- The first real core IOCP step should now move from primitives to a native backend/runtime adapter with operation lifetime, cancellation, accepted-socket handoff, and wakeup semantics. The benchmark POC proves direction, but it should not be copied into production as an HTTP-specific fast path.
-- A production IOCP backend should reuse the current `IocpCompletionPort`, `IocpAcceptEx`, and `IocpTcpIo` primitives, keep per-operation ownership explicit, and share the existing runtime dispatch contract so TCP, HTTP, and later SSL/UDP integrations do not diverge.
+- The low-level IOCP foundation and TCP accept/read/write service adapter are now complete enough for opt-in HTTP service use through `ListenOptions::use_iocp`.
+- To approach bare IOCP throughput with the real server, the next architectural step is multi-runtime IOCP dispatch: accepted IOCP connections need to be assigned to runtime shards instead of all application-level readable handling returning to one event-loop thread. That is a real server architecture change, not a benchmark tweak.
+- A production IOCP backend should reuse the current `IocpCompletionPort`, `IocpDispatcher`, `IocpOperation`, `IocpSocketContext`, `IocpAcceptEx`, `IocpConnectEx`, `IocpTcpIo`, `IocpTcpEngine`, and `IocpStreamAcceptor` pieces, keep per-operation ownership explicit, and share the existing runtime dispatch contract so TCP, HTTP, and later SSL/UDP integrations do not diverge. The old connector should remain a policy layer; it should not be expanded into a mixed readiness/completion transport.
+- The current `TcpConnector` readiness abstraction is not a good target for direct IOCP extension. It mixes retry/timer policy, SSL setup, connection ownership, and readiness-based connect completion. The cleaner direction is to keep connector policy above the transport and let a Windows transport adapter use `IocpConnectEx` directly.
+- Remaining IOCP gaps are SSL-on-IOCP and UDP/RIO-style work. Normal HTTP request/response, coroutine read/write/flush, graceful output drain on close, IPv4/IPv6 listen, and outbound `ConnectEx` TCP are covered by the IOCP tests and `yuan_iocp` benchmark.
 
 Before the stop-path fix, `http_worker_pool_benchmark yuan 1 1 24/32` intermittently crashed with Windows heap corruption during `HttpServer::stop()`. After dispatching stop onto the runtime thread, concurrency 24/32/64 completed cleanly.

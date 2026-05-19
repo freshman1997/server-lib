@@ -71,16 +71,6 @@ namespace yuan::coroutine
             }
 
             handle_ = handle;
-            register_waiter(connection, net::ConnectionEvent::readable, [this](const std::shared_ptr<net::Connection> &conn) {
-                if (!completed_) {
-                    complete(IoStatus::success);
-                }
-            });
-            register_waiter(connection, net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    complete(IoStatus::connection_error);
-                }
-            });
             auto terminal = [this](const std::shared_ptr<net::Connection> &conn) {
                 if (!completed_) {
                     if (complete_with_buffered_data_on_terminal_event_ && conn && conn->input_readable_bytes() > 0) {
@@ -92,8 +82,23 @@ namespace yuan::coroutine
                 }
 
             };
-            register_waiter(connection, net::ConnectionEvent::closed, terminal);
-            register_waiter(connection, net::ConnectionEvent::input_shutdown, std::move(terminal));
+            net::Connection::EventWaiterRegistration registrations[] = {
+                { net::ConnectionEvent::readable, [this](const std::shared_ptr<net::Connection> &) {
+                    if (!completed_) {
+                        complete(IoStatus::success);
+                    }
+                } },
+                { net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
+                    if (!completed_) {
+                        complete(IoStatus::connection_error);
+                    }
+                } },
+                { net::ConnectionEvent::closed, terminal },
+                { net::ConnectionEvent::input_shutdown, std::move(terminal) },
+            };
+            connection->add_event_waiters(registrations,
+                                          sizeof(registrations) / sizeof(registrations[0]),
+                                          waiter_ids_);
 
             if (connection->input_readable_bytes() > 0) {
                 result_.status = IoStatus::success;
@@ -183,9 +188,7 @@ namespace yuan::coroutine
                 waiter_ids_.clear();
                 return;
             }
-            for (const auto id : waiter_ids_) {
-                connection->remove_event_waiter(id);
-            }
+            connection->remove_event_waiters(waiter_ids_);
             waiter_ids_.clear();
         }
         RuntimeView runtime_{};
@@ -258,21 +261,26 @@ namespace yuan::coroutine
             }
 
             handle_ = handle;
-            register_waiter(connection, net::ConnectionEvent::writable, [this](const std::shared_ptr<net::Connection> &conn) {
-                if (!completed_ && conn && conn->output_readable_bytes() == 0) {
-                    complete(IoStatus::success);
-                }
-            });
-            register_waiter(connection, net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    complete(IoStatus::connection_error);
-                }
-            });
-            register_waiter(connection, net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    complete(IoStatus::connection_closed);
-                }
-            });
+            net::Connection::EventWaiterRegistration registrations[] = {
+                { net::ConnectionEvent::writable, [this](const std::shared_ptr<net::Connection> &conn) {
+                    if (!completed_ && conn && conn->output_readable_bytes() == 0) {
+                        complete(IoStatus::success);
+                    }
+                } },
+                { net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
+                    if (!completed_) {
+                        complete(IoStatus::connection_error);
+                    }
+                } },
+                { net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
+                    if (!completed_) {
+                        complete(IoStatus::connection_closed);
+                    }
+                } },
+            };
+            connection->add_event_waiters(registrations,
+                                          sizeof(registrations) / sizeof(registrations[0]),
+                                          waiter_ids_);
             connection->write_and_flush(buffer_);
 
             if (completed_) {
@@ -346,9 +354,7 @@ namespace yuan::coroutine
                 waiter_ids_.clear();
                 return;
             }
-            for (const auto id : waiter_ids_) {
-                connection->remove_event_waiter(id);
-            }
+            connection->remove_event_waiters(waiter_ids_);
             waiter_ids_.clear();
         }
         RuntimeView runtime_{};
@@ -411,21 +417,26 @@ namespace yuan::coroutine
             }
 
             handle_ = handle;
-            register_waiter(connection, net::ConnectionEvent::writable, [this](const std::shared_ptr<net::Connection> &conn) {
-                if (!completed_ && conn && conn->output_readable_bytes() == 0) {
-                    complete(IoStatus::success);
-                }
-            });
-            register_waiter(connection, net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    complete(IoStatus::connection_error);
-                }
-            });
-            register_waiter(connection, net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    complete(IoStatus::connection_closed);
-                }
-            });
+            net::Connection::EventWaiterRegistration registrations[] = {
+                { net::ConnectionEvent::writable, [this](const std::shared_ptr<net::Connection> &conn) {
+                    if (!completed_ && conn && conn->output_readable_bytes() == 0) {
+                        complete(IoStatus::success);
+                    }
+                } },
+                { net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
+                    if (!completed_) {
+                        complete(IoStatus::connection_error);
+                    }
+                } },
+                { net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
+                    if (!completed_) {
+                        complete(IoStatus::connection_closed);
+                    }
+                } },
+            };
+            connection->add_event_waiters(registrations,
+                                          sizeof(registrations) / sizeof(registrations[0]),
+                                          waiter_ids_);
             connection->flush();
 
             if (completed_) {
@@ -499,9 +510,7 @@ namespace yuan::coroutine
                 waiter_ids_.clear();
                 return;
             }
-            for (const auto id : waiter_ids_) {
-                connection->remove_event_waiter(id);
-            }
+            connection->remove_event_waiters(waiter_ids_);
             waiter_ids_.clear();
         }
         RuntimeView runtime_{};
@@ -557,21 +566,26 @@ namespace yuan::coroutine
             }
 
             handle_ = handle;
-            register_waiter(connection, net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    complete(IoStatus::success);
-                }
-            });
-            register_waiter(connection, net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    complete(IoStatus::connection_error);
-                }
-            });
-            register_waiter(connection, net::ConnectionEvent::input_shutdown, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    complete(IoStatus::connection_closed);
-                }
-            });
+            net::Connection::EventWaiterRegistration registrations[] = {
+                { net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
+                    if (!completed_) {
+                        complete(IoStatus::success);
+                    }
+                } },
+                { net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
+                    if (!completed_) {
+                        complete(IoStatus::connection_error);
+                    }
+                } },
+                { net::ConnectionEvent::input_shutdown, [this](const std::shared_ptr<net::Connection> &) {
+                    if (!completed_) {
+                        complete(IoStatus::connection_closed);
+                    }
+                } },
+            };
+            connection->add_event_waiters(registrations,
+                                          sizeof(registrations) / sizeof(registrations[0]),
+                                          waiter_ids_);
             connection->close();
 
             if (completed_) {
@@ -627,9 +641,7 @@ namespace yuan::coroutine
                 waiter_ids_.clear();
                 return;
             }
-            for (const auto id : waiter_ids_) {
-                connection->remove_event_waiter(id);
-            }
+            connection->remove_event_waiters(waiter_ids_);
             waiter_ids_.clear();
         }
         RuntimeView runtime_{};

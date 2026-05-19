@@ -1,6 +1,8 @@
 #ifndef __YUAN_NET_SOCKET_LISTEN_OPTIONS_H__
 #define __YUAN_NET_SOCKET_LISTEN_OPTIONS_H__
 
+#include <cstddef>
+
 namespace yuan::net
 {
 
@@ -15,6 +17,8 @@ struct ListenOptions
 #endif
     bool non_block = true;
     int backlog = 128;
+    bool use_iocp = false;
+    std::size_t iocp_worker_count = 1;
 };
 
 } // namespace yuan::net

@@ -135,13 +135,15 @@ namespace yuan::net
             }
 
             conn->set_event_handler(loop);
-            conn->set_connection_handler(state->default_handler);
 
+            bool uses_readiness_channel = false;
             if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
                 if (auto *channel = stream->stream_channel()) {
+                    uses_readiness_channel = true;
                     loop->update_channel(channel);
                 }
             }
+            conn->set_connection_handler(uses_readiness_channel ? state->default_handler : nullptr);
 
             if (state->conn_handler) {
                 auto ctx = AsyncConnectionContext(conn, static_cast<coroutine::RuntimeView>(runtime->runtime_view()));
@@ -168,29 +170,38 @@ namespace yuan::net
                 return false;
             }
 
-            auto sock = std::make_unique<Socket>(host.c_str(), port);
-            if (!sock->valid()) {
-                return false;
-            }
+#ifdef _WIN32
+            if (options.use_iocp) {
+                acceptor_.reset(create_iocp_stream_acceptor(host, port, runtime, options));
+            } else
+#endif
+            {
+                auto sock = std::make_unique<Socket>(host.c_str(), port);
+                if (!sock->valid()) {
+                    return false;
+                }
 
-            if (!sock->apply_listen_options(options)) {
-                return false;
-            }
-            if (!sock->bind()) {
-                return false;
-            }
+                if (!sock->apply_listen_options(options)) {
+                    return false;
+                }
+                if (!sock->bind()) {
+                    return false;
+                }
 
-            acceptor_.reset(create_stream_acceptor(sock.release()));
+                acceptor_.reset(create_stream_acceptor(sock.release()));
+            }
+            if (!acceptor_) {
+                return false;
+            }
+            if (ssl_module_) {
+                acceptor_->set_ssl_module(ssl_module_);
+            }
+            acceptor_->set_connection_handler(default_handler_holder_);
             if (!acceptor_->listen(options.backlog)) {
                 acceptor_.reset();
                 return false;
             }
 
-            if (ssl_module_) {
-                acceptor_->set_ssl_module(ssl_module_);
-            }
-
-            acceptor_->set_connection_handler(default_handler_holder_);
             acceptor_->set_event_handler(loop);
             if (auto *channel = acceptor_->listener_channel()) {
                 loop->update_channel(channel);

@@ -1287,10 +1287,6 @@ namespace yuan::net::http
             }
         }
 
-        if (!find_http_session(sessions_, sessionId)) {
-            return;
-        }
-
         if (config::close_idle_connection && session) {
             session->reset_timer();
         }
@@ -1667,7 +1663,7 @@ namespace yuan::net::http
         auto *session_ptr = ptr_of(session);
         sessions_[sessionId] = std::move(session);
 
-        bool protocol_checked = alpn_h2;
+        bool protocol_checked = alpn_h2 || !config::enable_http2;
         bool http2_mode = false;
         bool h2_handshake_active = false;
         ::yuan::buffer::ByteBuffer protocol_probe_data;

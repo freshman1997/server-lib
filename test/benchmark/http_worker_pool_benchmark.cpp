@@ -4,8 +4,14 @@
 #include "registry.h"
 #include "net/iocp/iocp_accept.h"
 #include "net/iocp/iocp_completion_port.h"
+#include "net/iocp/iocp_dispatcher.h"
+#include "net/iocp/iocp_operation.h"
+#include "net/iocp/iocp_socket_context.h"
+#include "net/iocp/iocp_tcp_engine.h"
 #include "net/iocp/iocp_tcp_io.h"
+#include "net/async/async_listener_host.h"
 #include "net/runtime/network_runtime.h"
+#include "net/socket/listen_options.h"
 #include "response.h"
 #include "net/socket/socket_ops.h"
 #include "runtime_context.h"
@@ -275,7 +281,10 @@ namespace
         }
     };
 
-    bool start_yuan_server(YuanServer &server, uint16_t port, std::size_t worker_count)
+    bool start_yuan_server(YuanServer &server,
+                           uint16_t port,
+                           std::size_t worker_count,
+                           bool use_iocp_backend = false)
     {
         auto log_registry = yuan::log::LogRegistry::get_instance();
         log_registry->disable_file_log();
@@ -283,17 +292,22 @@ namespace
         log_registry->set_default(nullptr);
 
         auto bus = std::make_shared<yuan::eventbus::EventBus>();
-        server.runtimes.reserve(worker_count);
-        server.services.reserve(worker_count);
-        server.threads.reserve(worker_count);
+        const std::size_t service_count = use_iocp_backend ? 1 : worker_count;
+        server.runtimes.reserve(service_count);
+        server.services.reserve(service_count);
+        server.threads.reserve(service_count);
 
-        for (std::size_t i = 0; i < worker_count; ++i) {
+        for (std::size_t i = 0; i < service_count; ++i) {
             auto runtime = std::make_unique<yuan::net::NetworkRuntime>();
 
             yuan::net::http::HttpServerConfig cfg;
             cfg.enable_ssl = false;
             cfg.enable_cors = false;
             cfg.enable_keep_alive = true;
+            if (use_iocp_backend) {
+                cfg.listen_options.use_iocp = true;
+                cfg.listen_options.iocp_worker_count = worker_count;
+            }
             auto service = std::make_unique<yuan::server::HttpService>(port, cfg);
 
             yuan::app::RuntimeContext context;
@@ -306,8 +320,8 @@ namespace
             context.active_service_name = "http";
             context.service_index = 0;
             context.service_instance_index = i;
-            context.service_instance_count = worker_count;
-            context.listener_reuse_port = worker_count > 1;
+            context.service_instance_count = service_count;
+            context.listener_reuse_port = !use_iocp_backend && worker_count > 1;
             context.shared_runtime = runtime.get();
             context.event_bus = bus;
             service->set_runtime_context(context);
@@ -647,271 +661,104 @@ namespace
 #ifdef _WIN32
     struct IocpServer
     {
-        enum class OperationKind
+        struct ClientState
         {
-            accept,
-            recv,
-            send
-        };
-
-        struct Client;
-
-        struct Operation
-        {
-            OVERLAPPED overlapped{};
-            OperationKind kind = OperationKind::recv;
-            Client *client = nullptr;
-            socket_t accepted_fd = kInvalidSocket;
-            std::array<char, yuan::net::kIocpAcceptBufferBytes> accept_buffer{};
-            std::array<char, 4096> storage{};
-        };
-
-        struct Client
-        {
-            socket_t fd = kInvalidSocket;
-            IocpServer *server = nullptr;
             std::string input;
         };
 
-        yuan::net::IocpCompletionPort iocp;
-        yuan::net::IocpAcceptEx accept_ex;
-        socket_t listener = kInvalidSocket;
-        std::atomic_bool stopping{false};
-        std::atomic_uint32_t pending_accepts{0};
-        std::vector<std::thread> workers;
+        yuan::net::IocpTcpEngine engine;
+        std::shared_ptr<const std::string> response;
 
         bool start(uint16_t port, std::size_t worker_count)
         {
-            stopping.store(false, std::memory_order_release);
-            if (!iocp.init()) {
+            response = std::make_shared<const std::string>(kHttpResponse);
+            yuan::net::IocpTcpEngineCallbacks callbacks;
+            callbacks.on_accept = [](const std::shared_ptr<yuan::net::IocpTcpConnection> &connection) {
+                connection->set_user_data(std::make_shared<ClientState>());
+            };
+            callbacks.on_read = [response = response](const std::shared_ptr<yuan::net::IocpTcpConnection> &connection,
+                                                      const char *data,
+                                                      std::size_t size) {
+                auto state = std::static_pointer_cast<ClientState>(connection->user_data());
+                if (!state) {
+                    state = std::make_shared<ClientState>();
+                    connection->set_user_data(state);
+                }
+
+                state->input.append(data, size);
+                for (;;) {
+                    const auto request_end = state->input.find("\r\n\r\n");
+                    if (request_end == std::string::npos) {
+                        break;
+                    }
+                    state->input.erase(0, request_end + 4);
+                    connection->send_shared(response);
+                }
+            };
+            return engine.listen("127.0.0.1", port, worker_count, std::move(callbacks));
+        }
+
+        void stop()
+        {
+            engine.stop();
+        }
+    };
+
+    struct YuanIocpMinimalServer
+    {
+        yuan::net::NetworkRuntime runtime;
+        yuan::net::AsyncListenerHost listener;
+        std::thread thread;
+
+        bool start(uint16_t port, std::size_t worker_count)
+        {
+            yuan::net::ListenOptions options;
+            options.use_iocp = true;
+            options.iocp_worker_count = worker_count;
+
+            listener.set_connection_handler([](yuan::net::AsyncConnectionContext ctx)->yuan::coroutine::Task<void> {
+                std::string input;
+                while (ctx.is_connected()) {
+                    auto read = co_await ctx.read_async();
+                    if (read.status != yuan::coroutine::IoStatus::success) {
+                        break;
+                    }
+                    const auto span = read.data.readable_span();
+                    input.append(span.data(), span.size());
+                    for (;;) {
+                        const auto request_end = input.find("\r\n\r\n");
+                        if (request_end == std::string::npos) {
+                            break;
+                        }
+                        input.erase(0, request_end + 4);
+                        ctx.append_output(kHttpResponse);
+                        ctx.flush();
+                    }
+                }
+                ctx.close();
+                co_return;
+            });
+
+            if (!listener.bind("127.0.0.1", port, runtime, options)) {
                 return false;
             }
 
-            listener = yuan::net::socket::create_ipv4_overlapped_tcp_socket(false);
-            if (listener == kInvalidSocket) {
-                stop();
-                return false;
-            }
-
-            int flag = 1;
-            (void)::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&flag), sizeof(flag));
-            (void)::setsockopt(listener, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char *>(&flag), sizeof(flag));
-
-            sockaddr_in addr{};
-            addr.sin_family = AF_INET;
-            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-            addr.sin_port = htons(port);
-            if (::bind(listener, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) != 0 ||
-                ::listen(listener, SOMAXCONN) != 0) {
-                stop();
-                return false;
-            }
-            if (!iocp.associate_socket(listener, reinterpret_cast<uintptr_t>(this)) ||
-                !accept_ex.load(listener)) {
-                stop();
-                return false;
-            }
-
-            const std::size_t actual_workers = (std::max<std::size_t>)(1, worker_count);
-            workers.reserve(actual_workers);
-            for (std::size_t i = 0; i < actual_workers; ++i) {
-                workers.emplace_back([this]() { worker_loop(); });
-            }
-
-            const std::size_t accept_count = (std::max<std::size_t>)(16, actual_workers * 8);
-            for (std::size_t i = 0; i < accept_count; ++i) {
-                post_accept();
-            }
+            auto task = listener.run_async();
+            task.resume();
+            task.detach();
+            thread = std::thread([this]() {
+                runtime.run();
+            });
             return true;
         }
 
         void stop()
         {
-            stopping.store(true, std::memory_order_release);
-            if (listener != kInvalidSocket) {
-                close_socket(listener);
-                listener = kInvalidSocket;
+            listener.close();
+            runtime.stop();
+            if (thread.joinable()) {
+                thread.join();
             }
-            for (int i = 0; pending_accepts.load(std::memory_order_acquire) != 0 && i < 200; ++i) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-            if (iocp.valid()) {
-                for (std::size_t i = 0; i < workers.size(); ++i) {
-                    iocp.post();
-                }
-            }
-            for (auto &worker : workers) {
-                if (worker.joinable()) {
-                    worker.join();
-                }
-            }
-            workers.clear();
-            iocp.close();
-            pending_accepts.store(0, std::memory_order_release);
-        }
-
-        void post_accept()
-        {
-            if (stopping.load(std::memory_order_acquire) || listener == kInvalidSocket) {
-                return;
-            }
-
-            auto *operation = new Operation{};
-            operation->kind = OperationKind::accept;
-            operation->accepted_fd = yuan::net::socket::create_ipv4_overlapped_tcp_socket(false);
-            if (operation->accepted_fd == kInvalidSocket) {
-                delete operation;
-                return;
-            }
-
-            pending_accepts.fetch_add(1, std::memory_order_acq_rel);
-            if (!accept_ex.post(listener,
-                                operation->accepted_fd,
-                                operation->accept_buffer.data(),
-                                operation->accept_buffer.size(),
-                                &operation->overlapped)) {
-                pending_accepts.fetch_sub(1, std::memory_order_acq_rel);
-                close_socket(operation->accepted_fd);
-                delete operation;
-            }
-        }
-
-        void worker_loop()
-        {
-            for (;;) {
-                yuan::net::IocpCompletion completion;
-                iocp.wait(INFINITE, completion);
-                auto *overlapped = static_cast<OVERLAPPED *>(completion.operation);
-                if (!overlapped) {
-                    break;
-                }
-
-                auto *operation = reinterpret_cast<Operation *>(overlapped);
-                auto *client = operation->client;
-                if (operation->kind == OperationKind::accept) {
-                    pending_accepts.fetch_sub(1, std::memory_order_acq_rel);
-                    handle_accept_completion(operation, completion.ok);
-                    continue;
-                }
-
-                if (!completion.ok || !client) {
-                    delete operation;
-                    close_client(client);
-                    continue;
-                }
-
-                if (operation->kind == OperationKind::recv) {
-                    if (completion.bytes == 0) {
-                        delete operation;
-                        close_client(client);
-                        continue;
-                    }
-
-                    client->input.append(operation->storage.data(), completion.bytes);
-                    delete operation;
-
-                    const auto request_end = client->input.find("\r\n\r\n");
-                    if (request_end != std::string::npos) {
-                        client->input.erase(0, request_end + 4);
-                        post_send(client);
-                    } else {
-                        post_recv(client);
-                    }
-                } else {
-                    delete operation;
-                    post_recv(client);
-                }
-            }
-        }
-
-        void handle_accept_completion(Operation *operation, bool ok)
-        {
-            const socket_t accepted_fd = operation ? operation->accepted_fd : kInvalidSocket;
-            if (!operation) {
-                return;
-            }
-
-            if (!ok || stopping.load(std::memory_order_acquire) || accepted_fd == kInvalidSocket ||
-                !accept_ex.update_accept_context(accepted_fd, listener)) {
-                if (accepted_fd != kInvalidSocket) {
-                    close_socket(accepted_fd);
-                }
-                delete operation;
-                if (!stopping.load(std::memory_order_acquire)) {
-                    post_accept();
-                }
-                return;
-            }
-
-            set_client_socket_options(accepted_fd);
-            auto *client = new Client{};
-            client->fd = accepted_fd;
-            client->server = this;
-            if (!iocp.associate_socket(accepted_fd, reinterpret_cast<uintptr_t>(client))) {
-                close_socket(accepted_fd);
-                delete client;
-                delete operation;
-                if (!stopping.load(std::memory_order_acquire)) {
-                    post_accept();
-                }
-                return;
-            }
-
-            operation->accepted_fd = kInvalidSocket;
-            delete operation;
-            post_recv(client);
-            if (!stopping.load(std::memory_order_acquire)) {
-                post_accept();
-            }
-        }
-
-        void post_recv(Client *client)
-        {
-            if (!client || stopping.load(std::memory_order_acquire)) {
-                close_client(client);
-                return;
-            }
-
-            auto *operation = new Operation{};
-            operation->kind = OperationKind::recv;
-            operation->client = client;
-
-            if (!yuan::net::IocpTcpIo::post_recv(client->fd,
-                                                 operation->storage.data(),
-                                                 static_cast<uint32_t>(operation->storage.size()),
-                                                 &operation->overlapped)) {
-                delete operation;
-                close_client(client);
-            }
-        }
-
-        void post_send(Client *client)
-        {
-            if (!client || stopping.load(std::memory_order_acquire)) {
-                close_client(client);
-                return;
-            }
-
-            auto *operation = new Operation{};
-            operation->kind = OperationKind::send;
-            operation->client = client;
-
-            if (!yuan::net::IocpTcpIo::post_send(client->fd,
-                                                 kHttpResponse,
-                                                 static_cast<uint32_t>(std::strlen(kHttpResponse)),
-                                                 &operation->overlapped)) {
-                delete operation;
-                close_client(client);
-            }
-        }
-
-        void close_client(Client *client)
-        {
-            if (!client) {
-                return;
-            }
-            close_socket(client->fd);
-            delete client;
         }
     };
 #endif
@@ -960,6 +807,7 @@ namespace
 #endif
 #ifdef _WIN32
         IocpServer iocp;
+        YuanIocpMinimalServer yuan_iocp_min;
 #endif
 #ifdef YUAN_BENCH_WITH_WORKFLOW
         WorkflowServer workflow;
@@ -970,6 +818,9 @@ namespace
             implementation = name;
             if (name == "yuan") {
                 return start_yuan_server(yuan, port, worker_count);
+            }
+            if (name == "yuan_iocp") {
+                return start_yuan_server(yuan, port, worker_count, true);
             }
 #ifdef YUAN_BENCH_WITH_LIBEVENT
             if (name == "libevent") {
@@ -982,7 +833,10 @@ namespace
             }
 #endif
 #ifdef _WIN32
-            if (name == "iocp" || name == "yuan_iocp") {
+            if (name == "yuan_iocp_min") {
+                return yuan_iocp_min.start(port, worker_count);
+            }
+            if (name == "iocp") {
                 return iocp.start(port, worker_count);
             }
 #endif
@@ -996,7 +850,7 @@ namespace
 
         void stop()
         {
-            if (implementation == "yuan") {
+            if (implementation == "yuan" || implementation == "yuan_iocp") {
                 yuan.stop();
             }
 #ifdef YUAN_BENCH_WITH_LIBEVENT
@@ -1010,7 +864,10 @@ namespace
             }
 #endif
 #ifdef _WIN32
-            else if (implementation == "iocp" || implementation == "yuan_iocp") {
+            else if (implementation == "yuan_iocp_min") {
+                yuan_iocp_min.stop();
+            }
+            else if (implementation == "iocp") {
                 iocp.stop();
             }
 #endif
@@ -1085,16 +942,28 @@ int main(int argc, char **argv)
         ? parse_concurrency_list(argv[4])
         : std::vector<std::size_t>{1, 2, 4, 8, 16, 32, 64, 128};
 
-    const uint16_t port = reserve_tcp_port();
-    if (port == 0) {
-        std::cerr << "failed to reserve benchmark port\n";
-        return 1;
-    }
-
     BenchmarkServer server;
-    if (!server.start(implementation, port, worker_count)) {
-        std::cerr << "failed to start HTTP benchmark server implementation=" << implementation << '\n';
+    uint16_t port = 0;
+    constexpr int kStartAttempts = 5;
+    for (int attempt = 1; attempt <= kStartAttempts; ++attempt) {
+        port = reserve_tcp_port();
+        if (port == 0) {
+            std::cerr << "failed to reserve benchmark port attempt=" << attempt << '\n';
+            continue;
+        }
+        if (server.start(implementation, port, worker_count)) {
+            break;
+        }
+        std::cerr << "failed to start HTTP benchmark server implementation=" << implementation
+                  << " port=" << port
+                  << " attempt=" << attempt << '\n';
         server.stop();
+        port = 0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (port == 0) {
+        std::cerr << "failed to start HTTP benchmark server implementation=" << implementation
+                  << " attempts=" << kStartAttempts << '\n';
         return 1;
     }
 
