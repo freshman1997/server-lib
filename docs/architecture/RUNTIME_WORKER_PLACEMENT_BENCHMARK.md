@@ -703,3 +703,57 @@ Practical blocker summary:
 - Remaining IOCP gaps are SSL-on-IOCP and UDP/RIO-style work. Normal HTTP request/response, coroutine read/write/flush, graceful output drain on close, IPv4/IPv6 listen, and outbound `ConnectEx` TCP are covered by the IOCP tests and `yuan_iocp` benchmark.
 
 Before the stop-path fix, `http_worker_pool_benchmark yuan 1 1 24/32` intermittently crashed with Windows heap corruption during `HttpServer::stop()`. After dispatching stop onto the runtime thread, concurrency 24/32/64 completed cleanly.
+
+## Windows IOCP Runtime Sharding Proof
+
+Date: 2026-05-19
+
+Host/build:
+
+- Windows, MinGW GCC 12.2.0, `build-mingw-release`, `CMAKE_BUILD_TYPE=Release`.
+- Benchmarks were run sequentially. Parallel server runs are not comparable on this host because the server and built-in clients contend for the same CPUs.
+
+Change validated in this pass:
+
+- Core now has `IocpShardedAsyncListener`, a reusable IOCP listener that accepts through one `IocpTcpEngine` and assigns accepted connections round-robin to multiple `NetworkRuntime` shards. This keeps the transport completion model in core instead of leaving runtime sharding as benchmark-only code.
+- The benchmark's `yuan_iocp_sharded_min` path now uses `IocpShardedAsyncListener`; it is still intentionally minimal HTTP so it measures the coroutine/async transport ceiling before full `HttpServer` request/session/routing work.
+- `HttpServer::handle_connection()` now seeds `HttpSession` with the current `AsyncConnectionContext` runtime view instead of reading the listener's runtime singleton. This is behavior-equivalent for one runtime and required before full HTTP connection handling can be safely placed on runtime shards.
+- `HttpServer` session-map access now goes through locked store/check/erase/abort/clear helpers. The stop path copies connection owners before aborting them so it does not call into connection close handling while holding the session-map mutex.
+- `test/protocol/http/test_http_server.cpp` now explicitly configures port 45005 as plain HTTP and port 45006 as HTTPS. The previous two-service local test accidentally used the default SSL-enabled HTTP config for the "http" service.
+
+Regression subset:
+
+```text
+ctest --test-dir build-mingw-release -R "^(iocp_completion_port|async_facades|event_token|tcp_close_semantics|buffer_model|byte_buffer_reader|http_shared_reuse_port)$" --output-on-failure --timeout 180
+100% tests passed, 0 tests failed out of 7
+```
+
+HTTP worker-pool benchmark, sequential 2 second sweeps:
+
+```text
+http_worker_pool_benchmark yuan_iocp_sharded_min 4 2 1,2,4,8,16,32,64,128
+best_concurrency=16 best_requests_per_second=200681
+
+http_worker_pool_benchmark yuan_iocp_sharded_min 4 2 1,2,4,8,16,32,64,128
+best_concurrency=16 best_requests_per_second=204827
+
+http_worker_pool_benchmark iocp 4 2 1,2,4,8,16,32,64,128
+best_concurrency=128 best_requests_per_second=213435
+
+http_worker_pool_benchmark yuan_iocp_min 4 2 1,2,4,8,16,32,64,128
+best_concurrency=16 best_requests_per_second=86766.3
+
+http_worker_pool_benchmark yuan_iocp 1 2 1,2,4,8,16,32
+best_concurrency=16 best_requests_per_second=62727.9
+
+http_worker_pool_benchmark yuan_iocp 1 2 1,2,4,8,16,32
+best_concurrency=16 best_requests_per_second=63457.5
+```
+
+Interpretation:
+
+`yuan_iocp_sharded_min` holds roughly 200K RPS after being extracted into core, close to the bare IOCP benchmark's roughly 213K RPS result in the same pass. The single-runtime `yuan_iocp_min` path remains around 85K-87K RPS, so the largest confirmed wall is the one-runtime application dispatch point, not `AcceptEx`, `WSARecv`, or `WSASend`.
+
+This does not yet mean the full `HttpServer` should default to runtime sharding. The full server still owns sessions, proxy/upload state, timers, and shutdown from the current server/runtime assumptions. The safe production path is to use `IocpShardedAsyncListener` as the core transport primitive, then move full HTTP connection/session ownership onto per-shard runtime state before enabling the same placement model for real services.
+
+The local `http_server` two-port smoke (`45005` HTTP, `45006` HTTPS) was also sampled after startup and after plain HTTP requests to both ports. CPU time stayed flat at `0.015625s` across 12 half-second samples with 8 threads and 106 handles, so the current local build does not reproduce a persistent idle spin after the explicit HTTP/HTTPS config split.

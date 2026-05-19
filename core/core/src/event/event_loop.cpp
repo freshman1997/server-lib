@@ -89,6 +89,7 @@ namespace yuan::net
 
         data_->quit_.store(false, std::memory_order_relaxed);
         data_->resume_coroutine_requested_.store(false, std::memory_order_relaxed);
+
         auto drain_callbacks = [this]() {
             std::queue<std::function<void()>> callbacks;
             {
@@ -111,8 +112,10 @@ namespace yuan::net
                     }
                 }
             }
+
             return processed;
         };
+
         auto drain_coroutines = [this]() {
             std::queue<std::coroutine_handle<>> coroutines;
             {
@@ -135,6 +138,7 @@ namespace yuan::net
                     }
                 }
             }
+
             return processed;
         };
         
@@ -144,6 +148,7 @@ namespace yuan::net
             std::lock_guard<std::mutex> lock(data_->m);
             return !data_->channels_.empty();
         };
+
         auto poll_timeout = [this](const bool processed_work) {
             if (processed_work) {
                 return 0U;
@@ -153,12 +158,10 @@ namespace yuan::net
                 return kIdlePollTimeoutMs;
             }
 
-            return data_->timer_manager_->poll_timeout(
-                kIdlePollTimeoutMs,
-                kActiveTimerPollTimeoutCapMs);
+            return data_->timer_manager_->poll_timeout(kIdlePollTimeoutMs, kActiveTimerPollTimeoutCapMs);
         };
-        while (!data_->quit_.load(std::memory_order_acquire) &&
-               !data_->resume_coroutine_requested_.load(std::memory_order_acquire)) {
+
+        while (!data_->quit_.load(std::memory_order_acquire) && !data_->resume_coroutine_requested_.load(std::memory_order_acquire)) {
             if (data_->timer_manager_) {
                 data_->timer_manager_->run_due_timers();
             }
@@ -224,6 +227,7 @@ namespace yuan::net
 
         drain_callbacks();
         drain_coroutines();
+
         return data_->resume_coroutine_requested_.load(std::memory_order_acquire)
             ? EventLoopExitReason::coroutine_resume_requested
             : EventLoopExitReason::quit_requested;

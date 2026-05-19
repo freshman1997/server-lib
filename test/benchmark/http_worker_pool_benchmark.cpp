@@ -10,6 +10,7 @@
 #include "net/iocp/iocp_tcp_engine.h"
 #include "net/iocp/iocp_tcp_io.h"
 #include "net/async/async_listener_host.h"
+#include "net/async/iocp_sharded_async_listener.h"
 #include "net/runtime/network_runtime.h"
 #include "net/socket/listen_options.h"
 #include "response.h"
@@ -761,6 +762,45 @@ namespace
             }
         }
     };
+
+    struct YuanIocpShardedMinimalServer
+    {
+        yuan::net::IocpShardedAsyncListener listener;
+
+        static yuan::coroutine::Task<void> handle_connection(yuan::net::AsyncConnectionContext ctx)
+        {
+            std::string input;
+            while (ctx.is_connected()) {
+                auto read = co_await ctx.read_async();
+                if (read.status != yuan::coroutine::IoStatus::success) {
+                    break;
+                }
+                const auto span = read.data.readable_span();
+                input.append(span.data(), span.size());
+                for (;;) {
+                    const auto request_end = input.find("\r\n\r\n");
+                    if (request_end == std::string::npos) {
+                        break;
+                    }
+                    input.erase(0, request_end + 4);
+                    ctx.append_output(kHttpResponse);
+                    ctx.flush();
+                }
+            }
+            ctx.close();
+            co_return;
+        }
+
+        bool start(uint16_t port, std::size_t worker_count)
+        {
+            return listener.listen("127.0.0.1", port, worker_count, worker_count, handle_connection);
+        }
+
+        void stop()
+        {
+            listener.close();
+        }
+    };
 #endif
 
 #ifdef YUAN_BENCH_WITH_WORKFLOW
@@ -808,6 +848,7 @@ namespace
 #ifdef _WIN32
         IocpServer iocp;
         YuanIocpMinimalServer yuan_iocp_min;
+        YuanIocpShardedMinimalServer yuan_iocp_sharded_min;
 #endif
 #ifdef YUAN_BENCH_WITH_WORKFLOW
         WorkflowServer workflow;
@@ -835,6 +876,9 @@ namespace
 #ifdef _WIN32
             if (name == "yuan_iocp_min") {
                 return yuan_iocp_min.start(port, worker_count);
+            }
+            if (name == "yuan_iocp_sharded_min") {
+                return yuan_iocp_sharded_min.start(port, worker_count);
             }
             if (name == "iocp") {
                 return iocp.start(port, worker_count);
@@ -866,6 +910,9 @@ namespace
 #ifdef _WIN32
             else if (implementation == "yuan_iocp_min") {
                 yuan_iocp_min.stop();
+            }
+            else if (implementation == "yuan_iocp_sharded_min") {
+                yuan_iocp_sharded_min.stop();
             }
             else if (implementation == "iocp") {
                 iocp.stop();

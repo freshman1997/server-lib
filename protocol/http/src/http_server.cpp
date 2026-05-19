@@ -65,8 +65,6 @@ namespace yuan::net::http
 {
     namespace
     {
-        using HttpSessionMap = std::unordered_map<uint64_t, std::unique_ptr<HttpSession> >;
-
         constexpr uint64_t kUploadCleanupIntervalMs = 30000;
         constexpr uint64_t kUploadSessionTtlMs = 10 * 60 * 1000;
         constexpr uint64_t kUploadTmpFileTtlMs = 30 * 60 * 1000;
@@ -122,12 +120,6 @@ namespace yuan::net::http
         T *ptr_of(const std::unique_ptr<T> &owner)
         {
             return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-
-        HttpSession *find_http_session(HttpSessionMap &sessions, uint64_t session_id)
-        {
-            const auto it = sessions.find(session_id);
-            return it == sessions.end() ? nullptr : ptr_of(it->second);
         }
 
         bool iequals_ascii(std::string_view lhs, std::string_view rhs)
@@ -823,7 +815,7 @@ namespace yuan::net::http
     HttpServer::~HttpServer()
     {
         stop();
-        sessions_.clear();
+        clear_sessions();
     }
 
     bool HttpServer::init_ssl_if_needed()
@@ -1292,6 +1284,57 @@ namespace yuan::net::http
         }
     }
 
+    void HttpServer::store_session(uint64_t session_id, std::unique_ptr<HttpSession> session)
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        sessions_[session_id] = std::move(session);
+    }
+
+    bool HttpServer::has_session(uint64_t session_id) const
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        return sessions_.find(session_id) != sessions_.end();
+    }
+
+    void HttpServer::erase_session(uint64_t session_id)
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        sessions_.erase(session_id);
+    }
+
+    void HttpServer::abort_sessions()
+    {
+        std::vector<std::shared_ptr<net::Connection>> connections;
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            connections.reserve(sessions_.size());
+            for (auto &[id, session] : sessions_) {
+                if (!session) {
+                    continue;
+                }
+                auto *ctx = session->get_context();
+                if (!ctx) {
+                    continue;
+                }
+                if (auto conn = ctx->connection()) {
+                    connections.push_back(std::move(conn));
+                }
+            }
+        }
+
+        for (auto &conn : connections) {
+            if (conn && conn->is_connected()) {
+                conn->abort();
+            }
+        }
+    }
+
+    void HttpServer::clear_sessions()
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        sessions_.clear();
+    }
+
     bool HttpServer::init(int port)
     {
         owned_runtime_ = std::make_unique<NetworkRuntime>();
@@ -1300,7 +1343,7 @@ namespace yuan::net::http
 
     bool HttpServer::init(int port, NetworkRuntime & runtime)
     {
-        sessions_.clear();
+        clear_sessions();
         uploaded_chunks_.clear();
         proxy_.reset();
         listener_.close();
@@ -1358,17 +1401,7 @@ namespace yuan::net::http
 
     void HttpServer::stop()
     {
-        for (auto &[id, session] : sessions_) {
-            if (session) {
-                auto *ctx = session->get_context();
-                if (ctx) {
-                    auto *conn = ctx->get_connection();
-                    if (conn && conn->is_connected()) {
-                        conn->abort();
-                    }
-                }
-            }
-        }
+        abort_sessions();
 
         listener_.close();
         if (owned_runtime_) {
@@ -1379,7 +1412,7 @@ namespace yuan::net::http
             thread_pool_->shutdown();
         }
 
-        sessions_.clear();
+        clear_sessions();
     }
 
     void HttpServer::on(const std::string & url, request_function func, bool is_prefix)
@@ -1658,10 +1691,10 @@ namespace yuan::net::http
         auto session = std::make_unique<HttpSession>(
             sessionId,
             std::move(httpCtx),
-            listener_.runtime()->runtime_view(),
+            ctx.runtime_view(),
             false);
         auto *session_ptr = ptr_of(session);
-        sessions_[sessionId] = std::move(session);
+        store_session(sessionId, std::move(session));
 
         bool protocol_checked = alpn_h2 || !config::enable_http2;
         bool http2_mode = false;
@@ -1812,7 +1845,7 @@ namespace yuan::net::http
                     if (proxy_->has_client_mapping(conn.get())) {
                         release_inflight_request(context->get_request());
                         release_connection_count();
-                        sessions_.erase(sessionId);
+                        erase_session(sessionId);
                         co_return;
                     }
                 }
@@ -1825,7 +1858,7 @@ namespace yuan::net::http
                     auto leftover = context->take_leftover_buffer();
                     release_inflight_request(context->get_request());
                     release_connection_count();
-                    sessions_.erase(sessionId);
+                    erase_session(sessionId);
 
                     auto proxy_task = ws_proxy_handler_(std::move(ctx), raw_url, route_key, client_key, subproto, std::move(leftover));
                     proxy_task.resume();
@@ -1870,7 +1903,7 @@ namespace yuan::net::http
             catch (const fmt::format_error &e)
             {
                 LOG_ERROR("Invalid UTF-8 or format error while processing HTTP request: {}", e.what());
-                if (find_http_session(sessions_, sessionId)) {
+                if (has_session(sessionId)) {
                     release_inflight_request(context->get_request());
                     context->process_error(ResponseCode::bad_request);
                 }
@@ -1878,7 +1911,7 @@ namespace yuan::net::http
             catch (const std::exception &e)
             {
                 LOG_ERROR("Exception while processing HTTP request: {}", e.what());
-                if (find_http_session(sessions_, sessionId)) {
+                if (has_session(sessionId)) {
                     release_inflight_request(context->get_request());
                     context->process_error(ResponseCode::internal_server_error);
                 }
@@ -1886,7 +1919,7 @@ namespace yuan::net::http
             catch (...)
             {
                 LOG_ERROR("Unknown exception while processing HTTP request");
-                if (find_http_session(sessions_, sessionId)) {
+                if (has_session(sessionId)) {
                     release_inflight_request(context->get_request());
                     context->process_error(ResponseCode::internal_server_error);
                 }
@@ -1905,7 +1938,7 @@ namespace yuan::net::http
             proxy_->on_client_close(conn);
         }
         release_connection_count();
-        sessions_.erase(sessionId);
+        erase_session(sessionId);
 
         co_return;
     }

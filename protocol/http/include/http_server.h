@@ -181,6 +181,11 @@ namespace yuan::net::http
         bool dispatch_h2_context(HttpSessionContext *context);
         bool dispatch_request(HttpSessionContext *context);
         void finalize_request(uint64_t session_id, HttpSession *session, HttpSessionContext *context);
+        void store_session(uint64_t session_id, std::unique_ptr<HttpSession> session);
+        bool has_session(uint64_t session_id) const;
+        void erase_session(uint64_t session_id);
+        void abort_sessions();
+        void clear_sessions();
         void load_static_paths();
         static void icon(HttpRequest *req, HttpResponse *resp);
         void serve_static(HttpRequest *req, HttpResponse *resp);
@@ -253,6 +258,7 @@ namespace yuan::net::http
         std::unique_ptr<NetworkRuntime> owned_runtime_;
         std::shared_ptr<SSLModule> ssl_module_;
         std::unordered_map<uint64_t, std::unique_ptr<HttpSession> > sessions_;
+        mutable std::mutex sessions_mutex_;
         HttpRequestDispatcher dispatcher_;
         base::CompressTrie static_mount_trie_;
         std::unordered_map<std::string, StaticMount> static_mounts_;
