@@ -77,9 +77,9 @@ namespace yuan::net::ssh
 
     void SshDirectTcpipHandler::on_eof(SshChannel * channel)
     {
+        (void)channel;
         if (target_conn_) {
-            target_conn_->close();
-            target_conn_.reset();
+            target_conn_->shutdown_write();
         }
     }
 

@@ -8,12 +8,14 @@
 #include "server/commands/dele.h"
 #include "server/commands/eprt.h"
 #include "server/commands/epsv.h"
+#include "server/commands/feat.h"
 #include "server/commands/help.h"
 #include "server/commands/list.h"
 #include "server/commands/mkd.h"
 #include "server/commands/mode.h"
 #include "server/commands/nlist.h"
 #include "server/commands/noop.h"
+#include "server/commands/opts.h"
 #include "server/commands/pass.h"
 #include "server/commands/pasv.h"
 #include "server/commands/port.h"
@@ -50,12 +52,14 @@ namespace yuan::net::ftp
             factory->register_command(new CommandDele());
             factory->register_command(new CommandEprt());
             factory->register_command(new CommandEpsv());
+            factory->register_command(new CommandFeat());
             factory->register_command(new CommandHelp());
             factory->register_command(new CommandList());
             factory->register_command(new CommandMkd());
             factory->register_command(new CommandMode());
             factory->register_command(new CommandNlist());
             factory->register_command(new CommandNoop());
+            factory->register_command(new CommandOpts());
             factory->register_command(new CommandPass());
             factory->register_command(new CommandPasv());
             factory->register_command(new CommandPort());

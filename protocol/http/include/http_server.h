@@ -49,6 +49,8 @@ namespace yuan::net::http
         int max_connections_per_ip = 0;
         int max_inflight_requests_per_ip = 0;
         ::yuan::net::ListenOptions listen_options;
+        std::string ssl_certificate;
+        std::string ssl_certificate_key;
         std::string server_name = "YuanServer/1.0";
     };
 

@@ -430,6 +430,56 @@ namespace
         waitpid(pid, nullptr, 0);
         return baseline_ok && got_reject;
     }
+
+    bool run_edge_features_probe(const std::string &bin, const std::filesystem::path &cfg_path)
+    {
+        const pid_t pid = fork();
+        if (pid == 0) {
+            execl(bin.c_str(), bin.c_str(), cfg_path.c_str(), static_cast<char *>(nullptr));
+            _exit(127);
+        }
+        if (pid < 0) {
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));
+
+        auto request = [](const std::string &raw) {
+            int fd = connect_loopback(18087);
+            if (fd < 0) {
+                return std::string();
+            }
+            std::string resp;
+            if (send_all(fd, raw)) {
+                resp = recv_head(fd);
+            }
+            ::close(fd);
+            return resp;
+        };
+
+        const std::string health = request(
+            "GET /healthz HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Connection: close\r\n\r\n");
+        const std::string redirect = request(
+            "GET /old-static/index.html HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Connection: close\r\n\r\n");
+        const std::string rejected = request(
+            "TRACE / HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Connection: close\r\n\r\n");
+
+        kill(pid, SIGTERM);
+        waitpid(pid, nullptr, 0);
+
+        return health.find(" 200 ") != std::string::npos &&
+               health.find("X-Test-Header: edge") != std::string::npos &&
+               redirect.find(" 301 ") != std::string::npos &&
+               redirect.find("Location: /static/index.html") != std::string::npos &&
+               rejected.find(" 405 ") != std::string::npos &&
+               rejected.find("Allow:") != std::string::npos;
+    }
 #endif
 }
 
@@ -447,6 +497,7 @@ int main()
     const auto cfg_max_connections = work_dir / "mini_nginx_max_connections_test.json";
     const auto cfg_inflight = work_dir / "mini_nginx_inflight_limit_test.json";
     const auto cfg_reload_limits = work_dir / "mini_nginx_reload_limits_test.json";
+    const auto cfg_static_only = work_dir / "mini_nginx_static_only_test.json";
 
     {
         std::ofstream out(cfg_legacy, std::ios::binary | std::ios::trunc);
@@ -622,6 +673,51 @@ int main()
 })";
     }
 
+    {
+        std::ofstream out(cfg_static_only, std::ios::binary | std::ios::trunc);
+        out << R"({
+  "server": {
+    "listen": 18087,
+    "server_name": "mini-nginx-static-only",
+    "enable_ssl": false,
+    "backlog": 256,
+    "use_iocp": true,
+    "iocp_worker_count": 2,
+    "allowed_methods": ["GET", "HEAD"]
+  },
+  "health": {
+    "enabled": true,
+    "path": "/healthz",
+    "json": true
+  },
+  "headers": {
+    "add": {
+      "X-Test-Header": "edge"
+    }
+  },
+  "redirects": [
+    {
+      "from": "/old-static",
+      "to": "/static",
+      "code": 301,
+      "prefix": true,
+      "preserve_path": true
+    }
+  ],
+  "access_log": {
+    "enabled": true,
+    "path": "tmp/mini_nginx_static_only_access.log"
+  },
+  "static": [
+    {
+      "location": "/",
+      "root": "server/mini_nginx/www",
+      "auto_index": true
+    }
+  ]
+})";
+    }
+
     const std::string bin = mini_nginx_bin();
 
     const auto legacy_result = run_and_capture(bin, cfg_legacy.string(), std::chrono::milliseconds(1000));
@@ -638,6 +734,11 @@ int main()
 
     const auto new_result = run_and_capture(bin, cfg_new.string(), std::chrono::milliseconds(1500));
     check(new_result.timed_out, "new-format config should start and keep running");
+
+    const auto static_only_result = run_and_capture(bin, cfg_static_only.string(), std::chrono::milliseconds(1500));
+    check(static_only_result.timed_out, "static-only config should start and keep running");
+    check(run_edge_features_probe(bin, cfg_static_only),
+          "edge features should handle health, redirect, headers, and method allow-list");
 
     check(run_rate_limit_probe(bin, cfg_rate_limit),
           "rate-limit config should produce 429 under burst traffic");
@@ -659,7 +760,10 @@ int main()
     std::filesystem::remove(cfg_max_connections, ec);
     std::filesystem::remove(cfg_inflight, ec);
     std::filesystem::remove(cfg_reload_limits, ec);
+    std::filesystem::remove(cfg_static_only, ec);
     std::filesystem::remove(work_dir / "mini_nginx_access_test.log", ec);
+    std::filesystem::remove(work_dir / "tmp" / "mini_nginx_static_only_access.log", ec);
+    std::filesystem::remove(work_dir / "tmp", ec);
 
     if (g_failed != 0) {
         std::cerr << "mini_nginx config tests failed=" << g_failed << '\n';

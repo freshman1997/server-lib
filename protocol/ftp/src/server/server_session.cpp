@@ -1,6 +1,7 @@
 #include "server/server_session.h"
 #include "common/def.h"
 #include "server/command.h"
+#include "server/command_support.h"
 
 #include "logger.h"
 
@@ -38,10 +39,7 @@ namespace yuan::net::ftp
             if (res.code_ == FtpResponseCode::invalid) {
                 continue;
             }
-            conn.append_output(std::to_string((int)res.code_));
-            conn.append_output(" ");
-            conn.append_output(res.body_);
-            conn.append_output("\r\n");
+            conn.append_output(format_ftp_response(res));
             conn.flush();
             if (res.close_) {
                 quit();

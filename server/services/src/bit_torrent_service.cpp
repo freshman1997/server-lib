@@ -226,7 +226,7 @@ namespace yuan::server
         while (static_cast<int32_t>(active_clients_.size()) < max_concurrent_downloads_) {
             ManagedTask *next = nullptr;
             for (auto &task : tasks_) {
-            if (task.status == "queued" || task.status == "paused") {
+                if (task.status == "queued") {
                     next = &task;
                     break;
                 }

@@ -6,7 +6,7 @@ namespace yuan::net::ftp
     {
         (void)session;
         (void)args;
-        return {FtpResponseCode::__214__, "USER PASS PWD CWD CDUP PASV EPSV PORT EPRT LIST NLST RETR STOR APPE SIZE ALLO MKD RMD DELE RNFR RNTO REST TYPE MODE STRU STAT NOOP QUIT"};
+        return {FtpResponseCode::__214__, "USER PASS PWD CWD CDUP PASV EPSV PORT EPRT LIST NLST RETR STOR APPE SIZE ALLO MKD RMD DELE RNFR RNTO REST TYPE MODE STRU STAT FEAT OPTS NOOP QUIT"};
     }
     CommandType CommandHelp::get_command_type() { return CommandType::cmd_help; }
     std::string CommandHelp::get_command_name() { return "HELP"; }

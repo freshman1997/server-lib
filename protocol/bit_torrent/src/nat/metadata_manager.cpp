@@ -9,7 +9,7 @@ namespace yuan::net::bit_torrent
 {
 
     MetadataManager::MetadataManager()
-        : next_ext_id_(1)
+        : next_ext_id_(2)
     {
     }
 
@@ -33,10 +33,11 @@ namespace yuan::net::bit_torrent
     std::vector<uint8_t> MetadataManager::build_ext_handshake() const
     {
         std::string dict;
+        dict += "d";
         dict += "1:m";
 
         dict += "d";
-        dict += "10:ut_metadata";
+        dict += "11:ut_metadata";
         dict += "i";
         dict += our_ut_metadata_id_str_;
         dict += "e";
@@ -49,6 +50,7 @@ namespace yuan::net::bit_torrent
             dict += std::to_string(metadata_size_);
             dict += "e";
         }
+        dict += "e";
 
         return std::vector<uint8_t>(dict.begin(), dict.end());
     }

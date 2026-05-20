@@ -28,6 +28,7 @@
 #include "nat/utp_connection.h"
 #include "nat/dht_node.h"
 #include "nat/pex_manager.h"
+#include "nat/metadata_manager.h"
 #include "net/poller/select_poller.h"
 #include "session/tracker_session.h"
 #include "state/piece_download_state.h"
@@ -1357,7 +1358,11 @@ void test_pex_manager_basic()
         pex.init(info_hash, cfg);
 
         auto ext_hs = pex.build_ext_handshake();
-        CHECK(!ext_hs.empty(), "extension handshake should not be empty");
+        std::string hs(reinterpret_cast<const char *>(ext_hs.data()), ext_hs.size());
+        auto *parsed = BencodingDataConverter::parse(hs);
+        const bool valid = parsed && parsed->type_ == DataType::dictionary_;
+        delete parsed;
+        CHECK(valid, "extension handshake should be a valid bencoded dictionary");
     }
 
     TEST("PexManager build_pex_message (empty initially)");
@@ -1370,6 +1375,87 @@ void test_pex_manager_basic()
         auto pex_msg = pex.build_pex_message("192.168.1.1:6881");
         // Should be a valid bencoded dict (or empty if no changes)
         CHECK(true, "build_pex_message should not crash");
+    }
+}
+
+void test_extension_handshake_bencoding()
+{
+    printf("\n=== BEP10: extension handshake bencoding ===\n");
+
+    TEST("MetadataManager build_ext_handshake is a valid dictionary");
+    {
+        MetadataManager metadata;
+        std::vector<uint8_t> info_hash(20, 0xCD);
+        metadata.init(info_hash);
+        metadata.set_metadata_size(32768);
+
+        auto ext_hs = metadata.build_ext_handshake();
+        std::string hs(reinterpret_cast<const char *>(ext_hs.data()), ext_hs.size());
+        auto *parsed = BencodingDataConverter::parse(hs);
+
+        bool valid = false;
+        if (parsed && parsed->type_ == DataType::dictionary_) {
+            auto *dict = static_cast<DicttionaryData *>(parsed);
+            auto *m = dict->get_val("m");
+            auto *size = dict->get_val("metadata_size");
+            valid = m && m->type_ == DataType::dictionary_ &&
+                    size && size->type_ == DataType::integer_;
+            if (valid) {
+                auto *m_dict = static_cast<DicttionaryData *>(m);
+                auto *ut_metadata = m_dict->get_val("ut_metadata");
+                valid = ut_metadata && ut_metadata->type_ == DataType::integer_ &&
+                        static_cast<IntegerData *>(ut_metadata)->get_data() > 0;
+            }
+        }
+        delete parsed;
+
+        CHECK(valid, "metadata extension handshake should advertise ut_metadata and metadata_size");
+    }
+
+    TEST("PEX and metadata extension ids do not collide");
+    {
+        PexManager pex;
+        MetadataManager metadata;
+        std::vector<uint8_t> info_hash(20, 0xEF);
+        NatConfig cfg;
+        pex.init(info_hash, cfg);
+        metadata.init(info_hash);
+
+        auto pex_hs = pex.build_ext_handshake();
+        auto metadata_hs = metadata.build_ext_handshake();
+        std::string pex_str(reinterpret_cast<const char *>(pex_hs.data()), pex_hs.size());
+        std::string metadata_str(reinterpret_cast<const char *>(metadata_hs.data()), metadata_hs.size());
+
+        auto *pex_parsed = BencodingDataConverter::parse(pex_str);
+        auto *metadata_parsed = BencodingDataConverter::parse(metadata_str);
+        int64_t pex_id = 0;
+        int64_t metadata_id = 0;
+
+        if (pex_parsed && pex_parsed->type_ == DataType::dictionary_) {
+            auto *dict = static_cast<DicttionaryData *>(pex_parsed);
+            if (auto *m = dict->get_val("m"); m && m->type_ == DataType::dictionary_) {
+                auto *m_dict = static_cast<DicttionaryData *>(m);
+                if (auto *v = m_dict->get_val("ut_pex"); v && v->type_ == DataType::integer_) {
+                    pex_id = static_cast<IntegerData *>(v)->get_data();
+                }
+            }
+        }
+
+        if (metadata_parsed && metadata_parsed->type_ == DataType::dictionary_) {
+            auto *dict = static_cast<DicttionaryData *>(metadata_parsed);
+            if (auto *m = dict->get_val("m"); m && m->type_ == DataType::dictionary_) {
+                auto *m_dict = static_cast<DicttionaryData *>(m);
+                if (auto *v = m_dict->get_val("ut_metadata"); v && v->type_ == DataType::integer_) {
+                    metadata_id = static_cast<IntegerData *>(v)->get_data();
+                }
+            }
+        }
+
+        delete pex_parsed;
+        delete metadata_parsed;
+
+        CHECK(pex_id > 0 && metadata_id > 0 && pex_id != metadata_id,
+              "ut_pex and ut_metadata ids should both be advertised and unique");
     }
 }
 
@@ -2717,6 +2803,7 @@ int main()
 
     // Part 8: PEX
     test_pex_manager_basic();
+    test_extension_handshake_bencoding();
     test_pex_compact_format();
 
     // Part 9: Piece download state

@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "buffer/byte_buffer.h"
 #include "response_code.h"
@@ -31,13 +32,14 @@ namespace yuan::net::ftp
 
     struct FtpCommandResponse
     {
-        FtpCommandResponse(FtpResponseCode code, const std::string &body, bool close = false)
-            : code_(code), body_(std::move(body)), close_(close)
+        FtpCommandResponse(FtpResponseCode code, std::string body, bool close = false, bool multiline = false)
+            : close_(close), code_(code), body_(std::move(body)), multiline_(multiline)
         {
         }
         bool close_;
         FtpResponseCode code_;
         std::string body_;
+        bool multiline_;
     };
 
     enum class FileState : char {

@@ -12,6 +12,9 @@ This is a lightweight nginx-like reverse proxy app built on top of `HttpService`
 - WebSocket proxy path can be configured as regular routes
 - Access log middleware (`ip/method/url`, one line per request)
 - Route hot reload (file change polling + `SIGHUP` on non-Windows)
+- Windows IOCP listener selection via config/env
+- Static-only mode for simple file hosting
+- Health endpoint, redirect rules, global response headers, and method allow-list
 
 ## Build
 
@@ -30,6 +33,7 @@ You can override runtime values with env vars:
 - `YUAN_MINI_NGINX_PORT`
 - `YUAN_MINI_NGINX_SERVER_NAME`
 - `YUAN_MINI_NGINX_WORKERS`
+- `YUAN_MINI_NGINX_USE_IOCP`
 - `YUAN_MINI_NGINX_ACCESS_LOG`
 - `YUAN_MINI_NGINX_ACCESS_LOG_PATH`
 
@@ -49,8 +53,19 @@ Top-level fields:
   - `server_name` string
   - `thread_pool_size` int
   - `worker_processes` int (POSIX: `>1` starts one HTTP listener per worker with `SO_REUSEPORT`)
+  - `enable_ssl` bool
+  - `ssl_certificate` string
+  - `ssl_certificate_key` string
   - `enable_keep_alive` bool
   - `enable_cors` bool
+  - `backlog` int
+  - `reuse_addr` bool
+  - `reuse_port` bool
+  - `exclusive_addr` bool
+  - `non_block` bool
+  - `use_iocp` bool (Windows IOCP accept/read/write backend)
+  - `iocp_worker_count` int
+  - `allowed_methods` array (global allow-list, returns 405 when rejected)
   - `max_body_size` number
   - `write_timeout_ms` int (static response/body flush timeout)
   - `max_connections` int
@@ -82,6 +97,16 @@ Additional top-level fields:
   - `enabled` bool
   - `requests_per_second` int
   - `burst` int
+- `health` object
+  - `enabled` bool
+  - `path` string
+  - `json` bool
+- `headers` object
+  - `add` object of response headers added to every request
+- `response_headers` object
+  - shorthand object of response headers added to every request
+- `redirects` array
+  - each item: `from`, `to`, `code` (`301|302|303`), `prefix`, `preserve_path`
 - `static` array
   - each item:
     - `location` URL prefix (example `/static`)
@@ -96,7 +121,10 @@ Example: see `mini_nginx.json`.
 
 ## Config compatibility
 
-Only the new structured format is supported (`server` + `upstreams` + `routes`).
+Only the new structured format is supported. Use `server` plus at least one of:
+
+- `static`
+- `upstreams` + `routes`
 
 ## Hot reload
 

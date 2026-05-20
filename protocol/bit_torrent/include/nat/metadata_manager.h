@@ -101,7 +101,7 @@ namespace yuan::net::bit_torrent
         };
         std::unordered_map<std::string, PeerMetadataState> peer_states_;
 
-        int next_ext_id_ = 1;
+        int next_ext_id_ = 2;
         int our_ut_metadata_ext_id_ = 0;
         std::string our_ut_metadata_id_str_;
 

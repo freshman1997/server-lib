@@ -56,8 +56,7 @@ namespace yuan::net::ssh
     void SshForwardedTcpipHandler::on_eof(SshChannel *)
     {
         if (accepted_conn_) {
-            accepted_conn_->close();
-            accepted_conn_.reset();
+            accepted_conn_->shutdown_write();
         }
     }
 

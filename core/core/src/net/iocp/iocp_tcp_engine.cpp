@@ -51,7 +51,6 @@ namespace yuan::net
         std::vector<char> buffer;
         std::shared_ptr<const std::string> shared_buffer;
         bool drains_output = false;
-        std::size_t drain_bytes = 0;
     };
 
     IocpTcpConnection::IocpTcpConnection(IocpTcpEngine &engine,
@@ -67,7 +66,7 @@ namespace yuan::net
 
     IocpTcpConnection::~IocpTcpConnection()
     {
-        close();
+        close_now();
     }
 
     int IocpTcpConnection::fd() const noexcept
@@ -242,7 +241,6 @@ namespace yuan::net
                 if (!front->empty()) {
                     operation->buffer.assign(front->read_ptr(), front->read_ptr() + front->readable_bytes());
                     operation->drains_output = true;
-                    operation->drain_bytes = front->readable_bytes();
                     output_flush_pending_ = true;
                     break;
                 }
@@ -286,7 +284,6 @@ namespace yuan::net
             }
             if (output_flush_pending_ || output_buffer_.readable_bytes() > 0) {
                 state_.store(ConnectionState::closing, std::memory_order_release);
-                input_shutdown_.store(true, std::memory_order_release);
                 close_after_output_ = true;
                 should_flush = !output_flush_pending_;
             }
@@ -301,16 +298,23 @@ namespace yuan::net
             return;
         }
 
-        close_now();
+        if (engine_) {
+            engine_->close_connection(self(), true, true);
+        } else {
+            close_now();
+        }
     }
 
-    void IocpTcpConnection::close_now()
+    void IocpTcpConnection::close_now(bool graceful_shutdown)
     {
         const int fd = fd_.exchange(-1, std::memory_order_acq_rel);
         if (fd < 0) {
             return;
         }
 
+        if (graceful_shutdown) {
+            (void)socket::shutdown_write(fd);
+        }
         state_.store(ConnectionState::closed, std::memory_order_release);
         input_shutdown_.store(true, std::memory_order_release);
         output_shutdown_.store(true, std::memory_order_release);
@@ -422,6 +426,11 @@ namespace yuan::net
         read_dispatch_pending_.store(false, std::memory_order_release);
     }
 
+    void IocpTcpConnection::mark_defer_close_on_unconsumed_input() noexcept
+    {
+        defer_close_on_unconsumed_input_.store(true, std::memory_order_release);
+    }
+
     std::shared_ptr<IocpTcpConnection> IocpTcpConnection::self()
     {
         return std::static_pointer_cast<IocpTcpConnection>(shared_from_this());
@@ -454,6 +463,23 @@ namespace yuan::net
     {
         std::lock_guard<std::mutex> lock(output_buffer_mutex_);
         output_flush_pending_ = false;
+    }
+
+    bool IocpTcpConnection::has_pending_output() const
+    {
+        std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+        return output_flush_pending_ || output_buffer_.readable_bytes() > 0;
+    }
+
+    bool IocpTcpConnection::mark_close_after_pending_output()
+    {
+        std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+        if (!output_flush_pending_ && output_buffer_.readable_bytes() == 0) {
+            return false;
+        }
+        state_.store(ConnectionState::closing, std::memory_order_release);
+        close_after_output_ = true;
+        return !output_flush_pending_;
     }
 
     void IocpTcpConnection::notify_connected()
@@ -901,13 +927,29 @@ namespace yuan::net
             delete &operation;
             connection->input_shutdown_.store(true, std::memory_order_release);
             connection->notify_event_waiters(ConnectionEvent::input_shutdown);
-            if (auto handler = connection->get_connection_handler_owner()) {
+            auto handler = connection->get_connection_handler_owner();
+            if (handler) {
                 handler->on_input_shutdown(connection);
             }
-            close_connection(connection, true);
+            if (connection->read_dispatch_pending_.load(std::memory_order_acquire)) {
+                return;
+            }
+            if (connection->mark_close_after_pending_output()) {
+                connection->flush();
+                return;
+            }
+            if (!connection->has_pending_output()) {
+                if (connection->defer_close_on_unconsumed_input_.load(std::memory_order_acquire)) {
+                    return;
+                }
+                close_connection(connection, true, true);
+            }
             return;
         }
 
+        if (connection->has_event_waiter(ConnectionEvent::readable)) {
+            connection->mark_defer_close_on_unconsumed_input();
+        }
         connection->notify_read(operation.buffer.data(), completion.bytes);
         if (callbacks_.on_read) {
             callbacks_.on_read(connection, operation.buffer.data(), completion.bytes);
@@ -915,7 +957,7 @@ namespace yuan::net
         delete &operation;
         if (!connection->closing() && running_.load(std::memory_order_acquire)) {
             if (!connection->post_recv()) {
-                close_connection(connection, true);
+                close_connection(connection, true, true);
             }
         }
     }
@@ -937,7 +979,6 @@ namespace yuan::net
         const uint32_t error = completion.error;
         const uint32_t bytes = completion.bytes;
         const bool drains_output = operation.drains_output;
-        const std::size_t drain_bytes = operation.drain_bytes;
         delete &operation;
         if (!completion.ok) {
             if (drains_output) {
@@ -953,7 +994,7 @@ namespace yuan::net
 
         if (drains_output) {
             bool close_after_output = false;
-            if (connection->complete_output_send(drain_bytes, close_after_output)) {
+            if (connection->complete_output_send(bytes, close_after_output)) {
                 connection->flush();
                 return;
             }
@@ -961,8 +1002,14 @@ namespace yuan::net
             if (callbacks_.on_write) {
                 callbacks_.on_write(connection, bytes);
             }
+            if (connection->input_shutdown_.load(std::memory_order_acquire) &&
+                connection->defer_close_on_unconsumed_input_.load(std::memory_order_acquire) &&
+                !connection->has_pending_output()) {
+                close_connection(connection, true, true);
+                return;
+            }
             if (close_after_output) {
-                connection->close_now();
+                close_connection(connection, true, true);
             }
             return;
         }
@@ -987,7 +1034,9 @@ namespace yuan::net
         connections_.erase(fd);
     }
 
-    void IocpTcpEngine::close_connection(const std::shared_ptr<IocpTcpConnection> &connection, bool notify)
+    void IocpTcpEngine::close_connection(const std::shared_ptr<IocpTcpConnection> &connection,
+                                         bool notify,
+                                         bool graceful_shutdown)
     {
         if (!connection) {
             return;
@@ -1001,6 +1050,6 @@ namespace yuan::net
         if (notify) {
             connection->notify_closed();
         }
-        connection->close_now();
+        connection->close_now(graceful_shutdown);
     }
 }

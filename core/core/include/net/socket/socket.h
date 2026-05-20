@@ -55,6 +55,8 @@ namespace yuan::net
 
         bool shutdown_write() const;
 
+        void close();
+
         int get_fd() const
         {
             return fd_;

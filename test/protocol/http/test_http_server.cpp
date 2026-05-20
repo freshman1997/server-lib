@@ -30,7 +30,7 @@ int main()
     std::signal(SIGTERM, signal_handler);
 
     yuan::app::RuntimeContext context;
-    //context.worker_threads = 2;
+    context.worker_threads = 2;
     context.app_name = "http-test-server";
 
     yuan::app::Application application(context);
@@ -42,13 +42,13 @@ int main()
         return 1;
     }
 
-    //yuan::net::http::HttpServerConfig https_config;
-    //https_config.enable_ssl = true;
-    //auto https_service = std::make_shared<yuan::server::HttpService>(45006, https_config);
-    //if (!application.add_typed_service<yuan::server::HttpService>("https", https_service, "server.https", 2)) {
-    //    std::cerr << "failed to register https service\n";
-    //    return 1;
-    //}
+    yuan::net::http::HttpServerConfig https_config;
+    https_config.enable_ssl = true;
+    auto https_service = std::make_shared<yuan::server::HttpService>(45006, https_config);
+    if (!application.add_typed_service<yuan::server::HttpService>("https", https_service, "server.https", 2)) {
+        std::cerr << "failed to register https service\n";
+        return 1;
+    }
 
     yuan::app::Bootstrap bootstrap(application);
     if (!bootstrap.run()) {

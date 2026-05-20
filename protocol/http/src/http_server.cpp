@@ -846,8 +846,12 @@ namespace yuan::net::http
             return relative;
         };
 
-        const auto cert_path = resolve_asset(std::filesystem::path("ca") / "ca.crt");
-        const auto key_path = resolve_asset(std::filesystem::path("ca") / "ca.key");
+        const auto cert_path = config_.ssl_certificate.empty()
+            ? resolve_asset(std::filesystem::path("ca") / "ca.crt")
+            : std::filesystem::path(config_.ssl_certificate);
+        const auto key_path = config_.ssl_certificate_key.empty()
+            ? resolve_asset(std::filesystem::path("ca") / "ca.key")
+            : std::filesystem::path(config_.ssl_certificate_key);
 
         ssl_module_ = std::make_shared<OpenSSLModule>();
         if (!ssl_module_->init(cert_path.string(), key_path.string(), SSLHandler::SSLMode::acceptor_)) {
@@ -864,6 +868,11 @@ namespace yuan::net::http
         }
 
         listener_.set_ssl_module(ssl_module_);
+#else
+        if (config_.enable_ssl) {
+            LOG_ERROR("HTTP SSL requested but this build was configured with YUAN_ENABLE_HTTP_SSL=OFF");
+            return false;
+        }
 #endif
         return true;
     }
@@ -1670,8 +1679,11 @@ namespace yuan::net::http
 
         bool alpn_h2 = false;
         if (conn->is_ssl_handshaking()) {
-            auto hs_result = co_await ctx.ssl_handshake_async();
+            auto hs_result = co_await ctx.ssl_handshake_async(keep_alive_idle_timeout_ms());
             if (hs_result != coroutine::SslHandshakeResult::success) {
+                if (ctx.is_connected()) {
+                    ctx.close();
+                }
                 release_connection_count();
                 co_return;
             }
@@ -1725,6 +1737,9 @@ namespace yuan::net::http
         if (alpn_h2) {
             if (!config::enable_http2) {
                 LOG_WARN("ALPN selected h2 but enable_http2=false from {}", conn->get_remote_address().to_address_key());
+                if (ctx.is_connected()) {
+                    ctx.close();
+                }
                 release_connection_count();
                 co_return;
             }
@@ -1870,7 +1885,8 @@ namespace yuan::net::http
                 release_inflight_request(context->get_request());
 
                 const bool close_after_response = should_close_http1_connection(
-                    context->get_request(), context->get_response(), config_.enable_keep_alive);
+                    context->get_request(), context->get_response(), config_.enable_keep_alive) ||
+                    conn->input_shutdown();
                 http1_long_lived_response = context->get_response()->is_sse();
 
                 bool response_stream_failed = false;

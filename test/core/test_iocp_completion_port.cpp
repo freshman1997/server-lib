@@ -44,6 +44,7 @@
         void on_read(const std::shared_ptr<yuan::net::Connection> &conn) override
         {
             if (conn && conn->input_readable_bytes() >= 5) {
+                (void)conn->take_input_byte_buffer();
                 readable.store(true, std::memory_order_release);
             }
         }
@@ -91,6 +92,21 @@ namespace
         const auto port = static_cast<uint16_t>(addr.get_port());
         yuan::net::socket::close_fd(fd);
         return port;
+    }
+
+    void set_recv_timeout(int fd, int milliseconds)
+    {
+        const DWORD timeout = static_cast<DWORD>(milliseconds);
+        (void)::setsockopt(static_cast<SOCKET>(fd),
+                           SOL_SOCKET,
+                           SO_RCVTIMEO,
+                           reinterpret_cast<const char *>(&timeout),
+                           sizeof(timeout));
+    }
+
+    void shutdown_send(int fd)
+    {
+        (void)::shutdown(static_cast<SOCKET>(fd), SD_SEND);
     }
 
     bool test_dispatcher_post_and_stop()
@@ -965,6 +981,139 @@ namespace
         return require(ok, "tcp engine close-drain reply should round-trip");
     }
 
+    bool test_tcp_engine_peer_half_close_drains_response()
+    {
+        yuan::net::IocpTcpEngine engine;
+        std::mutex mutex;
+        std::condition_variable cond;
+        std::atomic_bool saw_input_shutdown{false};
+        std::atomic_bool saw_close{false};
+
+        class HalfCloseHandler final : public yuan::net::ConnectionHandler
+        {
+        public:
+            HalfCloseHandler(std::atomic_bool &input_shutdown, std::condition_variable &cv)
+                : input_shutdown_(input_shutdown), cv_(cv)
+            {
+            }
+
+            void on_connected(const std::shared_ptr<yuan::net::Connection> &) override
+            {
+            }
+
+            void on_error(const std::shared_ptr<yuan::net::Connection> &) override
+            {
+            }
+
+            void on_read(const std::shared_ptr<yuan::net::Connection> &) override
+            {
+            }
+
+            void on_write(const std::shared_ptr<yuan::net::Connection> &) override
+            {
+            }
+
+            void on_close(const std::shared_ptr<yuan::net::Connection> &) override
+            {
+            }
+
+            void on_input_shutdown(const std::shared_ptr<yuan::net::Connection> &conn) override
+            {
+                if (conn && conn->input_shutdown()) {
+                    input_shutdown_.store(true, std::memory_order_release);
+                    cv_.notify_all();
+                }
+            }
+
+        private:
+            std::atomic_bool &input_shutdown_;
+            std::condition_variable &cv_;
+        };
+
+        auto handler = std::make_shared<HalfCloseHandler>(saw_input_shutdown, cond);
+
+        yuan::net::IocpTcpEngineCallbacks callbacks;
+        callbacks.on_accept = [&](const std::shared_ptr<yuan::net::IocpTcpConnection> &connection) {
+            connection->set_connection_handler(handler);
+        };
+        callbacks.on_read = [&](const std::shared_ptr<yuan::net::IocpTcpConnection> &connection,
+                                const char *data,
+                                std::size_t size) {
+            if (size == 5 && std::memcmp(data, "half!", 5) == 0) {
+                yuan::buffer::ByteBuffer reply;
+                reply.append("reply", 5);
+                connection->write_and_flush(reply);
+            }
+        };
+        callbacks.on_close = [&](const std::shared_ptr<yuan::net::IocpTcpConnection> &) {
+            saw_close.store(true, std::memory_order_release);
+            cond.notify_all();
+        };
+
+        if (!require(engine.listen("127.0.0.1", 0, 1, std::move(callbacks)),
+                     "tcp engine half-close listen should succeed")) {
+            return false;
+        }
+
+        const int client = yuan::net::socket::create_ipv4_tcp_socket(false);
+        if (!require(client >= 0, "tcp engine half-close client socket should be created")) {
+            engine.stop();
+            return false;
+        }
+        set_recv_timeout(client, 2000);
+        if (!require(yuan::net::socket::connect(client, yuan::net::InetAddress("127.0.0.1", engine.local_port())) == 0,
+                     "tcp engine half-close client connect should succeed")) {
+            yuan::net::socket::close_fd(client);
+            engine.stop();
+            return false;
+        }
+        if (!require(::send(static_cast<SOCKET>(client), "half!", 5, 0) == 5,
+                     "tcp engine half-close client send should succeed")) {
+            yuan::net::socket::close_fd(client);
+            engine.stop();
+            return false;
+        }
+        shutdown_send(client);
+
+        std::array<char, 16> reply{};
+        if (!require(::recv(static_cast<SOCKET>(client), reply.data(), 5, 0) == 5,
+                     "tcp engine half-close should receive response before close")) {
+            yuan::net::socket::close_fd(client);
+            engine.stop();
+            return false;
+        }
+        if (!require(std::memcmp(reply.data(), "reply", 5) == 0,
+                     "tcp engine half-close response should match")) {
+            yuan::net::socket::close_fd(client);
+            engine.stop();
+            return false;
+        }
+
+        std::array<char, 1> eof{};
+        if (!require(::recv(static_cast<SOCKET>(client), eof.data(), 1, 0) == 0,
+                     "tcp engine half-close should close after drained response")) {
+            yuan::net::socket::close_fd(client);
+            engine.stop();
+            return false;
+        }
+
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            if (!cond.wait_for(lock, std::chrono::seconds(1), [&]() {
+                    return saw_input_shutdown.load(std::memory_order_acquire) &&
+                           saw_close.load(std::memory_order_acquire);
+                })) {
+                yuan::net::socket::close_fd(client);
+                engine.stop();
+                return require(false, "tcp engine half-close should notify input shutdown and close");
+            }
+        }
+
+        yuan::net::socket::close_fd(client);
+        engine.stop();
+        return true;
+    }
+
     bool test_iocp_connection_read_dispatch_gate()
     {
         yuan::net::IocpTcpEngine engine;
@@ -1033,7 +1182,6 @@ namespace
                 auto flush = co_await ctx.flush_async(1000);
                 handled.store(flush.status == yuan::coroutine::IoStatus::success, std::memory_order_release);
             }
-            runtime.stop();
             co_return;
         });
 
@@ -1146,6 +1294,116 @@ namespace
         return require(handled.load(std::memory_order_acquire),
                        "iocp async listener coroutine should handle request");
     }
+
+    bool test_iocp_async_listener_half_close_response()
+    {
+        const auto port = reserve_tcp_port();
+        if (!require(port != 0, "iocp async half-close should reserve a port")) {
+            return false;
+        }
+
+        yuan::net::NetworkRuntime runtime;
+        yuan::net::AsyncListenerHost listener;
+        yuan::net::ListenOptions options;
+        options.use_iocp = true;
+        options.iocp_worker_count = 1;
+
+        std::atomic_bool handled{false};
+        std::atomic_bool runtime_done{false};
+
+        listener.set_connection_handler([&](yuan::net::AsyncConnectionContext ctx)->yuan::coroutine::Task<void> {
+            auto read = co_await ctx.read_async(1000);
+            if (read.status == yuan::coroutine::IoStatus::success &&
+                read.data.readable_bytes() == 5 &&
+                std::memcmp(read.data.read_ptr(), "half!", 5) == 0) {
+                yuan::buffer::ByteBuffer reply;
+                reply.append("reply", 5);
+                ctx.write_and_flush(reply);
+                handled.store(true, std::memory_order_release);
+            }
+            co_return;
+        });
+
+        if (!require(listener.bind("127.0.0.1", port, runtime, options),
+                     "iocp async half-close listener should bind")) {
+            return false;
+        }
+
+        auto accept_task = listener.run_async();
+        accept_task.resume();
+        accept_task.detach();
+
+        std::thread runtime_thread([&]() {
+            runtime.run();
+            runtime_done.store(true, std::memory_order_release);
+        });
+
+        const int client = yuan::net::socket::create_ipv4_tcp_socket(false);
+        if (!require(client >= 0, "iocp async half-close client socket should be created")) {
+            runtime.stop();
+            if (runtime_thread.joinable()) {
+                runtime_thread.join();
+            }
+            listener.close();
+            return false;
+        }
+        set_recv_timeout(client, 2000);
+        if (!require(yuan::net::socket::connect(client, yuan::net::InetAddress("127.0.0.1", port)) == 0,
+                     "iocp async half-close client connect should succeed")) {
+            yuan::net::socket::close_fd(client);
+            runtime.stop();
+            if (runtime_thread.joinable()) {
+                runtime_thread.join();
+            }
+            listener.close();
+            return false;
+        }
+        if (!require(::send(static_cast<SOCKET>(client), "half!", 5, 0) == 5,
+                     "iocp async half-close client send should succeed")) {
+            yuan::net::socket::close_fd(client);
+            runtime.stop();
+            if (runtime_thread.joinable()) {
+                runtime_thread.join();
+            }
+            listener.close();
+            return false;
+        }
+        shutdown_send(client);
+
+        std::array<char, 16> reply{};
+        if (!require(::recv(static_cast<SOCKET>(client), reply.data(), 5, 0) == 5,
+                     "iocp async half-close should receive response before close")) {
+            yuan::net::socket::close_fd(client);
+            runtime.stop();
+            if (runtime_thread.joinable()) {
+                runtime_thread.join();
+            }
+            listener.close();
+            return false;
+        }
+        if (!require(std::memcmp(reply.data(), "reply", 5) == 0,
+                     "iocp async half-close response should match")) {
+            yuan::net::socket::close_fd(client);
+            runtime.stop();
+            if (runtime_thread.joinable()) {
+                runtime_thread.join();
+            }
+            listener.close();
+            return false;
+        }
+
+        yuan::net::socket::close_fd(client);
+        for (int i = 0; !runtime_done.load(std::memory_order_acquire) && i < 100; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        runtime.stop();
+        if (runtime_thread.joinable()) {
+            runtime_thread.join();
+        }
+        listener.close();
+        return require(handled.load(std::memory_order_acquire),
+                       "iocp async half-close coroutine should write response");
+    }
 #endif
 }
 
@@ -1213,10 +1471,16 @@ int main()
     if (!test_tcp_engine_close_drains_output()) {
         return 1;
     }
+    if (!test_tcp_engine_peer_half_close_drains_response()) {
+        return 1;
+    }
     if (!test_iocp_connection_read_dispatch_gate()) {
         return 1;
     }
     if (!test_iocp_async_listener_host_loopback()) {
+        return 1;
+    }
+    if (!test_iocp_async_listener_half_close_response()) {
         return 1;
     }
 #else

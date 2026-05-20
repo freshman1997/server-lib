@@ -66,6 +66,7 @@ namespace
         std::string save_path = ".";
         bool enable_keep_alive = true;
         bool enable_cors = true;
+        bool enable_ssl = false;
         std::string app_name = "bt_downloader";
         int bt_max_peers = 50;
         int bt_listen_port = 6881;
@@ -108,6 +109,9 @@ namespace
         }
         if (j.contains("enable_cors") && j["enable_cors"].is_boolean()) {
             cfg.enable_cors = j["enable_cors"].get<bool>();
+        }
+        if (j.contains("enable_ssl") && j["enable_ssl"].is_boolean()) {
+            cfg.enable_ssl = j["enable_ssl"].get<bool>();
         }
         if (j.contains("app_name") && j["app_name"].is_string()) {
             cfg.app_name = j["app_name"].get<std::string>();
@@ -188,6 +192,7 @@ int main(int argc, char **argv)
     cfg.admin_port = read_env_int("YUAN_BT_ADMIN_PORT", cfg.admin_port);
     cfg.torrent_file = read_env_string("YUAN_BT_TORRENT_FILE", cfg.torrent_file);
     cfg.save_path = read_env_string("YUAN_BT_SAVE_PATH", cfg.save_path);
+    cfg.enable_ssl = read_env_bool("YUAN_BT_ENABLE_SSL", cfg.enable_ssl);
     cfg.bt_max_peers = read_env_int("YUAN_BT_MAX_PEERS", cfg.bt_max_peers);
     cfg.bt_listen_port = read_env_int("YUAN_BT_LISTEN_PORT", cfg.bt_listen_port);
     cfg.bt_listen_port_end = read_env_int("YUAN_BT_LISTEN_PORT_END", cfg.bt_listen_port_end);
@@ -201,6 +206,7 @@ int main(int argc, char **argv)
     yuan::net::http::HttpServerConfig http_config;
     http_config.enable_keep_alive = cfg.enable_keep_alive;
     http_config.enable_cors = cfg.enable_cors;
+    http_config.enable_ssl = cfg.enable_ssl;
 
     yuan::app::RuntimeContext context;
     context.app_name = cfg.app_name;
@@ -249,8 +255,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    std::cout << "bt_downloader started. admin=http://127.0.0.1:" << cfg.admin_port << "/admin\n";
-    std::cout << "env: YUAN_BT_CONFIG, YUAN_BT_ADMIN_PORT, YUAN_BT_TORRENT_FILE, YUAN_BT_SAVE_PATH, YUAN_BT_MAX_PEERS, YUAN_BT_LISTEN_PORT, YUAN_BT_DOWNLOAD_LIMIT_KBPS, YUAN_BT_UPLOAD_LIMIT_KBPS, YUAN_BT_ENABLE_DHT, YUAN_BT_ENABLE_PEX, YUAN_BT_ENABLE_UPNP, YUAN_BT_MAX_CONCURRENT, YUAN_ADMIN_TOKEN\n";
+    std::cout << "bt_downloader started. admin="
+              << (cfg.enable_ssl ? "https" : "http")
+              << "://127.0.0.1:" << cfg.admin_port << "/admin\n";
+    std::cout << "env: YUAN_BT_CONFIG, YUAN_BT_ADMIN_PORT, YUAN_BT_TORRENT_FILE, YUAN_BT_SAVE_PATH, YUAN_BT_ENABLE_SSL, YUAN_BT_MAX_PEERS, YUAN_BT_LISTEN_PORT, YUAN_BT_DOWNLOAD_LIMIT_KBPS, YUAN_BT_UPLOAD_LIMIT_KBPS, YUAN_BT_ENABLE_DHT, YUAN_BT_ENABLE_PEX, YUAN_BT_ENABLE_UPNP, YUAN_BT_MAX_CONCURRENT, YUAN_ADMIN_TOKEN\n";
 
     while (!g_should_exit) {
         bootstrap.poll_workers();

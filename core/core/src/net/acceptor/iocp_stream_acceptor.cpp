@@ -43,6 +43,9 @@ namespace yuan::net
             if (iocp_conn && !iocp_conn->try_mark_read_dispatch_pending()) {
                 return;
             }
+            if (iocp_conn) {
+                iocp_conn->mark_defer_close_on_unconsumed_input();
+            }
 
             const bool queued = dispatch([conn, iocp_conn](ConnectionHandler &handler) {
                 struct PendingReadGuard

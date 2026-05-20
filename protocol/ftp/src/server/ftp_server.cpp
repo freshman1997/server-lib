@@ -7,6 +7,7 @@
 #include "net/channel/channel.h"
 #include "server/server_session.h"
 #include "server/command.h"
+#include "server/command_support.h"
 #include "server/context.h"
 #include "common/def.h"
 
@@ -122,10 +123,7 @@ namespace yuan::net::ftp
                     continue;
                 }
 
-                ctx.append_output(std::to_string((int)res.code_));
-                ctx.append_output(" ");
-                ctx.append_output(res.body_);
-                ctx.append_output("\r\n");
+                ctx.append_output(format_ftp_response(res));
                 ctx.flush();
 
                 if (session->has_pending_transfer()) {

@@ -197,7 +197,7 @@ namespace yuan::net::bit_torrent
                 }
                 delete meta_parsed;
 
-                combined += "e1:v6:YZ00014:reqqi50e";
+                combined += "e1:v6:YZ00014:reqqi50ee";
                 ext_hs.assign(combined.begin(), combined.end());
             } else if (pex_manager_) {
                 ext_hs = pex_manager_->build_ext_handshake();

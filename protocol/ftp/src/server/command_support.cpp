@@ -2,6 +2,8 @@
 #include "common/session.h"
 
 #include <chrono>
+#include <algorithm>
+#include <cctype>
 #include <iomanip>
 #include <sstream>
 
@@ -10,7 +12,29 @@ namespace yuan::net::ftp
     namespace
     {
         namespace fs = std::filesystem;
-        fs::path session_root(FtpSession *session) { return fs::path(session->get_root_dir()).lexically_normal(); }
+        fs::path normalize_scope_path(const fs::path &path)
+        {
+            std::error_code ec;
+            auto normalized = fs::weakly_canonical(path, ec);
+            if (!ec) {
+                return normalized.lexically_normal();
+            }
+            return fs::absolute(path, ec).lexically_normal();
+        }
+
+        fs::path session_root(FtpSession *session) { return normalize_scope_path(fs::path(session->get_root_dir())); }
+
+        std::string comparable_path(fs::path path)
+        {
+            auto text = path.lexically_normal().generic_string();
+#ifdef _WIN32
+            std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+#endif
+            return text;
+        }
+
         std::string permission_string(const fs::directory_entry &entry)
         {
             const auto perms = entry.status().permissions();
@@ -50,12 +74,15 @@ namespace yuan::net::ftp
 
     bool path_within_root(FtpSession *session, const fs::path &path)
     {
-        const fs::path normalized_root = session_root(session).lexically_normal();
-        const fs::path normalized_candidate = path.lexically_normal();
+        const fs::path normalized_root = session_root(session);
+        const fs::path normalized_candidate = normalize_scope_path(path);
 
+        if (comparable_path(normalized_candidate) == comparable_path(normalized_root)) {
+            return true;
+        }
         const fs::path relative = normalized_candidate.lexically_relative(normalized_root);
         if (relative.empty()) {
-            return true;
+            return false;
         }
 
         for (const auto &part : relative) {
@@ -74,6 +101,39 @@ namespace yuan::net::ftp
         }
         auto virtualPath = (fs::path("/") / relative).lexically_normal().generic_string();
         return virtualPath.empty() ? "/" : virtualPath;
+    }
+
+    std::string format_ftp_response(const FtpCommandResponse &response)
+    {
+        if (response.code_ == FtpResponseCode::invalid) {
+            return {};
+        }
+
+        const auto code = std::to_string(static_cast<int>(response.code_));
+        if (!response.multiline_) {
+            return code + " " + response.body_ + "\r\n";
+        }
+
+        std::vector<std::string> lines;
+        std::stringstream input(response.body_);
+        std::string line;
+        while (std::getline(input, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            lines.push_back(line);
+        }
+        if (lines.empty()) {
+            lines.push_back("");
+        }
+
+        std::string out = code + "-" + lines.front() + "\r\n";
+        for (std::size_t i = 1; i < lines.size(); ++i) {
+            out += lines[i].empty() || lines[i].front() == ' ' ? lines[i] : " " + lines[i];
+            out += "\r\n";
+        }
+        out += code + " End\r\n";
+        return out;
     }
 
     std::string build_pasv_response(const std::string &ip, int port)

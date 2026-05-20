@@ -4,9 +4,14 @@
     "server_name": "mini-nginx",
     "thread_pool_size": 2,
     "worker_processes": 1,
+    "enable_ssl": false,
     "enable_keep_alive": true,
     "enable_cors": true,
     "enable_http2": true,
+    "use_iocp": true,
+    "iocp_worker_count": 4,
+    "backlog": 1024,
+    "allowed_methods": ["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     "max_connections": 0,
     "max_connections_per_ip": 0,
     "max_inflight_requests_per_ip": 0,
@@ -24,6 +29,27 @@
     "requests_per_second": 100,
     "burst": 50
   },
+  "health": {
+    "enabled": true,
+    "path": "/healthz",
+    "json": true
+  },
+  "headers": {
+    "add": {
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "SAMEORIGIN",
+      "Referrer-Policy": "strict-origin-when-cross-origin"
+    }
+  },
+  "redirects": [
+    {
+      "from": "/old-static",
+      "to": "/static",
+      "code": 301,
+      "prefix": true,
+      "preserve_path": true
+    }
+  ],
   "static": [
     {
       "location": "/static",

@@ -44,7 +44,10 @@ namespace yuan::net::ftp
         FtpSessionValueType type = FtpSessionValueType::invalid;
 
         FtpSessionValue() = default;
-        ~FtpSessionValue() = default;
+        ~FtpSessionValue()
+        {
+            destroy_string();
+        }
 
         FtpSessionValue(const FtpSessionValue &other)
             : type(other.type)
@@ -273,10 +276,6 @@ namespace yuan::net::ftp
         template <typename T>
         void set_item_value(const std::string &key, T &&val)
         {
-            auto it = context_.values.find(key);
-            if (it != context_.values.end() && it->second.type == FtpSessionValueType::string_val && it->second.item.sval) {
-                delete it->second.item.sval;
-            }
             FtpSessionValue itemVal;
             using DecayedT = std::decay_t<T>;
             if
@@ -347,13 +346,7 @@ namespace yuan::net::ftp
 
         void remove_item(const std::string &key)
         {
-            auto it = context_.values.find(key);
-            if (it != context_.values.end()) {
-                if (it->second.type == FtpSessionValueType::string_val && it->second.item.sval) {
-                    delete it->second.item.sval;
-                }
-                context_.values.erase(it);
-            }
+            context_.values.erase(key);
         }
 
         FileManager *get_file_manager()

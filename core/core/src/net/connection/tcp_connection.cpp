@@ -351,7 +351,11 @@ namespace yuan::net
                 }
 #endif
 
-                channel_->enable_write();
+                if (ssl_handler_) {
+                    update_ssl_handshake_interest(*ssl_handler_);
+                } else {
+                    channel_->enable_write();
+                }
                 if (eventHandler_) {
                     eventHandler_->update_channel(ptr_of(channel_));
                 }
@@ -413,6 +417,7 @@ namespace yuan::net
         }
         if (front && front->readable_bytes() > 0) {
             channel_->disable_read();
+            channel_->enable_write();
             if (eventHandler_) {
                 eventHandler_->update_channel(ptr_of(channel_));
             }
@@ -814,6 +819,10 @@ namespace yuan::net
                 handler->on_close(shared_from_this());
             }
             clear_event_waiters();
+        }
+
+        if (socket_) {
+            socket_->close();
         }
 
         if (eventHandler_ && channel_) {

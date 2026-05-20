@@ -1,73 +1,87 @@
 # bt_downloader
 
-`bt_downloader` 是一个独立的 BT 下载服务，内置 Web 管理后台。
+`bt_downloader` is a standalone BitTorrent download service with a built-in Web admin dashboard.
 
-## 功能
+## Features
 
-- Web 后台：`/admin`
-- BT 监控：下载进度、peer、事件计数
-- BT 控制：启动/停止、加载 `.torrent` 文件
-- 构建后自动拷贝 web 资源到可执行目录下 `web/admin`
+- Web dashboard: `/admin`
+- Add tasks by uploading `.torrent`, by server-side `.torrent` path, or by magnet URI
+- Multi-task queue with start, pause, resume, stop, remove, retry, and detail views
+- Progress, peer, tracker, DHT, NAT, speed, ratio, and task history monitoring
+- Persistent task list and uploaded torrent files
+- Optional admin API token via `YUAN_ADMIN_TOKEN`
+- Plain HTTP dashboard by default, with optional SSL via config or env
 
-## 构建
+## Build
 
 ```bash
 cmake --build build --target bt_downloader -j4
 ```
 
-## 运行
+## Run
 
 ```bash
 ./build/server/bt_downloader/bt_downloader
 ```
 
-启动后访问：`http://127.0.0.1:18080/admin`
+Then open:
 
-## 配置
+```text
+http://127.0.0.1:18080/admin
+```
 
-优先级：环境变量 > 配置文件 > 默认值。
+## Configuration
 
-### 配置文件
+Priority: environment variables > config file > defaults.
 
-默认读取：`server/bt_downloader/config.json`。
+The default config file is:
 
-也可通过参数或环境变量指定：
+```text
+server/bt_downloader/config.json
+```
+
+You can also pass a config file path:
 
 ```bash
 ./build/server/bt_downloader/bt_downloader /path/to/config.json
 ```
 
-或
+or use:
 
 ```bash
 YUAN_BT_CONFIG=/path/to/config.json ./build/server/bt_downloader/bt_downloader
 ```
 
-配置项示例见 `server/bt_downloader/config.json`。
+## Environment Variables
 
-### 环境变量
+- `YUAN_BT_CONFIG`: config file path
+- `YUAN_BT_ADMIN_PORT`: dashboard/API port
+- `YUAN_BT_TORRENT_FILE`: torrent file loaded on startup
+- `YUAN_BT_SAVE_PATH`: default download directory
+- `YUAN_BT_MAX_PEERS`: max peers per task
+- `YUAN_BT_LISTEN_PORT`: first BT listen port
+- `YUAN_BT_LISTEN_PORT_END`: last BT listen port
+- `YUAN_BT_DOWNLOAD_LIMIT_KBPS`: download limit in KB/s, `0` means unlimited
+- `YUAN_BT_UPLOAD_LIMIT_KBPS`: upload limit in KB/s, `0` means unlimited
+- `YUAN_BT_ENABLE_DHT`: enable DHT, `1/true/on` or `0/false/off`
+- `YUAN_BT_ENABLE_PEX`: enable PEX
+- `YUAN_BT_ENABLE_UPNP`: enable UPnP/NAT-PMP
+- `YUAN_BT_ENABLE_SSL`: enable HTTPS for the admin server
+- `YUAN_BT_MAX_CONCURRENT`: max concurrent running downloads
+- `YUAN_ADMIN_TOKEN`: require `Authorization: Bearer <token>` for admin APIs
 
-- `YUAN_BT_CONFIG`：配置文件路径
-- `YUAN_BT_ADMIN_PORT`：后台端口
-- `YUAN_BT_TORRENT_FILE`：启动时加载 torrent 文件
-- `YUAN_BT_SAVE_PATH`：下载保存目录
-- `YUAN_BT_MAX_PEERS`：最大 peer 数
-- `YUAN_BT_LISTEN_PORT`：BT 监听端口
-- `YUAN_BT_DOWNLOAD_LIMIT_KBPS`：下载限速（KB/s）
-- `YUAN_BT_UPLOAD_LIMIT_KBPS`：上传限速（KB/s）
-- `YUAN_ADMIN_TOKEN`：设置后需要 `Authorization: Bearer <token>` 调用后台 API
-
-## 后台 API
+## Admin API
 
 - `GET /admin/api/overview`
-- `POST /admin/api/bt/control`，body: `{"action":"start|stop"}`
-- `POST /admin/api/bt/torrent`，body: `{"torrent_path":"...","save_path":"..."}`
-- `POST /admin/api/bt/settings`，body: `{"max_peers":80,"listen_port":6881,"download_limit_kbps":1024,"upload_limit_kbps":256}`
+- `GET /admin/api/bt/tasks`
+- `GET /admin/api/bt/tasks/detail?task_id=1`
+- `POST /admin/api/bt/torrent` with `{"torrent_path":"...","save_path":"..."}`
+- `POST /admin/api/bt/magnet` with `{"magnet_uri":"...","save_path":"..."}`
+- `POST /admin/api/bt/upload` multipart form field `torrent`
+- `POST /admin/api/bt/tasks/start` with `{"task_id":1}`
+- `POST /admin/api/bt/tasks/pause` with `{"task_id":1}`
+- `POST /admin/api/bt/tasks/resume` with `{"task_id":1}`
+- `POST /admin/api/bt/tasks/stop` with `{"task_id":1}`
+- `POST /admin/api/bt/tasks/remove` with `{"task_id":1}`
+- `POST /admin/api/bt/settings`
 - `GET /admin/api/bt/history?page=1&page_size=20`
-
-## 说明
-
-- `download_limit_kbps/upload_limit_kbps` 已接入 BT core 令牌桶限速（单位 KB/s，`0` 表示不限速）。
-- Web 后台支持导出/导入配置模板：
-  - 导出：根据当前运行态生成 `bt_downloader.config.template.json`
-  - 导入：先应用 `bt` 设置，再按 `torrent_file/save_path` 自动加载任务（若提供）

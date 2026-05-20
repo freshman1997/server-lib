@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -24,6 +25,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace
@@ -60,6 +62,36 @@ namespace
         return raw ? std::string(raw) : default_value;
     }
 
+    bool json_bool(const nlohmann::json &json, const char *key, bool fallback)
+    {
+        return json.contains(key) && json[key].is_boolean() ? json[key].get<bool>() : fallback;
+    }
+
+    int json_int(const nlohmann::json &json, const char *key, int fallback)
+    {
+        return json.contains(key) && json[key].is_number_integer() ? json[key].get<int>() : fallback;
+    }
+
+    std::string to_upper_ascii(std::string value)
+    {
+        for (auto &ch : value) {
+            ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        }
+        return value;
+    }
+
+    std::string join_methods(const std::unordered_set<std::string> &methods)
+    {
+        std::string out;
+        for (const auto &method : methods) {
+            if (!out.empty()) {
+                out += ", ";
+            }
+            out += method;
+        }
+        return out;
+    }
+
     void print_usage(const char *program)
     {
         std::cout << "mini_nginx usage:\n"
@@ -68,6 +100,7 @@ namespace
                   << "  YUAN_MINI_NGINX_PORT\n"
                   << "  YUAN_MINI_NGINX_SERVER_NAME\n"
                   << "  YUAN_MINI_NGINX_WORKERS\n"
+                  << "  YUAN_MINI_NGINX_USE_IOCP\n"
                   << "  YUAN_MINI_NGINX_ACCESS_LOG\n"
                   << "  YUAN_MINI_NGINX_ACCESS_LOG_PATH\n";
     }
@@ -82,6 +115,11 @@ namespace
             error = "route.root(string) is required";
             return false;
         }
+        const auto root = route["root"].get<std::string>();
+        if (root.empty() || root.front() != '/') {
+            error = "route.root must start with '/'";
+            return false;
+        }
         if (!route.contains("target") || !route["target"].is_array() || route["target"].empty()) {
             error = "route.target(non-empty array) is required";
             return false;
@@ -93,12 +131,31 @@ namespace
                 error = "route.target items must be [host, port]";
                 return false;
             }
+            const auto port = upstream[1].get<uint64_t>();
+            if (port == 0 || port > 65535) {
+                error = "route.target port must be in range [1, 65535]";
+                return false;
+            }
         }
         return true;
     }
 
+    struct RedirectRule
+    {
+        std::string from;
+        std::string to;
+        int code = 302;
+        bool prefix = false;
+        bool preserve_path = false;
+    };
+
     struct MiniNginxConfig
     {
+        MiniNginxConfig()
+        {
+            server_config.enable_ssl = false;
+        }
+
         yuan::net::http::HttpServerConfig server_config;
         int listen_port = 8080;
         bool access_log_enabled = true;
@@ -114,9 +171,148 @@ namespace
         int max_concurrent_requests_per_ip = 0;
         int worker_processes = 1;
         bool expose_stats = true;
+        bool health_enabled = true;
+        bool health_json = false;
+        std::string health_path = "/healthz";
+        std::vector<std::pair<std::string, std::string>> response_headers;
+        std::vector<RedirectRule> redirects;
+        std::unordered_set<std::string> allowed_methods;
         std::vector<yuan::net::http::StaticMount> static_mounts;
         std::vector<nlohmann::json> routes;
     };
+
+    bool parse_header_map(const nlohmann::json &obj,
+                          std::vector<std::pair<std::string, std::string>> &headers)
+    {
+        if (!obj.is_object()) {
+            std::cerr << "response headers must be an object\n";
+            return false;
+        }
+
+        for (auto it = obj.begin(); it != obj.end(); ++it) {
+            if (!it.value().is_string()) {
+                std::cerr << "response header values must be strings\n";
+                return false;
+            }
+            const auto name = it.key();
+            if (name.empty() || name.find_first_of("\r\n:") != std::string::npos) {
+                std::cerr << "response header name is invalid\n";
+                return false;
+            }
+            headers.emplace_back(name, it.value().get<std::string>());
+        }
+        return true;
+    }
+
+    bool parse_edge_features(const nlohmann::json &json, MiniNginxConfig &cfg)
+    {
+        cfg.response_headers.clear();
+        cfg.redirects.clear();
+        cfg.allowed_methods.clear();
+
+        if (json.contains("health")) {
+            if (!json["health"].is_object()) {
+                std::cerr << "config 'health' must be an object\n";
+                return false;
+            }
+            const auto &health = json["health"];
+            cfg.health_enabled = json_bool(health, "enabled", cfg.health_enabled);
+            cfg.health_json = json_bool(health, "json", cfg.health_json);
+            if (health.contains("path") && health["path"].is_string()) {
+                cfg.health_path = health["path"].get<std::string>();
+            }
+            if (cfg.health_path.empty() || cfg.health_path.front() != '/') {
+                std::cerr << "health.path must start with '/'\n";
+                return false;
+            }
+        }
+
+        if (json.contains("response_headers") &&
+            !parse_header_map(json["response_headers"], cfg.response_headers)) {
+            return false;
+        }
+        if (json.contains("headers")) {
+            if (!json["headers"].is_object()) {
+                std::cerr << "config 'headers' must be an object\n";
+                return false;
+            }
+            if (json["headers"].contains("add")) {
+                if (!parse_header_map(json["headers"]["add"], cfg.response_headers)) {
+                    return false;
+                }
+            } else if (!parse_header_map(json["headers"], cfg.response_headers)) {
+                return false;
+            }
+        }
+
+        auto parse_allowed_methods = [&](const nlohmann::json &arr) {
+            if (!arr.is_array()) {
+                std::cerr << "allowed_methods must be an array\n";
+                return false;
+            }
+            for (const auto &item : arr) {
+                if (!item.is_string()) {
+                    std::cerr << "allowed_methods values must be strings\n";
+                    return false;
+                }
+                const auto method = to_upper_ascii(item.get<std::string>());
+                if (method.empty()) {
+                    std::cerr << "allowed_methods values must not be empty\n";
+                    return false;
+                }
+                cfg.allowed_methods.insert(method);
+            }
+            return true;
+        };
+
+        if (json.contains("allowed_methods") && !parse_allowed_methods(json["allowed_methods"])) {
+            return false;
+        }
+        if (json.contains("server") && json["server"].is_object() &&
+            json["server"].contains("allowed_methods") &&
+            !parse_allowed_methods(json["server"]["allowed_methods"])) {
+            return false;
+        }
+
+        if (json.contains("redirects")) {
+            if (!json["redirects"].is_array()) {
+                std::cerr << "config 'redirects' must be an array\n";
+                return false;
+            }
+            for (const auto &item : json["redirects"]) {
+                if (!item.is_object()) {
+                    std::cerr << "redirect item must be object\n";
+                    return false;
+                }
+                if (!item.contains("from") || !item["from"].is_string() ||
+                    !item.contains("to") || !item["to"].is_string()) {
+                    std::cerr << "redirect.from and redirect.to are required strings\n";
+                    return false;
+                }
+                RedirectRule rule;
+                rule.from = item["from"].get<std::string>();
+                rule.to = item["to"].get<std::string>();
+                rule.code = json_int(item, "code", rule.code);
+                rule.prefix = json_bool(item, "prefix", rule.prefix);
+                rule.preserve_path = json_bool(item, "preserve_path", rule.preserve_path);
+                if (rule.from.empty() || rule.from.front() != '/') {
+                    std::cerr << "redirect.from must start with '/'\n";
+                    return false;
+                }
+                if (rule.to.empty() || rule.to.find_first_of("\r\n") != std::string::npos) {
+                    std::cerr << "redirect.to is invalid\n";
+                    return false;
+                }
+                if (rule.code != 301 && rule.code != 302 && rule.code != 303) {
+                    std::cerr << "redirect.code must be 301, 302, or 303\n";
+                    return false;
+                }
+                cfg.redirects.push_back(std::move(rule));
+            }
+        }
+
+        return true;
+    }
 
     bool parse_static_mounts(const nlohmann::json &json, MiniNginxConfig &cfg)
     {
@@ -146,6 +342,14 @@ namespace
             yuan::net::http::StaticMount mount;
             mount.prefix = item["location"].get<std::string>();
             mount.root = item["root"].get<std::string>();
+            if (mount.prefix.empty() || mount.prefix.front() != '/') {
+                std::cerr << "static.location must start with '/'\n";
+                return false;
+            }
+            if (mount.root.empty()) {
+                std::cerr << "static.root must not be empty\n";
+                return false;
+            }
 
             if (item.contains("auto_index") && item["auto_index"].is_boolean()) {
                 mount.options.auto_index = item["auto_index"].get<bool>();
@@ -193,6 +397,39 @@ namespace
         return true;
     }
 
+    void parse_listen_options(const nlohmann::json &server, MiniNginxConfig &cfg)
+    {
+        auto apply = [&](const nlohmann::json &options) {
+            cfg.server_config.listen_options.reuse_addr =
+                json_bool(options, "reuse_addr", cfg.server_config.listen_options.reuse_addr);
+            cfg.server_config.listen_options.reuse_port =
+                json_bool(options, "reuse_port", cfg.server_config.listen_options.reuse_port);
+            cfg.server_config.listen_options.exclusive_addr =
+                json_bool(options, "exclusive_addr", cfg.server_config.listen_options.exclusive_addr);
+            cfg.server_config.listen_options.non_block =
+                json_bool(options, "non_block", cfg.server_config.listen_options.non_block);
+            cfg.server_config.listen_options.use_iocp =
+                json_bool(options, "use_iocp", cfg.server_config.listen_options.use_iocp);
+            cfg.server_config.listen_options.backlog =
+                json_int(options, "backlog", cfg.server_config.listen_options.backlog);
+            if (options.contains("iocp_worker_count") && options["iocp_worker_count"].is_number_unsigned()) {
+                cfg.server_config.listen_options.iocp_worker_count =
+                    options["iocp_worker_count"].get<std::size_t>();
+            }
+        };
+
+        apply(server);
+        if (server.contains("listen_options") && server["listen_options"].is_object()) {
+            apply(server["listen_options"]);
+        }
+        if (cfg.server_config.listen_options.backlog < 1) {
+            cfg.server_config.listen_options.backlog = 128;
+        }
+        if (cfg.server_config.listen_options.iocp_worker_count == 0) {
+            cfg.server_config.listen_options.iocp_worker_count = 1;
+        }
+    }
+
     bool parse_server_config(const nlohmann::json &json, MiniNginxConfig &cfg)
     {
         if (json.contains("server")) {
@@ -213,6 +450,15 @@ namespace
             }
             if (server.contains("enable_keep_alive") && server["enable_keep_alive"].is_boolean()) {
                 cfg.server_config.enable_keep_alive = server["enable_keep_alive"].get<bool>();
+            }
+            if (server.contains("enable_ssl") && server["enable_ssl"].is_boolean()) {
+                cfg.server_config.enable_ssl = server["enable_ssl"].get<bool>();
+            }
+            if (server.contains("ssl_certificate") && server["ssl_certificate"].is_string()) {
+                cfg.server_config.ssl_certificate = server["ssl_certificate"].get<std::string>();
+            }
+            if (server.contains("ssl_certificate_key") && server["ssl_certificate_key"].is_string()) {
+                cfg.server_config.ssl_certificate_key = server["ssl_certificate_key"].get<std::string>();
             }
             if (server.contains("enable_cors") && server["enable_cors"].is_boolean()) {
                 cfg.server_config.enable_cors = server["enable_cors"].get<bool>();
@@ -241,6 +487,7 @@ namespace
             if (server.contains("worker_processes") && server["worker_processes"].is_number_integer()) {
                 cfg.worker_processes = server["worker_processes"].get<int>();
             }
+            parse_listen_options(server, cfg);
         }
 
         if (json.contains("access_log") && json["access_log"].is_object()) {
@@ -276,11 +523,16 @@ namespace
         return true;
     }
 
-    bool build_routes_from_upstreams(const nlohmann::json &json, std::vector<nlohmann::json> &routes)
+    bool build_routes_from_upstreams(const nlohmann::json &json,
+                                     std::vector<nlohmann::json> &routes,
+                                     bool require_routes)
     {
         if (!json.contains("routes")) {
-            std::cerr << "config 'routes' is required\n";
-            return false;
+            if (require_routes) {
+                std::cerr << "config 'routes' is required\n";
+                return false;
+            }
+            return true;
         }
         if (!json.contains("upstreams") || !json["upstreams"].is_object()) {
             std::cerr << "config with 'routes' must provide object 'upstreams'\n";
@@ -394,18 +646,26 @@ namespace
         if (!parse_server_config(json, cfg)) {
             return false;
         }
-
-        cfg.routes.clear();
-        if (!build_routes_from_upstreams(json, cfg.routes)) {
+        if (!parse_edge_features(json, cfg)) {
             return false;
         }
 
+        cfg.routes.clear();
         if (!parse_static_mounts(json, cfg)) {
             return false;
         }
 
-        if (cfg.routes.empty()) {
-            std::cerr << "at least one route is required (routes[] with upstreams{})\n";
+        const bool require_routes = cfg.static_mounts.empty();
+        if (!build_routes_from_upstreams(json, cfg.routes, require_routes)) {
+            return false;
+        }
+
+        if (cfg.routes.empty() && cfg.static_mounts.empty()) {
+            std::cerr << "at least one route or static mount is required\n";
+            return false;
+        }
+        if (cfg.listen_port <= 0 || cfg.listen_port > 65535) {
+            std::cerr << "server.listen must be in range [1, 65535]\n";
             return false;
         }
 
@@ -446,6 +706,12 @@ namespace
         cfg.worker_processes = read_env_int("YUAN_MINI_NGINX_WORKERS", cfg.worker_processes);
         if (cfg.worker_processes < 1) {
             cfg.worker_processes = 1;
+        }
+
+        const std::string use_iocp = read_env_string("YUAN_MINI_NGINX_USE_IOCP");
+        if (!use_iocp.empty()) {
+            cfg.server_config.listen_options.use_iocp =
+                (use_iocp == "1" || use_iocp == "true" || use_iocp == "TRUE");
         }
     }
 
@@ -527,6 +793,102 @@ namespace
         std::cout << "rate limit enabled: rps=" << rps << " burst=" << burst << '\n';
     }
 
+    void install_edge_middlewares(yuan::server::HttpService &http_service, const MiniNginxConfig &cfg)
+    {
+        if (cfg.allowed_methods.empty() && cfg.response_headers.empty() && cfg.redirects.empty()) {
+            return;
+        }
+
+        auto allowed = cfg.allowed_methods;
+        auto allow_header = join_methods(allowed);
+        auto headers = cfg.response_headers;
+        auto redirects = cfg.redirects;
+
+        http_service.server().use(
+            [allowed = std::move(allowed),
+             allow_header = std::move(allow_header),
+             headers = std::move(headers),
+             redirects = std::move(redirects)](yuan::net::http::HttpRequest *req,
+                                               yuan::net::http::HttpResponse *resp) {
+                if (!req || !resp) {
+                    return yuan::net::http::MiddlewareResult::next;
+                }
+
+                for (const auto &header : headers) {
+                    resp->add_header(header.first, header.second);
+                }
+
+                if (!allowed.empty()) {
+                    const auto method = to_upper_ascii(req->get_raw_method());
+                    if (allowed.find(method) == allowed.end()) {
+                        const std::string body = "405 Method Not Allowed\n";
+                        resp->set_response_code(yuan::net::http::ResponseCode::method_not_allowed);
+                        resp->add_header("Allow", allow_header);
+                        resp->add_header("Content-Type", "text/plain; charset=utf-8");
+                        resp->append_body(body);
+                        resp->add_header("Content-Length", std::to_string(resp->body_buffer_size()));
+                        resp->send();
+                        return yuan::net::http::MiddlewareResult::stop;
+                    }
+                }
+
+                const auto path_view = req->get_path();
+                const std::string path(path_view.data(), path_view.size());
+                for (const auto &rule : redirects) {
+                    bool matched = false;
+                    if (rule.prefix) {
+                        matched = path.rfind(rule.from, 0) == 0;
+                    } else {
+                        matched = path == rule.from;
+                    }
+                    if (!matched) {
+                        continue;
+                    }
+
+                    std::string target = rule.to;
+                    if (rule.prefix && rule.preserve_path && path.size() > rule.from.size()) {
+                        if (!target.empty() && target.back() == '/' && path[rule.from.size()] == '/') {
+                            target.pop_back();
+                        }
+                        target.append(path.substr(rule.from.size()));
+                    }
+                    resp->redirect(target, static_cast<yuan::net::http::ResponseCode>(rule.code));
+                    resp->add_header("Content-Length", "0");
+                    resp->send();
+                    return yuan::net::http::MiddlewareResult::stop;
+                }
+
+                return yuan::net::http::MiddlewareResult::next;
+            },
+            "mini_nginx_edge");
+    }
+
+    void install_edge_routes(yuan::net::http::HttpServer &server, const MiniNginxConfig &cfg)
+    {
+        if (!cfg.health_enabled) {
+            return;
+        }
+
+        const auto path = cfg.health_path;
+        const bool json = cfg.health_json;
+        server.on(path, [json](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
+            if (json) {
+                nlohmann::json body;
+                body["status"] = "ok";
+                body["service"] = "mini_nginx";
+                resp->json(body.dump(), yuan::net::http::ResponseCode::ok_);
+            } else {
+                resp->set_response_code(yuan::net::http::ResponseCode::ok_);
+                resp->add_header("Content-Type", "text/plain; charset=utf-8");
+                resp->append_body("ok\n");
+                resp->add_header("Content-Length", std::to_string(resp->body_buffer_size()));
+            }
+            if (req->get_version() != yuan::net::http::HttpVersion::v_2_0) {
+                resp->send();
+            }
+        });
+    }
+
     std::string now_iso8601_local()
     {
         const auto now = std::chrono::system_clock::now();
@@ -550,6 +912,14 @@ namespace
         }
 
         auto stream = std::make_shared<std::ofstream>(cfg.access_log_path, std::ios::out | std::ios::app);
+        if (!stream->good()) {
+            std::error_code ec;
+            const auto parent = std::filesystem::path(cfg.access_log_path).parent_path();
+            if (!parent.empty()) {
+                std::filesystem::create_directories(parent, ec);
+                stream = std::make_shared<std::ofstream>(cfg.access_log_path, std::ios::out | std::ios::app);
+            }
+        }
         if (!stream->good()) {
             std::cerr << "failed to open access log file: " << cfg.access_log_path << '\n';
             return;
@@ -617,6 +987,7 @@ namespace
     {
         auto service = std::make_shared<yuan::server::HttpService>(cfg.listen_port, cfg.server_config);
         install_protection_middlewares(*service, cfg);
+        install_edge_middlewares(*service, cfg);
         install_access_log(*service, cfg);
         service->set_server_configurator([cfg](yuan::server::HttpService &http_service) {
             auto *proxy = http_service.server().ensure_proxy();
@@ -625,6 +996,7 @@ namespace
                 return false;
             }
 
+            install_edge_routes(http_service.server(), cfg);
             install_static_mounts(http_service.server(), cfg);
             install_routes(proxy, cfg.routes);
             return true;
@@ -752,7 +1124,13 @@ int main(int argc, char **argv)
 
     std::cout << "mini_nginx listening on 0.0.0.0:" << cfg.listen_port << " using config " << config_path << '\n';
     std::cout << "routes loaded: " << cfg.routes.size() << '\n';
+    std::cout << "static mounts loaded: " << cfg.static_mounts.size() << '\n';
     std::cout << "worker processes: " << effective_worker_processes << '\n';
+#ifdef _WIN32
+    std::cout << "listen backend: " << (cfg.server_config.listen_options.use_iocp ? "iocp" : "default") << '\n';
+#else
+    std::cout << "listen backend: default\n";
+#endif
     std::cout << "reload check interval: " << cfg.reload_check_interval_ms << " ms\n";
 
     std::error_code ec;

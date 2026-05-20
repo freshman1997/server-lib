@@ -1,6 +1,7 @@
 #include "server/context.h"
 #include "server/server_session.h"
 #include "server/command.h"
+#include "server/command_support.h"
 #include "handler/ftp_app.h"
 #include "net/connection/connection.h"
 #include "net/socket/inet_address.h"
@@ -208,12 +209,16 @@ int main()
 {
     namespace fs = std::filesystem;
     const auto root = fs::temp_directory_path() / "ftp_command_tests_root";
+    const auto outside = fs::temp_directory_path() / "ftp_command_tests_outside";
     std::error_code ec;
     fs::remove_all(root, ec);
+    fs::remove_all(outside, ec);
     fs::create_directories(root / "sub", ec);
+    fs::create_directories(outside, ec);
     {
         std::ofstream(root / "sample.txt") << "hello";
         std::ofstream(root / "rename.txt") << "rename";
+        std::ofstream(outside / "secret.txt") << "outside";
     }
 
     ServerContext::get_instance()->set_server_work_dir(root.generic_string());
@@ -227,6 +232,8 @@ int main()
     require(factory->find_command("MKD") != nullptr, "MKD command should be registered");
     require(factory->find_command("RNFR") != nullptr, "RNFR command should be registered");
     require(factory->find_command("HELP") != nullptr, "HELP command should be registered");
+    require(factory->find_command("FEAT") != nullptr, "FEAT command should be registered");
+    require(factory->find_command("OPTS") != nullptr, "OPTS command should be registered");
 
     auto resp = factory->find_command("USER")->execute(session, "tester");
     require(resp.code_ == FtpResponseCode::__331__, "USER should request password");
@@ -256,6 +263,13 @@ int main()
     require(resp.code_ == FtpResponseCode::__350__, "REST should accept restart offset");
     require(session->get_item_value<int32_t>("restart_offset") == 128, "REST should store restart offset");
 
+    session->set_item_value<std::string>("rename_from", "first.txt");
+    session->set_item_value<std::string>("rename_from", "second.txt");
+    auto *rename_value = session->get_item_value<std::string *>("rename_from");
+    require(rename_value && *rename_value == "second.txt", "string session values should be safely replaceable");
+    session->remove_item("rename_from");
+    require(session->get_item_value<std::string *>("rename_from") == nullptr, "string session values should be removable");
+
     resp = factory->find_command("ALLO")->execute(session, "256");
     require(resp.code_ == FtpResponseCode::__200__, "ALLO should accept allocation size");
     require(session->get_item_value<int32_t>("upload_file_size") == 256, "ALLO should store upload size");
@@ -279,12 +293,32 @@ int main()
     resp = factory->find_command("HELP")->execute(session, "");
     require(resp.code_ == FtpResponseCode::__214__, "HELP should return supported command list");
 
+    resp = factory->find_command("FEAT")->execute(session, "");
+    require(resp.code_ == FtpResponseCode::__211__ && resp.multiline_, "FEAT should return a multiline feature response");
+    const auto feat_wire = format_ftp_response(resp);
+    require(feat_wire.find("211-Features:") == 0, "FEAT response should use FTP multiline framing");
+    require(feat_wire.find(" UTF8\r\n") != std::string::npos, "FEAT should advertise UTF8");
+    require(feat_wire.find("211 End\r\n") != std::string::npos, "FEAT response should end with 211 End");
+
+    resp = factory->find_command("OPTS")->execute(session, "UTF8 ON");
+    require(resp.code_ == FtpResponseCode::__200__, "OPTS UTF8 ON should be accepted");
+
+    require(!path_within_root(session, outside), "absolute paths outside the FTP root should be rejected");
+    std::error_code link_ec;
+    fs::create_directory_symlink(outside, root / "link_out", link_ec);
+    if (!link_ec) {
+        require(!path_within_root(session, root / "link_out" / "secret.txt"), "symlinks escaping the FTP root should be rejected");
+        resp = factory->find_command("CWD")->execute(session, "link_out");
+        require(resp.code_ == FtpResponseCode::__550__, "CWD should reject symlinks escaping the FTP root");
+    }
+
     resp = factory->find_command("RMD")->execute(session, "work");
     require(resp.code_ == FtpResponseCode::__250__, "RMD should remove empty directory");
     require(!fs::exists(root / "work"), "RMD should remove the directory");
 
     delete session;
     fs::remove_all(root, ec);
+    fs::remove_all(outside, ec);
     std::cout << "ftp command tests passed\n";
     return 0;
 }

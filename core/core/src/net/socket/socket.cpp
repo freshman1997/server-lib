@@ -163,4 +163,12 @@ namespace yuan::net
     {
         return socket::shutdown_write(fd_);
     }
+
+    void Socket::close()
+    {
+        if (fd_ >= 0) {
+            socket::close_fd(fd_);
+            fd_ = -1;
+        }
+    }
 }

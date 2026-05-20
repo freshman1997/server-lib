@@ -206,6 +206,21 @@ namespace yuan::net
         OpenSSLHandler::SSLMode mode_;
         SSL *ssl_ = nullptr;
         OpenSSLModule *module_ = nullptr;
+        bool want_read_ = false;
+        bool want_write_ = false;
+
+        void clear_last_want() noexcept
+        {
+            want_read_ = false;
+            want_write_ = false;
+        }
+
+        bool set_last_error_want(int ssl_error) noexcept
+        {
+            want_read_ = ssl_error == SSL_ERROR_WANT_READ;
+            want_write_ = ssl_error == SSL_ERROR_WANT_WRITE;
+            return want_read_ || want_write_;
+        }
     };
 
     OpenSSLHandler::OpenSSLHandler()
@@ -223,6 +238,7 @@ namespace yuan::net
         if (!data_->ssl_) {
             return res;
         }
+        data_->clear_last_want();
 
         if (data_->mode_ == OpenSSLHandler::SSLMode::acceptor_) {
             res = SSL_accept(data_->ssl_);
@@ -232,7 +248,7 @@ namespace yuan::net
 
         if (res <= 0) {
             const int ssl_error = SSL_get_error(data_->ssl_, res);
-            if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+            if (data_->set_last_error_want(ssl_error)) {
                 errno = EAGAIN;
                 return -1;
             }
@@ -244,12 +260,12 @@ namespace yuan::net
 
     bool OpenSSLHandler::ssl_want_read() const
     {
-        return data_->ssl_ && SSL_want_read(data_->ssl_);
+        return data_->ssl_ && data_->want_read_;
     }
 
     bool OpenSSLHandler::ssl_want_write() const
     {
-        return data_->ssl_ && SSL_want_write(data_->ssl_);
+        return data_->ssl_ && data_->want_write_;
     }
 
     std::string_view OpenSSLHandler::get_alpn_selected() const
@@ -278,6 +294,7 @@ namespace yuan::net
         if (!data_->module_ || !data_->ssl_ || !data) {
             return -1;
         }
+        data_->clear_last_want();
 
         if (size == 0) {
             return 0;
@@ -286,7 +303,7 @@ namespace yuan::net
         int res = SSL_write(data_->ssl_, data, static_cast<int>(size));
         if (res <= 0) {
             const int ssl_error = SSL_get_error(data_->ssl_, res);
-            if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+            if (data_->set_last_error_want(ssl_error)) {
                 errno = EAGAIN;
                 return -1;
             }
@@ -301,6 +318,7 @@ namespace yuan::net
         if (!data_->module_ || !data_->ssl_ || !buffer) {
             return -1;
         }
+        data_->clear_last_want();
 
         if (size == 0) {
             errno = ENOBUFS;
@@ -310,7 +328,7 @@ namespace yuan::net
         int res = SSL_read(data_->ssl_, buffer, static_cast<int>(size));
         if (res <= 0) {
             const int ssl_error = SSL_get_error(data_->ssl_, res);
-            if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+            if (data_->set_last_error_want(ssl_error)) {
                 errno = EAGAIN;
                 return -1;
             }

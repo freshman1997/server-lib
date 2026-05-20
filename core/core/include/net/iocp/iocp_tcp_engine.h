@@ -74,6 +74,7 @@ namespace yuan::net
         UserData user_data() const;
         bool try_mark_read_dispatch_pending() noexcept;
         void clear_read_dispatch_pending() noexcept;
+        void mark_defer_close_on_unconsumed_input() noexcept;
 
     private:
         friend class IocpTcpEngine;
@@ -83,7 +84,9 @@ namespace yuan::net
         std::shared_ptr<IocpTcpConnection> self();
         bool complete_output_send(std::size_t bytes, bool &close_after_output);
         void fail_output_send();
-        void close_now();
+        bool has_pending_output() const;
+        bool mark_close_after_pending_output();
+        void close_now(bool graceful_shutdown = false);
         void notify_connected();
         void notify_read(const char *data, std::size_t size);
         void notify_write();
@@ -107,6 +110,7 @@ namespace yuan::net
         std::atomic_bool output_shutdown_{false};
         std::atomic_bool close_notified_{false};
         std::atomic_bool read_dispatch_pending_{false};
+        std::atomic_bool defer_close_on_unconsumed_input_{false};
     };
 
     struct IocpTcpEngineCallbacks
@@ -155,7 +159,7 @@ namespace yuan::net
         void handle_send(Operation &operation, const IocpCompletion &completion);
         void add_connection(const std::shared_ptr<IocpTcpConnection> &connection);
         void remove_connection(int fd);
-        void close_connection(const std::shared_ptr<IocpTcpConnection> &connection, bool notify);
+        void close_connection(const std::shared_ptr<IocpTcpConnection> &connection, bool notify, bool graceful_shutdown = false);
 
         IocpCompletionPort port_;
         IocpDispatcher dispatcher_;

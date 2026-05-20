@@ -5,6 +5,7 @@
   "save_path": ".",
   "enable_keep_alive": true,
   "enable_cors": true,
+  "enable_ssl": false,
   "bt": {
     "max_peers": 50,
     "listen_port": 6881,

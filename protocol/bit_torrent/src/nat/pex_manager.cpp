@@ -72,6 +72,7 @@ std::vector<uint8_t> PexManager::build_ext_handshake() const
     // Manual bencode for simplicity (avoid allocating BaseData objects):
 
     std::string dict;
+    dict += "d";
     // "m" key
     dict += "1:m";  // key "m"
 
@@ -93,6 +94,7 @@ std::vector<uint8_t> PexManager::build_ext_handshake() const
     dict += "4:reqq";
     // "reqq" value
     dict += "i50e";
+    dict += "e";
 
     return std::vector<uint8_t>(dict.begin(), dict.end());
 }

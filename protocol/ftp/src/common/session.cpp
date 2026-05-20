@@ -38,11 +38,6 @@ namespace yuan::net::ftp
 
     FtpSessionContext::~FtpSessionContext()
     {
-        for (auto it : values) {
-            if (it.second.item.sval && it.second.type == FtpSessionValueType::string_val) {
-                delete it.second.item.sval;
-            }
-        }
     }
 
     void FtpSessionContext::close()
