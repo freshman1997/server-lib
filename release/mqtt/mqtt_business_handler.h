@@ -2,7 +2,7 @@
 #define __RELEASE_MQTT_BUSINESS_HANDLER_H__
 
 #include "mqtt.h"
-#include "mqtt_service_enhanced_handler.h"
+#include "mqtt/mqtt_service_enhanced_handler.h"
 
 #include <cstdint>
 #include <string>

@@ -2,14 +2,14 @@ if(TARGET SmbProto)
     add_executable(test_smb test_smb.cpp)
     target_link_libraries(test_smb PUBLIC SmbProto)
 
-    if(TARGET ServerServices)
+    if(TARGET ServerServiceNasSmbAdapter)
         add_executable(test_smb_internal_client_smoke test_smb_internal_client_smoke.cpp)
-        target_link_libraries(test_smb_internal_client_smoke PUBLIC ServerServices)
+        target_link_libraries(test_smb_internal_client_smoke PUBLIC ServerServiceNasSmbAdapter)
     endif()
 
-    if(TARGET ServerServices)
+    if(TARGET ServerServiceNasSmbAdapter AND TARGET ServerServiceSmb)
         add_executable(test_smb_nas_fixture test_smb_nas_fixture.cpp)
-        target_link_libraries(test_smb_nas_fixture PUBLIC ServerServices)
+        target_link_libraries(test_smb_nas_fixture PUBLIC ServerServiceNasSmbAdapter ServerServiceSmb)
     endif()
 
     if(BUILD_TESTING)

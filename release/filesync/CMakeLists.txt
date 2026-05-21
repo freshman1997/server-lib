@@ -20,7 +20,7 @@ else()
     target_link_libraries(release_filesync_server PUBLIC Threads::Threads)
 endif()
 if (UNIX AND NOT APPLE)
-    target_link_options(release_filesync_server PRIVATE "-static-libgcc" "-static-libstdc++")
+    target_link_options(release_filesync_server PRIVATE "-static" "-static-libgcc" "-static-libstdc++")
 endif()
 set_target_properties(release_filesync_server PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${RELEASE_FILESYNC_OUTPUT_DIR}"
@@ -41,7 +41,7 @@ else()
     target_link_libraries(release_filesync_client PUBLIC Threads::Threads)
 endif()
 if (UNIX AND NOT APPLE)
-    target_link_options(release_filesync_client PRIVATE "-static-libgcc" "-static-libstdc++")
+    target_link_options(release_filesync_client PRIVATE "-static" "-static-libgcc" "-static-libstdc++")
 endif()
 set_target_properties(release_filesync_client PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${RELEASE_FILESYNC_OUTPUT_DIR}"

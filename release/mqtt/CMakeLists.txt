@@ -12,7 +12,7 @@ add_executable(release_mqtt_server
     mqtt_server_main.cpp
 )
 target_compile_features(release_mqtt_server PUBLIC cxx_std_20)
-target_link_libraries(release_mqtt_server PUBLIC Core MqttProto ServerServices)
+target_link_libraries(release_mqtt_server PUBLIC Core MqttProto ServerServiceMqtt)
 target_include_directories(release_mqtt_server PUBLIC
     "${CMAKE_SOURCE_DIR}"
     "${CMAKE_SOURCE_DIR}/protocol/mqtt/include"

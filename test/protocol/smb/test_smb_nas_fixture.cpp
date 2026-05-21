@@ -1,5 +1,5 @@
-#include "nas_smb_adapter.h"
-#include "smb_service.h"
+#include "nas/nas_smb_adapter.h"
+#include "smb/smb_service.h"
 
 #include <atomic>
 #include <chrono>

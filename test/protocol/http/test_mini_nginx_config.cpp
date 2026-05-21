@@ -337,7 +337,7 @@ namespace
             << "  \"static\": [\n"
             << "    {\n"
             << "      \"location\": \"/\",\n"
-            << "      \"root\": \"server/mini_nginx/www\",\n"
+            << "      \"root\": \"release/mini_nginx/www\",\n"
             << "      \"auto_index\": true\n"
             << "    }\n"
             << "  ]\n"
@@ -597,7 +597,7 @@ int main()
   "static": [
     {
       "location": "/",
-      "root": "server/mini_nginx/www",
+      "root": "release/mini_nginx/www",
       "auto_index": true
     }
   ]
@@ -630,7 +630,7 @@ int main()
   "static": [
     {
       "location": "/",
-      "root": "server/mini_nginx/www",
+      "root": "release/mini_nginx/www",
       "auto_index": true
     }
   ]
@@ -666,7 +666,7 @@ int main()
   "static": [
     {
       "location": "/",
-      "root": "server/mini_nginx/www",
+      "root": "release/mini_nginx/www",
       "auto_index": true
     }
   ]
@@ -711,7 +711,7 @@ int main()
   "static": [
     {
       "location": "/",
-      "root": "server/mini_nginx/www",
+      "root": "release/mini_nginx/www",
       "auto_index": true
     }
   ]

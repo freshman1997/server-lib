@@ -16,7 +16,7 @@ if(TARGET FtpProto)
     add_executable(ftp_ipv6 test_ftp_ipv6.cpp)
     add_executable(test_fix_verification test_fix_verification.cpp)
 
-    target_link_libraries(ftp_server PUBLIC FtpProto ServerServices)
+    target_link_libraries(ftp_server PUBLIC FtpProto ServerServiceFtp)
     target_link_libraries(ftp_client PUBLIC FtpProto)
     target_link_libraries(ftp_commands PUBLIC FtpProto)
     target_link_libraries(ftp_e2e PUBLIC FtpProto)

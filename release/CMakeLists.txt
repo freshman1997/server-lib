@@ -3,6 +3,10 @@ project(release_targets)
 
 add_subdirectory(filesync)
 add_subdirectory(dns)
+add_subdirectory(proxy)
+add_subdirectory(mini_nginx)
+add_subdirectory(bt_downloader)
+add_subdirectory(nas)
 
 if (TARGET FtpProto)
     add_subdirectory(ftp)

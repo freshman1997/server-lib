@@ -1,6 +1,6 @@
 #include "plugin_http_bridge.h"
 
-#include "http_service.h"
+#include "http/http_service.h"
 #include "plugin_host_service.h"
 #include "request.h"
 #include "response.h"

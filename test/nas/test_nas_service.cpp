@@ -1,4 +1,4 @@
-#include "nas_service.h"
+#include "nas/nas_service.h"
 
 #include "base/utils/base64.h"
 
@@ -486,6 +486,18 @@ int main()
           "admin activity should report started service");
     check(activity_resp.find("\"share_count\":2") != std::string::npos,
           "admin activity should report updated share count");
+    const auto readiness_resp = roundtrip(port,
+        "GET /nas/admin/readiness HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Authorization: " + admin_auth + "\r\n"
+        "Connection: close\r\n\r\n");
+    check(readiness_resp.find("200") != std::string::npos, "admin readiness should return 200");
+    check(readiness_resp.find("\"ready\":true") != std::string::npos,
+          "admin readiness should report sell-ready state");
+    check(readiness_resp.find("\"blocker_count\":0") != std::string::npos,
+          "admin readiness should report no blockers");
+    check(readiness_resp.find("\"warning_count\":0") != std::string::npos,
+          "admin readiness should report no warnings by default");
     const auto sessions_resp = roundtrip(port,
         "GET /nas/admin/sessions HTTP/1.1\r\n"
         "Host: 127.0.0.1\r\n"

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.12)
 project(PluginBridge)
 
-if(YUAN_FORCE_STATIC_LINK AND MINGW)
+if(YUAN_GLOBAL_STATIC_LINK AND MINGW)
     add_library(PluginBridge STATIC src/plugin_http_bridge.cpp)
 else()
     add_library(PluginBridge src/plugin_http_bridge.cpp)

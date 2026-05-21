@@ -9,6 +9,7 @@ fi
 : "${YUAN_SMB_HOST:=127.0.0.1}"
 : "${YUAN_SMB_PORT:=445}"
 : "${YUAN_SMB_DOMAIN:=WORKGROUP}"
+: "${YUAN_SMB_USE_FIXTURE:=0}"
 : "${YUAN_SMBCLIENT_SIGNING:=default}"
 : "${YUAN_SMBCLIENT_DEBUGLEVEL:=0}"
 
@@ -27,7 +28,7 @@ if [[ -n "${YUAN_NAS_HEALTH_URL:-}" ]] && command -v curl >/dev/null 2>&1; then
 fi
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-YUAN_SMB_USE_FIXTURE=0 \
+YUAN_SMB_USE_FIXTURE="$YUAN_SMB_USE_FIXTURE" \
 YUAN_SMB_HOST="$YUAN_SMB_HOST" \
 YUAN_SMB_PORT="$YUAN_SMB_PORT" \
 YUAN_SMB_DOMAIN="$YUAN_SMB_DOMAIN" \

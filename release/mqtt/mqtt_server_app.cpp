@@ -15,7 +15,7 @@
 #include "mqtt_business_factory.h"
 #include "mqtt_business_handler.h"
 #include "mqtt_business_options.h"
-#include "mqtt_service.h"
+#include "mqtt/mqtt_service.h"
 
 namespace
 {

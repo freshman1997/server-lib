@@ -844,7 +844,7 @@ Files:
 - `protocol/http/src/http_server.cpp`
 - `server/services/include/http_service.h`
 - `server/services/src/http_service.cpp`
-- `server/mini_nginx/main.cpp`
+- `release/mini_nginx/main.cpp`
 
 Changes:
 
@@ -1038,8 +1038,8 @@ listener_.bind(
 Likely callers:
 
 - `main.cpp`
-- `server/mini_nginx/main.cpp`
-- `server/bt_downloader/main.cpp`
+- `release/mini_nginx/main.cpp`
+- `release/bt_downloader/main.cpp`
 - `server/match/main.cpp`
 - `test/protocol/http/test_http_server.cpp`
 - `test/protocol/websocket/test_websocket_server.cpp`

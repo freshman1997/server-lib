@@ -1,6 +1,6 @@
 #include "application.h"
 #include "bootstrap.h"
-#include "dns_service.h"
+#include "dns/dns_service.h"
 #include "logger.h"
 
 #include <chrono>

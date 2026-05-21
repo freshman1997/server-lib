@@ -18,12 +18,12 @@ This directory is organized by feature area:
 
 ## Quick Start
 
-- Build the proxy helper: `cmake --build . --target proxy_tool -j 4`
-- Run the proxy: `.\test\proxy\proxy_tool.exe serve 1080`
+- Build the proxy helper: `cmake --build . --target release_proxy_tool -j 4`
+- Run the proxy: `.\build\release\proxy\release_proxy_tool.exe serve 1080`
 - Verify TCP: `curl.exe --socks5-hostname 127.0.0.1:1080 -I https://example.com`
 - Verify UDP locally:
-  - `.\test\proxy\proxy_tool.exe udp-echo 19090`
-  - `.\test\proxy\proxy_tool.exe udp-probe 127.0.0.1 1080 127.0.0.1 19090 PING-UDP`
+  - `.\build\release\proxy\release_proxy_tool.exe udp-echo 19090`
+  - `.\build\release\proxy\release_proxy_tool.exe udp-probe 127.0.0.1 1080 127.0.0.1 19090 PING-UDP`
 
 ## Build Test Groups Selectively
 

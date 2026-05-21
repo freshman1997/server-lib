@@ -3,7 +3,7 @@
 #include "http2/hpack_encoder.h"
 #include "request.h"
 #include "response.h"
-#include "http_service.h"
+#include "http/http_service.h"
 #include "bootstrap.h"
 #include "eventbus/event_bus.h"
 #include "net/runtime/network_runtime.h"

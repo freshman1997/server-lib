@@ -3,7 +3,7 @@ project(PluginHost)
 
 file(GLOB_RECURSE PLUGIN_HOST_SRC CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
-if(YUAN_FORCE_STATIC_LINK AND MINGW)
+if(YUAN_GLOBAL_STATIC_LINK AND MINGW)
     add_library(PluginHost STATIC ${PLUGIN_HOST_SRC})
 else()
     add_library(PluginHost ${PLUGIN_HOST_SRC})

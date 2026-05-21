@@ -2,7 +2,7 @@ add_executable(core_runtime_benchmark core_runtime_benchmark.cpp)
 target_link_libraries(core_runtime_benchmark PUBLIC Core App)
 
 add_executable(http_worker_pool_benchmark http_worker_pool_benchmark.cpp)
-target_link_libraries(http_worker_pool_benchmark PUBLIC HttpProto ServerServices)
+target_link_libraries(http_worker_pool_benchmark PUBLIC HttpProto ServerServiceHttp)
 
 set(YUAN_NETWORK_REPOS_ROOT "/home/yuan/codes/repos/network" CACHE PATH "Local network library checkout root for optional benchmark comparisons")
 

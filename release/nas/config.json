@@ -1,0 +1,56 @@
+{
+  "port": 8080,
+  "http": {
+    "enable_keep_alive": true,
+    "thread_pool_size": 4
+  },
+  "smb": {
+    "enabled": false,
+    "port": 445,
+    "require_signing": false,
+    "enable_encryption": false,
+    "server_name": "YUAN-NAS",
+    "domain_name": "WORKGROUP"
+  },
+  "nas": {
+    "webdav_mount": "/dav",
+    "admin_console_path": "../../server/services/resources/nas_admin_console.html",
+    "allow_anonymous_read": false,
+    "redis": {
+      "enabled": false,
+      "host": "127.0.0.1",
+      "port": 6379,
+      "db": 0,
+      "key_prefix": "yuan:nas:",
+      "audit_max_events": 1000
+    },
+    "audit": {
+      "file_enabled": true,
+      "file_path": "../../logs/nas-audit.jsonl",
+      "max_events": 1000
+    },
+    "users": [
+      {
+        "id": "admin-1",
+        "username": "admin",
+        "password_hash": "plain:admin",
+        "enabled": true,
+        "admin": true
+      }
+    ],
+    "shares": [
+      {
+        "id": "share-public",
+        "name": "public",
+        "root_path": "./data/public",
+        "enabled": true,
+        "readonly": false,
+        "default_permissions": [
+          "read",
+          "write",
+          "remove"
+        ]
+      }
+    ]
+  }
+}
