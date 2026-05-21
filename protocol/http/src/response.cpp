@@ -8,9 +8,31 @@
 #include "sse.h"
 
 #include <cstring>
+#include <string_view>
 
 namespace yuan::net::http
 {
+    namespace
+    {
+        std::string_view fast_status_line(ResponseCode code) noexcept
+        {
+            switch (code) {
+            case ResponseCode::ok_:
+                return "HTTP/1.1 200 OK\r\n";
+            case ResponseCode::not_found:
+                return "HTTP/1.1 404 Not Found\r\n";
+            case ResponseCode::bad_request:
+                return "HTTP/1.1 400 Bad Request\r\n";
+            case ResponseCode::no_content:
+                return "HTTP/1.1 204 No Content\r\n";
+            case ResponseCode::found:
+                return "HTTP/1.1 302 Found\r\n";
+            default:
+                return {};
+            }
+        }
+    }
+
     HttpResponse::HttpResponse(HttpSessionContext *context) : HttpPacket(context)
     {
         parser_ = std::make_unique<HttpResponseParser>(this);
@@ -64,17 +86,27 @@ namespace yuan::net::http
             return false;
         }
 
-        std::size_t header_size = std::string_view("HTTP/1.1 ").size() + descIt->second.size() + 2;
+        std::size_t header_size = 2;
+        const auto fast_line = fast_status_line(respCode_);
+        if (!fast_line.empty()) {
+            header_size += fast_line.size();
+        } else {
+            header_size += std::string_view("HTTP/1.1 ").size() + descIt->second.size() + 2;
+        }
         for (const auto &item : headers_) {
             header_size += item.first.size() + 2 + item.second.size() + 2;
         }
-        header_size += 2;
 
         std::string header;
         header.reserve(header_size);
-        header.append("HTTP/1.1 ");
-        header.append(descIt->second);
-        header.append("\r\n");
+        if (!fast_line.empty()) {
+            header.append(fast_line);
+        } else {
+            header.append("HTTP/1.1 ");
+            header.append(descIt->second);
+            header.append("\r\n");
+        }
+
         for (const auto &item : headers_) {
             header.append(item.first);
             header.append(": ");

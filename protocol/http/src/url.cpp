@@ -68,9 +68,9 @@ namespace yuan::url
         return result;
     }
 
-    bool decode_url_domain(const std::string &url, std::vector<std::string> &urlDomain)
+    bool decode_url_domain(std::string_view url, std::vector<std::string> &urlDomain)
     {
-        size_t pos = url.find_first_of('/');
+        const size_t pos = url.find_first_of('/');
         if (pos == std::string::npos) {
             return false;
         }
@@ -82,16 +82,16 @@ namespace yuan::url
 
         const bool needs_decode = url.find('%', pos + 1) != std::string::npos;
         size_t i = pos + 1;
-        size_t sz = url.size();
+        const size_t sz = url.size();
         for (; i < sz; ++i) {
             size_t j = i;
             while (j < sz && url[j] != '/' && url[j] != '?') ++j;
 
             if (j > i) {
                 if (needs_decode) {
-                    urlDomain.push_back(url_decode(url.c_str() + i, url.c_str() + j));
+                    urlDomain.push_back(url_decode(url.data() + i, url.data() + j));
                 } else {
-                    urlDomain.emplace_back(url.c_str() + i, j - i);
+                    urlDomain.emplace_back(url.data() + i, j - i);
                 }
             }
 
@@ -107,7 +107,12 @@ namespace yuan::url
         return true;
     }
 
-    bool decode_parameters(const std::string &url,
+    bool decode_url_domain(const std::string &url, std::vector<std::string> &urlDomain)
+    {
+        return decode_url_domain(std::string_view(url), urlDomain);
+    }
+
+    bool decode_parameters(std::string_view url,
                            std::unordered_map<std::string, std::vector<std::string>> &params,
                            bool fromBody)
     {
@@ -131,7 +136,7 @@ namespace yuan::url
                 return i >= sz;  // body 模式下要求严格格式
             }
 
-            std::string key = url_decode(url.c_str() + i, url.c_str() + eq_pos);
+            std::string key = url_decode(url.data() + i, url.data() + eq_pos, true);
 
             // 解析 value(s) —— 支持标准 '&' 分隔的多值
             i = eq_pos + 1;
@@ -139,7 +144,7 @@ namespace yuan::url
                 size_t next = url.find_first_of('&', i);
                 if (next == std::string::npos) next = sz;
 
-                std::string val = url_decode(url.c_str() + i, url.c_str() + next);
+                std::string val = url_decode(url.data() + i, url.data() + next, true);
                 params[key].push_back(std::move(val));
 
                 if (next < sz) {
@@ -151,6 +156,13 @@ namespace yuan::url
             }
         }
         return true;
+    }
+
+    bool decode_parameters(const std::string &url,
+                           std::unordered_map<std::string, std::vector<std::string>> &params,
+                           bool fromBody)
+    {
+        return decode_parameters(std::string_view(url), params, fromBody);
     }
 
     bool decode_url(const std::string &rawUrl, UrlDetail &url)

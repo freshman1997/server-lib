@@ -2,6 +2,7 @@
 #include "http/http_service.h"
 #include "log.h"
 #include "registry.h"
+#include "net/acceptor/acceptor_factory.h"
 #include "net/iocp/iocp_accept.h"
 #include "net/iocp/iocp_completion_port.h"
 #include "net/iocp/iocp_dispatcher.h"
@@ -33,6 +34,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #ifdef _WIN32
@@ -279,6 +281,254 @@ namespace
                     thread.join();
                 }
             }
+        }
+    };
+
+    struct YuanMinimalServer
+    {
+        std::vector<std::unique_ptr<yuan::net::NetworkRuntime>> runtimes;
+        std::vector<std::unique_ptr<yuan::net::AsyncListenerHost>> listeners;
+        std::vector<std::thread> threads;
+
+        bool start(uint16_t port, std::size_t worker_count)
+        {
+            auto log_registry = yuan::log::LogRegistry::get_instance();
+            log_registry->disable_file_log();
+            log_registry->set_global_level(yuan::log::Level::fatal);
+            log_registry->set_default(nullptr);
+
+            const std::size_t count = (std::max)(worker_count, std::size_t{1});
+            runtimes.reserve(count);
+            listeners.reserve(count);
+            threads.reserve(count);
+
+            for (std::size_t i = 0; i < count; ++i) {
+                auto runtime = std::make_unique<yuan::net::NetworkRuntime>();
+                auto listener = std::make_unique<yuan::net::AsyncListenerHost>();
+
+                listener->set_connection_handler([](yuan::net::AsyncConnectionContext ctx) -> yuan::coroutine::Task<void> {
+                    std::string input;
+                    while (ctx.is_connected()) {
+                        auto read = co_await ctx.read_async();
+                        if (read.status != yuan::coroutine::IoStatus::success) {
+                            break;
+                        }
+
+                        const auto span = read.data.readable_span();
+                        input.append(span.data(), span.size());
+                        for (;;) {
+                            const auto request_end = input.find("\r\n\r\n");
+                            if (request_end == std::string::npos) {
+                                break;
+                            }
+                            input.erase(0, request_end + 4);
+                            ctx.append_output(kHttpResponse);
+                            ctx.flush();
+                        }
+                    }
+                    ctx.close();
+                    co_return;
+                });
+
+                yuan::net::ListenOptions options;
+                options.reuse_port = count > 1;
+                options.backlog = 4096;
+                if (!listener->bind("127.0.0.1", port, *runtime, options)) {
+                    stop();
+                    return false;
+                }
+
+                auto task = listener->run_async();
+                task.resume();
+                task.detach();
+
+                listeners.push_back(std::move(listener));
+                runtimes.push_back(std::move(runtime));
+            }
+
+            for (auto &runtime : runtimes) {
+                threads.emplace_back([runtime = runtime.get()]() {
+                    runtime->run();
+                });
+            }
+
+            return true;
+        }
+
+        void stop()
+        {
+            for (auto &listener : listeners) {
+                if (listener) {
+                    listener->close();
+                }
+            }
+            for (auto &runtime : runtimes) {
+                if (runtime) {
+                    runtime->stop();
+                }
+            }
+            for (auto &thread : threads) {
+                if (thread.joinable()) {
+                    thread.join();
+                }
+            }
+            threads.clear();
+            listeners.clear();
+            runtimes.clear();
+        }
+    };
+
+    class YuanRawConnectionHandler final : public yuan::net::ConnectionHandler
+    {
+    public:
+        void on_connected(const std::shared_ptr<yuan::net::Connection> &) override
+        {
+        }
+
+        void on_error(const std::shared_ptr<yuan::net::Connection> &conn) override
+        {
+            if (conn) {
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    buffers_.erase(conn.get());
+                }
+                conn->close();
+            }
+        }
+
+        void on_read(const std::shared_ptr<yuan::net::Connection> &conn) override
+        {
+            if (!conn) {
+                return;
+            }
+
+            auto input = conn->take_input_byte_buffer();
+            const auto span = input.readable_span();
+            if (span.empty()) {
+                return;
+            }
+
+            std::size_t completed = 0;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                auto &buffer = buffers_[conn.get()];
+                buffer.append(span.data(), span.size());
+                std::string::size_type pos = std::string::npos;
+                while ((pos = buffer.find("\r\n\r\n")) != std::string::npos) {
+                    buffer.erase(0, pos + 4);
+                    ++completed;
+                }
+            }
+
+            for (std::size_t i = 0; i < completed; ++i) {
+                conn->append_output(kHttpResponse);
+            }
+            if (completed > 0) {
+                conn->flush();
+            }
+        }
+
+        void on_write(const std::shared_ptr<yuan::net::Connection> &) override
+        {
+        }
+
+        void on_close(const std::shared_ptr<yuan::net::Connection> &conn) override
+        {
+            if (!conn) {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(mutex_);
+            buffers_.erase(conn.get());
+        }
+
+    private:
+        std::mutex mutex_;
+        std::unordered_map<yuan::net::Connection *, std::string> buffers_;
+    };
+
+    struct YuanRawServer
+    {
+        std::vector<std::unique_ptr<yuan::net::NetworkRuntime>> runtimes;
+        std::vector<std::unique_ptr<yuan::net::StreamAcceptor>> acceptors;
+        std::vector<std::unique_ptr<YuanRawConnectionHandler>> handlers;
+        std::vector<std::thread> threads;
+
+        bool start(uint16_t port, std::size_t worker_count)
+        {
+            auto log_registry = yuan::log::LogRegistry::get_instance();
+            log_registry->disable_file_log();
+            log_registry->set_global_level(yuan::log::Level::fatal);
+            log_registry->set_default(nullptr);
+
+            const std::size_t count = (std::max)(worker_count, std::size_t{1});
+            runtimes.reserve(count);
+            acceptors.reserve(count);
+            handlers.reserve(count);
+            threads.reserve(count);
+
+            for (std::size_t i = 0; i < count; ++i) {
+                auto runtime = std::make_unique<yuan::net::NetworkRuntime>();
+                auto socket = std::make_unique<yuan::net::Socket>("127.0.0.1", port);
+                if (!socket->valid()) {
+                    stop();
+                    return false;
+                }
+
+                yuan::net::ListenOptions options;
+                options.reuse_port = count > 1;
+                options.backlog = 4096;
+                if (!socket->apply_listen_options(options) || !socket->bind()) {
+                    stop();
+                    return false;
+                }
+
+                auto acceptor = std::unique_ptr<yuan::net::StreamAcceptor>(yuan::net::create_stream_acceptor(socket.release()));
+                if (!acceptor || !acceptor->listen(options.backlog)) {
+                    stop();
+                    return false;
+                }
+
+                auto handler = std::make_unique<YuanRawConnectionHandler>();
+                acceptor->set_connection_handler(yuan::net::make_non_owning_handler(handler.get()));
+                acceptor->set_event_handler(runtime->event_loop());
+                if (auto *channel = acceptor->listener_channel()) {
+                    runtime->update_channel(channel);
+                }
+
+                handlers.push_back(std::move(handler));
+                acceptors.push_back(std::move(acceptor));
+                runtimes.push_back(std::move(runtime));
+            }
+
+            for (auto &runtime : runtimes) {
+                threads.emplace_back([runtime = runtime.get()]() {
+                    runtime->run();
+                });
+            }
+            return true;
+        }
+
+        void stop()
+        {
+            for (auto &acceptor : acceptors) {
+                if (acceptor) {
+                    acceptor->close();
+                }
+            }
+            for (auto &runtime : runtimes) {
+                if (runtime) {
+                    runtime->stop();
+                }
+            }
+            for (auto &thread : threads) {
+                if (thread.joinable()) {
+                    thread.join();
+                }
+            }
+            threads.clear();
+            acceptors.clear();
+            runtimes.clear();
+            handlers.clear();
         }
     };
 
@@ -839,6 +1089,8 @@ namespace
     {
         std::string implementation;
         YuanServer yuan;
+        YuanMinimalServer yuan_min;
+        YuanRawServer yuan_raw;
 #ifdef YUAN_BENCH_WITH_LIBEVENT
         LibeventServer libevent;
 #endif
@@ -859,6 +1111,12 @@ namespace
             implementation = name;
             if (name == "yuan") {
                 return start_yuan_server(yuan, port, worker_count);
+            }
+            if (name == "yuan_min") {
+                return yuan_min.start(port, worker_count);
+            }
+            if (name == "yuan_raw") {
+                return yuan_raw.start(port, worker_count);
             }
             if (name == "yuan_iocp") {
                 return start_yuan_server(yuan, port, worker_count, true);
@@ -896,6 +1154,12 @@ namespace
         {
             if (implementation == "yuan" || implementation == "yuan_iocp") {
                 yuan.stop();
+            }
+            else if (implementation == "yuan_min") {
+                yuan_min.stop();
+            }
+            else if (implementation == "yuan_raw") {
+                yuan_raw.stop();
             }
 #ifdef YUAN_BENCH_WITH_LIBEVENT
             else if (implementation == "libevent") {

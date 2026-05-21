@@ -2,6 +2,7 @@
 #define __URL_H__
 
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -11,7 +12,12 @@ namespace yuan::url
     std::string url_decode(const std::string &str, bool is_query_string = false);
     std::string url_decode(const char *begin, const char *end, bool is_query_string = false);
 
+    bool decode_url_domain(std::string_view url, std::vector<std::string> &urlDomain);
     bool decode_url_domain(const std::string &url, std::vector<std::string> &urlDomain);
+
+    bool decode_parameters(std::string_view url,
+                           std::unordered_map<std::string, std::vector<std::string>> &params,
+                           bool fromBody = false);
     bool decode_parameters(const std::string &url, std::unordered_map<std::string, std::vector<std::string>> &params, bool fromBody = false);
 
     struct UrlDetail

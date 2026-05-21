@@ -94,37 +94,37 @@ namespace yuan::net::http
         }
 
         header_state = HeaderState::url;
-        std::string url;
+        const char *data = buff.read_ptr();
+        const std::size_t size = buff.readable_bytes();
+        std::size_t token_len = 0;
         bool needs_decode = false;
-        char ch = buff.read_i8();
-        url.push_back(ch);
-        needs_decode = needs_decode || ch == '%';
-        while (ch != ' ' && buff.readable_bytes()) {
-            ch = buff.read_i8();
-            if (ch != ' ') {
-                url.push_back(ch);
-                needs_decode = needs_decode || ch == '%';
-            }
-
-            if (buff.read_offset() > config::max_header_length) {
+        while (token_len < size && data[token_len] != ' ') {
+            needs_decode = needs_decode || data[token_len] == '%';
+            ++token_len;
+            if (buff.read_offset() + token_len > config::max_header_length) {
                 header_state = HeaderState::too_long;
                 return false;
             }
         }
 
-        size_t query_pos = url.find_first_of('?');
-        std::string query_part;
-        if (query_pos != std::string::npos) {
-            query_part = url.substr(query_pos);
+        if (token_len == 0 || token_len >= size) {
+            return false;
         }
-        req->url_ = needs_decode ? url::url_decode(url) : std::move(url);
+
+        const std::string_view raw_url(data, token_len);
+        const std::size_t query_pos = raw_url.find('?');
+        req->url_ = needs_decode
+                        ? url::url_decode(raw_url.data(), raw_url.data() + raw_url.size())
+                        : std::string(raw_url);
+
+        buff.consume(token_len + 1);
 
         if (!url::decode_url_domain(req->url_, req->url_domain_)) {
             return false;
         }
 
-        if (!query_part.empty()) {
-            if (!url::decode_parameters(query_part, req->params_)) {
+        if (query_pos != std::string::npos) {
+            if (!url::decode_parameters(raw_url.substr(query_pos), req->params_)) {
                 return false;
             }
         }

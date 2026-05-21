@@ -10,8 +10,8 @@
 #include "logger.h"
 
 #include <atomic>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <string_view>
 
@@ -20,26 +20,6 @@ namespace yuan::net::http
     namespace
     {
         std::atomic_uint64_t g_body_spool_counter{0};
-
-        std::string normalize_header_key(std::string_view key)
-        {
-            std::string normalized;
-            normalized.reserve(key.size());
-            for (char ch : key) {
-                normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-            }
-            return normalized;
-        }
-
-        bool is_normalized_header_key(std::string_view key) noexcept
-        {
-            for (const char ch : key) {
-                if (ch >= 'A' && ch <= 'Z') {
-                    return false;
-                }
-            }
-            return true;
-        }
 
         std::filesystem::path make_body_spool_path()
         {
@@ -254,7 +234,7 @@ namespace yuan::net::http
             return nullptr;
         }
 
-        const auto it = headers_.find(normalize_header_key(key));
+        const auto it = headers_.find(key);
         if (it != headers_.end()) {
             return &it->second;
         }
@@ -263,13 +243,12 @@ namespace yuan::net::http
 
     void HttpPacket::add_header(const std::string & k, const std::string & v)
     {
-        headers_[normalize_header_key(k)] = v;
+        headers_[k] = v;
     }
 
     void HttpPacket::add_header(std::string && k, std::string && v)
     {
-        std::string key = is_normalized_header_key(k) ? std::move(k) : normalize_header_key(k);
-        headers_[std::move(key)] = std::move(v);
+        headers_[std::move(k)] = std::move(v);
     }
 
     void HttpPacket::add_header(const char * k, const char * v)
@@ -277,7 +256,15 @@ namespace yuan::net::http
         if (!k || !v) {
             return;
         }
-        headers_[normalize_header_key(k)] = v;
+        headers_[k] = v;
+    }
+
+    void HttpPacket::add_header(const char * k, std::string && v)
+    {
+        if (!k) {
+            return;
+        }
+        headers_[k] = std::move(v);
     }
 
     void HttpPacket::remove_header(std::string_view k)
@@ -285,13 +272,13 @@ namespace yuan::net::http
         if (k.empty()) {
             return;
         }
-        headers_.erase(normalize_header_key(k));
+        headers_.erase(std::string(k));
     }
 
     void HttpPacket::clear_header()
     {
         headers_.clear();
-        std::unordered_map<std::string, std::string> empty;
+        HttpHeaderMap empty;
         headers_.swap(empty);
     }
 
@@ -377,7 +364,7 @@ namespace yuan::net::http
 
     std::pair<bool, uint32_t> HttpPacket::parse_content_type(const char * begin, const char * end, std::string & ctype, std::unordered_map<std::string, std::string> & extra)
     {
-        const char *p = begin;
+        const char *const p = begin;
         if (!begin) {
             return { true, 0 };
         }
@@ -386,70 +373,85 @@ namespace yuan::net::http
             return { false, 0 };
         }
 
-        ctype.reserve(64); // 预分配减少rehash
-
-        for (; begin != end; ++begin) {
-            char ch = *begin;
-            if (ch == ' ')
-                continue;
-
-            if (ch == ';') {
-                ++begin;
-                break;
+        const auto consume_crlf_if_any = [&](const char *cur) {
+            if (cur < end && *cur == '\r') {
+                ++cur;
+                if (cur < end && *cur == '\n') {
+                    ++cur;
+                }
             }
+            return cur;
+        };
 
-            if (ch == '\r') {
-                begin += 2;
-                break;
+        const auto append_lower_trimmed = [](std::string &out, const char *b, const char *e) {
+            while (b < e && std::isspace(static_cast<unsigned char>(*b))) {
+                ++b;
             }
+            while (e > b && std::isspace(static_cast<unsigned char>(*(e - 1)))) {
+                --e;
+            }
+            out.reserve(out.size() + static_cast<std::size_t>(e - b));
+            for (const char *it = b; it < e; ++it) {
+                out.push_back(ascii_lower(*it));
+            }
+        };
 
-            ctype.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        const char *cur = begin;
+        while (cur < end && *cur != ';' && *cur != '\r') {
+            ++cur;
+        }
+        append_lower_trimmed(ctype, begin, cur);
+
+        if (cur < end && *cur == ';') {
+            ++cur;
+        } else {
+            cur = consume_crlf_if_any(cur);
+            return { true, static_cast<uint32_t>(cur - p) };
         }
 
-        if (begin != end && ctype.size() < 256) {
-            extra.reserve(4); // 通常只有charset等少量extra参数
-
-            while (begin != end) {
-                char ch = *begin;
-                if (ch == ' ') {
-                    ++begin;
-                    continue;
+        if (ctype.size() < 256) {
+            extra.reserve(4);
+            while (cur < end) {
+                while (cur < end && std::isspace(static_cast<unsigned char>(*cur))) {
+                    ++cur;
                 }
-
-                if (ch == '\r') {
+                if (cur >= end || *cur == '\r') {
                     break;
                 }
 
-                std::string k;
-                k.reserve(16);
-                for (; begin != end; ++begin) {
-                    ch = *begin;
-                    if (ch == '=') {
-                        ++begin;
-                        break;
-                    }
-                    k.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+                const char *key_begin = cur;
+                while (cur < end && *cur != '=' && *cur != ';' && *cur != '\r') {
+                    ++cur;
                 }
 
-                std::string v;
-                v.reserve(32);
-                for (; begin != end; ++begin) {
-                    ch = *begin;
-                    if (ch == ';' || ch == '\r') {
-                        break;
-                    }
-                    v.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+                if (cur >= end || *cur != '=') {
+                    break;
                 }
 
-                extra[std::move(k)] = std::move(v);
+                const char *key_end = cur;
+                ++cur;
+                const char *value_begin = cur;
+                while (cur < end && *cur != ';' && *cur != '\r') {
+                    ++cur;
+                }
+                const char *value_end = cur;
 
-                if (*begin == ';') {
-                    ++begin;
-                    continue;
+                std::string key;
+                std::string value;
+                append_lower_trimmed(key, key_begin, key_end);
+                append_lower_trimmed(value, value_begin, value_end);
+                if (!key.empty()) {
+                    extra[std::move(key)] = std::move(value);
+                }
+
+                if (cur < end && *cur == ';') {
+                    ++cur;
                 }
             }
         }
-        return { true, static_cast<uint32_t>(begin - p) };
+
+        cur = consume_crlf_if_any(cur);
+        return { true, static_cast<uint32_t>(cur - p) };
     }
 
     bool HttpPacket::parse_content()

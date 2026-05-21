@@ -53,7 +53,7 @@ namespace yuan::net
         input_shutdown,
     };
 
-        static constexpr size_t DEFAULT_INPUT_BUFFER_SIZE = 256 * 1024;
+        static constexpr size_t DEFAULT_INPUT_BUFFER_SIZE = 16 * 1024;
         static constexpr size_t DEFAULT_MAX_PACKET_SIZE = 1024 * 1024 * 5;
         static constexpr size_t ET_DRAIN_MAX_BUFFER_SIZE = 4 * 1024 * 1024;
 
@@ -324,6 +324,17 @@ namespace yuan::net
 
         bool grow_input_buffer()
         {
+            if (input_buffer_.writable_bytes() > 0) {
+                return true;
+            }
+
+            if (input_buffer_.read_offset() > 0) {
+                input_buffer_.compact();
+                if (input_buffer_.writable_bytes() > 0) {
+                    return true;
+                }
+            }
+
             if (input_buffer_.capacity() >= max_packet_size_) {
                 return false;
             }
@@ -339,6 +350,14 @@ namespace yuan::net
             if (input_buffer_.writable_bytes() > 0) {
                 return true;
             }
+
+            if (input_buffer_.read_offset() > 0) {
+                input_buffer_.compact();
+                if (input_buffer_.writable_bytes() > 0) {
+                    return true;
+                }
+            }
+
             if (input_buffer_.capacity() >= ET_DRAIN_MAX_BUFFER_SIZE) {
                 return false;
             }

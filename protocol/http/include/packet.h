@@ -3,6 +3,7 @@
 #include "buffer/byte_buffer.h"
 #include "content_type.h"
 #include "content/types.h"
+#include "http_headers.h"
 #include "packet_parser.h"
 #include "response_code.h"
 #include "task/task.h"
@@ -83,6 +84,8 @@ namespace yuan::net::http
         void add_header(std::string &&k, std::string &&v);
         // const char* 避免临时string构造
         void add_header(const char *k, const char *v);
+        // const char* key + move value
+        void add_header(const char *k, std::string &&v);
         // string_view 查询，避免构造string key
         const std::string *get_header(std::string_view key) const;
 
@@ -281,7 +284,7 @@ namespace yuan::net::http
         static size_t get_max_packet_size();
 
         // 直接访问headers（中间件等需要）
-        const std::unordered_map<std::string, std::string> &headers() const
+        const HttpHeaderMap &headers() const
         {
             return headers_;
         }
@@ -297,7 +300,7 @@ namespace yuan::net::http
         HttpSessionContext *context_;
         std::unique_ptr<HttpPacketParser> parser_;
         std::unordered_map<std::string, std::vector<std::string> > params_;
-        std::unordered_map<std::string, std::string> headers_;
+        HttpHeaderMap headers_;
         std::string content_type_text_;
         std::unordered_map<std::string, std::string> content_type_extra_;
         std::unique_ptr<Content> body_content_;

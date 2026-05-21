@@ -231,7 +231,10 @@ namespace yuan::net::http
         snapshot.content_type = response->get_content_type();
         snapshot.downloading = response->is_downloading();
         snapshot.original_file_name = response->get_original_file_name();
-        snapshot.headers = response->headers();
+        snapshot.headers.clear();
+        for (const auto &item : response->headers()) {
+            snapshot.headers[item.first] = item.second;
+        }
         if (const char *begin = response->body_begin()) {
             snapshot.body.assign(begin, response->get_body_length());
         }

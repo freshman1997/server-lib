@@ -8,13 +8,66 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cctype>
 #include <cstdlib>
+#include <cstring>
 
 namespace yuan::net::http
 {
     namespace
     {
         constexpr uint32_t kBodyFileSpoolThreshold = 64u * 1024u;
+
+        inline char ascii_lower_char(char ch) noexcept
+        {
+            return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch + ('a' - 'A')) : ch;
+        }
+
+        bool equals_ci_literal(const char *begin, std::size_t len, const char *literal) noexcept
+        {
+            if (!begin || !literal) {
+                return false;
+            }
+            std::size_t i = 0;
+            for (; i < len && literal[i] != '\0'; ++i) {
+                if (ascii_lower_char(begin[i]) != literal[i]) {
+                    return false;
+                }
+            }
+            return i == len && literal[i] == '\0';
+        }
+
+        const char *canonical_header_key(const char *begin, std::size_t len) noexcept
+        {
+            switch (len) {
+            case 4:
+                return equals_ci_literal(begin, len, http_header_key::host) ? http_header_key::host : nullptr;
+            case 6:
+                return equals_ci_literal(begin, len, http_header_key::accept) ? http_header_key::accept : nullptr;
+            case 10:
+                if (equals_ci_literal(begin, len, http_header_key::connection)) {
+                    return http_header_key::connection;
+                }
+                if (equals_ci_literal(begin, len, http_header_key::user_agent)) {
+                    return http_header_key::user_agent;
+                }
+                return nullptr;
+            case 14:
+                if (equals_ci_literal(begin, len, http_header_key::content_type)) {
+                    return http_header_key::content_type;
+                }
+                if (equals_ci_literal(begin, len, http_header_key::content_length)) {
+                    return http_header_key::content_length;
+                }
+                return nullptr;
+            case 15:
+                return equals_ci_literal(begin, len, http_header_key::accept_encoding) ? http_header_key::accept_encoding : nullptr;
+            case 17:
+                return equals_ci_literal(begin, len, http_header_key::transfer_encoding) ? http_header_key::transfer_encoding : nullptr;
+            default:
+                return nullptr;
+            }
+        }
 
         enum class ContentLengthParseState
         {
@@ -91,52 +144,52 @@ namespace yuan::net::http
 
         header_state = HeaderState::version;
 
-        std::string version;
-        char ch = buff.read_i8();
-        version.push_back(ch);
-        while (ch != ending && buff.readable_bytes()) {
-            ch = buff.read_i8();
-            if (ch != ending) {
-                version.push_back(ch);
-            }
+        const char *data = buff.read_ptr();
+        const std::size_t size = buff.readable_bytes();
+        std::size_t token_len = 0;
+        while (token_len < size && data[token_len] != ending) {
+            ++token_len;
+        }
+        if (token_len >= size) {
+            return false;
         }
 
+        if (token_len < 6) {
+            return false;
+        }
+
+        if (ascii_lower_char(data[0]) != 'h' ||
+            ascii_lower_char(data[1]) != 't' ||
+            ascii_lower_char(data[2]) != 't' ||
+            ascii_lower_char(data[3]) != 'p' ||
+            data[4] != '/') {
+            return false;
+        }
+
+        const char *version_begin = data + 5;
+        const std::size_t version_len = token_len - 5;
+
+        std::size_t consumed = token_len + 1;
         if (next) {
-            if (buff.readable_bytes() == 0 || buff.read_i8() != next) {
+            if (consumed >= size || data[consumed] != next) {
                 return false;
             }
+            ++consumed;
         }
 
-        size_t tag_pos = version.find_first_of("/");
-        if (tag_pos == std::string::npos) {
-            return false;
-        }
-
-        std::string tag;
-        for (size_t i = 0; i < tag_pos; ++i) {
-            tag.push_back(std::tolower(version[i]));
-        }
-
-        if (tag.empty() || tag != "http") {
-            return false;
-        }
-
-        std::string v = version.substr(tag_pos + 1);
-        if (v.empty()) {
-            return false;
-        }
-
-        if (v == "1.0") {
+        if (version_len == 3 && version_begin[0] == '1' && version_begin[1] == '.' && version_begin[2] == '0') {
             packet_->set_version(HttpVersion::v_1_0);
-        } else if (v == "1.1") {
+        } else if (version_len == 3 && version_begin[0] == '1' && version_begin[1] == '.' && version_begin[2] == '1') {
             packet_->set_version(HttpVersion::v_1_1);
-        } else if (v == "2.0") {
+        } else if (version_len == 3 && version_begin[0] == '2' && version_begin[1] == '.' && version_begin[2] == '0') {
             packet_->set_version(HttpVersion::v_2_0);
-        } else if (v == "3.0") {
+        } else if (version_len == 3 && version_begin[0] == '3' && version_begin[1] == '.' && version_begin[2] == '0') {
             packet_->set_version(HttpVersion::v_3_0);
         } else {
             return false;
         }
+
+        buff.consume(consumed);
 
         return true;
     }
@@ -147,61 +200,65 @@ namespace yuan::net::http
             return false;
         }
 
-        while (buff.readable_bytes()) {
+        const std::size_t start_offset = buff.read_offset();
+        const char *data = buff.read_ptr();
+        const std::size_t size = buff.readable_bytes();
+        std::size_t pos = 0;
+
+        while (pos < size) {
             header_state = HeaderState::header_key;
-            std::string key;
-            char ch = buff.read_i8();
-            if (ch == '\r') {
-                break;
-            }
 
-            while (ch != ':' && buff.readable_bytes()) {
-                key.push_back(std::tolower(ch));
-                if (ch != ':') {
-                    ch = buff.read_i8();
-                }
-
-                if (buff.read_offset() > config::max_header_length) {
+            std::size_t line_end = pos;
+            while (line_end < size && data[line_end] != '\n') {
+                ++line_end;
+                if (start_offset + line_end > config::max_header_length) {
                     header_state = HeaderState::too_long;
                     return false;
                 }
             }
-
-            if (key.empty()) {
+            if (line_end >= size) {
                 return false;
             }
+
+            if (line_end == pos || data[line_end - 1] != '\r') {
+                return false;
+            }
+
+            const std::size_t line_len = line_end - pos - 1;
+            if (line_len == 0) {
+                const std::size_t consumed = line_end + 1;
+                buff.consume(consumed);
+                return true;
+            }
+
+            const char *line_begin = data + pos;
+            const char *const line_data_end = line_begin + line_len;
+            const char *const colon = static_cast<const char *>(std::memchr(line_begin, ':', line_len));
+            if (!colon || colon == line_begin) {
+                return false;
+            }
+            const std::size_t key_len = static_cast<std::size_t>(colon - line_begin);
 
             header_state = HeaderState::header_value;
-            std::string val;
-            ch = buff.read_i8();
-            if (!std::isblank(ch)) {
-                val.push_back(ch);
+            const char *value_begin = colon + 1;
+            if (value_begin < line_data_end && std::isblank(static_cast<unsigned char>(*value_begin))) {
+                ++value_begin;
             }
+            std::string val(value_begin, static_cast<std::size_t>(line_data_end - value_begin));
 
-            while (ch != '\r' && buff.readable_bytes()) {
-                ch = buff.read_i8();
-                if (ch != '\r') {
-                    val.push_back(ch);
+            if (const char *canonical = canonical_header_key(line_begin, key_len)) {
+                packet_->add_header(canonical, std::move(val));
+            } else {
+                std::string key(key_len, '\0');
+                for (std::size_t i = 0; i < key_len; ++i) {
+                    key[i] = ascii_lower_char(line_begin[i]);
                 }
-
-                if (buff.read_offset() > config::max_header_length) {
-                    header_state = HeaderState::too_long;
-                    return false;
-                }
+                packet_->add_header(std::move(key), std::move(val));
             }
-
-            if (buff.readable_bytes() == 0 || buff.read_i8() != '\n') {
-                return false;
-            }
-
-            packet_->add_header(std::move(key), std::move(val));
+            pos = line_end + 1;
         }
 
-        if (buff.readable_bytes() == 0 || buff.read_i8() != '\n') {
-            return false;
-        }
-
-        return true;
+        return false;
     }
 
     int HttpPacketParser::parse_body(::yuan::buffer::ByteBuffer & buff, uint32_t length)
