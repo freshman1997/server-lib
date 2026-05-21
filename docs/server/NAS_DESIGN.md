@@ -88,7 +88,7 @@ Operational notes:
 
 Reference example config:
 
-- `docs/NAS_SERVICE_CONFIG_EXAMPLE.json`
+- `docs/server/NAS_SERVICE_CONFIG_EXAMPLE.json`
 
 Live SMB smoke (against a running NAS service, no fixture):
 

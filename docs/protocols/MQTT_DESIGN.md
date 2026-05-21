@@ -1095,7 +1095,7 @@ QoS 2 是最复杂的投递保证，需要两端维护状态：
 
 | # | 文件路径 | 说明 |
 |---|---------|------|
-| 1 | `docs/MQTT_DESIGN.md` | 本设计文档 |
+| 1 | `docs/protocols/MQTT_DESIGN.md` | 本设计文档 |
 | 2 | `protocol/mqtt/CMakeLists.txt` | 构建配置 |
 | 3 | `protocol/mqtt/include/mqtt.h` | 统一头文件 |
 | 4 | `protocol/mqtt/include/mqtt_protocol.h` | 常量、枚举、Reason Code |

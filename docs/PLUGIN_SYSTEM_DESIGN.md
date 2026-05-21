@@ -805,7 +805,7 @@ return plugin
 
 此后 `PluginManager::load_script_plugin()` 会自动通过 registry 找到 Lua 适配器。
 
-详细设计见 `docs/LUA_PLUGIN_DESIGN.md`。
+详细设计见 `docs/plugins/LUA_PLUGIN_DESIGN.md`。
 
 ## 19. 总结
 
@@ -838,4 +838,3 @@ TypeScript 插件和 Lua 采用同一套脚本插件机制：`script` run_mode +
 - Lua 和 TypeScript 的宿主 smoke test 已经并入 `test_plugin_contracts.exe`。
 - 这两个测试会直接加载 `plugins/examples/lua_greeter/plugin.json` 和 `plugins/examples/ts_greeter/plugin.json`。
 - `ts_greeter` 的入口文件是 `plugins/examples/ts_greeter/main.ts`，保持与 `language = "typescript"` 一致。
-

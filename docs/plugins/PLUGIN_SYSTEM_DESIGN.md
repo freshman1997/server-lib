@@ -805,7 +805,7 @@ return plugin
 
 此后 `PluginManager::load_script_plugin()` 会自动通过 registry 找到 Lua 适配器。
 
-详细设计见 `docs/LUA_PLUGIN_DESIGN.md`。
+详细设计见 `docs/plugins/LUA_PLUGIN_DESIGN.md`。
 
 ## 19. 总结
 

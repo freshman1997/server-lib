@@ -8,8 +8,8 @@ Status: complete
 
 | ID | Task | Output | Validation |
 | --- | --- | --- | --- |
-| N0.1 | Land NAS design document | `docs/NAS_DESIGN.md` | done |
-| N0.2 | Land task breakdown | `docs/NAS_TASK_BREAKDOWN.md` | done |
+| N0.1 | Land NAS design document | `docs/server/NAS_DESIGN.md` | done |
+| N0.2 | Land task breakdown | `docs/server/NAS_TASK_BREAKDOWN.md` | done |
 | N0.3 | Keep WebDAV matrix current | `docs/WEBDAV_TEST_MATRIX.md` | done |
 | N0.4 | Verify baseline tests | `webdav`, `http_features` | done |
 
@@ -55,7 +55,7 @@ Goal: SMB/SFTP use the same NAS identity, share, permission, and storage model.
 | N3.2 | Adapt SMB share manager to NAS shares | done: SMB share config generated from NAS config/metadata | adapter unit tests; `smbclient` tests still needed |
 | N3.3 | Map SMB auth to NAS users | in progress: SMB handler validates enabled NAS users and NTLMv2 proof; `pbkdf2-sha256` is now default for HTTP/WebDAV auth and is intentionally not exposed to SMB password lookup | NTLMv2 and adapter unit tests; Windows/Linux login tests still needed |
 | N3.4 | Map SMB permissions to NAS ACL | done: SMB tree/create/read/write/query/set-info checks use NAS ACL | adapter unit tests; real SMB ACL tests still needed |
-| N3.5 | Add SMB interop matrix | in progress: optional `smbclient_nas_smoke` script covers list/upload/download/rename/delete; see `docs/SMB_SMBD_COMPAT_MATRIX.md` and `docs/SMB_NAS_PROGRESS.md` | Windows/macOS/Linux CIFS matrix still needed |
+| N3.5 | Add SMB interop matrix | in progress: optional `smbclient_nas_smoke` script covers list/upload/download/rename/delete; see `docs/protocols/SMB_SMBD_COMPAT_MATRIX.md` and `docs/protocols/SMB_NAS_PROGRESS.md` | Windows/macOS/Linux CIFS matrix still needed |
 
 ## Phase 4 - Stability
 
@@ -88,7 +88,7 @@ ctest --test-dir build -R "base64|nas_core|nas_service|nas_redis_e2e|nas_webdav_
 
 ## Commercialization Plan
 
-See `docs/NAS_COMMERCIALIZATION_PLAN.md` for the production rollout gates, priority order, and milestone schedule focused on WebDAV-first private deployment.
+See `docs/server/NAS_COMMERCIALIZATION_PLAN.md` for the production rollout gates, priority order, and milestone schedule focused on WebDAV-first private deployment.
 
 ## Active Refactor Rules (Commercialization)
 

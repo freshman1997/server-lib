@@ -1,6 +1,6 @@
 # Documentation Index
 
-当前 `docs/` 仅保留长期有效的架构与设计文档，进度追踪/阶段计划类文档已清理。
+当前 `docs/` 以按域分类为主：`architecture/`、`protocols/`、`plugins/`、`server/`。
 
 ## Architecture
 
@@ -27,4 +27,6 @@
 ## Server
 
 - `docs/server/NAS_DESIGN.md`
+- `docs/server/NAS_TASK_BREAKDOWN.md`
+- `docs/server/NAS_COMMERCIALIZATION_PLAN.md`
 - `docs/server/NAS_SERVICE_CONFIG_EXAMPLE.json`

@@ -147,7 +147,7 @@ NAS SMB adapter tests passed
 
 ## Related Documents
 
-- `docs/SMB_SMBD_COMPAT_MATRIX.md`
-- `docs/SMB_DESIGN.md`
-- `docs/NAS_TASK_BREAKDOWN.md`
-- `docs/NAS_DESIGN.md`
+- `docs/protocols/SMB_SMBD_COMPAT_MATRIX.md`
+- `docs/protocols/SMB_DESIGN.md`
+- `docs/server/NAS_TASK_BREAKDOWN.md`
+- `docs/server/NAS_DESIGN.md`

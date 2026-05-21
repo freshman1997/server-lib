@@ -2,7 +2,7 @@
 
 This matrix tracks the practical Linux Samba `smbd` behavior needed for NAS interoperability.
 
-For chronological implementation notes and validation commands, see `docs/SMB_NAS_PROGRESS.md`.
+For chronological implementation notes and validation commands, see `docs/protocols/SMB_NAS_PROGRESS.md`.
 
 ## Step 1 - Client Mount Path
 

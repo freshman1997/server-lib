@@ -8,6 +8,8 @@
 - `WEBRTC_DESIGN.md`
 - `SHADOWSOCKS_DESIGN.md`
 - `SMB_DESIGN.md`
+- `SMB_NAS_PROGRESS.md`
+- `SMB_SMBD_COMPAT_MATRIX.md`
 - `SOCKS5_DESIGN.md`
 - `SSH_DESIGN.md`
 - `ssh_tests/README.md`

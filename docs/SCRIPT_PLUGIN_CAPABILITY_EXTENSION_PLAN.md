@@ -12,7 +12,7 @@
 - 资源追踪：`resource_guard`
 - 宿主上下文：`app_name` / `plugin_name` / `config`
 
-Lua 和 TypeScript 当前都已经通过宿主模块自动注册接入，Lua 侧说明见 `docs/LUA_PLUGIN_DESIGN.md`，TypeScript 侧与 Lua 共享同一套 `script` 插件机制。
+Lua 和 TypeScript 当前都已经通过宿主模块自动注册接入，Lua 侧说明见 `docs/plugins/LUA_PLUGIN_DESIGN.md`，TypeScript 侧与 Lua 共享同一套 `script` 插件机制。
 
 ## 1. 能力评估
 

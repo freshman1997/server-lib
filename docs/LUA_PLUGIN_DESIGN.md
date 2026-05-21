@@ -559,7 +559,7 @@ plugins/core/include/plugin/plugin_state.h      # can_transition 补 script 相�
 plugins/core/src/plugin/plugin_manager.cpp      # load() 分支 + load_script_plugin 用 registry
 plugins/core/CMakeLists.txt                     # 移除 lua_static 依赖
 plugins/CMakeLists.txt                          # add_subdirectory(lua)
-docs/PLUGIN_SYSTEM_DESIGN.md                    # 补充脚本插件章节
+docs/plugins/PLUGIN_SYSTEM_DESIGN.md            # 补充脚本插件章节
 ```
 
 ## 10. Lua 插件 SDK API 参考
