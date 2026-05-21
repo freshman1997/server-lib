@@ -6,11 +6,57 @@
 #include "authorization.h"
 #include "base/time.h"
 
+#include <cctype>
 #include <mutex>
 #include <unordered_map>
 
 namespace yuan::net::http
 {
+    namespace
+    {
+        bool token_equals_ci(std::string_view lhs, std::string_view rhs)
+        {
+            if (lhs.size() != rhs.size()) {
+                return false;
+            }
+            for (std::size_t i = 0; i < lhs.size(); ++i) {
+                if (std::tolower(static_cast<unsigned char>(lhs[i])) !=
+                    std::tolower(static_cast<unsigned char>(rhs[i]))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        std::string_view trim_token(std::string_view value)
+        {
+            while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+                value.remove_prefix(1);
+            }
+            while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+                value.remove_suffix(1);
+            }
+            return value;
+        }
+
+        bool header_has_token(std::string_view value, std::string_view token)
+        {
+            std::size_t pos = 0;
+            while (pos <= value.size()) {
+                const auto comma = value.find(',', pos);
+                const auto end = comma == std::string_view::npos ? value.size() : comma;
+                if (token_equals_ci(trim_token(value.substr(pos, end - pos)), token)) {
+                    return true;
+                }
+                if (comma == std::string_view::npos) {
+                    break;
+                }
+                pos = comma + 1;
+            }
+            return false;
+        }
+    }
+
     // ==================== MiddlewarePipeline ====================
 
     void MiddlewarePipeline::add(std::shared_ptr<HttpMiddleware> middleware)
@@ -380,13 +426,9 @@ namespace yuan::net::http
                 // HTTP/1.1 默认 keep-alive，HTTP/1.0 默认 close
                 const std::string *conn = req->get_header(http_header_key::connection);
                 if (conn) {
-                    std::string conn_val = *conn;
-                    // 转小写比较
-                    std::transform(conn_val.begin(), conn_val.end(), conn_val.begin(), ::tolower);
-
-                    if (conn_val == "close") {
+                    if (header_has_token(*conn, "close")) {
                         resp->add_header("Connection", "close");
-                    } else if (conn_val == "keep-alive") {
+                    } else if (header_has_token(*conn, "keep-alive")) {
                         resp->add_header("Connection", "keep-alive");
                         resp->add_header("Keep-Alive", "timeout=60, max=1000");
                     }

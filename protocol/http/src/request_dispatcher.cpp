@@ -10,9 +10,15 @@ namespace yuan::net::http
 
     request_function HttpRequestDispatcher::get_handler(const std::string &url) const
     {
+        const auto *handler = get_handler_ptr(url);
+        return handler ? *handler : nullptr;
+    }
+
+    const request_function *HttpRequestDispatcher::get_handler_ptr(const std::string &url) const
+    {
         const auto exact = mappings_.find(url);
         if (exact != mappings_.end()) {
-            return exact->second;
+            return &exact->second;
         }
 
         auto result = compress_trie_.find_prefix(url);
@@ -24,6 +30,6 @@ namespace yuan::net::http
         }
 
         auto it = mappings_.find(prefix.empty() ? url : prefix);
-        return it == mappings_.end() ? nullptr : it->second;
+        return it == mappings_.end() ? nullptr : &it->second;
     }
 }

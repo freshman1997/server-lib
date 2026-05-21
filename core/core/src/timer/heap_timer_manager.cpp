@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <limits>
-#include <unordered_set>
 
 namespace yuan::timer
 {
@@ -126,35 +125,6 @@ namespace yuan::timer
 
     void HeapTimerManager::cleanup_cancelled()
     {
-        std::unordered_set<BasicTimer *> live;
-        std::unordered_set<BasicTimer *> expired;
-        live.reserve(timers_.size());
-        expired.reserve(timers_.size());
-        for (const auto &timer : timers_) {
-            if (timer) {
-                live.insert(timer.get());
-            }
-            if (!timer || timer->is_done() || timer->is_cancel()) {
-                expired.insert(timer.get());
-            }
-        }
-
-        std::priority_queue<Entry, std::vector<Entry>, LaterDeadline> retained;
-        while (!heap_.empty()) {
-            Entry entry = heap_.top();
-            heap_.pop();
-            BasicTimer *timer = entry.timer;
-            if (!timer || live.find(timer) == live.end() ||
-                expired.find(timer) != expired.end() ||
-                timer->is_done() || timer->is_cancel() ||
-                entry.deadline != timer->deadline()) {
-                continue;
-            }
-
-            retained.push(entry);
-        }
-        heap_.swap(retained);
-
         timers_.erase(
             std::remove_if(
                 timers_.begin(),
@@ -163,5 +133,13 @@ namespace yuan::timer
                     return !timer || timer->is_done() || timer->is_cancel();
                 }),
             timers_.end());
+
+        std::priority_queue<Entry, std::vector<Entry>, LaterDeadline> retained;
+        for (const auto &timer : timers_) {
+            if (timer) {
+                retained.push(Entry{timer->deadline(), sequence_++, timer.get()});
+            }
+        }
+        heap_.swap(retained);
     }
 }

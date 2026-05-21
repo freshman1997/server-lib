@@ -213,7 +213,7 @@ namespace yuan::net::http
             return oss.str();
         }
 
-        std::string trim_ascii(std::string_view sv)
+        std::string_view trim_ascii(std::string_view sv)
         {
             std::size_t begin = 0;
             while (begin < sv.size() && std::isspace(static_cast<unsigned char>(sv[begin]))) {
@@ -223,7 +223,7 @@ namespace yuan::net::http
             while (end > begin && std::isspace(static_cast<unsigned char>(sv[end - 1]))) {
                 --end;
             }
-            return std::string(sv.substr(begin, end - begin));
+            return sv.substr(begin, end - begin);
         }
 
         bool header_has_token(const std::string *value, std::string_view token)
@@ -1269,8 +1269,8 @@ namespace yuan::net::http
             return true;
         }
 
-        if (const auto handler = dispatcher_.get_handler(request->get_raw_url())) {
-            handler(request, response);
+        if (const auto *handler = dispatcher_.get_handler_ptr(request->get_raw_url())) {
+            (*handler)(request, response);
         } else {
             context->process_error(ResponseCode::not_found);
         }
@@ -1633,8 +1633,8 @@ namespace yuan::net::http
             return true;
         }
 
-        if (const auto handler = dispatcher_.get_handler(request->get_raw_url())) {
-            handler(request, response);
+        if (const auto *handler = dispatcher_.get_handler_ptr(request->get_raw_url())) {
+            (*handler)(request, response);
         } else {
             response->set_response_code(ResponseCode::not_found);
             response->add_header(http_header_key::content_type, "text/plain");
@@ -2149,7 +2149,7 @@ namespace yuan::net::http
                 if (comma == std::string::npos) {
                     comma = if_none_match->size();
                 }
-                const std::string token = trim_ascii(std::string_view(*if_none_match).substr(pos, comma - pos));
+                const std::string_view token = trim_ascii(std::string_view(*if_none_match).substr(pos, comma - pos));
                 if (!token.empty() && (token == etag || token == "*")) {
                     return true;
                 }
@@ -2159,7 +2159,7 @@ namespace yuan::net::http
 
         if (const auto *if_modified_since = req->get_header(http_header_key::if_modified_since)) {
             std::time_t since = 0;
-            const std::string date_text = trim_ascii(*if_modified_since);
+            const std::string_view date_text = trim_ascii(*if_modified_since);
             if (!date_text.empty() && parse_http_date(date_text, since) && modified_at <= since) {
                 return true;
             }

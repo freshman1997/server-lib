@@ -15,6 +15,8 @@ namespace yuan::net::http
 
         request_function get_handler(const std::string &url) const;
 
+        const request_function *get_handler_ptr(const std::string &url) const;
+
         const base::CompressTrie & get_compress_trie() const
         {
             return compress_trie_;
