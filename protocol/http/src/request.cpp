@@ -5,9 +5,29 @@
 #include "request_parser.h"
 #include "cookie.h"
 #include "header_key.h"
+#include "url.h"
+
+#include <cctype>
 
 namespace yuan::net::http 
 {
+    namespace
+    {
+        bool token_equals_ci(std::string_view token, std::string_view expected)
+        {
+            if (token.size() != expected.size()) {
+                return false;
+            }
+            for (std::size_t i = 0; i < token.size(); ++i) {
+                if (std::tolower(static_cast<unsigned char>(token[i])) !=
+                    std::tolower(static_cast<unsigned char>(expected[i]))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
     static const char* http_method_descs[] = {
         "GET",
         "POST",
@@ -83,9 +103,58 @@ namespace yuan::net::http
     {
         HttpPacket::reset();
         url_domain_.clear();
+        url_domain_parsed_ = false;
+        url_domain_valid_ = true;
         method_ = HttpMethod::invalid_;
+        connection_close_requested_ = false;
+        connection_keep_alive_requested_ = false;
         cookies_parsed_ = false;
         parsed_cookies_.clear();
+    }
+
+    const std::vector<std::string> &HttpRequest::get_url_domain() const
+    {
+        if (!url_domain_parsed_) {
+            url_domain_.clear();
+            url_domain_valid_ = url::decode_url_domain(url_, url_domain_);
+            url_domain_parsed_ = true;
+        }
+        return url_domain_;
+    }
+
+    void HttpRequest::set_raw_url(std::string url)
+    {
+        url_ = std::move(url);
+        url_domain_.clear();
+        url_domain_parsed_ = false;
+        url_domain_valid_ = true;
+    }
+
+    void HttpRequest::note_connection_header(std::string_view value)
+    {
+        std::size_t pos = 0;
+        while (pos <= value.size()) {
+            const auto comma = value.find(',', pos);
+            auto end = comma == std::string_view::npos ? value.size() : comma;
+            while (pos < end && std::isspace(static_cast<unsigned char>(value[pos]))) {
+                ++pos;
+            }
+            while (end > pos && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+                --end;
+            }
+
+            const auto token = value.substr(pos, end - pos);
+            if (token_equals_ci(token, "close")) {
+                connection_close_requested_ = true;
+            } else if (token_equals_ci(token, "keep-alive")) {
+                connection_keep_alive_requested_ = true;
+            }
+
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            pos = comma + 1;
+        }
     }
 
     bool HttpRequest::pack_header(Connection *conn)

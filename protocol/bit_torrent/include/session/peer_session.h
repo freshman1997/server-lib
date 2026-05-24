@@ -6,10 +6,12 @@
 #include "peer_wire/peer_connection.h"
 #include "net/runtime/network_runtime.h"
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace yuan::net::bit_torrent
@@ -29,6 +31,7 @@ namespace yuan::net::bit_torrent
         PieceServedHandler piece_served_handler_;
         std::function<void(PeerConnection *)> peer_ready_handler_;
         std::function<void(PeerConnection *)> peer_unchoke_handler_;
+        std::function<void(PeerConnection *)> peer_piece_availability_handler_;
         std::function<void(PeerConnection *, uint32_t, uint32_t, uint32_t)> peer_reject_handler_;
         std::function<void(const std::vector<PieceBlockRequest> &)> peer_lost_handler_;
     };
@@ -71,6 +74,10 @@ namespace yuan::net::bit_torrent
         {
             peer_unchoke_handler_ = std::move(handler);
         }
+        void set_peer_piece_availability_handler(PeerReadyHandler handler)
+        {
+            peer_piece_availability_handler_ = std::move(handler);
+        }
         void set_peer_reject_handler(std::function<void(PeerConnection *, uint32_t, uint32_t, uint32_t)> handler)
         {
             peer_reject_handler_ = std::move(handler);
@@ -95,6 +102,7 @@ namespace yuan::net::bit_torrent
         void on_peer_state_changed(PeerConnection *peer);
         void on_peer_connected(PeerConnection &peer);
         void remove_peer(PeerConnection &peer);
+        void pump_peer_queue();
 
     private:
         net::NetworkRuntime *runtime_ = nullptr;
@@ -111,11 +119,16 @@ namespace yuan::net::bit_torrent
         PieceServedHandler piece_served_handler_;
         PeerReadyHandler peer_ready_handler_;
         PeerReadyHandler peer_unchoke_handler_;
+        PeerReadyHandler peer_piece_availability_handler_;
         std::function<void(PeerConnection *, uint32_t, uint32_t, uint32_t)> peer_reject_handler_;
         PeerLostHandler peer_lost_handler_;
 
         mutable std::mutex peers_mutex_;
         std::unordered_map<std::string, std::shared_ptr<PeerConnection> > peers_;
+        std::deque<PeerAddress> pending_peers_;
+        std::unordered_set<std::string> pending_peer_keys_;
+        std::unordered_set<std::string> utp_attempted_keys_;
+        std::unordered_map<std::string, uint64_t> peer_retry_after_ms_;
     };
 
 } // namespace yuan::net::bit_torrent

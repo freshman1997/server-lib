@@ -3,6 +3,8 @@
 #include "nat/nat_manager.h"
 #include "net/runtime/network_runtime.h"
 
+#include <chrono>
+
 namespace yuan::net::bit_torrent
 {
     namespace
@@ -11,6 +13,12 @@ namespace yuan::net::bit_torrent
         T *ptr_of(const std::unique_ptr<T> &owner)
         {
             return owner ? const_cast<T *>(&*owner) : nullptr;
+        }
+
+        uint64_t monotonic_now_ms()
+        {
+            return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
         }
     }
 
@@ -127,6 +135,7 @@ namespace yuan::net::bit_torrent
         peer_config.piece_served_handler_ = config_.piece_served_handler_;
         peer_config.peer_ready_handler_ = config_.peer_ready_handler_;
         peer_config.peer_unchoke_handler_ = config_.peer_unchoke_handler_;
+        peer_config.peer_piece_availability_handler_ = config_.peer_piece_availability_handler_;
         peer_config.peer_reject_handler_ = config_.peer_reject_handler_;
         peer_config.peer_lost_handler_ = config_.peer_lost_handler_;
         peer_session_->configure(std::move(peer_config));
@@ -153,12 +162,6 @@ namespace yuan::net::bit_torrent
 
     void DownloadRuntimeCoordinator::start_nat_runtime()
     {
-        const auto &cfg = config_.nat_config_;
-        if (!cfg.enable_inbound_listen && !cfg.enable_upnp && !cfg.enable_nat_pmp &&
-            !cfg.enable_utp && !cfg.enable_dht && !cfg.enable_pex) {
-            return;
-        }
-
         nat_manager_ = std::make_unique<NatManager>();
         config_.nat_config_.listen_port = *config_.listen_port_;
         nat_manager_->start(config_.nat_config_, *config_.meta_, *config_.peer_id_,
@@ -193,8 +196,18 @@ namespace yuan::net::bit_torrent
             5000,
             5000,
             [this]() {
-            config_.stats_tracker_->update_peer_counts(get_active_peer_count(), get_peer_count());
+            const auto active_peer_count = get_active_peer_count();
+            const auto peer_count = get_peer_count();
+            config_.stats_tracker_->update_peer_counts(active_peer_count, peer_count);
             config_.stats_tracker_->emit();
+
+            if (peer_count == 0 && tracker_session_ && config_.meta_ && !config_.meta_->announce_list_.empty()) {
+                const auto now = monotonic_now_ms();
+                if (last_empty_peer_announce_ms_ == 0 || now - last_empty_peer_announce_ms_ >= 30000) {
+                    last_empty_peer_announce_ms_ = now;
+                    tracker_session_->announce_now();
+                }
+            }
             },
             -1);
     }

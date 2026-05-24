@@ -3,8 +3,23 @@
 #include "net/socket/inet_address.h"
 #include "net/runtime/network_runtime.h"
 
+#include <chrono>
+
 namespace yuan::net::bit_torrent
 {
+    namespace
+    {
+        constexpr int32_t MAX_PEER_CONNECTS_PER_PUMP = 16;
+        constexpr size_t MAX_PENDING_PEER_QUEUE = 2048;
+        constexpr uint64_t PEER_RETRY_COOLDOWN_MS = 30000;
+
+        uint64_t peer_session_now_ms()
+        {
+            return static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+        }
+    }
 
     void PeerSession::configure(PeerSessionConfig config)
     {
@@ -20,6 +35,7 @@ namespace yuan::net::bit_torrent
         piece_served_handler_ = std::move(config.piece_served_handler_);
         peer_ready_handler_ = std::move(config.peer_ready_handler_);
         peer_unchoke_handler_ = std::move(config.peer_unchoke_handler_);
+        peer_piece_availability_handler_ = std::move(config.peer_piece_availability_handler_);
         peer_reject_handler_ = std::move(config.peer_reject_handler_);
         peer_lost_handler_ = std::move(config.peer_lost_handler_);
     }
@@ -81,6 +97,11 @@ namespace yuan::net::bit_torrent
             peer_unchoke_handler_(p);
         }
         });
+        peer->set_piece_availability_handler([this](PeerConnection *p) {
+        if (peer_piece_availability_handler_) {
+            peer_piece_availability_handler_(p);
+        }
+        });
         peer->set_reject_request_handler([this](PeerConnection *p, uint32_t piece, uint32_t offset, uint32_t length) {
         if (peer_reject_handler_) {
             peer_reject_handler_(p, piece, offset, length);
@@ -92,6 +113,17 @@ namespace yuan::net::bit_torrent
     {
         if (!peer) {
             return;
+        }
+
+        std::shared_ptr<PeerConnection> keep_alive;
+        {
+            std::lock_guard<std::mutex> lock(peers_mutex_);
+            for (const auto &entry : peers_) {
+                if (entry.second && &*entry.second == peer) {
+                    keep_alive = entry.second;
+                    break;
+                }
+            }
         }
 
         const auto state = peer->get_state();
@@ -125,6 +157,9 @@ namespace yuan::net::bit_torrent
     void PeerSession::remove_peer(PeerConnection & peer)
     {
         std::string key;
+        std::string peer_ip = peer.get_peer_ip();
+        uint16_t peer_port = peer.get_peer_port();
+        const bool completed_bt_handshake = !peer.get_peer_id().empty();
         {
         std::lock_guard<std::mutex> lock(peers_mutex_);
             for (auto it = peers_.begin(); it != peers_.end(); ++it) {
@@ -134,10 +169,27 @@ namespace yuan::net::bit_torrent
                     break;
                 }
             }
+            if (!key.empty()) {
+                peer_retry_after_ms_[key] = peer_session_now_ms() + PEER_RETRY_COOLDOWN_MS;
+            }
+        }
+
+        if (!key.empty() && !completed_bt_handshake && nat_manager_ && nat_manager_->is_utp_running()) {
+            bool should_try_utp = false;
+            {
+                std::lock_guard<std::mutex> lock(peers_mutex_);
+                should_try_utp = utp_attempted_keys_.insert(key).second;
+            }
+            if (should_try_utp) {
+                nat_manager_->connect_utp_peer(peer_ip, peer_port);
+            }
         }
 
         if (!key.empty() && nat_manager_) {
             nat_manager_->unregister_peer(key);
+        }
+        if (!key.empty()) {
+            pump_peer_queue();
         }
     }
 
@@ -147,38 +199,94 @@ namespace yuan::net::bit_torrent
             return;
         }
 
-        for (const auto &addr : peer_list) {
-            std::shared_ptr<PeerConnection> peer;
-            std::string key;
-            {
-                std::lock_guard<std::mutex> lock(peers_mutex_);
-                if (static_cast<int32_t>(peers_.size()) >= max_peers_) {
-                    break;
+        const uint64_t now_ms = peer_session_now_ms();
+        {
+            std::lock_guard<std::mutex> lock(peers_mutex_);
+            for (auto it = peer_retry_after_ms_.begin(); it != peer_retry_after_ms_.end();) {
+                if (it->second <= now_ms) {
+                    it = peer_retry_after_ms_.erase(it);
+                } else {
+                    ++it;
                 }
-
-                key = make_key(addr.ip_, addr.port_);
-                if (peers_.count(key)) {
-                    continue;
-                }
-
-                if (addr.ip_ == "0.0.0.0") {
-                    continue;
-                }
-
-                if (!allow_loopback_peers_ && addr.ip_ == "127.0.0.1") {
-                    continue;
-                }
-
-                peer = std::make_shared<PeerConnection>();
-                peers_[key] = peer;
             }
+        }
 
-            if (!peer) {
+        for (const auto &addr : peer_list) {
+            if (addr.ip_ == "0.0.0.0") {
                 continue;
             }
 
-            attach_peer(peer, key);
-            peer->connect(addr.ip_, addr.port_, *meta_, *peer_id_, runtime_);
+            if (!allow_loopback_peers_ && addr.ip_ == "127.0.0.1") {
+                continue;
+            }
+
+            const std::string key = make_key(addr.ip_, addr.port_);
+            {
+                std::lock_guard<std::mutex> lock(peers_mutex_);
+                if (peers_.count(key) || pending_peer_keys_.count(key)) {
+                    continue;
+                }
+                auto retry_it = peer_retry_after_ms_.find(key);
+                if (retry_it != peer_retry_after_ms_.end() && retry_it->second > now_ms) {
+                    continue;
+                }
+                if (pending_peers_.size() >= MAX_PENDING_PEER_QUEUE) {
+                    continue;
+                }
+
+                pending_peers_.push_back(addr);
+                pending_peer_keys_.insert(key);
+            }
+        }
+
+        pump_peer_queue();
+    }
+
+    void PeerSession::pump_peer_queue()
+    {
+        if (!meta_ || !peer_id_ || !pieces_have_ || !runtime_) {
+            return;
+        }
+
+        struct PeerStart
+        {
+            PeerAddress addr;
+            std::string key;
+            std::shared_ptr<PeerConnection> peer;
+        };
+
+        std::vector<PeerStart> starts;
+        const uint64_t now_ms = peer_session_now_ms();
+        {
+            std::lock_guard<std::mutex> lock(peers_mutex_);
+            while (static_cast<int32_t>(peers_.size()) < max_peers_ &&
+                   static_cast<int32_t>(starts.size()) < MAX_PEER_CONNECTS_PER_PUMP &&
+                   !pending_peers_.empty()) {
+                auto addr = pending_peers_.front();
+                pending_peers_.pop_front();
+                std::string key = make_key(addr.ip_, addr.port_);
+                pending_peer_keys_.erase(key);
+
+                if (peers_.count(key)) {
+                    continue;
+                }
+                auto retry_it = peer_retry_after_ms_.find(key);
+                if (retry_it != peer_retry_after_ms_.end()) {
+                    if (retry_it->second > now_ms) {
+                        continue;
+                    }
+                    peer_retry_after_ms_.erase(retry_it);
+                }
+
+                auto peer = std::make_shared<PeerConnection>();
+                peers_[key] = peer;
+                starts.push_back(PeerStart{addr, std::move(key), std::move(peer)});
+            }
+        }
+
+        for (auto &start : starts) {
+            attach_peer(start.peer, start.key);
+            start.peer->connect(start.addr.ip_, start.addr.port_, *meta_, *peer_id_, runtime_);
         }
     }
 
@@ -221,6 +329,10 @@ namespace yuan::net::bit_torrent
                 keys.push_back(pair.first);
             }
             peers_.clear();
+            pending_peers_.clear();
+            pending_peer_keys_.clear();
+            utp_attempted_keys_.clear();
+            peer_retry_after_ms_.clear();
         }
 
         if (nat_manager_) {

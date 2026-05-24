@@ -58,6 +58,7 @@ struct TorrentMeta
 
     std::string info_hash_hex_;
     std::vector<uint8_t> info_hash_;  // 20-byte SHA-1 of bencoded info dict
+    std::string info_bencode_;        // exact raw bencoded info dict for metadata exchange
 
     static TorrentMeta parse(const std::string &torrent_data);
     static TorrentMeta parse_file(const std::string &file_path);

@@ -273,14 +273,35 @@ namespace yuan::net::http
                 return true;
             }
             if (header_has_token(resp->get_header(http_header_key::connection), "close") ||
-                header_has_token(req->get_header(http_header_key::connection), "close")) {
+                req->connection_close_requested()) {
                 return true;
             }
             if (req->get_version() == HttpVersion::v_1_0 &&
-                !header_has_token(req->get_header(http_header_key::connection), "keep-alive")) {
+                !req->connection_keep_alive_requested()) {
                 return true;
             }
             return false;
+        }
+
+        void apply_http1_connection_response_headers(HttpRequest *req, HttpResponse *resp, bool keep_alive_enabled)
+        {
+            if (!req || !resp || resp->is_sse()) {
+                return;
+            }
+
+            if (!keep_alive_enabled) {
+                resp->add_header("Connection", "close");
+                return;
+            }
+
+            if (req->get_version() == HttpVersion::v_1_0) {
+                if (req->connection_keep_alive_requested()) {
+                    resp->add_header("Connection", "keep-alive");
+                    resp->add_header("Keep-Alive", "timeout=60, max=1000");
+                } else {
+                    resp->add_header("Connection", "close");
+                }
+            }
         }
 
         constexpr std::string_view kHttp2ConnectionPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
@@ -693,9 +714,6 @@ namespace yuan::net::http
     HttpServer::HttpServer(const HttpServerConfig & config)
         : config_(config)
     {
-        if (config_.enable_keep_alive) {
-            global_pipeline_.add(middlewares::connection_handler());
-        }
         if (config_.enable_cors) {
             global_pipeline_.add(middlewares::cors());
         }
@@ -996,7 +1014,16 @@ namespace yuan::net::http
 
     void HttpServer::cleanup_stale_upload_sessions()
     {
+        if (upload_session_count_.load(std::memory_order_relaxed) == 0) {
+            return;
+        }
+
         const uint64_t observed_last_ms = upload_cleanup_last_ms_.load(std::memory_order_relaxed);
+        if (observed_last_ms != 0 &&
+            (upload_cleanup_probe_count_.fetch_add(1, std::memory_order_relaxed) & 1023U) != 0U) {
+            return;
+        }
+
         const uint64_t observed_now_ms = yuan::base::time::steady_now_ms();
         if (observed_last_ms != 0 && observed_now_ms < observed_last_ms + kUploadCleanupIntervalMs) {
             return;
@@ -1046,6 +1073,7 @@ namespace yuan::net::http
             }
 
             uploaded_chunks_.erase(it);
+            upload_session_count_.store(static_cast<uint32_t>(uploaded_chunks_.size()), std::memory_order_relaxed);
         }
 
         std::size_t orphan_removed = 0;
@@ -1186,6 +1214,36 @@ namespace yuan::net::http
         return context->is_completed();
     }
 
+    bool HttpServer::parse_request(HttpSessionContext *context, ::yuan::buffer::ByteBuffer &&data)
+    {
+        if (!context->parse_from(std::move(data))) {
+            if (context->has_error()) {
+                context->process_error(context->get_error_code());
+            }
+            return false;
+        }
+
+        if (context->has_error()) {
+            context->process_error(context->get_error_code());
+            return false;
+        }
+
+        if (!context->is_completed()) {
+            return false;
+        }
+
+        if (!context->try_parse_request_content()) {
+            context->process_error(ResponseCode::bad_request);
+            return false;
+        }
+
+        if (!validate_request_version(context)) {
+            return false;
+        }
+
+        return context->is_completed();
+    }
+
     bool HttpServer::validate_request_version(HttpSessionContext * context)
     {
         if (!context) {
@@ -1231,6 +1289,8 @@ namespace yuan::net::http
             return true;
         }
 
+        apply_http1_connection_response_headers(request, response, config_.enable_keep_alive);
+
         if (!global_pipeline_.empty() && !global_pipeline_.execute(request, response)) {
             if (response && response->get_response_code() == ResponseCode::too_many_requests) {
                 increment_reject_counter(reject_route_key(request), RejectReason::rate_limit);
@@ -1269,7 +1329,8 @@ namespace yuan::net::http
             return true;
         }
 
-        if (const auto *handler = dispatcher_.get_handler_ptr(request->get_raw_url())) {
+        const std::string_view dispatch_path = request->get_path();
+        if (const auto *handler = dispatcher_.get_handler_ptr(dispatch_path)) {
             (*handler)(request, response);
         } else {
             context->process_error(ResponseCode::not_found);
@@ -1354,6 +1415,7 @@ namespace yuan::net::http
     {
         clear_sessions();
         uploaded_chunks_.clear();
+        upload_session_count_.store(0, std::memory_order_relaxed);
         proxy_.reset();
         listener_.close();
 
@@ -1491,8 +1553,11 @@ namespace yuan::net::http
         }
     }
 
-    bool HttpServer::try_acquire_inflight_request(const HttpRequest *request)
+    bool HttpServer::try_acquire_inflight_request(const HttpRequest *request, bool *tracked)
     {
+        if (tracked) {
+            *tracked = false;
+        }
         const int max_inflight_requests_per_ip = max_inflight_requests_per_ip_limit_.load(std::memory_order_relaxed);
         if (!request || max_inflight_requests_per_ip <= 0) {
             return true;
@@ -1505,12 +1570,15 @@ namespace yuan::net::http
             return false;
         }
         ++cur;
+        if (tracked) {
+            *tracked = true;
+        }
         return true;
     }
 
-    void HttpServer::release_inflight_request(const HttpRequest *request)
+    void HttpServer::release_inflight_request(const HttpRequest *request, bool tracked)
     {
-        if (!request || max_inflight_requests_per_ip_limit_.load(std::memory_order_relaxed) <= 0) {
+        if (!tracked || !request) {
             return;
         }
 
@@ -1633,7 +1701,8 @@ namespace yuan::net::http
             return true;
         }
 
-        if (const auto *handler = dispatcher_.get_handler_ptr(request->get_raw_url())) {
+        const std::string_view dispatch_path = request->get_path();
+        if (const auto *handler = dispatcher_.get_handler_ptr(dispatch_path)) {
             (*handler)(request, response);
         } else {
             response->set_response_code(ResponseCode::not_found);
@@ -1700,11 +1769,13 @@ namespace yuan::net::http
         conn->set_max_packet_size(HttpPacket::get_max_packet_size());
 
         auto httpCtx = std::make_unique<HttpSessionContext>(conn);
+        httpCtx->set_request_timing_enabled(config_.track_request_time || static_cast<bool>(access_log_hook_));
+        const bool use_session_idle_timer = config::close_idle_connection && config::connection_idle_timeout > 0;
         auto session = std::make_unique<HttpSession>(
             sessionId,
             std::move(httpCtx),
             ctx.runtime_view(),
-            false);
+            use_session_idle_timer);
         auto *session_ptr = ptr_of(session);
         store_session(sessionId, std::move(session));
 
@@ -1752,7 +1823,7 @@ namespace yuan::net::http
 
         while (ctx.is_connected()) {
             const uint32_t read_timeout_ms = (!http2_mode && !http1_long_lived_response)
-                ? keep_alive_idle_timeout_ms()
+                ? (use_session_idle_timer ? uint32_t{0} : keep_alive_idle_timeout_ms())
                 : uint32_t{0};
             auto read_result = co_await ctx.read_async(read_timeout_ms);
             if (read_result.status == coroutine::IoStatus::timed_out) {
@@ -1762,6 +1833,7 @@ namespace yuan::net::http
             if (read_result.status != coroutine::IoStatus::success) {
                 break;
             }
+            session_ptr->reset_timer();
 
             if (http2_mode) {
                 if (h2_handshake_active) {
@@ -1837,16 +1909,17 @@ namespace yuan::net::http
 
             auto *context = session_ptr->get_context();
 
+            bool inflight_tracked = false;
             try
             {
-                if (!parse_request(context, parse_data)) {
+                if (!parse_request(context, std::move(parse_data))) {
                     if (context->has_error()) {
                         break;
                     }
                     continue;
                 }
 
-                const bool inflight_acquired = try_acquire_inflight_request(context->get_request());
+                const bool inflight_acquired = try_acquire_inflight_request(context->get_request(), &inflight_tracked);
                 if (!inflight_acquired) {
                     ++inflight_rejected_total_;
                     increment_reject_counter(reject_route_key(context->get_request()), RejectReason::inflight);
@@ -1858,7 +1931,7 @@ namespace yuan::net::http
                 if (proxy_ && proxy_->is_proxy_url(context->get_request()->get_raw_url())) {
                     co_await proxy_->serve_proxy_async(context->get_request(), context->get_response());
                     if (proxy_->has_client_mapping(conn.get())) {
-                        release_inflight_request(context->get_request());
+                        release_inflight_request(context->get_request(), inflight_tracked);
                         release_connection_count();
                         erase_session(sessionId);
                         co_return;
@@ -1871,7 +1944,7 @@ namespace yuan::net::http
                     std::string client_key = std::move(context->ws_client_key_);
                     std::string subproto = std::move(context->ws_subproto_);
                     auto leftover = context->take_leftover_buffer();
-                    release_inflight_request(context->get_request());
+                    release_inflight_request(context->get_request(), inflight_tracked);
                     release_connection_count();
                     erase_session(sessionId);
 
@@ -1882,7 +1955,7 @@ namespace yuan::net::http
                 }
 
                 finalize_request(sessionId, session_ptr, context);
-                release_inflight_request(context->get_request());
+                release_inflight_request(context->get_request(), inflight_tracked);
 
                 const bool close_after_response = should_close_http1_connection(
                     context->get_request(), context->get_response(), config_.enable_keep_alive) ||
@@ -1920,7 +1993,7 @@ namespace yuan::net::http
             {
                 LOG_ERROR("Invalid UTF-8 or format error while processing HTTP request: {}", e.what());
                 if (has_session(sessionId)) {
-                    release_inflight_request(context->get_request());
+                    release_inflight_request(context->get_request(), inflight_tracked);
                     context->process_error(ResponseCode::bad_request);
                 }
             }
@@ -1928,7 +2001,7 @@ namespace yuan::net::http
             {
                 LOG_ERROR("Exception while processing HTTP request: {}", e.what());
                 if (has_session(sessionId)) {
-                    release_inflight_request(context->get_request());
+                    release_inflight_request(context->get_request(), inflight_tracked);
                     context->process_error(ResponseCode::internal_server_error);
                 }
             }
@@ -1936,7 +2009,7 @@ namespace yuan::net::http
             {
                 LOG_ERROR("Unknown exception while processing HTTP request");
                 if (has_session(sessionId)) {
-                    release_inflight_request(context->get_request());
+                    release_inflight_request(context->get_request(), inflight_tracked);
                     context->process_error(ResponseCode::internal_server_error);
                 }
             }
@@ -2951,6 +3024,7 @@ namespace yuan::net::http
             session.total_size = file_size;
             session.touch(yuan::base::time::steady_now_ms());
             uploaded_chunks_[upload_id] = std::move(session);
+            upload_session_count_.store(static_cast<uint32_t>(uploaded_chunks_.size()), std::memory_order_relaxed);
             session_it = uploaded_chunks_.find(upload_id);
             return true;
         }
@@ -3105,6 +3179,7 @@ namespace yuan::net::http
             auto task = std::make_unique<SaveUploadTempChunkTask>();
             task->set_session(std::make_shared<UploadSession>(session_snapshot));
             uploaded_chunks_.erase(session_snapshot.upload_id);
+            upload_session_count_.store(static_cast<uint32_t>(uploaded_chunks_.size()), std::memory_order_relaxed);
             thread_pool_->push_task(std::move(task));
             LOG_INFO("[Upload] complete: {} size={}", session_snapshot.filename, session_snapshot.total_size);
         }

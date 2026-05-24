@@ -259,6 +259,62 @@ namespace yuan::net
         flush();
     }
 
+    void TcpConnection::write_raw_and_flush(std::string_view data)
+    {
+        if (data.empty() || state_ != ConnectionState::connected || is_closing_ || output_shutdown_) {
+            return;
+        }
+
+        if (ssl_handler_ || output_buffer_.front()) {
+            append_output(data);
+            flush();
+            return;
+        }
+
+        int ret = 0;
+        int write_error = 0;
+#ifdef _WIN32
+        ret = ::send(channel_->get_fd(), data.data(), static_cast<int>(data.size()), 0);
+        write_error = ret < 0 ? WSAGetLastError() : 0;
+#else
+        ret = ::send(channel_->get_fd(), data.data(), data.size(), MSG_NOSIGNAL);
+        write_error = ret < 0 ? errno : 0;
+#endif
+
+        if (ret == static_cast<int>(data.size())) {
+            finish_output_drained();
+            return;
+        }
+
+        if (ret > 0) {
+            data.remove_prefix(static_cast<std::size_t>(ret));
+        } else if (ret < 0) {
+            bool transient_write_error = is_transient_send_error(write_error);
+            if (transient_write_error) {
+                const int socket_error = socket_error_code(channel_->get_fd());
+                if (socket_error != 0) {
+                    write_error = socket_error;
+                    transient_write_error = false;
+                }
+            }
+
+            if (!transient_write_error) {
+                if (connectionHandlerOwner_) {
+                    notify_event_waiters(ConnectionEvent::error);
+                    connectionHandlerOwner_->on_error(shared_from_this());
+                }
+                do_close();
+                return;
+            }
+        }
+
+        append_output(data);
+        channel_->enable_write();
+        if (eventHandler_) {
+            eventHandler_->update_channel(ptr_of(channel_));
+        }
+    }
+
     void TcpConnection::flush()
     {
         if (state_ == ConnectionState::closed || is_closing_) {

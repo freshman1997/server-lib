@@ -196,12 +196,16 @@ namespace yuan::net::http
         void reset_timer();
 
     private:
+        void schedule_idle_timer(uint32_t timeout_ms);
+
         uint64_t session_id_;
         std::unordered_map<std::string, SessionItem> session_items_;
         std::unique_ptr<HttpSessionContext> context_;
         coroutine::RuntimeView runtime_;
         timer::TimerHandle conn_timer_;
         close_callback close_cb_;
+        uint64_t last_active_ms_ = 0;
+        bool idle_timer_enabled_ = false;
         bool alive_ = true;
     };
 }

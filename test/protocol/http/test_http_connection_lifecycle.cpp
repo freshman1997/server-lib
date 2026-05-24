@@ -198,6 +198,35 @@ namespace
         return response;
     }
 
+    bool keepalive_idle_closes(uint16_t port)
+    {
+        socket_t fd = connect_loopback(port);
+        if (fd == kInvalidSocket) {
+            return false;
+        }
+
+        const std::string req =
+            "GET /ok HTTP/1.1\r\n"
+            "Host: 127.0.0.1:" + std::to_string(port) + "\r\n"
+            "Connection: keep-alive\r\n\r\n";
+        if (!send_all(fd, req)) {
+            close_socket(fd);
+            return false;
+        }
+
+        bool saw_eof = false;
+        const auto response = recv_until(fd, "ok", &saw_eof);
+        if (response.find("200") == std::string::npos || response.find("ok") == std::string::npos) {
+            close_socket(fd);
+            return false;
+        }
+
+        char buf[16];
+        const int rc = ::recv(fd, buf, sizeof(buf), 0);
+        close_socket(fd);
+        return rc == 0;
+    }
+
     bool wait_for_tcp(uint16_t port)
     {
         for (int i = 0; i < 80; ++i) {
@@ -297,8 +326,6 @@ int main()
     }
 #endif
 
-    yuan::net::http::config::connection_idle_timeout = 500;
-
     const uint16_t http_port = reserve_tcp_port();
     check(http_port != 0, "should reserve HTTP port");
 
@@ -308,6 +335,7 @@ int main()
     yuan::server::HttpService http_service(http_port, http_cfg);
     install_ok_route(http_service, "ok");
     check(http_service.init(), "HTTP service should init");
+    yuan::net::http::config::connection_idle_timeout = 500;
     http_service.start();
     check(wait_for_tcp(http_port), "HTTP service should accept TCP");
 
@@ -320,6 +348,9 @@ int main()
     }
     check(wait_for_zero_connections(http_service), "HTTP half-close connections should drain");
 
+    check(keepalive_idle_closes(http_port), "HTTP keep-alive connection should close after idle timeout");
+    check(wait_for_zero_connections(http_service), "HTTP idle connection should drain");
+
 #ifdef HTTP_USE_SSL
     const uint16_t https_port = reserve_tcp_port();
     check(https_port != 0, "should reserve HTTPS port");
@@ -330,6 +361,7 @@ int main()
     yuan::server::HttpService https_service(https_port, https_cfg);
     install_ok_route(https_service, "secure-ok");
     check(https_service.init(), "HTTPS service should init");
+    yuan::net::http::config::connection_idle_timeout = 500;
     https_service.start();
     check(wait_for_tcp(https_port), "HTTPS service should accept TCP");
 

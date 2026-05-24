@@ -23,6 +23,12 @@
 
 namespace yuan::net::bit_torrent
 {
+    namespace
+    {
+        constexpr uint32_t UTP_RETRANSMIT_INTERVAL_MS = 500;
+        constexpr uint32_t UTP_MAX_RETRANSMIT_RETRIES = 6;
+    }
+
     // ===== UtpConnection =====
 
     UtpConnection::UtpConnection(const std::string & remote_ip, uint16_t remote_port,
@@ -67,11 +73,6 @@ namespace yuan::net::bit_torrent
         // Send ST_STATE back
         send_state(seq_nr_);
 
-        // Start retransmit timer
-        if (runtime_) {
-            retransmit_timer_ = runtime_->schedule_periodic(500, 500, [this]() { retransmit_timeout(); }, -1);
-        }
-
         if (state_change_handler_)
             state_change_handler_(this, state_);
     }
@@ -97,6 +98,10 @@ namespace yuan::net::bit_torrent
             send_queue_.push(pkt);
             sent_packets_[pkt.seq_nr] = pkt;
             offset += chunk_size;
+        }
+
+        if (!sent_packets_.empty()) {
+            ensure_retransmit_timer();
         }
 
         // Try to send queued packets
@@ -164,6 +169,7 @@ namespace yuan::net::bit_torrent
 
     void UtpConnection::send_syn()
     {
+        const bool already_syn_sent = state_ == State::syn_sent;
         UtpHeader hdr;
         std::memset(&hdr, 0, UTP_HEADER_SIZE);
         hdr.set_type_ver(UtpType::st_syn);
@@ -176,12 +182,18 @@ namespace yuan::net::bit_torrent
         send_raw(reinterpret_cast<const uint8_t *>(&hdr), UTP_HEADER_SIZE);
         state_ = State::syn_sent;
 
-        // Start retransmit timer
-        if (runtime_) {
-            retransmit_timer_ = runtime_->schedule_periodic(500, 500, [this]() { retransmit_timeout(); }, -1);
-        }
+        const auto now_us = base::time::steady_now_us();
+        const auto existing = sent_packets_.find(seq_nr_);
+        SentPacket pkt;
+        pkt.seq_nr = seq_nr_;
+        pkt.sent_time_us = now_us;
+        pkt.timestamp = current_timestamp_us();
+        pkt.retries = existing != sent_packets_.end() ? existing->second.retries : 0;
+        sent_packets_[seq_nr_] = std::move(pkt);
 
-        if (state_change_handler_)
+        ensure_retransmit_timer();
+
+        if (!already_syn_sent && state_change_handler_)
             state_change_handler_(this, state_);
     }
 
@@ -274,11 +286,6 @@ namespace yuan::net::bit_torrent
         // Reply with ST_STATE
         send_state(hdr.seq_nr);
 
-        // Start retransmit timer
-        if (runtime_) {
-            retransmit_timer_ = runtime_->schedule_periodic(500, 500, [this]() { retransmit_timeout(); }, -1);
-        }
-
         if (state_change_handler_)
             state_change_handler_(this, state_);
     }
@@ -299,6 +306,7 @@ namespace yuan::net::bit_torrent
             auto it = sent_packets_.find(seq_nr_ - 1);
             if (it != sent_packets_.end())
                 sent_packets_.erase(it);
+            stop_retransmit_timer_if_idle();
 
             if (state_change_handler_)
                 state_change_handler_(this, state_);
@@ -312,6 +320,7 @@ namespace yuan::net::bit_torrent
             // The peer acknowledged our ST_STATE, connection is now established
             ack_nr_ = hdr.seq_nr;
             state_ = State::connected;
+            stop_retransmit_timer_if_idle();
 
             if (state_change_handler_)
                 state_change_handler_(this, state_);
@@ -335,6 +344,7 @@ namespace yuan::net::bit_torrent
                     }
                 }
                 ack_nr_ = new_ack;
+                stop_retransmit_timer_if_idle();
             }
             break;
         }
@@ -426,6 +436,10 @@ namespace yuan::net::bit_torrent
     {
         if (state_ != State::syn_sent && state_ != State::connected && state_ != State::syn_recv)
             return;
+        if (state_ == State::connected && sent_packets_.empty()) {
+            stop_retransmit_timer_if_idle();
+            return;
+        }
 
         const auto now_us = base::time::steady_now_us();
 
@@ -438,8 +452,21 @@ namespace yuan::net::bit_torrent
             const auto elapsed = now_us > pkt.sent_time_us ? now_us - pkt.sent_time_us : 0;
 
             if (elapsed > static_cast<uint64_t>(rtt_us_ + rtt_var_us_ * 4)) {
+                if (++pkt.retries > UTP_MAX_RETRANSMIT_RETRIES) {
+                    state_ = State::error;
+                    if (retransmit_timer_) {
+                        retransmit_timer_.cancel();
+                        retransmit_timer_.reset();
+                    }
+                    sent_packets_.clear();
+                    send_queue_ = std::queue<SentPacket>();
+                    if (state_change_handler_)
+                        state_change_handler_(this, state_);
+                    return;
+                }
+
                 // Retransmit
-                if (pair.first == seq_nr_ - 1 && state_ == State::syn_sent) {
+                if (pair.first == seq_nr_ && state_ == State::syn_sent) {
                     // Retransmit SYN
                     send_syn();
                 } else {
@@ -468,6 +495,25 @@ namespace yuan::net::bit_torrent
         yuan::buffer::ByteBuffer packet(len);
         packet.append(data, len);
         acceptor_->send_datagram(addr, packet);
+    }
+
+    void UtpConnection::ensure_retransmit_timer()
+    {
+        if (runtime_ && !retransmit_timer_) {
+            retransmit_timer_ = runtime_->schedule_periodic(
+                UTP_RETRANSMIT_INTERVAL_MS,
+                UTP_RETRANSMIT_INTERVAL_MS,
+                [this]() { retransmit_timeout(); },
+                -1);
+        }
+    }
+
+    void UtpConnection::stop_retransmit_timer_if_idle()
+    {
+        if (state_ == State::connected && sent_packets_.empty() && retransmit_timer_) {
+            retransmit_timer_.cancel();
+            retransmit_timer_.reset();
+        }
     }
 
     void UtpConnection::flush_send_queue()
@@ -518,6 +564,10 @@ namespace yuan::net::bit_torrent
 
         sock->set_reuse(true);
         sock->set_none_block(true);
+        if (!sock->bind()) {
+            delete sock;
+            return false;
+        }
 
         acceptor_.reset(net::create_datagram_acceptor(sock, runtime_->runtime_view()));
         if (!acceptor_->listen()) {
@@ -572,7 +622,7 @@ namespace yuan::net::bit_torrent
                                                     &*acceptor_, runtime_);
 
         auto *conn_ptr = &*conn;
-        connections_[conn_id] = std::move(conn);
+        connections_[conn_id + 1] = std::move(conn);
         conn_ptr->send_syn();
 
         return conn_ptr;
@@ -615,7 +665,8 @@ namespace yuan::net::bit_torrent
             it->second->on_packet_received(data, len);
 
             // Clean up closed connections
-            if (it->second->get_state() == UtpConnection::State::closed) {
+            if (it->second->get_state() == UtpConnection::State::closed ||
+                it->second->get_state() == UtpConnection::State::error) {
                 connections_.erase(it);
             }
             return;
@@ -637,13 +688,16 @@ namespace yuan::net::bit_torrent
 
                 if (new_peer_cb_)
                     new_peer_cb_(conn_ptr);
+            } else if (pit->second->get_state() == UtpConnection::State::closed ||
+                       pit->second->get_state() == UtpConnection::State::error) {
+                pending_syn_.erase(pit);
             }
             return;
         }
 
         // New incoming SYN
         if (type == UtpType::st_syn) {
-            handle_new_syn(hdr, remote_ip, remote_port, data + UTP_HEADER_SIZE, len - UTP_HEADER_SIZE);
+            handle_new_syn(hdr, remote_ip, remote_port, data, len);
         }
     }
 
@@ -666,8 +720,7 @@ namespace yuan::net::bit_torrent
                                                      their_recv_id,
                                                      &*acceptor_, runtime_);
 
-        conn->on_packet_received(
-            reinterpret_cast<const uint8_t *>(&hdr), UTP_HEADER_SIZE + len);
+        conn->on_packet_received(payload, len);
 
         std::string key = remote_ip + ":" + std::to_string(remote_port);
         auto *conn_ptr = &*conn;
@@ -709,7 +762,18 @@ namespace yuan::net::bit_torrent
     }
     void UtpManager::on_read(const std::shared_ptr<net::Connection> &conn)
     {
-        (void)conn;
+        if (!conn)
+            return;
+
+        auto packet = conn->take_input_byte_buffer();
+        if (packet.readable_bytes() == 0)
+            return;
+
+        const auto &addr = conn->get_remote_address();
+        on_udp_data(reinterpret_cast<const uint8_t *>(packet.read_ptr()),
+                    packet.readable_bytes(),
+                    addr.get_ip(),
+                    static_cast<uint16_t>(addr.get_port()));
     }
     void UtpManager::on_write(const std::shared_ptr<net::Connection> &conn)
     {

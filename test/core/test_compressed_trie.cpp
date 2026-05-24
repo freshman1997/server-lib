@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <string>
+#include <string_view>
 
 namespace
 {
@@ -23,11 +24,11 @@ namespace
         yuan::base::CompressTrie trie;
         trie.insert("/api/user");
 
-        check(trie.contains("/api/user"), "inserted key should be contained");
-        check(!trie.contains("/api"), "structural split prefix should not count as contained");
+        check(trie.contains(std::string_view("/api/user")), "inserted key should be contained");
+        check(!trie.contains(std::string_view("/api")), "structural split prefix should not count as contained");
 
         trie.insert("/api/order");
-        check(!trie.contains("/api"), "common split node should still not be terminal");
+        check(!trie.contains(std::string_view("/api")), "common split node should still not be terminal");
         check(trie.size() == 2, "size should count distinct inserted keys");
 
         trie.insert("/api/user");
@@ -40,12 +41,12 @@ namespace
         trie.insert("/api", true);
         trie.insert("/api/user");
 
-        const auto exact = trie.find_prefix("/api/user");
+        const auto exact = trie.find_prefix(std::string_view("/api/user"));
         check(exact.match_length == 9, "exact terminal should return full match length");
         check(exact.is_terminal, "exact terminal should be marked terminal");
         check(!exact.is_registered, "non-prefix exact handler should not be reported as registered prefix");
 
-        const auto child = trie.find_prefix("/api/user/42");
+        const auto child = trie.find_prefix(std::string_view("/api/user/42"));
         check(child.match_length == 4, "non-prefix child should fall back to parent registered prefix");
         check(child.is_registered, "fallback should be a registered prefix");
         check(!child.is_terminal, "fallback prefix for longer input is not an exact terminal");
@@ -57,7 +58,7 @@ namespace
         trie.insert("/static", true);
         trie.insert("/static/assets", true);
 
-        const auto result = trie.find_prefix("/static/assets/logo.png");
+        const auto result = trie.find_prefix(std::string_view("/static/assets/logo.png"));
         check(result.match_length == 14, "longest registered prefix should win");
         check(result.is_registered, "longest registered prefix should be marked registered");
         check(!result.is_terminal, "longer input should not be exact terminal");
@@ -68,10 +69,10 @@ namespace
         yuan::base::CompressTrie trie;
         trie.insert("/static/assets", true);
 
-        check(trie.has_key_with_prefix("/sta"), "key should exist with partial edge prefix");
-        check(trie.has_key_with_prefix("/static"), "key should exist with full node prefix");
-        check(!trie.has_key_with_prefix("/static/files"), "missing longer prefix should not match");
-        check(!trie.has_key_with_prefix("/missing"), "missing prefix should not match");
+        check(trie.has_key_with_prefix(std::string_view("/sta")), "key should exist with partial edge prefix");
+        check(trie.has_key_with_prefix(std::string_view("/static")), "key should exist with full node prefix");
+        check(!trie.has_key_with_prefix(std::string_view("/static/files")), "missing longer prefix should not match");
+        check(!trie.has_key_with_prefix(std::string_view("/missing")), "missing prefix should not match");
     }
 }
 

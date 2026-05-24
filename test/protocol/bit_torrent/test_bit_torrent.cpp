@@ -792,6 +792,28 @@ void test_torrent_meta_parse()
         CHECK(meta.info.piece_count() == 4, "piece count should be 4");
     }
 
+    TEST("parse single file torrent larger than 32-bit");
+    {
+        const int64_t large_size = 3221225472LL;
+        const int64_t large_piece_length = 1073741824LL;
+        std::string large_piece_hashes(60, '\x33');
+        std::string large_torrent = "d"
+            + bencode_str("announce") + bencode_str(tracker_url)
+            + bencode_str("info") + "d"
+                + bencode_str("name") + bencode_str("large.iso")
+                + bencode_str("piece length") + bencode_int(large_piece_length)
+                + bencode_str("pieces") + bencode_str(large_piece_hashes)
+                + bencode_str("length") + bencode_int(large_size)
+            + "e"
+        + "e";
+
+        auto meta = TorrentMeta::parse(large_torrent);
+        CHECK(meta.info_hash_.size() == 20, "large torrent should parse");
+        CHECK(meta.info.total_length_ == large_size, "large total length should not overflow");
+        CHECK(meta.info.piece_length_ == large_piece_length, "large piece length should not overflow");
+        CHECK(meta.info.piece_count() == 3, "large piece count should be 3");
+    }
+
     TEST("parse announce list");
     {
         auto meta = TorrentMeta::parse(torrent);
@@ -1166,6 +1188,83 @@ void test_utp_connection_state()
         CHECK(!mgr.is_running(), "UtpManager should not be running by default");
         CHECK(mgr.get_port() == 0, "default port should be 0");
     }
+
+    TEST("UtpManager local connection transfers data");
+    {
+        using namespace std::chrono_literals;
+
+        yuan::net::SelectPoller poller_a;
+        yuan::timer::WheelTimerManager timer_a;
+        yuan::net::EventLoop loop_a(&poller_a, &timer_a);
+        yuan::net::NetworkRuntime runtime_a(&loop_a, &timer_a);
+        yuan::net::SelectPoller poller_b;
+        yuan::timer::WheelTimerManager timer_b;
+        yuan::net::EventLoop loop_b(&poller_b, &timer_b);
+        yuan::net::NetworkRuntime runtime_b(&loop_b, &timer_b);
+
+        NatConfig cfg_a;
+        cfg_a.listen_port = 42081;
+        cfg_a.utp_port = 42081;
+        NatConfig cfg_b;
+        cfg_b.listen_port = 42082;
+        cfg_b.utp_port = 42082;
+
+        UtpManager mgr_a;
+        UtpManager mgr_b;
+        std::atomic_bool received {false};
+        std::atomic_bool connected {false};
+        const std::string payload = "utp-local-payload";
+
+        const bool started_a = mgr_a.start(cfg_a, &runtime_a);
+        const bool started_b = mgr_b.start(cfg_b, &runtime_b);
+
+        if (started_b) {
+            mgr_b.set_new_peer_callback([&](UtpConnection *conn) {
+                if (!conn)
+                    return;
+                conn->set_data_handler([&](const uint8_t *data, size_t len) {
+                    std::string got(reinterpret_cast<const char *>(data), len);
+                    if (got == payload) {
+                        received = true;
+                    }
+                });
+            });
+        }
+
+        std::thread thread_a([&]() { runtime_a.run(); });
+        std::thread thread_b([&]() { runtime_b.run(); });
+
+        if (started_a && started_b) {
+            runtime_a.dispatch([&]() {
+                auto *conn = mgr_a.connect("127.0.0.1", static_cast<uint16_t>(cfg_b.utp_port),
+                                           std::vector<uint8_t>(20, 0x11),
+                                           "-YZ0001-123456789012");
+                if (!conn)
+                    return;
+                conn->set_state_change_handler([&](UtpConnection *c, UtpConnection::State state) {
+                    if (state == UtpConnection::State::connected) {
+                        connected = true;
+                        c->send_data(reinterpret_cast<const uint8_t *>(payload.data()), payload.size());
+                    }
+                });
+            });
+        }
+
+        const auto deadline = std::chrono::steady_clock::now() + 3s;
+        while (!received.load() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(20ms);
+        }
+
+        mgr_a.stop();
+        mgr_b.stop();
+        runtime_a.stop();
+        runtime_b.stop();
+        if (thread_a.joinable()) thread_a.join();
+        if (thread_b.joinable()) thread_b.join();
+
+        CHECK(started_a && started_b && connected.load() && received.load(),
+              "uTP should connect locally and deliver payload");
+    }
 }
 
 // ============================================================================
@@ -1278,6 +1377,15 @@ void test_dht_node_basic()
         // the routing table itself should be safely iterable.
         DhtNode dht;
         CHECK(dht.routing_table_size() == 0, "empty routing table returns 0");
+    }
+
+    TEST("DhtNode find_closest_nodes handles empty routing table");
+    {
+        DhtNode dht;
+        DhtNodeId target = {};
+        target[0] = 0x42;
+        auto nodes = dht.find_closest_nodes(target, 8);
+        CHECK(nodes.empty(), "empty routing table should return no closest nodes");
     }
 }
 
@@ -1456,6 +1564,24 @@ void test_extension_handshake_bencoding()
 
         CHECK(pex_id > 0 && metadata_id > 0 && pex_id != metadata_id,
               "ut_pex and ut_metadata ids should both be advertised and unique");
+    }
+
+    TEST("PEX extension handshake keeps top-level keys sorted");
+    {
+        PexManager pex;
+        std::vector<uint8_t> info_hash(20, 0xEF);
+        NatConfig cfg;
+        pex.init(info_hash, cfg);
+
+        auto pex_hs = pex.build_ext_handshake();
+        std::string hs(reinterpret_cast<const char *>(pex_hs.data()), pex_hs.size());
+
+        const auto m_pos = hs.find("1:m");
+        const auto reqq_pos = hs.find("4:reqq");
+        const auto v_pos = hs.find("1:v");
+        CHECK(m_pos != std::string::npos && reqq_pos != std::string::npos && v_pos != std::string::npos &&
+              m_pos < reqq_pos && reqq_pos < v_pos,
+              "BEP10 extension handshake keys should be ordered as m, reqq, v");
     }
 }
 
@@ -2437,7 +2563,7 @@ void test_local_seed_download_e2e()
 {
     printf("\n=== BitTorrentClient: local seed/download e2e ===\n");
 
-    TEST("downloader fetches from local seeder via tracker");
+    TEST("magnet downloader fetches from local seeder via tracker");
     {
         namespace fs = std::filesystem;
         using namespace std::chrono_literals;
@@ -2506,6 +2632,9 @@ void test_local_seed_download_e2e()
             + bencode_str("announce") + bencode_str(announce_url)
             + bencode_str("announce-list") + "l" + "l" + bencode_str(announce_url) + "e" + "e"
             + info_only_torrent.substr(1); // reuse same info dict
+        const std::string magnet_uri = "magnet:?xt=urn:btih:" + downloader_meta.info_hash_hex_
+            + "&dn=" + url_encode("e2e_seed.bin")
+            + "&tr=" + url_encode(announce_url);
 
         std::atomic_int seeder_port {0};
         std::atomic_bool tracker_stop {false};
@@ -2615,7 +2744,7 @@ void test_local_seed_download_e2e()
         downloader.set_runtime(downloader_runtime);
         downloader.set_nat_config(downloader_cfg);
         downloader.set_save_path(downloader_dir.string());
-        const bool downloader_loaded = downloader.load_torrent_data(tracker_torrent);
+        const bool downloader_loaded = downloader.load_magnet(magnet_uri);
         const bool downloader_started = downloader_loaded && downloader.start();
 
         std::thread downloader_loop_thread([&]() {
@@ -2669,7 +2798,7 @@ void test_local_seed_download_e2e()
         }
         if (tracker_thread.joinable()) tracker_thread.join();
 
-        CHECK(passed, "downloader should complete from local seeder via tracker");
+        CHECK(passed, "magnet downloader should fetch metadata and complete from local seeder");
         fs::remove_all(seeder_dir);
         fs::remove_all(downloader_dir);
     }

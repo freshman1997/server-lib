@@ -527,6 +527,7 @@ namespace yuan::server
                     bt["enable_dht"] = nat_cfg.enable_dht;
                     bt["enable_pex"] = nat_cfg.enable_pex;
                     bt["enable_upnp"] = nat_cfg.enable_upnp;
+                    bt["enable_utp"] = nat_cfg.enable_utp;
                     bt["metadata_mode"] = first_client->is_metadata_mode();
                 } else {
                     bt["max_peers"] = bt_service->default_max_peers();
@@ -540,6 +541,7 @@ namespace yuan::server
                     bt["enable_dht"] = nat_cfg.enable_dht;
                     bt["enable_pex"] = nat_cfg.enable_pex;
                     bt["enable_upnp"] = nat_cfg.enable_upnp;
+                    bt["enable_utp"] = nat_cfg.enable_utp;
                     bt["metadata_mode"] = false;
                 }
 
@@ -764,6 +766,7 @@ namespace yuan::server
                         bt["enable_dht"] = nat_cfg.enable_dht;
                         bt["enable_pex"] = nat_cfg.enable_pex;
                         bt["enable_upnp"] = nat_cfg.enable_upnp;
+                        bt["enable_utp"] = nat_cfg.enable_utp;
                         bt["metadata_mode"] = first_client->is_metadata_mode();
                         bt["ratio"] = total_downloaded > 0 ? static_cast<double>(total_uploaded) / static_cast<double>(total_downloaded) : 0.0;
                     } else {
@@ -778,6 +781,7 @@ namespace yuan::server
                         bt["enable_dht"] = nat_cfg.enable_dht;
                         bt["enable_pex"] = nat_cfg.enable_pex;
                         bt["enable_upnp"] = nat_cfg.enable_upnp;
+                        bt["enable_utp"] = nat_cfg.enable_utp;
                         bt["metadata_mode"] = false;
                         bt["ratio"] = 0.0;
                     }
@@ -961,6 +965,10 @@ namespace yuan::server
                 nat_cfg.enable_nat_pmp = input["enable_upnp"].get<bool>();
                 nat_changed = true;
             }
+            if (input.contains("enable_utp") && input["enable_utp"].is_boolean()) {
+                nat_cfg.enable_utp = input["enable_utp"].get<bool>();
+                nat_changed = true;
+            }
 
             if (nat_changed) {
                 for (auto &pair : clients) {
@@ -989,9 +997,10 @@ namespace yuan::server
                 out["applied_enable_dht"] = nat_cfg.enable_dht;
                 out["applied_enable_pex"] = nat_cfg.enable_pex;
                 out["applied_enable_upnp"] = nat_cfg.enable_upnp;
+                out["applied_enable_utp"] = nat_cfg.enable_utp;
                 if (bt_service->active_task_count() > 0) {
                     out["nat_restart_required"] = true;
-                    out["hint"] = "NAT/DHT/PEX/UPnP changes take effect after restarting the active task";
+                    out["hint"] = "NAT/DHT/PEX/UPnP/uTP changes take effect after restarting the active task";
                 }
             }
             resp->json(out.dump(), yuan::net::http::ResponseCode::ok_);

@@ -34,6 +34,8 @@ namespace yuan::net
 
         virtual void write_owned_and_flush(::yuan::buffer::ByteBuffer buffer) override;
 
+        virtual void write_raw_and_flush(std::string_view data) override;
+
         virtual void flush();
 
         // 丢弃所有未发送的数据

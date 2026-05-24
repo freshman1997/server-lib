@@ -161,41 +161,52 @@ namespace yuan::net::bit_torrent
                                                  PieceBlockRequest & request)
     {
         const size_t count = std::min(peer_pieces.size(), pieces_have_.size());
-        std::vector<size_t> active_candidates;
-        std::vector<size_t> inactive_candidates;
-        active_candidates.reserve(count);
-        inactive_candidates.reserve(count);
+        size_t best_active = SIZE_MAX;
+        size_t best_inactive = SIZE_MAX;
+        uint32_t best_active_availability = UINT32_MAX;
+        uint32_t best_inactive_availability = UINT32_MAX;
+
+        const auto candidate_availability = [piece_availability, count](size_t index) {
+            if (piece_availability && piece_availability->size() >= count) {
+                return (*piece_availability)[index];
+            }
+            return static_cast<uint32_t>(0);
+        };
+
+        const auto better_candidate = [](size_t index,
+                                         uint32_t availability,
+                                         size_t best,
+                                         uint32_t best_availability) {
+            return best == SIZE_MAX ||
+                   availability < best_availability ||
+                   (availability == best_availability && index < best);
+        };
+
         for (size_t i = 0; i < count; ++i) {
             if (!pieces_have_[i] && peer_pieces[i]) {
+                const uint32_t piece_size = expected_piece_size(static_cast<uint32_t>(i));
+                if (piece_size == 0 ||
+                    (retry_requests_[i].empty() && next_request_offsets_[i] >= piece_size)) {
+                    continue;
+                }
+
+                const uint32_t availability = candidate_availability(i);
                 if (i < pieces_downloading_.size() && pieces_downloading_[i]) {
-                    active_candidates.push_back(i);
+                    if (better_candidate(i, availability, best_active, best_active_availability)) {
+                        best_active = i;
+                        best_active_availability = availability;
+                    }
                 } else {
-                    inactive_candidates.push_back(i);
+                    if (better_candidate(i, availability, best_inactive, best_inactive_availability)) {
+                        best_inactive = i;
+                        best_inactive_availability = availability;
+                    }
                 }
             }
         }
 
-        const auto sort_candidates = [piece_availability, count](std::vector<size_t> &candidates) {
-        std::stable_sort(candidates.begin(), candidates.end(),
-                         [piece_availability, count](size_t lhs, size_t rhs) {
-                         if (piece_availability && piece_availability->size() >= count)
-                         {
-                             const auto left = (*piece_availability)[lhs];
-                             const auto right = (*piece_availability)[rhs];
-                             if (left != right)
-                             {
-                                 return left < right;
-                             }
-                         }
-
-                         return lhs < rhs;
-                     });
-        };
-
-        sort_candidates(active_candidates);
-        sort_candidates(inactive_candidates);
-
-        if (try_select_request_from_candidates(active_candidates, default_request_size, now_ms, request)) {
+        if (best_active < count &&
+            try_select_request_from_piece(best_active, default_request_size, now_ms, request)) {
             return true;
         }
 
@@ -207,7 +218,8 @@ namespace yuan::net::bit_torrent
             return false;
         }
 
-        return try_select_request_from_candidates(inactive_candidates, default_request_size, now_ms, request);
+        return best_inactive < count &&
+               try_select_request_from_piece(best_inactive, default_request_size, now_ms, request);
     }
 
     bool PieceDownloadState::select_endgame_request(const std::vector<bool> & peer_pieces,
@@ -238,49 +250,51 @@ namespace yuan::net::bit_torrent
         return static_cast<size_t>(std::count(pieces_downloading_.begin(), pieces_downloading_.end(), true));
     }
 
-    bool PieceDownloadState::try_select_request_from_candidates(const std::vector<size_t> & candidates,
-                                                                uint32_t default_request_size,
-                                                                uint64_t now_ms,
-                                                                PieceBlockRequest & request)
+    bool PieceDownloadState::try_select_request_from_piece(size_t i,
+                                                           uint32_t default_request_size,
+                                                           uint64_t now_ms,
+                                                           PieceBlockRequest & request)
     {
-        for (const auto i : candidates) {
-            const auto piece_index = static_cast<uint32_t>(i);
-            const uint32_t piece_size = expected_piece_size(piece_index);
-            if (piece_size == 0) {
-                continue;
-            }
-
-            pieces_downloading_[i] = true;
-            auto &retry_queue = retry_requests_[i];
-            while (!retry_queue.empty()) {
-                request = retry_queue.front();
-                retry_queue.pop_front();
-                if (request.offset_ < piece_size &&
-                    !is_inflight(piece_index, request.offset_, request.length_)) {
-                    request.length_ = std::min(request.length_, piece_size - request.offset_);
-                    request.submit_time_ms_ = now_ms;
-                    inflight_requests_[i].push_back(request);
-                    return true;
-                }
-            }
-
-            uint32_t next_offset = next_request_offsets_[i];
-            while (next_offset < piece_size) {
-                const uint32_t remaining = piece_size - next_offset;
-                const uint32_t request_length = std::min(default_request_size, remaining);
-                if (!is_inflight(piece_index, next_offset, request_length)) {
-                    request.piece_index_ = piece_index;
-                    request.offset_ = next_offset;
-                    request.length_ = request_length;
-                    request.submit_time_ms_ = now_ms;
-                    next_request_offsets_[i] = next_offset + request.length_;
-                    inflight_requests_[i].push_back(request);
-                    return true;
-                }
-                next_offset += request_length;
-            }
-            next_request_offsets_[i] = next_offset;
+        if (i >= pieces_have_.size()) {
+            return false;
         }
+
+        const auto piece_index = static_cast<uint32_t>(i);
+        const uint32_t piece_size = expected_piece_size(piece_index);
+        if (piece_size == 0) {
+            return false;
+        }
+
+        pieces_downloading_[i] = true;
+        auto &retry_queue = retry_requests_[i];
+        while (!retry_queue.empty()) {
+            request = retry_queue.front();
+            retry_queue.pop_front();
+            if (request.offset_ < piece_size &&
+                !is_inflight(piece_index, request.offset_, request.length_)) {
+                request.length_ = std::min(request.length_, piece_size - request.offset_);
+                request.submit_time_ms_ = now_ms;
+                inflight_requests_[i].push_back(request);
+                return true;
+            }
+        }
+
+        uint32_t next_offset = next_request_offsets_[i];
+        while (next_offset < piece_size) {
+            const uint32_t remaining = piece_size - next_offset;
+            const uint32_t request_length = std::min(default_request_size, remaining);
+            if (!is_inflight(piece_index, next_offset, request_length)) {
+                request.piece_index_ = piece_index;
+                request.offset_ = next_offset;
+                request.length_ = request_length;
+                request.submit_time_ms_ = now_ms;
+                next_request_offsets_[i] = next_offset + request.length_;
+                inflight_requests_[i].push_back(request);
+                return true;
+            }
+            next_offset += request_length;
+        }
+        next_request_offsets_[i] = next_offset;
 
         return false;
     }

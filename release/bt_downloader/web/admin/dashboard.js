@@ -24,7 +24,7 @@ let fallbackPollTimer = 0;
 
 const settingsElementIds = [
   "maxPeers", "listenPort", "listenPortEnd", "downloadLimit", "uploadLimit", "maxConcurrent",
-  "enableDht", "enablePex", "enableUpnp"
+  "enableDht", "enablePex", "enableUpnp", "enableUtp"
 ];
 
 function byId(id) {
@@ -145,6 +145,7 @@ function updateSettings(data) {
   setCheckboxIfIdle("enableDht", data.bt.enable_dht !== false);
   setCheckboxIfIdle("enablePex", data.bt.enable_pex !== false);
   setCheckboxIfIdle("enableUpnp", data.bt.enable_upnp !== false);
+  setCheckboxIfIdle("enableUtp", data.bt.enable_utp !== false);
 }
 
 function handleOverviewData(data) {
@@ -600,6 +601,7 @@ async function applySettings() {
   payload.enable_dht = byId("enableDht").checked;
   payload.enable_pex = byId("enablePex").checked;
   payload.enable_upnp = byId("enableUpnp").checked;
+  payload.enable_utp = byId("enableUtp").checked;
 
   try {
     const data = await requestJson("/admin/api/bt/settings", {
@@ -645,7 +647,8 @@ async function exportConfigTemplate() {
         max_concurrent_downloads: bt.max_concurrent || 3,
         enable_dht: bt.enable_dht !== false,
         enable_pex: bt.enable_pex !== false,
-        enable_upnp: bt.enable_upnp !== false
+        enable_upnp: bt.enable_upnp !== false,
+        enable_utp: bt.enable_utp !== false
       }
     };
     downloadTextFile("bt_downloader.config.template.json", JSON.stringify(cfg, null, 2));
@@ -667,6 +670,7 @@ async function applyImportedConfig(config) {
     if (typeof config.bt.enable_dht === "boolean") settingsPayload.enable_dht = config.bt.enable_dht;
     if (typeof config.bt.enable_pex === "boolean") settingsPayload.enable_pex = config.bt.enable_pex;
     if (typeof config.bt.enable_upnp === "boolean") settingsPayload.enable_upnp = config.bt.enable_upnp;
+    if (typeof config.bt.enable_utp === "boolean") settingsPayload.enable_utp = config.bt.enable_utp;
   }
   if (Object.keys(settingsPayload).length > 0) {
     await requestJson("/admin/api/bt/settings", {

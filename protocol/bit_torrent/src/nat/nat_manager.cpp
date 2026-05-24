@@ -11,6 +11,7 @@
 #include "timer/timer.h"
 #include "timer/timer_task.h"
 #include <cstring>
+#include <map>
 
 namespace yuan::net::bit_torrent
 {
@@ -107,6 +108,10 @@ namespace yuan::net::bit_torrent
 
         metadata_manager_ = std::make_unique<MetadataManager>();
         metadata_manager_->init(info_hash_);
+        if (!meta.info_bencode_.empty()) {
+            std::vector<uint8_t> metadata(meta.info_bencode_.begin(), meta.info_bencode_.end());
+            metadata_manager_->set_metadata(metadata);
+        }
     }
 
     void NatManager::stop()
@@ -158,6 +163,8 @@ namespace yuan::net::bit_torrent
                 auto pex_hs = pex_manager_->build_ext_handshake();
                 auto meta_hs = metadata_manager_->build_ext_handshake();
 
+                std::map<std::string, int64_t> extension_ids;
+                int64_t metadata_size = -1;
                 std::string combined;
                 combined += "d1:md";
 
@@ -169,8 +176,7 @@ namespace yuan::net::bit_torrent
                         auto *m_dict = static_cast<DicttionaryData *>(m);
                         for (const auto &kv : m_dict->get_items()) {
                             if (kv.second->type_ == DataType::integer_) {
-                                combined += std::to_string(kv.first.size()) + ":" + kv.first;
-                                combined += "i" + std::to_string(static_cast<IntegerData *>(kv.second)->get_data()) + "e";
+                                extension_ids[kv.first] = static_cast<IntegerData *>(kv.second)->get_data();
                             }
                         }
                     }
@@ -185,28 +191,31 @@ namespace yuan::net::bit_torrent
                         auto *m_dict = static_cast<DicttionaryData *>(m);
                         for (const auto &kv : m_dict->get_items()) {
                             if (kv.second->type_ == DataType::integer_) {
-                                combined += std::to_string(kv.first.size()) + ":" + kv.first;
-                                combined += "i" + std::to_string(static_cast<IntegerData *>(kv.second)->get_data()) + "e";
+                                extension_ids[kv.first] = static_cast<IntegerData *>(kv.second)->get_data();
                             }
                         }
                     }
                     if (auto *v = meta_dict->get_val("metadata_size"); v && v->type_ == DataType::integer_) {
-                        combined += "13:metadata_size";
-                        combined += "i" + std::to_string(static_cast<IntegerData *>(v)->get_data()) + "e";
+                        metadata_size = static_cast<IntegerData *>(v)->get_data();
                     }
                 }
                 delete meta_parsed;
 
-                combined += "e1:v6:YZ00014:reqqi50ee";
+                for (const auto &kv : extension_ids) {
+                    combined += std::to_string(kv.first.size()) + ":" + kv.first;
+                    combined += "i" + std::to_string(kv.second) + "e";
+                }
+                combined += "e";
+                if (metadata_size > 0) {
+                    combined += "13:metadata_size";
+                    combined += "i" + std::to_string(metadata_size) + "e";
+                }
+                combined += "4:reqqi50e1:v6:YZ0001e";
                 ext_hs.assign(combined.begin(), combined.end());
             } else if (pex_manager_) {
                 ext_hs = pex_manager_->build_ext_handshake();
             } else if (metadata_manager_) {
                 ext_hs = metadata_manager_->build_ext_handshake();
-            }
-
-            if (!ext_hs.empty()) {
-                peer->send_extended(0, ext_hs.data(), ext_hs.size());
             }
 
             peer->set_extended_message_handler(
@@ -222,6 +231,10 @@ namespace yuan::net::bit_torrent
                         }
                     }
                 });
+
+            if (!ext_hs.empty()) {
+                peer->send_extended(0, ext_hs.data(), ext_hs.size());
+            }
         }
     }
 
@@ -279,6 +292,30 @@ namespace yuan::net::bit_torrent
     bool NatManager::is_utp_running() const
     {
         return utp_manager_ && utp_manager_->is_running();
+    }
+
+    bool NatManager::connect_utp_peer(const std::string & ip, uint16_t port)
+    {
+        if (!utp_manager_ || !utp_manager_->is_running() || info_hash_.empty() || peer_id_.empty())
+            return false;
+
+        auto *conn = utp_manager_->connect(ip, port, info_hash_, peer_id_);
+        if (!conn)
+            return false;
+
+        const std::string key = ip + ":" + std::to_string(port);
+        conn->set_state_change_handler([this, key](UtpConnection *utp_conn, UtpConnection::State state) {
+            if (state == UtpConnection::State::connected || state == UtpConnection::State::syn_recv) {
+                if (utp_peers_.find(key) == utp_peers_.end()) {
+                    on_new_utp_peer(utp_conn);
+                }
+            } else if (state == UtpConnection::State::closed ||
+                       state == UtpConnection::State::error) {
+                unregister_peer(key);
+                utp_peers_.erase(key);
+            }
+        });
+        return true;
     }
 
     void NatManager::on_upnp_result(bool success, const std::string & ip, uint16_t port)

@@ -34,24 +34,39 @@ namespace yuan::base
 
     bool CompressTrie::contains(const std::string &word) const
     {
+        return contains(std::string_view(word));
+    }
+
+    bool CompressTrie::contains(std::string_view word) const
+    {
         if (word.empty()) {
             return false;
         }
 
-        const auto result = do_find_prefix(root_.get(), std::string_view(word));
+        const auto result = do_find_prefix(root_.get(), word);
         return result.is_terminal && result.match_length == static_cast<int>(word.size());
     }
 
     CompressTrie::MatchResult CompressTrie::find_prefix(const std::string &word) const
     {
+        return find_prefix(std::string_view(word));
+    }
+
+    CompressTrie::MatchResult CompressTrie::find_prefix(std::string_view word) const
+    {
         if (word.empty() || !root_) {
             return no_match;
         }
 
-        return do_find_prefix(root_.get(), std::string_view(word));
+        return do_find_prefix(root_.get(), word);
     }
 
     bool CompressTrie::has_key_with_prefix(const std::string &word) const
+    {
+        return has_key_with_prefix(std::string_view(word));
+    }
+
+    bool CompressTrie::has_key_with_prefix(std::string_view word) const
     {
         if (word.empty() || !root_) {
             return false;

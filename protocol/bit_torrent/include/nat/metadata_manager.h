@@ -42,6 +42,7 @@ namespace yuan::net::bit_torrent
         ~MetadataManager();
 
         void init(const std::vector<uint8_t> &info_hash);
+        bool set_metadata(const std::vector<uint8_t> &metadata);
 
         void set_metadata_size(int32_t size);
 

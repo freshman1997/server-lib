@@ -102,6 +102,12 @@ namespace yuan::net
             flush();
         }
 
+        virtual void write_raw_and_flush(std::string_view data)
+        {
+            append_output(data);
+            flush();
+        }
+
         virtual void flush() = 0;
         virtual void abort() = 0;
         virtual void close() = 0;

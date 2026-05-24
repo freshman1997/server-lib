@@ -77,6 +77,7 @@ namespace
         bool bt_enable_dht = true;
         bool bt_enable_pex = true;
         bool bt_enable_upnp = true;
+        bool bt_enable_utp = true;
     };
 
     bool load_config_file(const std::filesystem::path &path, DownloaderConfig &cfg, std::string &error)
@@ -143,6 +144,9 @@ namespace
             if (bt.contains("enable_upnp") && bt["enable_upnp"].is_boolean()) {
                 cfg.bt_enable_upnp = bt["enable_upnp"].get<bool>();
             }
+            if (bt.contains("enable_utp") && bt["enable_utp"].is_boolean()) {
+                cfg.bt_enable_utp = bt["enable_utp"].get<bool>();
+            }
             if (bt.contains("max_concurrent_downloads") && bt["max_concurrent_downloads"].is_number_integer()) {
                 cfg.bt_max_concurrent_downloads = bt["max_concurrent_downloads"].get<int>();
             }
@@ -201,6 +205,7 @@ int main(int argc, char **argv)
     cfg.bt_enable_dht = read_env_bool("YUAN_BT_ENABLE_DHT", cfg.bt_enable_dht);
     cfg.bt_enable_pex = read_env_bool("YUAN_BT_ENABLE_PEX", cfg.bt_enable_pex);
     cfg.bt_enable_upnp = read_env_bool("YUAN_BT_ENABLE_UPNP", cfg.bt_enable_upnp);
+    cfg.bt_enable_utp = read_env_bool("YUAN_BT_ENABLE_UTP", cfg.bt_enable_utp);
     cfg.bt_max_concurrent_downloads = read_env_int("YUAN_BT_MAX_CONCURRENT", cfg.bt_max_concurrent_downloads);
 
     yuan::net::http::HttpServerConfig http_config;
@@ -238,6 +243,7 @@ int main(int argc, char **argv)
         nat_cfg.enable_pex = cfg.bt_enable_pex;
         nat_cfg.enable_upnp = cfg.bt_enable_upnp;
         nat_cfg.enable_nat_pmp = cfg.bt_enable_upnp;
+        nat_cfg.enable_utp = cfg.bt_enable_utp;
         bt_service->set_default_nat_config(nat_cfg);
     }
     if (!application.add_typed_service<yuan::server::BitTorrentService>(
@@ -258,7 +264,7 @@ int main(int argc, char **argv)
     std::cout << "bt_downloader started. admin="
               << (cfg.enable_ssl ? "https" : "http")
               << "://127.0.0.1:" << cfg.admin_port << "/admin\n";
-    std::cout << "env: YUAN_BT_CONFIG, YUAN_BT_ADMIN_PORT, YUAN_BT_TORRENT_FILE, YUAN_BT_SAVE_PATH, YUAN_BT_ENABLE_SSL, YUAN_BT_MAX_PEERS, YUAN_BT_LISTEN_PORT, YUAN_BT_DOWNLOAD_LIMIT_KBPS, YUAN_BT_UPLOAD_LIMIT_KBPS, YUAN_BT_ENABLE_DHT, YUAN_BT_ENABLE_PEX, YUAN_BT_ENABLE_UPNP, YUAN_BT_MAX_CONCURRENT, YUAN_ADMIN_TOKEN\n";
+    std::cout << "env: YUAN_BT_CONFIG, YUAN_BT_ADMIN_PORT, YUAN_BT_TORRENT_FILE, YUAN_BT_SAVE_PATH, YUAN_BT_ENABLE_SSL, YUAN_BT_MAX_PEERS, YUAN_BT_LISTEN_PORT, YUAN_BT_DOWNLOAD_LIMIT_KBPS, YUAN_BT_UPLOAD_LIMIT_KBPS, YUAN_BT_ENABLE_DHT, YUAN_BT_ENABLE_PEX, YUAN_BT_ENABLE_UPNP, YUAN_BT_ENABLE_UTP, YUAN_BT_MAX_CONCURRENT, YUAN_ADMIN_TOKEN\n";
 
     while (!g_should_exit) {
         bootstrap.poll_workers();

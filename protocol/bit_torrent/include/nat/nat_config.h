@@ -24,7 +24,7 @@ struct NatConfig
 
     // ===== uTP (BEP 29) =====
     bool enable_utp = true;             // Micro Transport Protocol over UDP (default: ON)
-    int32_t utp_port = 6882;            // UDP port for uTP (0 = same as listen_port)
+    int32_t utp_port = 0;               // UDP port for uTP (0 = same as listen_port)
     uint32_t utp_connect_timeout_ms = 15000;
     uint32_t utp_syn_retry = 3;
 

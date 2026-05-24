@@ -3,10 +3,13 @@
 #include "context.h"
 #include "cookie.h"
 #include "net/connection/connection.h"
+#include "header_key.h"
+#include "http_headers.h"
 #include "response_code_desc.h"
 #include "response_parser.h"
 #include "sse.h"
 
+#include <charconv>
 #include <cstring>
 #include <string_view>
 
@@ -63,6 +66,85 @@ namespace yuan::net::http
         HttpPacket::append_body(data);
     }
 
+    void HttpResponse::send_body(std::string_view body, std::string_view content_type, ResponseCode code)
+    {
+        set_response_code(code);
+        auto *conn = context_ ? context_->get_connection() : nullptr;
+        if (!conn) {
+            return;
+        }
+
+        const auto fast_line = fast_status_line(respCode_);
+        decltype(responseCodeDescs)::const_iterator descIt;
+        if (fast_line.empty()) {
+            descIt = responseCodeDescs.find(respCode_);
+            if (descIt == responseCodeDescs.end() || respCode_ == ResponseCode::internal_server_error) {
+                context_->process_error();
+                return;
+            }
+        }
+
+        char length_buf[32];
+        auto [length_end, ec] = std::to_chars(length_buf, length_buf + sizeof(length_buf), body.size());
+        if (ec != std::errc{}) {
+            context_->process_error();
+            return;
+        }
+        const std::string_view length_text(length_buf, static_cast<std::size_t>(length_end - length_buf));
+
+        std::size_t payload_size = 2 + body.size();
+        payload_size += !fast_line.empty()
+            ? fast_line.size()
+            : std::string_view("HTTP/1.1 ").size() + descIt->second.size() + 2;
+        if (!content_type.empty()) {
+            payload_size += std::string_view("Content-Type: ").size() + content_type.size() + 2;
+        }
+        payload_size += std::string_view("Content-Length: ").size() + length_text.size() + 2;
+        for (const auto &item : headers_) {
+            if (header_key_equals_ci(item.first, http_header_key::content_type) ||
+                header_key_equals_ci(item.first, http_header_key::content_length)) {
+                continue;
+            }
+            payload_size += item.first.size() + 2 + item.second.size() + 2;
+        }
+
+        thread_local std::string payload;
+        payload.clear();
+        if (payload.capacity() < payload_size) {
+            payload.reserve(payload_size);
+        }
+        if (!fast_line.empty()) {
+            payload.append(fast_line);
+        } else {
+            payload.append("HTTP/1.1 ");
+            payload.append(descIt->second);
+            payload.append("\r\n");
+        }
+        if (!content_type.empty()) {
+            payload.append("Content-Type: ");
+            payload.append(content_type);
+            payload.append("\r\n");
+        }
+        payload.append("Content-Length: ");
+        payload.append(length_text);
+        payload.append("\r\n");
+        for (const auto &item : headers_) {
+            if (header_key_equals_ci(item.first, http_header_key::content_type) ||
+                header_key_equals_ci(item.first, http_header_key::content_length)) {
+                continue;
+            }
+            payload.append(item.first);
+            payload.append(": ");
+            payload.append(item.second);
+            payload.append("\r\n");
+        }
+        payload.append("\r\n");
+        payload.append(body);
+
+        conn->write_raw_and_flush(payload);
+        headers_sent_ = true;
+    }
+
     void HttpResponse::reset()
     {
         HttpPacket::reset();
@@ -75,10 +157,14 @@ namespace yuan::net::http
 
     bool HttpResponse::pack_header(Connection *conn)
     {
-        const auto descIt = responseCodeDescs.find(respCode_);
-        if (descIt == responseCodeDescs.end() || respCode_ == ResponseCode::internal_server_error) {
-            context_->process_error();
-            return false;
+        const auto fast_line = fast_status_line(respCode_);
+        decltype(responseCodeDescs)::const_iterator descIt;
+        if (fast_line.empty()) {
+            descIt = responseCodeDescs.find(respCode_);
+            if (descIt == responseCodeDescs.end() || respCode_ == ResponseCode::internal_server_error) {
+                context_->process_error();
+                return false;
+            }
         }
 
         auto *target = conn ? conn : context_->get_connection();
@@ -87,7 +173,6 @@ namespace yuan::net::http
         }
 
         std::size_t header_size = 2;
-        const auto fast_line = fast_status_line(respCode_);
         if (!fast_line.empty()) {
             header_size += fast_line.size();
         } else {
@@ -97,8 +182,11 @@ namespace yuan::net::http
             header_size += item.first.size() + 2 + item.second.size() + 2;
         }
 
-        std::string header;
-        header.reserve(header_size);
+        thread_local std::string header;
+        header.clear();
+        if (header.capacity() < header_size) {
+            header.reserve(header_size);
+        }
         if (!fast_line.empty()) {
             header.append(fast_line);
         } else {

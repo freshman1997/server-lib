@@ -194,6 +194,8 @@ namespace yuan::net::bit_torrent
         void send_fin();
         void send_reset();
         void flush_send_queue();
+        void ensure_retransmit_timer();
+        void stop_retransmit_timer_if_idle();
 
         void handle_syn(const UtpHeader &hdr, const uint8_t *payload, size_t len);
         void handle_state(const UtpHeader &hdr);
@@ -230,6 +232,7 @@ namespace yuan::net::bit_torrent
             uint64_t sent_time_us = 0;
             uint32_t timestamp;
             bool acked = false;
+            uint32_t retries = 0;
         };
         std::unordered_map<uint32_t, SentPacket> sent_packets_;
         std::queue<SentPacket> send_queue_; // packets waiting to be sent

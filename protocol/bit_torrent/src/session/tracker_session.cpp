@@ -55,7 +55,6 @@ namespace yuan::net::bit_torrent
     TrackerSession::~TrackerSession()
     {
         running_.store(false);
-        join_workers();
     }
 
     void TrackerSession::configure(TrackerSessionConfig config)
@@ -109,7 +108,6 @@ namespace yuan::net::bit_torrent
             t.detach();
         }
 
-        detach_workers();
     }
 
     void TrackerSession::announce_now()
@@ -179,7 +177,7 @@ namespace yuan::net::bit_torrent
         std::string peer_id = ctx.peer_id_ ? *ctx.peer_id_ : std::string();
 
         auto self = shared_from_this();
-        std::thread t([
+        std::thread([
             self,
             meta_copy = std::move(meta_copy),
             listen_port,
@@ -274,12 +272,7 @@ namespace yuan::net::bit_torrent
                 }
                 self->on_announce_complete(any_success, new_interval, *shared_peers, event);
             });
-        });
-
-        {
-            std::lock_guard<std::mutex> lock(worker_mutex_);
-            workers_.push_back(std::move(t));
-        }
+        }).detach();
     }
 
     void TrackerSession::on_announce_complete(bool any_success, int32_t interval, const std::vector<PeerAddress> &peers, TrackerAnnounceEvent event)
@@ -345,32 +338,6 @@ namespace yuan::net::bit_torrent
     {
         std::lock_guard<std::mutex> lock(status_mutex_);
         return announce_statuses_;
-    }
-
-    void TrackerSession::join_workers()
-    {
-        std::vector<std::thread> to_join;
-        {
-            std::lock_guard<std::mutex> lock(worker_mutex_);
-            to_join = std::move(workers_);
-        }
-        for (auto &t : to_join) {
-            if (t.joinable())
-                t.join();
-        }
-    }
-
-    void TrackerSession::detach_workers()
-    {
-        std::vector<std::thread> to_detach;
-        {
-            std::lock_guard<std::mutex> lock(worker_mutex_);
-            to_detach = std::move(workers_);
-        }
-        for (auto &t : to_detach) {
-            if (t.joinable())
-                t.detach();
-        }
     }
 
 } // namespace yuan::net::bit_torrent

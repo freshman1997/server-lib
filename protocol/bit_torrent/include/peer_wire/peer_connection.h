@@ -202,6 +202,10 @@ namespace yuan::net::bit_torrent
         {
             on_unchoke_ = std::move(handler);
         }
+        void set_piece_availability_handler(PeerConnectionHandler handler)
+        {
+            piece_availability_handler_ = std::move(handler);
+        }
         void set_extended_message_handler(ExtendedMessageHandler handler)
         {
             extended_message_handler_ = std::move(handler);
@@ -258,8 +262,11 @@ namespace yuan::net::bit_torrent
         void update_rates(uint64_t now_ms);
 
     private:
+        void schedule_connect_failure();
         void schedule_connect_cleanup();
         void cleanup_connect_attempt();
+        void fail_connect_result();
+        void fail_connect_timeout();
         void on_keepalive_timer(timer::Timer *timer);
         void handle_handshake(const uint8_t *data, size_t len);
         void handle_message(const uint8_t *data, size_t len);
@@ -277,6 +284,7 @@ namespace yuan::net::bit_torrent
         std::shared_ptr<net::Connection> conn_owner_;
         net::NetworkRuntime *runtime_;
         timer::TimerHandle keepalive_timer_;
+        timer::TimerHandle connect_timeout_timer_;
         std::unique_ptr<net::InetAddress> pending_addr_;
         std::unique_ptr<net::TcpConnector> pending_connector_;
         std::shared_ptr<PeerConnectorHandler> connector_handler_;
@@ -289,6 +297,7 @@ namespace yuan::net::bit_torrent
         PieceServedHandler piece_served_handler_;
         PeerConnectionHandler on_state_change_;
         PeerConnectionHandler on_unchoke_;
+        PeerConnectionHandler piece_availability_handler_;
         ExtendedMessageHandler extended_message_handler_;
         SuggestPieceHandler suggest_piece_handler_;
         AllowedFastHandler allowed_fast_handler_;

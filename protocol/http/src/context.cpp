@@ -24,7 +24,7 @@ namespace yuan::net::http
         }
     }
 
-    HttpSessionContext::HttpSessionContext(Connection * conn)
+    HttpSessionContext::HttpSessionContext(Connection *conn)
         : mode_(Mode::server), has_parsed_(false), request_start_ms_(0), conn_(conn)
     {
         request_ = std::make_unique<HttpRequest>(this);
@@ -54,7 +54,7 @@ namespace yuan::net::http
         if (!is_downloading() && !has_parsed_) {
             reset();
             has_parsed_ = true;
-            request_start_ms_ = base::time::steady_now_ms();
+            request_start_ms_ = request_timing_enabled_ ? base::time::steady_now_ms() : 0;
         }
 
         auto pkt = get_packet();
@@ -62,16 +62,29 @@ namespace yuan::net::http
         return pkt->good();
     }
 
-    bool HttpSessionContext::parse_from(const ::yuan::buffer::ByteBuffer & data)
+    bool HttpSessionContext::parse_from(const ::yuan::buffer::ByteBuffer &data)
     {
         if (!is_downloading() && !has_parsed_) {
             reset();
             has_parsed_ = true;
-            request_start_ms_ = base::time::steady_now_ms();
+            request_start_ms_ = request_timing_enabled_ ? base::time::steady_now_ms() : 0;
         }
 
         auto pkt = get_packet();
         pkt->parse(data);
+        return pkt->good();
+    }
+
+    bool HttpSessionContext::parse_from(::yuan::buffer::ByteBuffer &&data)
+    {
+        if (!is_downloading() && !has_parsed_) {
+            reset();
+            has_parsed_ = true;
+            request_start_ms_ = request_timing_enabled_ ? base::time::steady_now_ms() : 0;
+        }
+
+        auto pkt = get_packet();
+        pkt->parse(std::move(data));
         return pkt->good();
     }
 

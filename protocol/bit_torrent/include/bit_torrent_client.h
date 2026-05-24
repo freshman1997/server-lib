@@ -185,6 +185,7 @@ namespace yuan::net::bit_torrent
         void preload_existing_pieces();
         bool start_download_runtime();
         void stop_download_runtime();
+        void bind_metadata_callback();
         bool emit_torrent_completed_once();
         void refill_bandwidth_budget();
         bool consume_download_budget(uint32_t bytes);
@@ -192,12 +193,15 @@ namespace yuan::net::bit_torrent
         void on_metadata_received(const std::vector<uint8_t> &metadata);
 
         void on_peer_connected(PeerConnection *peer);
+        void on_peer_piece_availability_changed(PeerConnection *peer);
         void on_piece_data(PeerConnection *peer, uint32_t piece_index, uint32_t offset,
                            const uint8_t *data, uint32_t length);
         bool on_piece_request(uint32_t piece_index, uint32_t offset, uint32_t length, std::vector<uint8_t> &out);
         void on_piece_served(uint32_t piece_index, uint32_t offset, uint32_t length);
         void on_peer_requests_lost(const std::vector<PieceBlockRequest> &requests);
         std::vector<uint32_t> build_piece_availability(const std::vector<std::shared_ptr<PeerConnection> > &peers) const;
+        const std::vector<uint32_t> *piece_availability_cache(const std::vector<std::shared_ptr<PeerConnection> > &peers);
+        void invalidate_piece_availability_cache();
         void request_next_block(PeerConnection *peer);
         void perform_choking_round();
         void on_unchoke_timer();
@@ -230,6 +234,9 @@ namespace yuan::net::bit_torrent
         double download_budget_bytes_ = 0.0;
         double upload_budget_bytes_ = 0.0;
         uint64_t bandwidth_last_refill_ms_ = 0;
+        std::vector<uint32_t> piece_availability_cache_;
+        size_t piece_availability_peer_count_ = 0;
+        bool piece_availability_dirty_ = true;
 
         int32_t optimistic_unchoke_index_ = -1;
         uint32_t optimistic_unchoke_counter_ = 0;

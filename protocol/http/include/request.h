@@ -59,11 +59,11 @@ namespace yuan::net::http
 
         void set_method(HttpMethod method) { method_ = method; }
 
-        const std::vector<std::string> & get_url_domain() const { return url_domain_; }
+        const std::vector<std::string> & get_url_domain() const;
 
         const std::string & get_raw_url() const  { return url_; }
 
-        void set_raw_url(std::string url) { url_ = std::move(url); }
+        void set_raw_url(std::string url);
 
         std::string get_last_uri();
         
@@ -100,10 +100,18 @@ namespace yuan::net::http
         bool is_acl() const { return method_ == HttpMethod::acl_; }
         bool is_search() const { return method_ == HttpMethod::search_; }
 
+        bool connection_close_requested() const { return connection_close_requested_; }
+        bool connection_keep_alive_requested() const { return connection_keep_alive_requested_; }
+        void note_connection_header(std::string_view value);
+
     private:
         HttpMethod method_;
         std::string url_;
-        std::vector<std::string> url_domain_;
+        bool connection_close_requested_ = false;
+        bool connection_keep_alive_requested_ = false;
+        mutable std::vector<std::string> url_domain_;
+        mutable bool url_domain_parsed_ = false;
+        mutable bool url_domain_valid_ = true;
         mutable std::unordered_map<std::string, std::string> parsed_cookies_;
         mutable bool cookies_parsed_ = false;
     };

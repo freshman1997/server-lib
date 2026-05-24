@@ -103,6 +103,7 @@ namespace yuan::net
         UserData user_data_;
         mutable std::mutex handler_mutex_;
         std::shared_ptr<ConnectionHandler> connection_handler_;
+        std::atomic_bool has_connection_handler_{false};
         std::shared_ptr<SSLHandler> ssl_handler_;
         bool output_flush_pending_ = false;
         bool close_after_output_ = false;

@@ -233,6 +233,10 @@ namespace yuan::net::bit_torrent
         peer->accept_inbound(conn.shared_from_this(), remote_peer_id, info_hash_, local_peer_id_,
                              peer_ip, peer_port, total_pieces,
                              runtime_);
+        auto &peer_state = peer->mutable_peer_state();
+        peer_state.supports_fast = hs.supports_fast();
+        peer_state.supports_extensions = hs.supports_extension();
+        peer_state.supports_dht = hs.supports_dht();
 
         // Notify callback with the ready peer
         if (new_peer_cb_) {

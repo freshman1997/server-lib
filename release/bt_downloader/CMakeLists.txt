@@ -40,5 +40,17 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/gate.sh"
             "${RELEASE_BT_DOWNLOADER_OUTPUT_DIR}/gate.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/start.ps1"
+            "${RELEASE_BT_DOWNLOADER_OUTPUT_DIR}/start.ps1"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/stop.ps1"
+            "${RELEASE_BT_DOWNLOADER_OUTPUT_DIR}/stop.ps1"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/health_check.ps1"
+            "${RELEASE_BT_DOWNLOADER_OUTPUT_DIR}/health_check.ps1"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/gate.ps1"
+            "${RELEASE_BT_DOWNLOADER_OUTPUT_DIR}/gate.ps1"
     COMMENT "Copy bt_downloader default config"
 )

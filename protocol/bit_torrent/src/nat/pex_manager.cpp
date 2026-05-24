@@ -67,7 +67,7 @@ bool PexManager::on_extended_message(const std::string &peer_key,
 std::vector<uint8_t> PexManager::build_ext_handshake() const
 {
     // Build extension handshake bencoded dict:
-    // { "m": { "ut_pex": <our_ext_id> }, "v": "YZ0001", "reqq": 50 }
+    // { "m": { "ut_pex": <our_ext_id> }, "reqq": 50, "v": "YZ0001" }
     //
     // Manual bencode for simplicity (avoid allocating BaseData objects):
 
@@ -84,16 +84,17 @@ std::vector<uint8_t> PexManager::build_ext_handshake() const
     dict += "e";
     dict += "e";
 
+    // "reqq" key
+    dict += "4:reqq";
+    // "reqq" value
+    dict += "i50e";
+
     // "v" key
     dict += "1:v";
     // "v" value
     std::string version = "YZ0001";
     dict += std::to_string(version.size()) + ":" + version;
 
-    // "reqq" key
-    dict += "4:reqq";
-    // "reqq" value
-    dict += "i50e";
     dict += "e";
 
     return std::vector<uint8_t>(dict.begin(), dict.end());

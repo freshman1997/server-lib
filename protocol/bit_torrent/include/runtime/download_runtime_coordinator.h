@@ -32,6 +32,7 @@ namespace yuan::net::bit_torrent
         PieceServedHandler piece_served_handler_;
         std::function<void(PeerConnection *)> peer_ready_handler_;
         std::function<void(PeerConnection *)> peer_unchoke_handler_;
+        std::function<void(PeerConnection *)> peer_piece_availability_handler_;
         std::function<void(PeerConnection *, uint32_t, uint32_t, uint32_t)> peer_reject_handler_;
         std::function<void(const std::vector<PieceBlockRequest> &)> peer_lost_handler_;
     };
@@ -67,6 +68,7 @@ namespace yuan::net::bit_torrent
     private:
         DownloadRuntimeConfig config_;
         timer::TimerHandle stats_timer_;
+        uint64_t last_empty_peer_announce_ms_ = 0;
         std::unique_ptr<NatManager> nat_manager_;
         std::shared_ptr<TrackerSession> tracker_session_;
         std::unique_ptr<PeerSession> peer_session_;

@@ -19,6 +19,8 @@
 #include "torrent_meta.h"
 #include "nat_config.h"
 #include "net/runtime/network_runtime.h"
+#include <atomic>
+#include <memory>
 #include <string>
 #include <vector>
 #include <array>
@@ -221,6 +223,7 @@ namespace yuan::net::bit_torrent
 
         std::unique_ptr<net::DatagramAcceptor> acceptor_;
         net::NetworkRuntime *runtime_ = nullptr;
+        std::shared_ptr<std::atomic_bool> bootstrap_alive_;
 
         DhtNodeId node_id_;
         std::string external_ip_;
@@ -258,6 +261,7 @@ namespace yuan::net::bit_torrent
             std::vector<DhtNodeId> queried; // nodes we've already queried
             int queries_sent = 0;
             int responses_received = 0;
+            int64_t expire_time_ms = 0;
         };
         std::unordered_map<std::string, ActiveLookup> active_lookups_;
 

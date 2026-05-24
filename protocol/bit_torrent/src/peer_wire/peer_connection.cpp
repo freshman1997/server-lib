@@ -27,8 +27,7 @@ namespace yuan::net::bit_torrent
             if (result.code != net::ConnectResultCode::success || !result.connection) {
                 (void)result.error_code;
                 (void)result.attempt_id;
-                parent_->state_ = PeerConnection::State::error;
-                parent_->schedule_connect_cleanup();
+                parent_->schedule_connect_failure();
                 return;
             }
 
@@ -49,8 +48,6 @@ namespace yuan::net::bit_torrent
                 parent_->keepalive_timer_ = parent_->runtime_->schedule_periodic(
                     120000, 120000, [parent = parent_]() { parent->send_keepalive(); }, -1);
             }
-
-            parent_->schedule_connect_cleanup();
         }
 
     private:
@@ -98,6 +95,7 @@ namespace yuan::net::bit_torrent
 
         runtime->register_connector(pending_connector_, connector_handler_);
         pending_connector_->connect(*pending_addr_);
+        connect_timeout_timer_ = runtime->schedule(15000, [this]() { fail_connect_timeout(); });
     }
 
     void PeerConnection::accept_inbound(net::Connection * conn,
@@ -234,6 +232,10 @@ namespace yuan::net::bit_torrent
             keepalive_timer_.cancel();
             keepalive_timer_.reset();
         }
+        if (connect_timeout_timer_) {
+            connect_timeout_timer_.cancel();
+            connect_timeout_timer_.reset();
+        }
 
         if (conn_) {
             conn_->set_connection_handler(std::shared_ptr<net::ConnectionHandler>{});
@@ -260,6 +262,10 @@ namespace yuan::net::bit_torrent
         (void)conn;
         state_ = State::error;
         pending_request_count_ = 0;
+        if (connect_timeout_timer_) {
+            connect_timeout_timer_.cancel();
+            connect_timeout_timer_.reset();
+        }
         if (on_state_change_)
             on_state_change_(this);
     }
@@ -269,6 +275,10 @@ namespace yuan::net::bit_torrent
         (void)conn;
         state_ = State::closed;
         pending_request_count_ = 0;
+        if (connect_timeout_timer_) {
+            connect_timeout_timer_.cancel();
+            connect_timeout_timer_.reset();
+        }
         if (on_state_change_)
             on_state_change_(this);
     }
@@ -323,6 +333,18 @@ namespace yuan::net::bit_torrent
         connector_handler_.reset();
     }
 
+    void PeerConnection::schedule_connect_failure()
+    {
+        if (runtime_) {
+            auto *self = this;
+            runtime_->dispatch([self]() {
+                self->fail_connect_result();
+            });
+        } else {
+            fail_connect_result();
+        }
+    }
+
     void PeerConnection::schedule_connect_cleanup()
     {
         if (runtime_) {
@@ -332,6 +354,43 @@ namespace yuan::net::bit_torrent
             });
         } else {
             cleanup_connect_attempt();
+        }
+    }
+
+    void PeerConnection::fail_connect_result()
+    {
+        if (state_ != State::connecting && state_ != State::handshaking) {
+            cleanup_connect_attempt();
+            return;
+        }
+        if (connect_timeout_timer_) {
+            connect_timeout_timer_.cancel();
+            connect_timeout_timer_.reset();
+        }
+        state_ = State::error;
+        pending_request_count_ = 0;
+        cleanup_connect_attempt();
+        if (on_state_change_) {
+            on_state_change_(this);
+        }
+    }
+
+    void PeerConnection::fail_connect_timeout()
+    {
+        connect_timeout_timer_.reset();
+        if (state_ != State::connecting && state_ != State::handshaking) {
+            return;
+        }
+        state_ = State::error;
+        if (conn_) {
+            conn_->set_connection_handler(std::shared_ptr<net::ConnectionHandler>{});
+            conn_->close();
+            conn_ = nullptr;
+            conn_owner_.reset();
+        }
+        cleanup_connect_attempt();
+        if (on_state_change_) {
+            on_state_change_(this);
         }
     }
 
@@ -355,6 +414,11 @@ namespace yuan::net::bit_torrent
         peer_state_.supports_dht = hs.supports_dht();
 
         state_ = State::connected;
+        if (connect_timeout_timer_) {
+            connect_timeout_timer_.cancel();
+            connect_timeout_timer_.reset();
+        }
+        cleanup_connect_attempt();
 
         if (on_state_change_)
             on_state_change_(this);
@@ -407,6 +471,9 @@ namespace yuan::net::bit_torrent
             case PeerMessageId::have: {
                 uint32_t piece = msg.have_piece_index();
                 peer_state_.set_have_piece(piece, total_pieces_);
+                if (piece_availability_handler_) {
+                    piece_availability_handler_(this);
+                }
                 if (!peer_state_.peer_choking && on_unchoke_) {
                     on_unchoke_(this);
                 }
@@ -414,6 +481,9 @@ namespace yuan::net::bit_torrent
             }
             case PeerMessageId::bitfield:
                 peer_state_.set_bitfield(msg.payload_, total_pieces_);
+                if (piece_availability_handler_) {
+                    piece_availability_handler_(this);
+                }
                 if (!peer_state_.peer_choking && on_unchoke_) {
                     on_unchoke_(this);
                 }
@@ -490,12 +560,18 @@ namespace yuan::net::bit_torrent
                 break;
             case PeerMessageId::have_all:
                 peer_state_.set_have_all(total_pieces_);
+                if (piece_availability_handler_) {
+                    piece_availability_handler_(this);
+                }
                 if (!peer_state_.peer_choking && on_unchoke_) {
                     on_unchoke_(this);
                 }
                 break;
             case PeerMessageId::have_none:
                 peer_state_.set_have_none(total_pieces_);
+                if (piece_availability_handler_) {
+                    piece_availability_handler_(this);
+                }
                 break;
             case PeerMessageId::reject_request:
                 pending_requests_.erase(

@@ -2782,8 +2782,23 @@ int main()
         resp->append_body(body);
         resp->send();
     });
+    service->server().on("/__query_route", [](yuan::net::http::HttpRequest *req,
+                                              yuan::net::http::HttpResponse *resp) {
+        const std::string body = "task_id=" + std::to_string(req->get_param_int("task_id", 0));
+        resp->set_response_code(yuan::net::http::ResponseCode::ok_);
+        resp->add_header("Content-Type", "text/plain");
+        resp->add_header("Content-Length", std::to_string(body.size()));
+        resp->append_body(body);
+        resp->send();
+    });
     service->start();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    const std::string query_route_resp = http_get(port, "/__query_route?task_id=42");
+    check(query_route_resp.find("200 OK") != std::string::npos,
+          "registered route should match request path without query string");
+    check(query_route_resp.find("task_id=42") != std::string::npos,
+          "query parameters should remain available to route handlers");
 
     test_http_caps_and_proxy_stats(port);
     test_http1_split_header_and_invalid_content_length(port);

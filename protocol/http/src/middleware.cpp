@@ -428,7 +428,7 @@ namespace yuan::net::http
                 if (conn) {
                     if (header_has_token(*conn, "close")) {
                         resp->add_header("Connection", "close");
-                    } else if (header_has_token(*conn, "keep-alive")) {
+                    } else if (req->get_version() == HttpVersion::v_1_0 && header_has_token(*conn, "keep-alive")) {
                         resp->add_header("Connection", "keep-alive");
                         resp->add_header("Keep-Alive", "timeout=60, max=1000");
                     }
@@ -437,8 +437,6 @@ namespace yuan::net::http
                     resp->add_header("Connection", "close");
                 } else {
                     // HTTP/1.1+ 默认保持连接
-                    resp->add_header("Connection", "keep-alive");
-                    resp->add_header("Keep-Alive", "timeout=60, max=1000");
                 }
 
                 return MiddlewareResult::next;

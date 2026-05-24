@@ -38,11 +38,12 @@ namespace yuan::net::http
     struct HttpServerConfig
     {
         int thread_pool_size = 1;
-        bool enable_ssl = true;
+        bool enable_ssl = false;
         bool enable_cors = true;
         bool enable_keep_alive = true;
         bool enable_http2 = false;
         bool enable_http3 = false;
+        bool track_request_time = false;
         size_t max_body_size = 0;
         int write_timeout_ms = 10000;
         int max_connections = 0;
@@ -172,12 +173,13 @@ namespace yuan::net::http
         void cleanup_stale_upload_sessions();
         bool parse_request(HttpSessionContext *context);
         bool parse_request(HttpSessionContext *context, const ::yuan::buffer::ByteBuffer &data);
+        bool parse_request(HttpSessionContext *context, ::yuan::buffer::ByteBuffer &&data);
         bool validate_request_version(HttpSessionContext *context);
         bool is_h2_dispatch_path(std::string_view path) const;
         bool allow_new_connection(const net::Connection &conn);
         void on_connection_closed(const net::Connection &conn);
-        bool try_acquire_inflight_request(const HttpRequest *request);
-        void release_inflight_request(const HttpRequest *request);
+        bool try_acquire_inflight_request(const HttpRequest *request, bool *tracked = nullptr);
+        void release_inflight_request(const HttpRequest *request, bool tracked = true);
         std::string reject_route_key(const HttpRequest *request) const;
         void increment_reject_counter(std::string route_key, RejectReason reason);
         bool dispatch_h2_context(HttpSessionContext *context);
@@ -271,7 +273,9 @@ namespace yuan::net::http
         AccessLogHook access_log_hook_;
         std::unordered_map<std::string, UploadFileMapping> uploaded_chunks_;
         mutable std::mutex upload_mutex_;
+        std::atomic<uint32_t> upload_session_count_{ 0 };
         std::atomic<uint64_t> upload_cleanup_last_ms_{ 0 };
+        std::atomic<uint32_t> upload_cleanup_probe_count_{ 0 };
         std::unique_ptr<thread::ThreadPool> thread_pool_;
         HttpServerConfig config_;
         MiddlewarePipeline global_pipeline_;

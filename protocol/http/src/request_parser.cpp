@@ -22,6 +22,18 @@ namespace yuan::net::http
         HttpRequest *req = static_cast<HttpRequest *>(packet_);
 
         header_state = HeaderState::metohd;
+        const char *data = buff.read_ptr();
+        const std::size_t readable = buff.readable_bytes();
+        if (readable >= 4 &&
+            (data[0] == 'G' || data[0] == 'g') &&
+            (data[1] == 'E' || data[1] == 'e') &&
+            (data[2] == 'T' || data[2] == 't') &&
+            data[3] == ' ') {
+            req->method_ = HttpMethod::get_;
+            buff.consume(4);
+            return true;
+        }
+
         char method[16];
         std::size_t method_size = 0;
         bool saw_space = false;
@@ -96,20 +108,16 @@ namespace yuan::net::http
         header_state = HeaderState::url;
         const char *data = buff.read_ptr();
         const std::size_t size = buff.readable_bytes();
-        std::size_t token_len = 0;
-        bool needs_decode = false;
-        while (token_len < size && data[token_len] != ' ') {
-            needs_decode = needs_decode || data[token_len] == '%';
-            ++token_len;
-            if (buff.read_offset() + token_len > config::max_header_length) {
-                header_state = HeaderState::too_long;
-                return false;
-            }
-        }
-
-        if (token_len == 0 || token_len >= size) {
+        const char *space = static_cast<const char *>(std::memchr(data, ' ', size));
+        if (!space || space == data) {
             return false;
         }
+        const std::size_t token_len = static_cast<std::size_t>(space - data);
+        if (buff.read_offset() + token_len > config::max_header_length) {
+            header_state = HeaderState::too_long;
+            return false;
+        }
+        const bool needs_decode = std::memchr(data, '%', token_len) != nullptr;
 
         const std::string_view raw_url(data, token_len);
         const std::size_t query_pos = raw_url.find('?');
@@ -119,9 +127,12 @@ namespace yuan::net::http
 
         buff.consume(token_len + 1);
 
-        if (!url::decode_url_domain(req->url_, req->url_domain_)) {
+        if (req->url_.find('/') == std::string::npos) {
             return false;
         }
+        req->url_domain_.clear();
+        req->url_domain_parsed_ = false;
+        req->url_domain_valid_ = true;
 
         if (query_pos != std::string::npos) {
             if (!url::decode_parameters(raw_url.substr(query_pos), req->params_)) {

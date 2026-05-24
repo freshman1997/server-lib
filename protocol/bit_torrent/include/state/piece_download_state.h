@@ -56,10 +56,10 @@ namespace yuan::net::bit_torrent
         bool is_inflight(uint32_t piece_index, uint32_t offset, uint32_t length) const;
         uint32_t merge_received_interval(uint32_t piece_index, uint32_t offset, uint32_t length);
         size_t active_piece_count() const;
-        bool try_select_request_from_candidates(const std::vector<size_t> &candidates,
-                                                uint32_t default_request_size,
-                                                uint64_t now_ms,
-                                                PieceBlockRequest &request);
+        bool try_select_request_from_piece(size_t piece_index,
+                                           uint32_t default_request_size,
+                                           uint64_t now_ms,
+                                           PieceBlockRequest &request);
 
     private:
         std::vector<bool> pieces_have_;

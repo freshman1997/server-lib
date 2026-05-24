@@ -22,6 +22,32 @@ namespace yuan::net::bit_torrent
         our_ut_metadata_id_str_ = std::to_string(our_ut_metadata_ext_id_);
     }
 
+    bool MetadataManager::set_metadata(const std::vector<uint8_t> &metadata)
+    {
+        if (metadata.empty())
+            return false;
+
+        auto computed_hash = sha1_hash(
+            reinterpret_cast<const unsigned char *>(metadata.data()),
+            metadata.size());
+        if (computed_hash.size() != info_hash_.size() ||
+            std::memcmp(computed_hash.data(), info_hash_.data(), info_hash_.size()) != 0) {
+            return false;
+        }
+
+        metadata_ = metadata;
+        metadata_size_ = static_cast<int32_t>(metadata_.size());
+        metadata_complete_ = true;
+        received_pieces_.clear();
+        const int32_t count = metadata_piece_count();
+        for (int32_t i = 0; i < count; ++i) {
+            const auto offset = static_cast<size_t>(i) * METADATA_PIECE_SIZE;
+            const auto len = std::min<size_t>(METADATA_PIECE_SIZE, metadata_.size() - offset);
+            received_pieces_[i].assign(metadata_.data() + offset, metadata_.data() + offset + len);
+        }
+        return true;
+    }
+
     void MetadataManager::set_metadata_size(int32_t size)
     {
         if (metadata_size_ > 0 && metadata_size_ != size)
@@ -70,7 +96,7 @@ namespace yuan::net::bit_torrent
         if (it == peer_states_.end() || !it->second.supports_metadata)
             return false;
 
-        if (ext_id != static_cast<uint8_t>(it->second.ut_metadata_msg_id))
+        if (ext_id != static_cast<uint8_t>(our_ut_metadata_ext_id_))
             return false;
 
         std::string str(reinterpret_cast<const char *>(payload), len);
@@ -285,6 +311,10 @@ namespace yuan::net::bit_torrent
 
         if (!metadata_complete_)
         {
+            auto it = peer_states_.find(peer_key);
+            if (it == peer_states_.end() || it->second.ut_metadata_msg_id <= 0)
+                return false;
+
             std::string reject;
             reject += "d";
             reject += "8:msg_type";
@@ -296,11 +326,15 @@ namespace yuan::net::bit_torrent
             reject += "e";
 
             peer->send_extended(
-                static_cast<uint8_t>(our_ut_metadata_ext_id_),
+                static_cast<uint8_t>(it->second.ut_metadata_msg_id),
                 reinterpret_cast<const uint8_t *>(reject.data()),
                 reject.size());
             return true;
         }
+
+        auto it = peer_states_.find(peer_key);
+        if (it == peer_states_.end() || it->second.ut_metadata_msg_id <= 0)
+            return false;
 
         if (piece_index >= metadata_piece_count())
             return false;
@@ -327,7 +361,7 @@ namespace yuan::net::bit_torrent
         payload.insert(payload.end(), metadata_.data() + offset, metadata_.data() + offset + piece_len);
 
         auto msg = PeerMessage::extended(
-            static_cast<uint8_t>(our_ut_metadata_ext_id_),
+            static_cast<uint8_t>(it->second.ut_metadata_msg_id),
             payload.data(), payload.size());
         peer->send_extended(msg.extended_id(), msg.extended_payload(), msg.extended_payload_size());
 

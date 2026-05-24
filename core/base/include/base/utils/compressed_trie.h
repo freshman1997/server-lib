@@ -49,12 +49,15 @@ namespace yuan::base
 
         void insert(const std::string &word, bool as_prefix = false);
         bool contains(const std::string &word) const;
+        bool contains(std::string_view word) const;
 
         // Returns an exact terminal match first. If no exact terminal matches,
         // returns the longest key explicitly registered as a prefix.
         MatchResult find_prefix(const std::string &word) const;
+        MatchResult find_prefix(std::string_view word) const;
 
         bool has_key_with_prefix(const std::string &word) const;
+        bool has_key_with_prefix(std::string_view word) const;
         void clear();
 
         size_t size() const { return size_; }

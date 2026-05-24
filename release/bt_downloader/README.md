@@ -31,16 +31,31 @@ bash release/bt_downloader/start.sh
 bash release/bt_downloader/stop.sh
 ```
 
+On Windows PowerShell, from the build output directory:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start.ps1
+powershell -ExecutionPolicy Bypass -File .\stop.ps1
+```
+
 Health check:
 
 ```bash
 bash release/bt_downloader/health_check.sh
 ```
 
+```powershell
+powershell -ExecutionPolicy Bypass -File .\health_check.ps1
+```
+
 Gate:
 
 ```bash
 bash release/bt_downloader/gate.sh
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\gate.ps1
 ```
 
 Then open:
@@ -85,6 +100,7 @@ YUAN_BT_CONFIG=/path/to/config.json ./build/release/bt_downloader/bt_downloader
 - `YUAN_BT_ENABLE_DHT`: enable DHT, `1/true/on` or `0/false/off`
 - `YUAN_BT_ENABLE_PEX`: enable PEX
 - `YUAN_BT_ENABLE_UPNP`: enable UPnP/NAT-PMP
+- `YUAN_BT_ENABLE_UTP`: enable uTP over UDP and TCP-failure uTP fallback
 - `YUAN_BT_ENABLE_SSL`: enable HTTPS for the admin server
 - `YUAN_BT_MAX_CONCURRENT`: max concurrent running downloads
 - `YUAN_ADMIN_TOKEN`: require `Authorization: Bearer <token>` for admin APIs

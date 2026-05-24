@@ -78,6 +78,7 @@ namespace yuan::net::http
         bool parse();
 
         bool parse_from(const ::yuan::buffer::ByteBuffer &data);
+        bool parse_from(::yuan::buffer::ByteBuffer &&data);
 
         ::yuan::buffer::ByteBuffer take_leftover_buffer();
 
@@ -104,6 +105,11 @@ namespace yuan::net::http
 
         uint64_t request_elapsed_ms() const;
 
+        void set_request_timing_enabled(bool enabled)
+        {
+            request_timing_enabled_ = enabled;
+        }
+
         bool ws_handoff_ = false;
         std::string ws_route_key_;
         std::string ws_client_key_;
@@ -115,6 +121,7 @@ namespace yuan::net::http
     private:
         Mode mode_;
         bool has_parsed_;
+        bool request_timing_enabled_ = true;
         uint64_t request_start_ms_;
         std::weak_ptr<net::Connection> conn_owner_;
         Connection *conn_;

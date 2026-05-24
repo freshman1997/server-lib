@@ -1,6 +1,8 @@
 #include <sstream>
 #include <algorithm>
+#include <cerrno>
 #include <cstdlib>
+#include <limits>
 #include "structure/bencoding.h"
 
 namespace yuan::net::bit_torrent
@@ -71,7 +73,7 @@ namespace yuan::net::bit_torrent
     {
         std::string str;
         const char *p = begin;
-        for (; p <= end; ++p) {
+        for (; p < end; ++p) {
             char ch = *p;
             if (ch == 'e') {
                 break;
@@ -79,18 +81,25 @@ namespace yuan::net::bit_torrent
             str.push_back(ch);
         }
 
-        if (str.empty()) {
+        if (str.empty() || p >= end || *p != 'e') {
             return { -1, nullptr };
         }
 
-        return { p - begin + 2, new IntegerData(std::atoi(str.c_str())) };
+        char *parse_end = nullptr;
+        errno = 0;
+        const auto value = std::strtoll(str.c_str(), &parse_end, 10);
+        if (errno == ERANGE || !parse_end || *parse_end != '\0') {
+            return { -1, nullptr };
+        }
+
+        return { static_cast<int>(p - begin + 2), new IntegerData(static_cast<int64_t>(value)) };
     }
 
     static std::pair<int, BaseData *> parse_string(const char * begin, const char * end)
     {
         std::string str;
         const char *p = begin;
-        for (; p <= end; ++p) {
+        for (; p < end; ++p) {
             char ch = *p;
             if (ch == ':') {
                 ++p;
@@ -99,17 +108,28 @@ namespace yuan::net::bit_torrent
             str.push_back(ch);
         }
 
-        if (str.empty()) {
+        if (str.empty() || p > end) {
             return { -1, nullptr };
         }
 
-        std::size_t len = std::atoi(str.c_str());
+        char *parse_end = nullptr;
+        errno = 0;
+        const auto parsed_len = std::strtoull(str.c_str(), &parse_end, 10);
+        if (errno == ERANGE || !parse_end || *parse_end != '\0' ||
+            parsed_len > static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max())) {
+            return { -1, nullptr };
+        }
+        std::size_t len = static_cast<std::size_t>(parsed_len);
         str.clear();
         if (end - p < len) {
             return { -1, nullptr };
         }
 
-        return { p - begin + len, new StringData(p, p + len) };
+        if (p - begin + static_cast<std::ptrdiff_t>(len) > std::numeric_limits<int>::max()) {
+            return { -1, nullptr };
+        }
+
+        return { static_cast<int>(p - begin + len), new StringData(p, p + len) };
     }
 
     static std::pair<int, BaseData *> parse_list(const char * begin, const char * end)

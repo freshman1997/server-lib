@@ -169,6 +169,7 @@ namespace yuan::net::bit_torrent
         // info hash - extract raw bencoded info dict and SHA-1 it
         std::string info_bencode = extract_info_bencode(torrent_data.c_str(), torrent_data.size());
         if (!info_bencode.empty()) {
+            meta.info_bencode_ = info_bencode;
             auto hash = sha1_hash(
                 reinterpret_cast<const unsigned char *>(info_bencode.data()),
                 info_bencode.size());

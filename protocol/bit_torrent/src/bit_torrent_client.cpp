@@ -143,6 +143,7 @@ namespace yuan::net::bit_torrent
         if (!metadata_mode_)
             return;
 
+        meta_.info_bencode_.assign(reinterpret_cast<const char *>(metadata.data()), metadata.size());
         std::string info_dict(reinterpret_cast<const char *>(metadata.data()), metadata.size());
         auto parsed = BencodingDataConverter::parse(info_dict);
         if (!parsed || parsed->type_ != DataType::dictionary_)
@@ -308,6 +309,9 @@ namespace yuan::net::bit_torrent
         runtime_config.peer_unchoke_handler_ = [this](PeerConnection *peer) {
         request_next_block(peer);
         };
+        runtime_config.peer_piece_availability_handler_ = [this](PeerConnection *peer) {
+        on_peer_piece_availability_changed(peer);
+        };
         runtime_config.peer_reject_handler_ = [this](PeerConnection *peer, uint32_t piece, uint32_t offset, uint32_t length) {
         piece_state_.requeue_block(piece, offset, length);
         request_next_block(peer);
@@ -320,14 +324,13 @@ namespace yuan::net::bit_torrent
             return false;
         }
 
-        auto *nat = runtime_coordinator_->get_nat_manager();
-        if (nat) {
-            auto *mm = nat->get_metadata_manager();
-            if (mm) {
-                mm->set_metadata_complete_callback([this](const std::vector<uint8_t> &metadata) {
-                    on_metadata_received(metadata);
-                });
-            }
+        bind_metadata_callback();
+        if (runtime_) {
+            runtime_->dispatch([this]() {
+                if (running_.load()) {
+                    bind_metadata_callback();
+                }
+            });
         }
 
         if (runtime_) {
@@ -336,6 +339,21 @@ namespace yuan::net::bit_torrent
         }
 
         return true;
+    }
+
+    void BitTorrentClient::bind_metadata_callback()
+    {
+        auto *nat = runtime_coordinator_ ? runtime_coordinator_->get_nat_manager() : nullptr;
+        if (!nat)
+            return;
+
+        auto *mm = nat->get_metadata_manager();
+        if (!mm)
+            return;
+
+        mm->set_metadata_complete_callback([this](const std::vector<uint8_t> &metadata) {
+            on_metadata_received(metadata);
+        });
     }
 
     void BitTorrentClient::stop_download_runtime()
@@ -390,6 +408,7 @@ namespace yuan::net::bit_torrent
         }
 
         emit_torrent_completed_once();
+        invalidate_piece_availability_cache();
 
         if (owned_runtime_) {
             owned_runtime_->run();
@@ -435,6 +454,7 @@ namespace yuan::net::bit_torrent
 
     void BitTorrentClient::on_peer_connected(PeerConnection * peer)
     {
+        invalidate_piece_availability_cache();
         if (peer->get_state() == PeerConnection::State::connected) {
             if (peer_connected_callback_) {
                 peer_connected_callback_(peer->get_peer_ip(), peer->get_peer_port(), peer->get_peer_id());
@@ -464,6 +484,12 @@ namespace yuan::net::bit_torrent
                 peer->send_not_interested();
             }
         }
+    }
+
+    void BitTorrentClient::on_peer_piece_availability_changed(PeerConnection * peer)
+    {
+        (void)peer;
+        invalidate_piece_availability_cache();
     }
 
     void BitTorrentClient::on_piece_data(PeerConnection * peer, uint32_t piece_index, uint32_t offset,
@@ -541,7 +567,7 @@ namespace yuan::net::bit_torrent
         refill_bandwidth_budget();
 
         const auto peers = runtime_coordinator_ ? runtime_coordinator_->get_active_peers() : std::vector<std::shared_ptr<PeerConnection> >{};
-        const auto piece_availability = build_piece_availability(peers);
+        const auto *piece_availability = piece_availability_cache(peers);
         const auto max_active_pieces = compute_max_active_pieces(ptr_of(runtime_coordinator_));
         const auto now_ms = monotonic_now_ms();
         while (peer->pending_request_count() < peer->request_window_size()) {
@@ -551,7 +577,7 @@ namespace yuan::net::bit_torrent
 
             PieceBlockRequest request;
             if (!piece_state_.select_next_request(peer->get_peer_state().pieces,
-                                                  piece_availability.empty() ? nullptr : &piece_availability,
+                                                  piece_availability,
                                                   16 * 1024,
                                                   max_active_pieces,
                                                   now_ms,
@@ -570,6 +596,7 @@ namespace yuan::net::bit_torrent
 
     void BitTorrentClient::on_peer_requests_lost(const std::vector<PieceBlockRequest> & requests)
     {
+        invalidate_piece_availability_cache();
         for (const auto &request : requests) {
             piece_state_.requeue_block(request.piece_index_, request.offset_, request.length_);
         }
@@ -624,6 +651,31 @@ namespace yuan::net::bit_torrent
             }
         }
         return availability;
+    }
+
+    const std::vector<uint32_t> *BitTorrentClient::piece_availability_cache(const std::vector<std::shared_ptr<PeerConnection> > &peers)
+    {
+        if (peers.empty()) {
+            piece_availability_cache_.clear();
+            piece_availability_peer_count_ = 0;
+            piece_availability_dirty_ = false;
+            return nullptr;
+        }
+
+        if (piece_availability_dirty_ ||
+            piece_availability_peer_count_ != peers.size() ||
+            piece_availability_cache_.size() != static_cast<size_t>(meta_.info.piece_count())) {
+            piece_availability_cache_ = build_piece_availability(peers);
+            piece_availability_peer_count_ = peers.size();
+            piece_availability_dirty_ = false;
+        }
+
+        return piece_availability_cache_.empty() ? nullptr : &piece_availability_cache_;
+    }
+
+    void BitTorrentClient::invalidate_piece_availability_cache()
+    {
+        piece_availability_dirty_ = true;
     }
 
     int32_t BitTorrentClient::get_peer_count() const

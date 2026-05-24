@@ -363,6 +363,7 @@ namespace yuan::net
     {
         std::lock_guard<std::mutex> lock(handler_mutex_);
         connection_handler_ = std::move(handler);
+        has_connection_handler_.store(static_cast<bool>(connection_handler_), std::memory_order_release);
     }
 
     ConnectionHandler *IocpTcpConnection::get_connection_handler() const
@@ -501,11 +502,11 @@ namespace yuan::net
             input_buffer_.append(data, size);
         }
 
-        auto handler = get_connection_handler_owner();
-        if (!handler && !has_event_waiter(ConnectionEvent::readable)) {
+        notify_event_waiters(ConnectionEvent::readable);
+        if (!has_connection_handler_.load(std::memory_order_acquire)) {
             return;
         }
-        notify_event_waiters(ConnectionEvent::readable);
+        auto handler = get_connection_handler_owner();
         if (handler) {
             handler->on_read(self());
         }

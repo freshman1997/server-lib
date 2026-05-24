@@ -87,9 +87,6 @@ namespace yuan::net::bit_torrent
         TrackerAnnounceContext make_announce_context(TrackerAnnounceEvent fallback_event) const;
         int32_t compute_backoff_interval() const;
         void handle_announce_failure();
-        void join_workers();
-        void detach_workers();
-
     private:
         net::NetworkRuntime *runtime_ = nullptr;
         timer::TimerHandle announce_timer_;
@@ -101,8 +98,6 @@ namespace yuan::net::bit_torrent
         std::atomic<bool> announcing_{false};
         bool started_sent_ = false;
         bool completed_sent_ = false;
-        std::vector<std::thread> workers_;
-        std::mutex worker_mutex_;
         mutable std::mutex status_mutex_;
         std::vector<TrackerAnnounceStatus> announce_statuses_;
 

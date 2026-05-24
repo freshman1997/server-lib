@@ -160,6 +160,7 @@ namespace yuan::net::bit_torrent
         config_ = config;
         runtime_ = runtime;
         external_ip_ = external_ip;
+        bootstrap_alive_ = std::make_shared<std::atomic_bool>(true);
 
         node_id_ = generate_node_id();
 
@@ -188,10 +189,12 @@ namespace yuan::net::bit_torrent
 
         bootstrap();
 
-        if (runtime_) {
+        if (runtime_ && config.dht_refresh_interval_s > 0) {
+            const auto refresh_interval_s = std::min<uint32_t>(config.dht_refresh_interval_s, 86400);
+            const auto refresh_interval_ms = std::max<uint32_t>(1000, refresh_interval_s * 1000);
             refresh_timer_ = runtime_->schedule_periodic(
-                config.dht_refresh_interval_s * 1000,
-                config.dht_refresh_interval_s * 1000,
+                refresh_interval_ms,
+                refresh_interval_ms,
                 [this]() {
                     periodic_refresh();
                 },
@@ -206,6 +209,10 @@ namespace yuan::net::bit_torrent
         if (!running_)
             return;
         running_ = false;
+        if (bootstrap_alive_) {
+            bootstrap_alive_->store(false);
+            bootstrap_alive_.reset();
+        }
 
         if (refresh_timer_) {
             refresh_timer_.cancel();
@@ -231,21 +238,34 @@ namespace yuan::net::bit_torrent
     {
         if (!running_)
             return;
+        if (info_hash.size() < 20) {
+            if (cb) {
+                cb({});
+            }
+            return;
+        }
 
         DhtNodeId target;
         std::memcpy(target.data(), info_hash.data(), 20);
 
         std::string key(reinterpret_cast<const char *>(info_hash.data()), 20);
 
+        auto closest = find_closest_nodes(target, 8);
+        if (closest.empty()) {
+            if (cb) {
+                cb({});
+            }
+            return;
+        }
+
         if (cb) {
             ActiveLookup lookup;
             lookup.callback = std::move(cb);
-            lookup.queries_sent = 0;
+            lookup.queries_sent = static_cast<int>(closest.size());
             lookup.responses_received = 0;
+            lookup.expire_time_ms = static_cast<int64_t>(base::time::steady_now_ms() + 15000);
             active_lookups_[key] = std::move(lookup);
         }
-
-        auto closest = find_closest_nodes(target, 8);
 
         for (const auto &node : closest) {
             send_get_peers(node.ip_string(), node.port, info_hash);
@@ -256,18 +276,32 @@ namespace yuan::net::bit_torrent
     {
         if (!running_)
             return;
+        if (info_hash.size() < 20) {
+            if (cb) {
+                cb({});
+            }
+            return;
+        }
 
         DhtNodeId target;
         std::memcpy(target.data(), info_hash.data(), 20);
 
         std::string key(reinterpret_cast<const char *>(info_hash.data()), 20);
 
+        auto closest = find_closest_nodes(target, 8);
+        if (closest.empty()) {
+            if (cb) {
+                cb({});
+            }
+            return;
+        }
+
         ActiveLookup lookup;
         lookup.callback = std::move(cb);
         lookup.queries_sent = 0;
         lookup.responses_received = 0;
+        lookup.expire_time_ms = static_cast<int64_t>(base::time::steady_now_ms() + 15000);
 
-        auto closest = find_closest_nodes(target, 8);
         for (const auto &node : closest) {
             std::string nkey = node.ip_string() + ":" + std::to_string(node.port);
             lookup.queried.push_back(node.id);
@@ -354,7 +388,9 @@ namespace yuan::net::bit_torrent
             candidates.push_back(node);
 
         // Expand to adjacent buckets
-        for (int d = 1; static_cast<int>(candidates.size()) < count * 2; d++) {
+        for (int d = 1;
+             d < static_cast<int>(buckets_.size()) && static_cast<int>(candidates.size()) < count * 2;
+             d++) {
             if (idx - d >= 0)
                 for (const auto &node : buckets_[idx - d].nodes)
                     candidates.push_back(node);
@@ -548,17 +584,24 @@ namespace yuan::net::bit_torrent
         }
 
         auto runtime = runtime_;
-        std::thread t([this, nodes = std::move(nodes), runtime]() {
+        auto alive = bootstrap_alive_;
+        std::thread t([this, nodes = std::move(nodes), runtime, alive]() {
             std::vector<std::pair<std::string, uint16_t>> resolved;
             for (const auto &node : nodes) {
+                if (!alive || !alive->load()) {
+                    return;
+                }
                 std::string ip = net::InetAddress::get_address_by_host(node.first);
                 if (!ip.empty()) {
                     resolved.emplace_back(ip, node.second);
                 }
             }
 
-            if (!resolved.empty()) {
-                runtime->dispatch([this, resolved = std::move(resolved)]() {
+            if (!resolved.empty() && alive && alive->load()) {
+                runtime->dispatch([this, resolved = std::move(resolved), alive]() {
+                    if (!alive || !alive->load() || !running_) {
+                        return;
+                    }
                     for (const auto &node : resolved) {
                         send_ping(node.first, node.second);
                     }
@@ -637,7 +680,14 @@ namespace yuan::net::bit_torrent
                 std::string ih_key(reinterpret_cast<const char *>(info_hash.data()), 20);
                 auto it = active_lookups_.find(ih_key);
                 if (it != active_lookups_.end() && it->second.callback) {
-                    it->second.callback(peers);
+                    it->second.responses_received++;
+                    const bool complete = it->second.responses_received >= it->second.queries_sent;
+                    auto callback = it->second.callback;
+                    callback(peers);
+                    auto current = active_lookups_.find(ih_key);
+                    if (complete && current != active_lookups_.end()) {
+                        active_lookups_.erase(current);
+                    }
                 } else if (peer_callback_) {
                     peer_callback_(peers);
                 }
@@ -1046,6 +1096,13 @@ namespace yuan::net::bit_torrent
         for (auto it = pending_queries_.begin(); it != pending_queries_.end();) {
             if (it->second.expire_time_ms < now_ms)
                 it = pending_queries_.erase(it);
+            else
+                ++it;
+        }
+
+        for (auto it = active_lookups_.begin(); it != active_lookups_.end();) {
+            if (it->second.expire_time_ms > 0 && it->second.expire_time_ms < now_ms)
+                it = active_lookups_.erase(it);
             else
                 ++it;
         }

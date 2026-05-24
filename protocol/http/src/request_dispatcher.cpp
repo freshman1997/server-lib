@@ -1,14 +1,19 @@
 #include "request_dispatcher.h"
 
-namespace yuan::net::http 
+namespace yuan::net::http
 {
     void HttpRequestDispatcher::register_handler(const std::string &url, request_function func, bool is_prefix)
     {
-        mappings_[url] = func;
+        mappings_[url] = std::move(func);
         compress_trie_.insert(url, is_prefix);
     }
 
     request_function HttpRequestDispatcher::get_handler(const std::string &url) const
+    {
+        return get_handler(std::string_view(url));
+    }
+
+    request_function HttpRequestDispatcher::get_handler(std::string_view url) const
     {
         const auto *handler = get_handler_ptr(url);
         return handler ? *handler : nullptr;
@@ -16,20 +21,23 @@ namespace yuan::net::http
 
     const request_function *HttpRequestDispatcher::get_handler_ptr(const std::string &url) const
     {
+        return get_handler_ptr(std::string_view(url));
+    }
+
+    const request_function *HttpRequestDispatcher::get_handler_ptr(std::string_view url) const
+    {
         const auto exact = mappings_.find(url);
         if (exact != mappings_.end()) {
             return &exact->second;
         }
 
-        auto result = compress_trie_.find_prefix(url);
-        std::string prefix;
-        
-        // is_registered=true 表示匹配到被 insert(..., is_prefix=true) 标记过的前缀节点
+        const auto result = compress_trie_.find_prefix(url);
+        std::string_view lookup = url;
         if (result && result.is_registered) {
-            prefix = url.substr(0, static_cast<size_t>(result.match_length));
+            lookup = url.substr(0, static_cast<std::size_t>(result.match_length));
         }
 
-        auto it = mappings_.find(prefix.empty() ? url : prefix);
+        const auto it = mappings_.find(lookup);
         return it == mappings_.end() ? nullptr : &it->second;
     }
 }

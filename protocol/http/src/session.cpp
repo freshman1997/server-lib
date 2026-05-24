@@ -1,7 +1,10 @@
 #include "session.h"
+#include "base/time.h"
 #include "context.h"
 #include "ops/option.h"
 #include "net/connection/connection.h"
+
+#include <algorithm>
 
 namespace yuan::net::http
 {
@@ -14,7 +17,9 @@ namespace yuan::net::http
         context_->set_session(this);
 
         if (enable_idle_timer && config::close_idle_connection && config::connection_idle_timeout > 0) {
-            conn_timer_ = runtime_.schedule(config::connection_idle_timeout, [this]() { on_idle_timeout(); });
+            idle_timer_enabled_ = true;
+            last_active_ms_ = yuan::base::time::steady_now_ms();
+            schedule_idle_timer(static_cast<uint32_t>(config::connection_idle_timeout));
         }
     }
 
@@ -98,6 +103,17 @@ namespace yuan::net::http
             return;
         }
 
+        if (idle_timer_enabled_ && config::close_idle_connection && config::connection_idle_timeout > 0) {
+            const auto now_ms = yuan::base::time::steady_now_ms();
+            const auto timeout_ms = static_cast<uint64_t>(config::connection_idle_timeout);
+            const auto elapsed_ms = now_ms >= last_active_ms_ ? now_ms - last_active_ms_ : timeout_ms;
+            if (elapsed_ms < timeout_ms) {
+                const auto remaining_ms = static_cast<uint32_t>((std::max<uint64_t>)(1, timeout_ms - elapsed_ms));
+                schedule_idle_timer(remaining_ms);
+                return;
+            }
+        }
+
         if (context_ && context_->get_connection()) {
             context_->get_connection()->close();
         }
@@ -105,10 +121,20 @@ namespace yuan::net::http
 
     void HttpSession::reset_timer()
     {
-        if (!alive_ || !conn_timer_ || !config::close_idle_connection || config::connection_idle_timeout <= 0) {
+        if (!alive_ || !idle_timer_enabled_ || !config::close_idle_connection || config::connection_idle_timeout <= 0) {
             return;
         }
-        conn_timer_.cancel();
-        conn_timer_ = runtime_.schedule(config::connection_idle_timeout, [this]() { on_idle_timeout(); });
+        last_active_ms_ = yuan::base::time::steady_now_ms();
+        if (!conn_timer_) {
+            schedule_idle_timer(static_cast<uint32_t>(config::connection_idle_timeout));
+        }
+    }
+
+    void HttpSession::schedule_idle_timer(uint32_t timeout_ms)
+    {
+        if (!runtime_.timer_manager() || timeout_ms == 0) {
+            return;
+        }
+        conn_timer_ = runtime_.schedule(timeout_ms, [this]() { on_idle_timeout(); });
     }
 }

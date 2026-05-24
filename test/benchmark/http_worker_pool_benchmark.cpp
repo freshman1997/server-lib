@@ -579,11 +579,7 @@ namespace
 
             service->server().on("/bench", [](yuan::net::http::HttpRequest *,
                                                yuan::net::http::HttpResponse *resp) {
-                resp->set_response_code(yuan::net::http::ResponseCode::ok_);
-                resp->add_header("Content-Type", "text/plain");
-                resp->add_header("Content-Length", std::to_string(kBenchmarkBodySize));
-                resp->append_body(kBenchmarkBody);
-                resp->send();
+                resp->send_body(kBenchmarkBody, "text/plain");
             });
 
             if (!service->init()) {
@@ -614,7 +610,7 @@ namespace
         }
 
         int flag = 1;
-        if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag)) != 0) {
+        if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&flag), sizeof(flag)) != 0) {
             close_socket(fd);
             return -1;
         }
@@ -678,7 +674,11 @@ namespace
         {
             static std::once_flag libevent_thread_init;
             std::call_once(libevent_thread_init, []() {
+#ifdef _WIN32
+                evthread_use_windows_threads();
+#else
                 evthread_use_pthreads();
+#endif
             });
 
             workers.reserve(worker_count);

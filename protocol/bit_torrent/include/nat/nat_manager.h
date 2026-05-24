@@ -83,6 +83,7 @@ namespace yuan::net::bit_torrent
         bool is_upnp_mapped() const;
         bool is_dht_running() const;
         bool is_utp_running() const;
+        bool connect_utp_peer(const std::string &ip, uint16_t port);
 
         const NatConfig &get_config() const
         {

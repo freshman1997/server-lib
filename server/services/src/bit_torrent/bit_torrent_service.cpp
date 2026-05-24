@@ -291,11 +291,7 @@ namespace yuan::server
             return;
         }
         uint16_t port = static_cast<uint16_t>(client.get_listen_port());
-        auto *nat = nat_manager_.get();
-        std::thread t([nat, port]() {
-            nat->add_port_mapping(port);
-        });
-        t.detach();
+        nat_manager_->add_port_mapping(port);
     }
 
     void BitTorrentService::remove_nat_port_mapping_for_client(yuan::net::bit_torrent::BitTorrentClient &client)
@@ -304,16 +300,12 @@ namespace yuan::server
             return;
         }
         uint16_t port = static_cast<uint16_t>(client.get_listen_port());
-        auto *nat = nat_manager_.get();
-        std::thread t([nat, port]() {
-            nat->remove_port_mapping(port);
-        });
-        t.detach();
+        nat_manager_->remove_port_mapping(port);
     }
 
     void BitTorrentService::setup_shared_dht_for_client(yuan::net::bit_torrent::BitTorrentClient &client)
     {
-        if (!shared_dht_node_ || !shared_dht_node_->is_running()) {
+        if (!shared_dht_node_ || !shared_dht_node_->is_running() || !shared_runtime_) {
             return;
         }
         const auto &meta = client.get_meta();
@@ -322,12 +314,18 @@ namespace yuan::server
         }
         uint16_t port = static_cast<uint16_t>(client.get_listen_port());
         auto *nat = client.get_nat_manager();
-        shared_dht_node_->announce(meta.info_hash_, port,
-            [nat](const std::vector<yuan::net::bit_torrent::PeerAddress> &peers) {
-                if (nat) {
-                    nat->on_dht_peers(peers);
-                }
-            });
+        auto info_hash = meta.info_hash_;
+        shared_runtime_->dispatch([this, info_hash = std::move(info_hash), port, nat]() {
+            if (!shared_dht_node_ || !shared_dht_node_->is_running()) {
+                return;
+            }
+            shared_dht_node_->announce(info_hash, port,
+                [nat](const std::vector<yuan::net::bit_torrent::PeerAddress> &peers) {
+                    if (nat) {
+                        nat->on_dht_peers(peers);
+                    }
+                });
+        });
     }
 
     uint16_t BitTorrentService::allocate_listen_port()
@@ -964,14 +962,10 @@ namespace yuan::server
             }
             used_ports_.clear();
             persist_tasks_to_disk_nolock();
-            if (!nat_ports.empty()) {
-                auto *nat = nat_manager_.get();
-                std::thread t([nat, ports = std::move(nat_ports)]() {
-                    for (auto port : ports) {
-                        nat->remove_port_mapping(port);
-                    }
-                });
-                t.detach();
+            if (nat_manager_) {
+                for (auto port : nat_ports) {
+                    nat_manager_->remove_port_mapping(port);
+                }
             }
         });
 

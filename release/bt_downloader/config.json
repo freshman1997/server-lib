@@ -15,6 +15,7 @@
     "max_concurrent_downloads": 3,
     "enable_dht": true,
     "enable_pex": true,
-    "enable_upnp": true
+    "enable_upnp": true,
+    "enable_utp": true
   }
 }

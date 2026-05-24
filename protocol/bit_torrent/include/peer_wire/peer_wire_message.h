@@ -583,6 +583,8 @@ namespace yuan::net::bit_torrent
 
         void set_bitfield(const std::vector<uint8_t> &bf, int32_t total_pieces)
         {
+            if (total_pieces <= 0 && !bf.empty())
+                total_pieces = static_cast<int32_t>(bf.size() * 8);
             pieces.assign(total_pieces, false);
             for (int32_t i = 0; i < total_pieces; i++) {
                 int byte_idx = i / 8;

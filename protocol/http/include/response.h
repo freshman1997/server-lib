@@ -41,6 +41,9 @@ namespace yuan::net::http
         void append_body(const std::string &data);
         // move版本
         void append_body(std::string &&data);
+        void send_body(std::string_view body,
+                       std::string_view content_type = "application/octet-stream",
+                       ResponseCode code = ResponseCode::ok_);
 
         void process_error(ResponseCode errorCode = ResponseCode::internal_server_error);
 

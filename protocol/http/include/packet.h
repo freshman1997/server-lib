@@ -15,6 +15,8 @@
 #include <memory>
 #include <filesystem>
 #include <fstream>
+#include <array>
+#include <bitset>
 
 namespace yuan::net
 {
@@ -75,6 +77,7 @@ namespace yuan::net::http
         void send();
 
         bool parse(const ::yuan::buffer::ByteBuffer &buff);
+        bool parse(::yuan::buffer::ByteBuffer &&buff);
 
         bool write(::yuan::buffer::ByteBuffer &buff);
 
@@ -86,6 +89,7 @@ namespace yuan::net::http
         void add_header(const char *k, const char *v);
         // const char* key + move value
         void add_header(const char *k, std::string &&v);
+        void add_parsed_header(const char *k, std::string &&v);
         // string_view 查询，避免构造string key
         const std::string *get_header(std::string_view key) const;
 
@@ -286,10 +290,15 @@ namespace yuan::net::http
         // 直接访问headers（中间件等需要）
         const HttpHeaderMap &headers() const
         {
+            materialize_parsed_headers();
             return headers_;
         }
 
     protected:
+        bool parse_input_cache();
+        void clear_parsed_headers();
+        void materialize_parsed_headers() const;
+
         HttpVersion version_ = HttpVersion::v_1_1;
         bool is_good_;
         bool is_upload_file_ = false;
@@ -300,7 +309,10 @@ namespace yuan::net::http
         HttpSessionContext *context_;
         std::unique_ptr<HttpPacketParser> parser_;
         std::unordered_map<std::string, std::vector<std::string> > params_;
-        HttpHeaderMap headers_;
+        mutable HttpHeaderMap headers_;
+        static constexpr std::size_t kParsedHeaderSlotCount = 8;
+        mutable std::array<std::string, kParsedHeaderSlotCount> parsed_header_values_;
+        mutable std::bitset<kParsedHeaderSlotCount> parsed_header_present_;
         std::string content_type_text_;
         std::unordered_map<std::string, std::string> content_type_extra_;
         std::unique_ptr<Content> body_content_;

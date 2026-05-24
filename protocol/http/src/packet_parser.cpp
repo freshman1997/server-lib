@@ -146,6 +146,15 @@ namespace yuan::net::http
 
         const char *data = buff.read_ptr();
         const std::size_t size = buff.readable_bytes();
+        if (header_state == HeaderState::version && ending == '\r' && next == '\n' && size >= 10 &&
+            data[0] == 'H' && data[1] == 'T' && data[2] == 'T' && data[3] == 'P' &&
+            data[4] == '/' && data[5] == '1' && data[6] == '.' && data[7] == '1' &&
+            data[8] == '\r' && data[9] == '\n') {
+            packet_->set_version(HttpVersion::v_1_1);
+            buff.consume(10);
+            return true;
+        }
+
         std::size_t token_len = 0;
         while (token_len < size && data[token_len] != ending) {
             ++token_len;
@@ -208,15 +217,13 @@ namespace yuan::net::http
         while (pos < size) {
             header_state = HeaderState::header_key;
 
-            std::size_t line_end = pos;
-            while (line_end < size && data[line_end] != '\n') {
-                ++line_end;
-                if (start_offset + line_end > config::max_header_length) {
-                    header_state = HeaderState::too_long;
-                    return false;
-                }
+            const char *line_end_ptr = static_cast<const char *>(std::memchr(data + pos, '\n', size - pos));
+            if (!line_end_ptr) {
+                return false;
             }
-            if (line_end >= size) {
+            const std::size_t line_end = static_cast<std::size_t>(line_end_ptr - data);
+            if (start_offset + line_end > config::max_header_length) {
+                header_state = HeaderState::too_long;
                 return false;
             }
 
@@ -247,7 +254,10 @@ namespace yuan::net::http
             std::string val(value_begin, static_cast<std::size_t>(line_data_end - value_begin));
 
             if (const char *canonical = canonical_header_key(line_begin, key_len)) {
-                packet_->add_header(canonical, std::move(val));
+                if (canonical == http_header_key::connection && packet_->get_packet_type() == PacketType::request) {
+                    static_cast<HttpRequest *>(packet_)->note_connection_header(val);
+                }
+                packet_->add_parsed_header(canonical, std::move(val));
             } else {
                 std::string key(key_len, '\0');
                 for (std::size_t i = 0; i < key_len; ++i) {
@@ -311,8 +321,14 @@ namespace yuan::net::http
         }
 
         if (is_header_done()) {
-            bool has_content_length = packet_->get_header(http_header_key::content_length) != nullptr;
-            bool has_transfer_encoding = packet_->get_header(http_header_key::transfer_encoding) != nullptr;
+            uint32_t length = 0;
+            const auto length_state = parse_content_length_header(packet_, length);
+            if (length_state == ContentLengthParseState::invalid) {
+                return -1;
+            }
+
+            const bool has_content_length = length_state == ContentLengthParseState::valid;
+            const bool has_transfer_encoding = packet_->get_header(http_header_key::transfer_encoding) != nullptr;
 
             if (has_content_length && has_transfer_encoding) {
                 return -1;
@@ -326,17 +342,8 @@ namespace yuan::net::http
                 return 1;
             }
 
-            uint32_t length = packet_->get_body_length();
-            if (packet_->get_body_length() == 0) {
-                uint32_t parsed_length = 0;
-                const auto length_state = parse_content_length_header(packet_, parsed_length);
-                if (length_state == ContentLengthParseState::invalid) {
-                    return -1;
-                }
-                if (length_state == ContentLengthParseState::valid) {
-                    length = parsed_length;
-                    packet_->set_body_length(length);
-                }
+            if (has_content_length) {
+                packet_->set_body_length(length);
             }
             if (length > 0) {
                 if (should_spool_request_body(packet_, length)) {

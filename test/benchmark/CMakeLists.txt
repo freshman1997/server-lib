@@ -21,8 +21,25 @@ elseif (EXISTS "${YUAN_LIBEVENT_ROOT}/build/lib/libevent_extrad.a"
     set(YUAN_LIBEVENT_CORE "${YUAN_LIBEVENT_ROOT}/build/lib/libevent_cored.a")
     set(YUAN_LIBEVENT_PTHREADS "${YUAN_LIBEVENT_ROOT}/build/lib/libevent_pthreadsd.a")
     set(YUAN_LIBEVENT_GENERATED_INCLUDE "${YUAN_LIBEVENT_ROOT}/build/include")
+elseif (EXISTS "${YUAN_NETWORK_REPOS_ROOT}/libevent-2.1.8-stable/build-mingw-release/libevent_extra.a"
+    AND EXISTS "${YUAN_NETWORK_REPOS_ROOT}/libevent-2.1.8-stable/build-mingw-release/libevent_core.a"
+    AND EXISTS "${YUAN_NETWORK_REPOS_ROOT}/libevent-2.1.8-stable/build-mingw-release/libevent.a")
+    set(YUAN_LIBEVENT_ROOT "${YUAN_NETWORK_REPOS_ROOT}/libevent-2.1.8-stable")
+    set(YUAN_LIBEVENT_EXTRA "${YUAN_LIBEVENT_ROOT}/build-mingw-release/libevent_extra.a")
+    set(YUAN_LIBEVENT_CORE "${YUAN_LIBEVENT_ROOT}/build-mingw-release/libevent_core.a")
+    set(YUAN_LIBEVENT_PTHREADS "")
+    set(YUAN_LIBEVENT_GENERATED_INCLUDE "${YUAN_LIBEVENT_ROOT}/WIN32-Code/nmake")
+elseif (MSVC
+    AND EXISTS "${YUAN_NETWORK_REPOS_ROOT}/libevent-2.1.8-stable/lib/libevent_extras.lib"
+    AND EXISTS "${YUAN_NETWORK_REPOS_ROOT}/libevent-2.1.8-stable/lib/libevent_core.lib"
+    AND EXISTS "${YUAN_NETWORK_REPOS_ROOT}/libevent-2.1.8-stable/lib/libevent.lib")
+    set(YUAN_LIBEVENT_ROOT "${YUAN_NETWORK_REPOS_ROOT}/libevent-2.1.8-stable")
+    set(YUAN_LIBEVENT_EXTRA "${YUAN_LIBEVENT_ROOT}/lib/libevent_extras.lib")
+    set(YUAN_LIBEVENT_CORE "${YUAN_LIBEVENT_ROOT}/lib/libevent_core.lib")
+    set(YUAN_LIBEVENT_PTHREADS "")
+    set(YUAN_LIBEVENT_GENERATED_INCLUDE "${YUAN_LIBEVENT_ROOT}/WIN32-Code/nmake")
 endif()
-if (YUAN_LIBEVENT_EXTRA AND YUAN_LIBEVENT_CORE AND YUAN_LIBEVENT_PTHREADS)
+if (YUAN_LIBEVENT_EXTRA AND YUAN_LIBEVENT_CORE)
     target_compile_definitions(http_worker_pool_benchmark PRIVATE YUAN_BENCH_WITH_LIBEVENT=1)
     target_include_directories(http_worker_pool_benchmark PRIVATE
         "${YUAN_LIBEVENT_ROOT}/include"
@@ -31,6 +48,9 @@ if (YUAN_LIBEVENT_EXTRA AND YUAN_LIBEVENT_CORE AND YUAN_LIBEVENT_PTHREADS)
         "${YUAN_LIBEVENT_EXTRA}"
         "${YUAN_LIBEVENT_PTHREADS}"
         "${YUAN_LIBEVENT_CORE}")
+    if (WIN32)
+        target_link_libraries(http_worker_pool_benchmark PRIVATE ws2_32 iphlpapi)
+    endif()
 endif()
 
 set(YUAN_LIBUV_ROOT "${YUAN_NETWORK_REPOS_ROOT}/libuv")
