@@ -34,6 +34,57 @@ namespace yuan::net::http
                 return {};
             }
         }
+
+        std::string_view cached_simple_response_header(ResponseCode code,
+                                                       std::string_view content_type,
+                                                       std::size_t body_size)
+        {
+            struct Cache
+            {
+                ResponseCode code = ResponseCode::invalid;
+                std::string content_type;
+                std::size_t body_size = static_cast<std::size_t>(-1);
+                std::string header;
+            };
+
+            const auto fast_line = fast_status_line(code);
+            if (fast_line.empty()) {
+                return {};
+            }
+
+            thread_local Cache cache;
+            if (cache.code == code &&
+                cache.body_size == body_size &&
+                cache.content_type.size() == content_type.size() &&
+                std::string_view(cache.content_type) == content_type) {
+                return cache.header;
+            }
+
+            char length_buf[32];
+            auto [length_end, ec] = std::to_chars(length_buf, length_buf + sizeof(length_buf), body_size);
+            if (ec != std::errc{}) {
+                return {};
+            }
+            const std::string_view length_text(length_buf, static_cast<std::size_t>(length_end - length_buf));
+
+            cache.code = code;
+            cache.content_type.assign(content_type);
+            cache.body_size = body_size;
+            cache.header.clear();
+            cache.header.reserve(fast_line.size() +
+                                 std::string_view("Content-Type: ").size() + content_type.size() + 2 +
+                                 std::string_view("Content-Length: ").size() + length_text.size() + 4);
+            cache.header.append(fast_line);
+            if (!content_type.empty()) {
+                cache.header.append("Content-Type: ");
+                cache.header.append(content_type);
+                cache.header.append("\r\n");
+            }
+            cache.header.append("Content-Length: ");
+            cache.header.append(length_text);
+            cache.header.append("\r\n\r\n");
+            return cache.header;
+        }
     }
 
     HttpResponse::HttpResponse(HttpSessionContext *context) : HttpPacket(context)
@@ -72,6 +123,23 @@ namespace yuan::net::http
         auto *conn = context_ ? context_->get_connection() : nullptr;
         if (!conn) {
             return;
+        }
+
+        if (headers_.empty()) {
+            if (const auto cached_header = cached_simple_response_header(respCode_, content_type, body.size());
+                !cached_header.empty()) {
+                thread_local std::string payload;
+                const std::size_t payload_size = cached_header.size() + body.size();
+                payload.clear();
+                if (payload.capacity() < payload_size) {
+                    payload.reserve(payload_size);
+                }
+                payload.append(cached_header);
+                payload.append(body);
+                conn->write_raw_and_flush(payload);
+                headers_sent_ = true;
+                return;
+            }
         }
 
         const auto fast_line = fast_status_line(respCode_);

@@ -43,7 +43,6 @@ namespace yuan::net
         {
             auto index_it = fd_indices_.find(fd);
             if (index_it == fd_indices_.end()) {
-                channels_.erase(fd);
                 return;
             }
 
@@ -51,15 +50,16 @@ namespace yuan::net
             const std::size_t last_index = fds_.size() - 1;
             if (index != last_index) {
                 fds_[index] = fds_[last_index];
+                channels_[index] = channels_[last_index];
                 fd_indices_[static_cast<int>(fds_[index].fd)] = index;
             }
             fds_.pop_back();
+            channels_.pop_back();
             fd_indices_.erase(index_it);
-            channels_.erase(fd);
         }
 
         std::vector<NativePollFd> fds_;
-        std::unordered_map<int, net::Channel *> channels_;
+        std::vector<net::Channel *> channels_;
         std::unordered_map<int, std::size_t> fd_indices_;
     };
 
@@ -104,12 +104,12 @@ namespace yuan::net
         }
 
         for (std::size_t i = 0; i < data_->fds_.size(); ++i) {
-            const int fd = static_cast<int>(data_->fds_[i].fd);
-            auto it = data_->channels_.find(fd);
-            if (it == data_->channels_.end() || !it->second) {
+            auto *channel = i < data_->channels_.size() ? data_->channels_[i] : nullptr;
+            if (!channel) {
                 continue;
             }
 
+            const int fd = static_cast<int>(data_->fds_[i].fd);
             const auto revents = data_->fds_[i].revents;
             const bool has_error = (revents & ERROR_MASK)
 #ifndef _WIN32
@@ -119,7 +119,7 @@ namespace yuan::net
 
             int ev = Channel::NONE_EVENT;
             if (has_error) {
-                ev |= it->second->get_events() & (Channel::READ_EVENT | Channel::WRITE_EVENT);
+                ev |= channel->get_events() & (Channel::READ_EVENT | Channel::WRITE_EVENT);
                 if (ev == Channel::NONE_EVENT) {
                     ev = Channel::READ_EVENT;
                 }
@@ -133,11 +133,11 @@ namespace yuan::net
                 }
             }
 
-            if (it != data_->channels_.end() && ev != Channel::NONE_EVENT && it->second) {
+            if (ev != Channel::NONE_EVENT) {
                 PollEvent pe;
                 pe.fd = fd;
                 pe.revents = ev;
-                pe.generation = it->second->generation();
+                pe.generation = channel->generation();
                 events.push_back(pe);
             }
         }
@@ -147,7 +147,6 @@ namespace yuan::net
 
     void PollPoller::do_add_channel(Channel * channel)
     {
-        data_->channels_[channel->get_fd()] = channel;
         NativePollFd pfd{};
         pfd.fd = static_cast<decltype(pfd.fd)>(channel->get_fd());
         pfd.events = 0;
@@ -162,6 +161,7 @@ namespace yuan::net
         pfd.events &= REQUEST_MASK;
 
         data_->fds_.push_back(pfd);
+        data_->channels_.push_back(channel);
         data_->fd_indices_[channel->get_fd()] = data_->fds_.size() - 1;
     }
 
@@ -171,8 +171,8 @@ namespace yuan::net
             return;
         }
 
-        auto it = data_->channels_.find(channel->get_fd());
-        if (it == data_->channels_.end()) {
+        auto index_it = data_->fd_indices_.find(channel->get_fd());
+        if (index_it == data_->fd_indices_.end()) {
             if (channel->has_events()) {
                 do_add_channel(channel);
             }
@@ -180,25 +180,19 @@ namespace yuan::net
             if (!channel->has_events()) {
                 remove_channel(channel);
             } else {
-                int fd = channel->get_fd();
-                auto index_it = data_->fd_indices_.find(fd);
-
-                data_->channels_[channel->get_fd()] = channel;
-                if (index_it != data_->fd_indices_.end()) {
-                    auto &pfd = data_->fds_[index_it->second];
-                    pfd.events = 0;
-                    pfd.revents = 0;
-                    if (channel->get_events() & Channel::READ_EVENT) {
-                        pfd.events |= READ_MASK;
-                    }
-
-                    if (channel->get_events() & Channel::WRITE_EVENT) {
-                        pfd.events |= WRITE_MASK;
-                    }
-                    pfd.events &= REQUEST_MASK;
-                } else {
-                    do_add_channel(channel);
+                const std::size_t index = index_it->second;
+                data_->channels_[index] = channel;
+                auto &pfd = data_->fds_[index];
+                pfd.events = 0;
+                pfd.revents = 0;
+                if (channel->get_events() & Channel::READ_EVENT) {
+                    pfd.events |= READ_MASK;
                 }
+
+                if (channel->get_events() & Channel::WRITE_EVENT) {
+                    pfd.events |= WRITE_MASK;
+                }
+                pfd.events &= REQUEST_MASK;
             }
         }
     }

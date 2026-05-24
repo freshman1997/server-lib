@@ -1,5 +1,6 @@
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #include <signal.h>
+#include <algorithm>
 #include <unistd.h>
 #include <sys/event.h>
 #include <sys/time.h>
@@ -22,6 +23,7 @@ namespace yuan::net
         std::set<int> fds_;
         std::unordered_map<int, Channel *> channels_;
         std::vector<struct kevent> kqueue_events_;
+        std::vector<PollEvent> merged_events_;
     };
 
     namespace
@@ -87,8 +89,11 @@ namespace yuan::net
             // 但 EventLoop 遍历时会反复调用 channel->on_event()，而 channel->revent_ 会在
             // poll 循环内被后一次 set_revent 覆盖，导致前一次回调丢失。
             // 因此这里按 Channel 聚合 revent，只 push 一次。
-            std::unordered_map<int, PollEvent> revents_by_fd;
-            revents_by_fd.reserve(static_cast<size_t>(count));
+            auto &merged_events = data_->merged_events_;
+            merged_events.clear();
+            if (merged_events.capacity() < static_cast<size_t>(count)) {
+                merged_events.reserve(static_cast<size_t>(count));
+            }
 
             for (int i = 0; i < count; ++i) {
                 int ev = Channel::NONE_EVENT;
@@ -116,15 +121,21 @@ namespace yuan::net
                 }
 
                 if (ev != Channel::NONE_EVENT) {
-                    auto &pe = revents_by_fd[fd];
+                    auto found = std::find_if(merged_events.begin(), merged_events.end(), [fd](const PollEvent &item) {
+                        return item.fd == fd;
+                    });
+                    if (found == merged_events.end()) {
+                        merged_events.push_back(PollEvent{ fd, ev, decode_kqueue_generation(token) });
+                        continue;
+                    }
+                    auto &pe = *found;
                     pe.fd = fd;
                     pe.generation = decode_kqueue_generation(token);
                     pe.revents |= ev;
                 }
             }
 
-            for (auto & [fd, pe] : revents_by_fd) {
-                (void)fd;
+            for (auto &pe : merged_events) {
                 if (pe.revents != Channel::NONE_EVENT) {
                     events.push_back(pe);
                 }

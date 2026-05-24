@@ -1,11 +1,11 @@
 ﻿#ifndef __YUAN_COROUTINE_CONNECT_AWAITABLE_H__
 #define __YUAN_COROUTINE_CONNECT_AWAITABLE_H__
 
+#include <array>
 #include <coroutine>
 #include <memory>
 #include <string>
 #include <system_error>
-#include <vector>
 
 #include "coroutine/awaiter_timeout_state.h"
 #include "coroutine/connection_event_awaitable.h"
@@ -85,24 +85,30 @@ namespace yuan::coroutine
                 return false;
             }
 
-            register_waiter(net::ConnectionEvent::connected, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    result_.result = ConnectResult::success;
-                    resume();
-                }
-            });
-            register_waiter(net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    result_.result = ConnectResult::connection_error;
-                    resume();
-                }
-            });
-            register_waiter(net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
-                if (!completed_) {
-                    result_.result = ConnectResult::connection_error;
-                    resume();
-                }
-            });
+            net::Connection::EventWaiterRegistration registrations[] = {
+                { net::ConnectionEvent::connected, [this](const std::shared_ptr<net::Connection> &) {
+                    if (!completed_) {
+                        result_.result = ConnectResult::success;
+                        resume();
+                    }
+                } },
+                { net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
+                    if (!completed_) {
+                        result_.result = ConnectResult::connection_error;
+                        resume();
+                    }
+                } },
+                { net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
+                    if (!completed_) {
+                        result_.result = ConnectResult::connection_error;
+                        resume();
+                    }
+                } },
+            };
+            waiter_count_ = conn_->add_event_waiters(registrations,
+                                                     sizeof(registrations) / sizeof(registrations[0]),
+                                                     waiter_ids_.data(),
+                                                     waiter_ids_.size());
             conn_->set_event_handler(runtime_.event_loop());
 
             if (connect_errno != 0) {
@@ -154,24 +160,14 @@ namespace yuan::coroutine
         }
 
     private:
-        void register_waiter(net::ConnectionEvent event, net::Connection::EventWaiter waiter)
-        {
-            if (!conn_) {
-                return;
-            }
-            waiter_ids_.push_back(conn_->add_event_waiter(event, std::move(waiter)));
-        }
-
         void cancel_waiters() noexcept
         {
-            if (!conn_ || waiter_ids_.empty()) {
-                waiter_ids_.clear();
+            if (!conn_ || waiter_count_ == 0) {
+                waiter_count_ = 0;
                 return;
             }
-            for (const auto id : waiter_ids_) {
-                conn_->remove_event_waiter(id);
-            }
-            waiter_ids_.clear();
+            conn_->remove_event_waiters(waiter_ids_.data(), waiter_count_);
+            waiter_count_ = 0;
         }
 
         void resume() noexcept
@@ -196,7 +192,8 @@ namespace yuan::coroutine
         std::shared_ptr<detail::AwaiterTimeoutState> timeout_state_;
 
         std::coroutine_handle<> handle_{};
-        std::vector<uint64_t> waiter_ids_;
+        std::array<uint64_t, 3> waiter_ids_{};
+        std::size_t waiter_count_ = 0;
         ConnectAwaitableResult result_{};
         bool completed_ = false;
     };

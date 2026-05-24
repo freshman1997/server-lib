@@ -51,6 +51,7 @@ namespace yuan::net
         std::vector<char> buffer;
         std::shared_ptr<const std::string> shared_buffer;
         bool drains_output = false;
+        bool direct_output = false;
     };
 
     IocpTcpConnection::IocpTcpConnection(IocpTcpEngine &engine,
@@ -216,6 +217,58 @@ namespace yuan::net
     {
         write_owned(std::move(buffer));
         flush();
+    }
+
+    void IocpTcpConnection::write_raw_and_flush(std::string_view data)
+    {
+        if (data.empty()) {
+            return;
+        }
+        if (state_.load(std::memory_order_acquire) == ConnectionState::closed || closing() || get_ssl_handler()) {
+            append_output(data);
+            flush();
+            return;
+        }
+
+        auto *operation = new IocpTcpEngine::Operation{};
+        bool should_flush = false;
+        {
+            std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+            if (output_flush_pending_ || output_buffer_.readable_bytes() != 0) {
+                ensure_output_chunk(data.size())->append(data);
+                should_flush = !output_flush_pending_;
+                delete operation;
+                operation = nullptr;
+            } else {
+                operation->buffer.assign(data.data(), data.data() + data.size());
+                operation->drains_output = true;
+                operation->direct_output = true;
+                output_flush_pending_ = true;
+            }
+        }
+
+        if (!operation) {
+            if (should_flush) {
+                flush();
+            }
+            return;
+        }
+
+        operation->connection = self();
+        if (!context_.begin_operation(operation->io, IocpOperationKind::send, operation)) {
+            fail_output_send();
+            delete operation;
+            return;
+        }
+
+        if (!IocpTcpIo::post_send(context_.fd(),
+                                  operation->buffer.data(),
+                                  static_cast<uint32_t>(operation->buffer.size()),
+                                  operation->io.native_overlapped())) {
+            context_.complete_operation(operation->io);
+            fail_output_send();
+            delete operation;
+        }
     }
 
     void IocpTcpConnection::flush()
@@ -456,6 +509,22 @@ namespace yuan::net
             }
         }
         output_flush_pending_ = false;
+        close_after_output = close_after_output_ && output_buffer_.readable_bytes() == 0;
+        return output_buffer_.readable_bytes() > 0;
+    }
+
+    bool IocpTcpConnection::complete_direct_output_send(const char *data,
+                                                        std::size_t size,
+                                                        std::size_t bytes,
+                                                        bool &close_after_output)
+    {
+        std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+        output_flush_pending_ = false;
+        if (data && bytes < size) {
+            auto remaining = std::make_unique<::yuan::buffer::ByteBuffer>(size - bytes);
+            remaining->append(data + bytes, size - bytes);
+            output_buffer_.push_front(std::move(remaining));
+        }
         close_after_output = close_after_output_ && output_buffer_.readable_bytes() == 0;
         return output_buffer_.readable_bytes() > 0;
     }
@@ -980,11 +1049,12 @@ namespace yuan::net
         const uint32_t error = completion.error;
         const uint32_t bytes = completion.bytes;
         const bool drains_output = operation.drains_output;
-        delete &operation;
+        const bool direct_output = operation.direct_output;
         if (!completion.ok) {
             if (drains_output) {
                 connection->fail_output_send();
             }
+            delete &operation;
             connection->notify_error();
             if (callbacks_.on_error) {
                 callbacks_.on_error(connection, error);
@@ -995,7 +1065,11 @@ namespace yuan::net
 
         if (drains_output) {
             bool close_after_output = false;
-            if (connection->complete_output_send(bytes, close_after_output)) {
+            const bool has_more_output = direct_output
+                ? connection->complete_direct_output_send(operation.buffer.data(), operation.buffer.size(), bytes, close_after_output)
+                : connection->complete_output_send(bytes, close_after_output);
+            delete &operation;
+            if (has_more_output) {
                 connection->flush();
                 return;
             }
@@ -1014,6 +1088,7 @@ namespace yuan::net
             }
             return;
         }
+        delete &operation;
         connection->notify_write();
         if (callbacks_.on_write) {
             callbacks_.on_write(connection, bytes);

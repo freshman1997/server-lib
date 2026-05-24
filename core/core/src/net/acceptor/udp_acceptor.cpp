@@ -79,7 +79,6 @@ namespace yuan::net
         //instance_->set_adapter_type(adapterType);
         channel_ = std::make_unique<Channel>();
         channel_->enable_read();
-        channel_->enable_write();
         channel_->clear_handler();
         channel_->set_fd(sock_->get_fd());
 
@@ -150,7 +149,6 @@ namespace yuan::net
                 }
 
                 channel_->enable_read();
-                channel_->enable_write();
                 handler_->update_channel(ptr_of(channel_));
                 break;
             }
@@ -189,6 +187,10 @@ namespace yuan::net
     void UdpAcceptor::on_write_event()
     {
         instance_->send();
+        if (channel_) {
+            channel_->disable_write();
+            update_channel();
+        }
     }
 
     int UdpAcceptor::send_to(Connection * conn, const ::yuan::buffer::ByteBuffer & buff)

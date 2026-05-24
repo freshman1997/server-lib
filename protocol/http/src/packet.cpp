@@ -154,6 +154,7 @@ namespace yuan::net::http
           error_code_(other.error_code_),
           content_type_(other.content_type_),
           body_length_(other.body_length_),
+          body_related_header_present_(other.body_related_header_present_),
           context_(other.context_),
           parser_(std::move(other.parser_)),
           params_(std::move(other.params_)),
@@ -193,6 +194,7 @@ namespace yuan::net::http
             error_code_ = other.error_code_;
             content_type_ = other.content_type_;
             body_length_ = other.body_length_;
+            body_related_header_present_ = other.body_related_header_present_;
             context_ = other.context_;
             parser_ = std::move(other.parser_);
             params_ = std::move(other.params_);
@@ -226,6 +228,7 @@ namespace yuan::net::http
     {
         is_good_ = false;
         body_length_ = 0;
+        body_related_header_present_ = false;
         version_ = HttpVersion::v_1_1;
         params_.clear();
         headers_.clear();
@@ -292,12 +295,21 @@ namespace yuan::net::http
     {
         remove_header(k);
         headers_[k] = v;
+        body_related_header_present_ = body_related_header_present_ ||
+            header_key_equals_ci(k, http_header_key::content_length) ||
+            header_key_equals_ci(k, http_header_key::content_type) ||
+            header_key_equals_ci(k, http_header_key::transfer_encoding);
     }
 
     void HttpPacket::add_header(std::string && k, std::string && v)
     {
+        const bool body_related =
+            header_key_equals_ci(k, http_header_key::content_length) ||
+            header_key_equals_ci(k, http_header_key::content_type) ||
+            header_key_equals_ci(k, http_header_key::transfer_encoding);
         remove_header(k);
         headers_[std::move(k)] = std::move(v);
+        body_related_header_present_ = body_related_header_present_ || body_related;
     }
 
     void HttpPacket::add_header(const char * k, const char * v)
@@ -307,6 +319,10 @@ namespace yuan::net::http
         }
         remove_header(k);
         headers_[k] = v;
+        body_related_header_present_ = body_related_header_present_ ||
+            header_key_equals_ci(k, http_header_key::content_length) ||
+            header_key_equals_ci(k, http_header_key::content_type) ||
+            header_key_equals_ci(k, http_header_key::transfer_encoding);
     }
 
     void HttpPacket::add_header(const char * k, std::string && v)
@@ -316,6 +332,10 @@ namespace yuan::net::http
         }
         remove_header(k);
         headers_[k] = std::move(v);
+        body_related_header_present_ = body_related_header_present_ ||
+            header_key_equals_ci(k, http_header_key::content_length) ||
+            header_key_equals_ci(k, http_header_key::content_type) ||
+            header_key_equals_ci(k, http_header_key::transfer_encoding);
     }
 
     void HttpPacket::add_parsed_header(const char *k, std::string &&v)
@@ -328,6 +348,11 @@ namespace yuan::net::http
             const auto idx = static_cast<std::size_t>(slot);
             parsed_header_values_[idx] = std::move(v);
             parsed_header_present_.set(idx);
+            if (k == http_header_key::content_length ||
+                k == http_header_key::content_type ||
+                k == http_header_key::transfer_encoding) {
+                body_related_header_present_ = true;
+            }
             return;
         }
         headers_[k] = std::move(v);
@@ -344,7 +369,10 @@ namespace yuan::net::http
             parsed_header_values_[idx].clear();
             parsed_header_present_.reset(idx);
         }
-        headers_.erase(std::string(k));
+        const auto it = headers_.find(k);
+        if (it != headers_.end()) {
+            headers_.erase(it);
+        }
     }
 
     void HttpPacket::clear_header()
@@ -353,6 +381,7 @@ namespace yuan::net::http
         HttpHeaderMap empty;
         headers_.swap(empty);
         clear_parsed_headers();
+        body_related_header_present_ = false;
     }
 
     void HttpPacket::clear_parsed_headers()
@@ -556,6 +585,10 @@ namespace yuan::net::http
             return true;
         }
 
+        if (!body_related_header_present_) {
+            return true;
+        }
+
         const std::string *ctype = get_header(http_header_key::content_type);
         if (!ctype && !is_chunked())
             return true;
@@ -676,9 +709,8 @@ namespace yuan::net::http
 
     bool HttpPacket::is_chunked() const
     {
-        auto it = headers_.find(http_header_key::transfer_encoding);
-        if (it != headers_.end()) {
-            return transfer_encoding_has_chunked(it->second);
+        if (const auto *transfer_encoding = get_header(http_header_key::transfer_encoding)) {
+            return transfer_encoding_has_chunked(*transfer_encoding);
         }
 
         return false;

@@ -65,6 +65,26 @@ namespace yuan::net
 
     void UdpInstance::send()
     {
+        if (!pending_write_addrs_.empty()) {
+            while (!pending_write_addrs_.empty()) {
+                auto address = std::move(pending_write_addrs_.front());
+                pending_write_addrs_.pop_front();
+                pending_write_set_.erase(address);
+
+                auto current = conns_.find(address);
+                if (current == conns_.end() || !current->second) {
+                    continue;
+                }
+
+                if (current->second->is_connected()) {
+                    current->second->on_write_event();
+                } else {
+                    current->second->flush();
+                }
+            }
+            return;
+        }
+
         auto it = conns_.begin();
         while (it != conns_.end()) {
             auto current = it;
@@ -85,6 +105,7 @@ namespace yuan::net
 
         auto it = conns_.find(conn->get_remote_address());
         if (it != conns_.end()) {
+            pending_write_set_.erase(it->first);
             conns_.erase(it);
         }
     }
@@ -98,8 +119,21 @@ namespace yuan::net
     {
         if (acceptor_) {
             acceptor_->endpoint_channel()->enable_read();
-            acceptor_->endpoint_channel()->enable_write();
+            if (!pending_write_addrs_.empty()) {
+                acceptor_->endpoint_channel()->enable_write();
+            }
             acceptor_->update_endpoint_channel();
         }
+    }
+
+    void UdpInstance::request_write(Connection *conn)
+    {
+        if (conn) {
+            const auto &address = conn->get_remote_address();
+            if (pending_write_set_.insert(address).second) {
+                pending_write_addrs_.push_back(address);
+            }
+        }
+        enable_rw_events();
     }
 }

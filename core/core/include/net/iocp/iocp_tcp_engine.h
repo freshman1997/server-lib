@@ -54,6 +54,7 @@ namespace yuan::net
         void write_owned(::yuan::buffer::ByteBuffer buffer) override;
         void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer) override;
         void write_owned_and_flush(::yuan::buffer::ByteBuffer buffer) override;
+        void write_raw_and_flush(std::string_view data) override;
         void flush() override;
         void abort() override;
         void close() override;
@@ -83,6 +84,7 @@ namespace yuan::net
         bool complete(IocpOperation &operation) noexcept;
         std::shared_ptr<IocpTcpConnection> self();
         bool complete_output_send(std::size_t bytes, bool &close_after_output);
+        bool complete_direct_output_send(const char *data, std::size_t size, std::size_t bytes, bool &close_after_output);
         void fail_output_send();
         bool has_pending_output() const;
         bool mark_close_after_pending_output();

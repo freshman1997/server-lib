@@ -215,6 +215,35 @@ namespace yuan::net
             }
         }
 
+        std::size_t add_event_waiters(EventWaiterRegistration *registrations,
+                                      std::size_t count,
+                                      uint64_t *ids,
+                                      std::size_t ids_capacity)
+        {
+            if (!registrations || count == 0 || !ids || ids_capacity == 0) {
+                return 0;
+            }
+
+            const std::size_t limit = std::min(count, ids_capacity);
+            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            std::size_t added = 0;
+            for (std::size_t i = 0; i < limit; ++i) {
+                auto &registration = registrations[i];
+                if (!registration.waiter) {
+                    ids[i] = 0;
+                    continue;
+                }
+                const auto id = next_waiter_id_++;
+                waiters_.push_back(WaiterEntry{ id, registration.event, std::move(registration.waiter) });
+                ids[i] = id;
+                ++added;
+            }
+            if (added != 0) {
+                waiter_count_.fetch_add(static_cast<uint32_t>(added), std::memory_order_release);
+            }
+            return limit;
+        }
+
         void remove_event_waiters(const std::vector<uint64_t> &ids)
         {
             if (ids.empty()) {
@@ -225,6 +254,28 @@ namespace yuan::net
             const auto old_size = waiters_.size();
             waiters_.erase(std::remove_if(waiters_.begin(), waiters_.end(), [&ids](const auto &entry) {
                 return std::find(ids.begin(), ids.end(), entry.id) != ids.end();
+            }), waiters_.end());
+            const auto removed = old_size - waiters_.size();
+            if (removed != 0) {
+                waiter_count_.fetch_sub(static_cast<uint32_t>(removed), std::memory_order_release);
+            }
+        }
+
+        void remove_event_waiters(const uint64_t *ids, std::size_t count)
+        {
+            if (!ids || count == 0) {
+                return;
+            }
+
+            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            const auto old_size = waiters_.size();
+            waiters_.erase(std::remove_if(waiters_.begin(), waiters_.end(), [ids, count](const auto &entry) {
+                for (std::size_t i = 0; i < count; ++i) {
+                    if (ids[i] != 0 && ids[i] == entry.id) {
+                        return true;
+                    }
+                }
+                return false;
             }), waiters_.end());
             const auto removed = old_size - waiters_.size();
             if (removed != 0) {

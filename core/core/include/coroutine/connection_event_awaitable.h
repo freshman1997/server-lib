@@ -1,9 +1,9 @@
 #ifndef __YUAN_COROUTINE_CONNECTION_EVENT_AWAITABLE_H__
 #define __YUAN_COROUTINE_CONNECTION_EVENT_AWAITABLE_H__
 
+#include <array>
 #include <coroutine>
 #include <memory>
-#include <vector>
 
 #include "coroutine/runtime.h"
 #include "event/event_loop.h"
@@ -45,13 +45,25 @@ namespace yuan::coroutine
             auto *connection = connection_handle_.get();
 
             handle_ = handle;
-            register_waiter(connection, to_connection_event(event_kind_), false);
+            net::Connection::EventWaiterRegistration registrations[3];
+            std::size_t count = 0;
+            registrations[count++] = { to_connection_event(event_kind_), [this](const std::shared_ptr<net::Connection> &) {
+                complete(false);
+            } };
             if (event_kind_ != ConnectionEventKind::closed) {
-                register_waiter(connection, net::ConnectionEvent::closed, true);
+                registrations[count++] = { net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
+                    complete(true);
+                } };
             }
             if (event_kind_ != ConnectionEventKind::error) {
-                register_waiter(connection, net::ConnectionEvent::error, true);
+                registrations[count++] = { net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
+                    complete(true);
+                } };
             }
+            waiter_count_ = connection->add_event_waiters(registrations,
+                                                          count,
+                                                          waiter_ids_.data(),
+                                                          waiter_ids_.size());
             return true;
         }
 
@@ -89,40 +101,32 @@ namespace yuan::coroutine
             return net::ConnectionEvent::closed;
         }
 
-        void register_waiter(net::Connection *connection, net::ConnectionEvent event, bool force_restore)
+        void complete(bool force_restore) noexcept
         {
-            if (!connection) {
-                return;
+            if (force_restore) {
+                restore_handler_if_needed();
             }
 
-            waiter_ids_.push_back(connection->add_event_waiter(event, [this, force_restore](const std::shared_ptr<net::Connection> &) {
-                if (force_restore) {
-                    restore_handler_if_needed();
-                }
+            if (!completed_) {
+                completed_ = true;
+                exit_reason_ = force_restore
+                                   ? net::EventLoopExitReason::quit_requested
+                                   : net::EventLoopExitReason::coroutine_resume_requested;
 
-                if (!completed_) {
-                    completed_ = true;
-                    exit_reason_ = force_restore
-                                       ? net::EventLoopExitReason::quit_requested
-                                       : net::EventLoopExitReason::coroutine_resume_requested;
-
-                    if (runtime_.event_loop() && handle_) {
-                        runtime_.event_loop()->post_coroutine(handle_);
-                    }
+                if (runtime_.event_loop() && handle_) {
+                    runtime_.event_loop()->post_coroutine(handle_);
                 }
-            }));
+            }
         }
 
         void cancel_waiters(net::Connection *connection) noexcept
         {
-            if (!connection || waiter_ids_.empty()) {
-                waiter_ids_.clear();
+            if (!connection || waiter_count_ == 0) {
+                waiter_count_ = 0;
                 return;
             }
-            for (const auto id : waiter_ids_) {
-                connection->remove_event_waiter(id);
-            }
-            waiter_ids_.clear();
+            connection->remove_event_waiters(waiter_ids_.data(), waiter_count_);
+            waiter_count_ = 0;
         }
 
         RuntimeView runtime_{};
@@ -132,7 +136,8 @@ namespace yuan::coroutine
         bool completed_ = false;
         net::EventLoopExitReason exit_reason_ = net::EventLoopExitReason::quit_requested;
         std::coroutine_handle<> handle_{};
-        std::vector<uint64_t> waiter_ids_;
+        std::array<uint64_t, 3> waiter_ids_{};
+        std::size_t waiter_count_ = 0;
     };
 
     inline ConnectionEventAwaiter wait_for_connection_event(

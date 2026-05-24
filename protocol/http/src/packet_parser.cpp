@@ -321,6 +321,11 @@ namespace yuan::net::http
         }
 
         if (is_header_done()) {
+            if (!packet_->has_body_related_header()) {
+                body_state = BodyState::empty;
+                return 1;
+            }
+
             uint32_t length = 0;
             const auto length_state = parse_content_length_header(packet_, length);
             if (length_state == ContentLengthParseState::invalid) {

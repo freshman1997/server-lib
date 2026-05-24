@@ -127,7 +127,7 @@ namespace yuan::net::http
 
         buff.consume(token_len + 1);
 
-        if (req->url_.find('/') == std::string::npos) {
+        if (req->url_.empty() || (req->url_.front() != '/' && req->url_.find('/') == std::string::npos)) {
             return false;
         }
         req->url_domain_.clear();

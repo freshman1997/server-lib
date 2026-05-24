@@ -97,6 +97,11 @@ namespace yuan::net::http
 
         void clear_header();
 
+        bool has_body_related_header() const noexcept
+        {
+            return body_related_header_present_;
+        }
+
         void set_body_length(uint32_t len);
 
         uint32_t get_body_length() const
@@ -306,6 +311,7 @@ namespace yuan::net::http
         ResponseCode error_code_;
         ContentType content_type_;
         uint32_t body_length_ = 0;
+        bool body_related_header_present_ = false;
         HttpSessionContext *context_;
         std::unique_ptr<HttpPacketParser> parser_;
         std::unordered_map<std::string, std::vector<std::string> > params_;

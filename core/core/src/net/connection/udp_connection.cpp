@@ -188,14 +188,13 @@ namespace yuan::net
                 if (!front || front->empty()) {
                     break;
                 }
-                const auto packet = front->copy_readable();
-                int sent = instance_->on_send(this, packet);
+                int sent = instance_->on_send(this, *front);
                 if (sent > 0) {
                     front->consume(static_cast<std::size_t>(sent));
                     if (front->empty()) {
                         output_buffer_.pop_front();
                     } else {
-                        instance_->enable_rw_events();
+                        instance_->request_write(this);
                         return;
                     }
                     ++i;
@@ -210,7 +209,7 @@ namespace yuan::net
                         return;
                     }
                 } else {
-                    instance_->enable_rw_events();
+                    instance_->request_write(this);
                     break;
                 }
             }
@@ -270,7 +269,7 @@ namespace yuan::net
 
         bool ok = true;
         if (adapter_) {
-            auto decoded = get_input_byte_buffer();
+            auto decoded = take_and_clear_input_byte_buffer();
             ok = adapter_->on_recv(decoded) > 0;
             if (ok) {
                 replace_input_buffer(std::move(decoded));
@@ -392,8 +391,7 @@ namespace yuan::net
 
     bool UdpConnection::proc_one_buffer(const ::yuan::buffer::ByteBuffer & buffer)
     {
-        auto packet = buffer.copy_readable();
-        int ret = adapter_->on_write(packet);
+        int ret = adapter_->on_write(buffer);
         if (ret < 0) {
             return false;
         }
@@ -420,7 +418,7 @@ namespace yuan::net
                 return;
             }
 
-            if (!proc_one_buffer(front->copy_readable())) {
+            if (!proc_one_buffer(*front)) {
                 [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
                 auto *handler = ptr_of(handler_owner);
                 if (handler) {

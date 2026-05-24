@@ -1,6 +1,8 @@
 #ifndef __NET_UDP_INSTANCE_H___
 #define __NET_UDP_INSTANCE_H___
+#include <deque>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include "buffer/byte_buffer.h"
 #include "net/connection/connection.h"
@@ -50,7 +52,7 @@ namespace yuan::net
 
         ::yuan::buffer::ByteBuffer take_input_packet()
         {
-            auto packet = input_packet_.copy_readable();
+            auto packet = std::move(input_packet_);
             input_packet_.clear();
             return packet;
         }
@@ -73,6 +75,7 @@ namespace yuan::net
         timer::TimerManager *get_timer_manager() const;
 
         void enable_rw_events();
+        void request_write(Connection *conn);
 
         bool is_closing() const
         {
@@ -90,6 +93,8 @@ namespace yuan::net
         DatagramEndpoint *acceptor_;
         ::yuan::buffer::ByteBuffer input_packet_;
         std::unordered_map<InetAddress, std::shared_ptr<Connection>> conns_;
+        std::deque<InetAddress> pending_write_addrs_;
+        std::unordered_set<InetAddress> pending_write_set_;
     };
 }
 

@@ -2,8 +2,8 @@
 #define __YUAN_COROUTINE_STREAM_IO_AWAITABLE_H__
 
 #include <coroutine>
+#include <array>
 #include <memory>
-#include <vector>
 
 #include "coroutine/awaiter_timeout_state.h"
 #include "coroutine/io_result.h"
@@ -96,9 +96,10 @@ namespace yuan::coroutine
                 { net::ConnectionEvent::closed, terminal },
                 { net::ConnectionEvent::input_shutdown, std::move(terminal) },
             };
-            connection->add_event_waiters(registrations,
-                                          sizeof(registrations) / sizeof(registrations[0]),
-                                          waiter_ids_);
+            waiter_count_ = connection->add_event_waiters(registrations,
+                                                          sizeof(registrations) / sizeof(registrations[0]),
+                                                          waiter_ids_.data(),
+                                                          waiter_ids_.size());
 
             if (connection->input_readable_bytes() > 0) {
                 result_.status = IoStatus::success;
@@ -175,21 +176,14 @@ namespace yuan::coroutine
             handler_restored_ = true;
         }
 
-        void register_waiter(net::Connection *connection, net::ConnectionEvent event, net::Connection::EventWaiter waiter)
-        {
-            if (connection) {
-                waiter_ids_.push_back(connection->add_event_waiter(event, std::move(waiter)));
-            }
-        }
-
         void cancel_waiters(net::Connection *connection) noexcept
         {
-            if (!connection || waiter_ids_.empty()) {
-                waiter_ids_.clear();
+            if (!connection || waiter_count_ == 0) {
+                waiter_count_ = 0;
                 return;
             }
-            connection->remove_event_waiters(waiter_ids_);
-            waiter_ids_.clear();
+            connection->remove_event_waiters(waiter_ids_.data(), waiter_count_);
+            waiter_count_ = 0;
         }
         RuntimeView runtime_{};
         net::ConnectionHandle connection_handle_{};
@@ -198,7 +192,8 @@ namespace yuan::coroutine
 
         std::coroutine_handle<> handle_{};
         ReadResult result_{};
-        std::vector<uint64_t> waiter_ids_;
+        std::array<uint64_t, 4> waiter_ids_{};
+        std::size_t waiter_count_ = 0;
         bool completed_ = false;
         bool handler_restored_ = false;
         bool complete_with_buffered_data_on_terminal_event_ = true;
@@ -278,9 +273,10 @@ namespace yuan::coroutine
                     }
                 } },
             };
-            connection->add_event_waiters(registrations,
-                                          sizeof(registrations) / sizeof(registrations[0]),
-                                          waiter_ids_);
+            waiter_count_ = connection->add_event_waiters(registrations,
+                                                          sizeof(registrations) / sizeof(registrations[0]),
+                                                          waiter_ids_.data(),
+                                                          waiter_ids_.size());
             connection->write_and_flush(buffer_);
 
             if (completed_) {
@@ -341,21 +337,14 @@ namespace yuan::coroutine
             handler_restored_ = true;
         }
 
-        void register_waiter(net::Connection *connection, net::ConnectionEvent event, net::Connection::EventWaiter waiter)
-        {
-            if (connection) {
-                waiter_ids_.push_back(connection->add_event_waiter(event, std::move(waiter)));
-            }
-        }
-
         void cancel_waiters(net::Connection *connection) noexcept
         {
-            if (!connection || waiter_ids_.empty()) {
-                waiter_ids_.clear();
+            if (!connection || waiter_count_ == 0) {
+                waiter_count_ = 0;
                 return;
             }
-            connection->remove_event_waiters(waiter_ids_);
-            waiter_ids_.clear();
+            connection->remove_event_waiters(waiter_ids_.data(), waiter_count_);
+            waiter_count_ = 0;
         }
         RuntimeView runtime_{};
         net::ConnectionHandle connection_handle_{};
@@ -365,7 +354,8 @@ namespace yuan::coroutine
 
         std::coroutine_handle<> handle_{};
         WriteResult result_{};
-        std::vector<uint64_t> waiter_ids_;
+        std::array<uint64_t, 4> waiter_ids_{};
+        std::size_t waiter_count_ = 0;
         bool completed_ = false;
         bool handler_restored_ = false;
 
@@ -434,9 +424,10 @@ namespace yuan::coroutine
                     }
                 } },
             };
-            connection->add_event_waiters(registrations,
-                                          sizeof(registrations) / sizeof(registrations[0]),
-                                          waiter_ids_);
+            waiter_count_ = connection->add_event_waiters(registrations,
+                                                          sizeof(registrations) / sizeof(registrations[0]),
+                                                          waiter_ids_.data(),
+                                                          waiter_ids_.size());
             connection->flush();
 
             if (completed_) {
@@ -497,21 +488,14 @@ namespace yuan::coroutine
             handler_restored_ = true;
         }
 
-        void register_waiter(net::Connection *connection, net::ConnectionEvent event, net::Connection::EventWaiter waiter)
-        {
-            if (connection) {
-                waiter_ids_.push_back(connection->add_event_waiter(event, std::move(waiter)));
-            }
-        }
-
         void cancel_waiters(net::Connection *connection) noexcept
         {
-            if (!connection || waiter_ids_.empty()) {
-                waiter_ids_.clear();
+            if (!connection || waiter_count_ == 0) {
+                waiter_count_ = 0;
                 return;
             }
-            connection->remove_event_waiters(waiter_ids_);
-            waiter_ids_.clear();
+            connection->remove_event_waiters(waiter_ids_.data(), waiter_count_);
+            waiter_count_ = 0;
         }
         RuntimeView runtime_{};
         net::ConnectionHandle connection_handle_{};
@@ -520,7 +504,8 @@ namespace yuan::coroutine
 
         std::coroutine_handle<> handle_{};
         WriteResult result_{};
-        std::vector<uint64_t> waiter_ids_;
+        std::array<uint64_t, 3> waiter_ids_{};
+        std::size_t waiter_count_ = 0;
         bool completed_ = false;
         bool handler_restored_ = false;
 
@@ -583,9 +568,10 @@ namespace yuan::coroutine
                     }
                 } },
             };
-            connection->add_event_waiters(registrations,
-                                          sizeof(registrations) / sizeof(registrations[0]),
-                                          waiter_ids_);
+            waiter_count_ = connection->add_event_waiters(registrations,
+                                                          sizeof(registrations) / sizeof(registrations[0]),
+                                                          waiter_ids_.data(),
+                                                          waiter_ids_.size());
             connection->close();
 
             if (completed_) {
@@ -628,28 +614,22 @@ namespace yuan::coroutine
             handler_restored_ = true;
         }
 
-        void register_waiter(net::Connection *connection, net::ConnectionEvent event, net::Connection::EventWaiter waiter)
-        {
-            if (connection) {
-                waiter_ids_.push_back(connection->add_event_waiter(event, std::move(waiter)));
-            }
-        }
-
         void cancel_waiters(net::Connection *connection) noexcept
         {
-            if (!connection || waiter_ids_.empty()) {
-                waiter_ids_.clear();
+            if (!connection || waiter_count_ == 0) {
+                waiter_count_ = 0;
                 return;
             }
-            connection->remove_event_waiters(waiter_ids_);
-            waiter_ids_.clear();
+            connection->remove_event_waiters(waiter_ids_.data(), waiter_count_);
+            waiter_count_ = 0;
         }
         RuntimeView runtime_{};
         net::ConnectionHandle connection_handle_{};
 
         std::coroutine_handle<> handle_{};
         IoStatus result_ = IoStatus::success;
-        std::vector<uint64_t> waiter_ids_;
+        std::array<uint64_t, 3> waiter_ids_{};
+        std::size_t waiter_count_ = 0;
         bool completed_ = false;
         bool handler_restored_ = false;
     };

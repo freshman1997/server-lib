@@ -3,8 +3,8 @@
 #include "net/poller/select_poller.h"
 #include "logger.h"
 
-#include <map>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #ifdef _WIN32
@@ -19,7 +19,7 @@ namespace yuan::net
         fd_set reads_;
         fd_set writes_;
 		fd_set excepts_;
-        std::map<int, net::Channel *> sockets_;
+        std::unordered_map<int, net::Channel *> sockets_;
         std::mutex mutex_;
     };
 
@@ -96,16 +96,6 @@ namespace yuan::net
                 continue;
             }
 
-#ifdef _WIN32
-            if (!is_valid_socket_fd(fd)) {
-                const int err = WSAGetLastError();
-                LOG_WARN("select poll remove invalid socket, fd: {}, wsa_error: {}", fd, err);
-                queue_close_event(fd, i->second);
-                i = data_->sockets_.erase(i);
-                continue;
-            }
-#endif
-
             if (i->second->get_events() & Channel::READ_EVENT) {
 #ifdef _WIN32
                 if (data_->reads_.fd_count >= FD_SETSIZE) {
@@ -164,6 +154,22 @@ namespace yuan::net
         if (ret <= 0) {
             if (ret < 0) {
 #ifdef _WIN32
+                bool removed_invalid = false;
+                for (auto i = data_->sockets_.begin(); i != data_->sockets_.end();) {
+                    if (!i->second || !is_valid_socket_fd(i->first)) {
+                        const int fd = i->first;
+                        const int err = WSAGetLastError();
+                        LOG_WARN("select poll remove invalid socket, fd: {}, wsa_error: {}", fd, err);
+                        queue_close_event(fd, i->second);
+                        i = data_->sockets_.erase(i);
+                        removed_invalid = true;
+                    } else {
+                        ++i;
+                    }
+                }
+                if (removed_invalid) {
+                    return tm;
+                }
                 LOG_WARN("select poll failed, ret: {}, wsa_error: {}, sockets: {}", ret, WSAGetLastError(), data_->sockets_.size());
 #else
                 LOG_WARN("select poll failed, ret: {}", ret);

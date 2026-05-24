@@ -1779,7 +1779,7 @@ namespace yuan::net::http
         auto *session_ptr = ptr_of(session);
         store_session(sessionId, std::move(session));
 
-        bool protocol_checked = alpn_h2 || !config::enable_http2;
+        bool protocol_checked = alpn_h2;
         bool http2_mode = false;
         bool h2_handshake_active = false;
         ::yuan::buffer::ByteBuffer protocol_probe_data;
@@ -1874,9 +1874,16 @@ namespace yuan::net::http
 
             ::yuan::buffer::ByteBuffer parse_data;
             if (!protocol_checked) {
-                protocol_probe_data.append(read_result.data.readable_span());
-                const auto probe = probe_http2_preface(protocol_probe_data);
+                auto &probe_data = protocol_probe_data.empty() ? read_result.data : protocol_probe_data;
+                if (!protocol_probe_data.empty()) {
+                    protocol_probe_data.append(read_result.data.readable_span());
+                }
+
+                const auto probe = probe_http2_preface(probe_data);
                 if (probe == Http2PrefaceProbe::need_more) {
+                    if (protocol_probe_data.empty()) {
+                        protocol_probe_data.append(read_result.data.readable_span());
+                    }
                     continue;
                 }
                 if (probe == Http2PrefaceProbe::is_preface) {
@@ -1886,9 +1893,9 @@ namespace yuan::net::http
                             break;
                         }
 
-                        protocol_probe_data.consume(kHttp2ConnectionPreface.size());
+                        probe_data.consume(kHttp2ConnectionPreface.size());
 
-                        if (!http2_session->on_bytes(protocol_probe_data)) {
+                        if (!http2_session->on_bytes(probe_data)) {
                             break;
                         }
 
@@ -1902,7 +1909,7 @@ namespace yuan::net::http
                 }
 
                 protocol_checked = true;
-                parse_data = std::move(protocol_probe_data);
+                parse_data = protocol_probe_data.empty() ? std::move(read_result.data) : std::move(protocol_probe_data);
             } else {
                 parse_data = std::move(read_result.data);
             }

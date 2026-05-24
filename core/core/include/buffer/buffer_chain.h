@@ -72,6 +72,13 @@ public:
         }
     }
 
+    void push_front(BufferPtr buffer)
+    {
+        if (buffer) {
+            buffers_.push_front(std::move(buffer));
+        }
+    }
+
     BufferPtr pop_front()
     {
         if (buffers_.empty()) {
