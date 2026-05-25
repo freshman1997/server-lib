@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cctype>
 #include <cstdint>
@@ -44,6 +45,7 @@ using socket_t = SOCKET;
 constexpr socket_t kInvalidSocket = INVALID_SOCKET;
 #else
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
@@ -60,6 +62,28 @@ constexpr socket_t kInvalidSocket = -1;
 #include <event2/util.h>
 #endif
 
+#ifdef YUAN_BENCH_WITH_LIBEV
+#ifdef EV_READ
+#undef EV_READ
+#endif
+#ifdef EV_WRITE
+#undef EV_WRITE
+#endif
+#ifdef EV_TIMEOUT
+#undef EV_TIMEOUT
+#endif
+#ifdef EV_SIGNAL
+#undef EV_SIGNAL
+#endif
+#ifdef EV_PERSIST
+#undef EV_PERSIST
+#endif
+#ifdef EVLOOP_NONBLOCK
+#undef EVLOOP_NONBLOCK
+#endif
+#include <ev.h>
+#endif
+
 #ifdef YUAN_BENCH_WITH_LIBUV
 #include <uv.h>
 #endif
@@ -69,8 +93,54 @@ constexpr socket_t kInvalidSocket = -1;
 #include <workflow/WFHttpServer.h>
 #endif
 
+#ifdef YUAN_BENCH_WITH_LIBHV
+#include <HttpServer.h>
+#include <HttpService.h>
+#endif
+
 #ifdef _WIN32
 #include <mswsock.h>
+#endif
+
+constexpr const char *kBenchBodyGlobal = "OK";
+constexpr const char *kHttpResponseGlobal =
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/plain\r\n"
+    "Content-Length: 2\r\n"
+    "Connection: keep-alive\r\n"
+    "\r\n"
+    "OK";
+
+#ifdef YUAN_BENCH_WITH_LIBHV
+    struct LibhvServer
+    {
+        std::unique_ptr<hv::HttpServer> server;
+        std::unique_ptr<hv::HttpService> service;
+
+        bool start(uint16_t port, std::size_t worker_count)
+        {
+            service = std::make_unique<hv::HttpService>();
+            service->GET("/bench", [](HttpRequest *, HttpResponse *resp) {
+                return resp->String(kBenchBodyGlobal);
+            });
+
+            server = std::make_unique<hv::HttpServer>();
+            server->registerHttpService(service.get());
+            server->setHost("127.0.0.1");
+            server->setPort(static_cast<int>(port));
+            server->setThreadNum(static_cast<int>((std::max)(worker_count, std::size_t{1})));
+            return server->start() == 0;
+        }
+
+        void stop()
+        {
+            if (server) {
+                server->stop();
+                server.reset();
+            }
+            service.reset();
+        }
+    };
 #endif
 
 namespace
@@ -111,6 +181,224 @@ namespace
         (void)::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 #endif
     }
+
+    void set_nonblocking(socket_t fd)
+    {
+        if (fd == kInvalidSocket) {
+            return;
+        }
+#ifdef _WIN32
+        u_long mode = 1;
+        (void)::ioctlsocket(fd, FIONBIO, &mode);
+#else
+        const int flags = ::fcntl(fd, F_GETFL, 0);
+        if (flags >= 0) {
+            (void)::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        }
+#endif
+    }
+
+    int create_reuse_port_listener(uint16_t port, bool reuse_port)
+    {
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) {
+            return -1;
+        }
+
+        int flag = 1;
+        if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&flag), sizeof(flag)) != 0) {
+            close_socket(fd);
+            return -1;
+        }
+#ifdef SO_REUSEPORT
+        if (reuse_port && ::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &flag, sizeof(flag)) != 0) {
+            close_socket(fd);
+            return -1;
+        }
+#else
+        if (reuse_port) {
+            close_socket(fd);
+            return -1;
+        }
+#endif
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(port);
+        if (::bind(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) != 0) {
+            close_socket(fd);
+            return -1;
+        }
+        if (::listen(fd, 4096) != 0) {
+            close_socket(fd);
+            return -1;
+        }
+
+        set_nonblocking(fd);
+        return fd;
+    }
+
+#ifdef YUAN_BENCH_WITH_LIBEV
+    struct LibevClient
+    {
+        ev_io watcher{};
+        std::string buffer;
+    };
+
+    struct LibevWorker
+    {
+        struct ev_loop *loop = nullptr;
+        ev_io accept_watcher{};
+        ev_async stop_watcher{};
+        int listen_fd = -1;
+        std::thread thread;
+    };
+
+    void libev_write_response(int fd)
+    {
+        (void)::send(fd, kHttpResponseGlobal, static_cast<int>(std::strlen(kHttpResponseGlobal)), 0);
+    }
+
+    void libev_client_cb(struct ev_loop *loop, ev_io *watcher, int revents)
+    {
+        if (!(revents & EV_READ)) {
+            return;
+        }
+
+        auto *client = static_cast<LibevClient *>(watcher->data);
+        if (!client) {
+            ev_io_stop(loop, watcher);
+            return;
+        }
+
+        char chunk[4096];
+        const int n = static_cast<int>(::recv(watcher->fd, chunk, sizeof(chunk), 0));
+        if (n <= 0) {
+            ev_io_stop(loop, watcher);
+            close_socket(watcher->fd);
+            delete client;
+            return;
+        }
+
+        client->buffer.append(chunk, static_cast<std::size_t>(n));
+        std::string::size_type pos = std::string::npos;
+        while ((pos = client->buffer.find("\r\n\r\n")) != std::string::npos) {
+            client->buffer.erase(0, pos + 4);
+            libev_write_response(watcher->fd);
+        }
+    }
+
+    void libev_accept_cb(struct ev_loop *loop, ev_io *watcher, int revents)
+    {
+        if (!(revents & EV_READ)) {
+            return;
+        }
+
+        for (;;) {
+            sockaddr_in addr{};
+            socklen_t len = sizeof(addr);
+            const int client_fd = ::accept(watcher->fd, reinterpret_cast<sockaddr *>(&addr), &len);
+            if (client_fd < 0) {
+#ifdef _WIN32
+                const int err = WSAGetLastError();
+                if (err == WSAEWOULDBLOCK || err == WSAEINTR || err == WSAEINPROGRESS) {
+                    break;
+                }
+#else
+                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                    break;
+                }
+#endif
+                break;
+            }
+
+            set_client_socket_options(client_fd);
+            set_nonblocking(client_fd);
+
+            auto *client = new LibevClient{};
+            ev_io_init(&client->watcher, libev_client_cb, client_fd, EV_READ);
+            client->watcher.data = client;
+            ev_io_start(loop, &client->watcher);
+        }
+    }
+
+    void libev_stop_cb(struct ev_loop *loop, ev_async *, int)
+    {
+        ev_break(loop, EVBREAK_ALL);
+    }
+
+    struct LibevServer
+    {
+        std::vector<std::unique_ptr<LibevWorker>> workers;
+
+        bool start(uint16_t port, std::size_t worker_count)
+        {
+            const std::size_t count = (std::max)(worker_count, std::size_t{1});
+            workers.reserve(count);
+
+            for (std::size_t i = 0; i < count; ++i) {
+                auto worker = std::make_unique<LibevWorker>();
+                worker->loop = ev_loop_new(EVFLAG_AUTO);
+                if (!worker->loop) {
+                    stop();
+                    return false;
+                }
+
+                worker->listen_fd = create_reuse_port_listener(port, count > 1);
+                if (worker->listen_fd < 0) {
+                    stop();
+                    return false;
+                }
+
+                ev_io_init(&worker->accept_watcher, libev_accept_cb, worker->listen_fd, EV_READ);
+                ev_io_start(worker->loop, &worker->accept_watcher);
+
+                ev_async_init(&worker->stop_watcher, libev_stop_cb);
+                ev_async_start(worker->loop, &worker->stop_watcher);
+
+                auto *loop = worker->loop;
+                worker->thread = std::thread([loop]() {
+                    ev_run(loop, 0);
+                });
+
+                workers.push_back(std::move(worker));
+            }
+
+            return true;
+        }
+
+        void stop()
+        {
+            for (auto &worker : workers) {
+                if (worker && worker->loop) {
+                    ev_async_send(worker->loop, &worker->stop_watcher);
+                }
+            }
+
+            for (auto &worker : workers) {
+                if (worker && worker->thread.joinable()) {
+                    worker->thread.join();
+                }
+            }
+
+            for (auto &worker : workers) {
+                if (!worker) {
+                    continue;
+                }
+                if (worker->loop) {
+                    ev_io_stop(worker->loop, &worker->accept_watcher);
+                    ev_async_stop(worker->loop, &worker->stop_watcher);
+                    ev_loop_destroy(worker->loop);
+                    worker->loop = nullptr;
+                }
+                close_socket(worker->listen_fd);
+                worker->listen_fd = -1;
+            }
+            workers.clear();
+        }
+    };
+#endif
 
     uint16_t reserve_tcp_port()
     {
@@ -602,46 +890,6 @@ namespace
     }
 
 #ifdef YUAN_BENCH_WITH_LIBEVENT
-    int create_reuse_port_listener(uint16_t port, bool reuse_port)
-    {
-        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) {
-            return -1;
-        }
-
-        int flag = 1;
-        if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&flag), sizeof(flag)) != 0) {
-            close_socket(fd);
-            return -1;
-        }
-#ifdef SO_REUSEPORT
-        if (reuse_port && ::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &flag, sizeof(flag)) != 0) {
-            close_socket(fd);
-            return -1;
-        }
-#else
-        if (reuse_port) {
-            close_socket(fd);
-            return -1;
-        }
-#endif
-
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        addr.sin_port = htons(port);
-        if (::bind(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) != 0) {
-            close_socket(fd);
-            return -1;
-        }
-        if (::listen(fd, 4096) != 0) {
-            close_socket(fd);
-            return -1;
-        }
-        evutil_make_socket_nonblocking(fd);
-        return fd;
-    }
-
     void libevent_http_cb(evhttp_request *request, void *)
     {
         auto *body = evbuffer_new();
@@ -1097,6 +1345,12 @@ namespace
 #ifdef YUAN_BENCH_WITH_LIBUV
         LibuvServer libuv;
 #endif
+#ifdef YUAN_BENCH_WITH_LIBEV
+        LibevServer libev;
+#endif
+#ifdef YUAN_BENCH_WITH_LIBHV
+        LibhvServer libhv;
+#endif
 #ifdef _WIN32
         IocpServer iocp;
         YuanIocpMinimalServer yuan_iocp_min;
@@ -1129,6 +1383,16 @@ namespace
 #ifdef YUAN_BENCH_WITH_LIBUV
             if (name == "libuv") {
                 return libuv.start(port, worker_count);
+            }
+#endif
+#ifdef YUAN_BENCH_WITH_LIBEV
+            if (name == "libev") {
+                return libev.start(port, worker_count);
+            }
+#endif
+#ifdef YUAN_BENCH_WITH_LIBHV
+            if (name == "libhv") {
+                return libhv.start(port, worker_count);
             }
 #endif
 #ifdef _WIN32
@@ -1169,6 +1433,16 @@ namespace
 #ifdef YUAN_BENCH_WITH_LIBUV
             else if (implementation == "libuv") {
                 libuv.stop();
+            }
+#endif
+#ifdef YUAN_BENCH_WITH_LIBEV
+            else if (implementation == "libev") {
+                libev.stop();
+            }
+#endif
+#ifdef YUAN_BENCH_WITH_LIBHV
+            else if (implementation == "libhv") {
+                libhv.stop();
             }
 #endif
 #ifdef _WIN32

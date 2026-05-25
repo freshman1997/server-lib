@@ -70,8 +70,73 @@ if (YUAN_LIBUV_LIBRARY)
     endif()
 endif()
 
+set(YUAN_LIBEV_ROOT "${YUAN_NETWORK_REPOS_ROOT}/libev")
+if (EXISTS "${YUAN_LIBEV_ROOT}/ev.h" AND EXISTS "${YUAN_LIBEV_ROOT}/ev.c")
+    target_compile_definitions(http_worker_pool_benchmark PRIVATE YUAN_BENCH_WITH_LIBEV=1)
+    target_include_directories(http_worker_pool_benchmark PRIVATE "${YUAN_LIBEV_ROOT}")
+    target_compile_definitions(http_worker_pool_benchmark PRIVATE EV_STANDALONE=1)
+    target_sources(http_worker_pool_benchmark PRIVATE "${YUAN_LIBEV_ROOT}/ev.c")
+    if (UNIX AND NOT APPLE)
+        target_link_libraries(http_worker_pool_benchmark PRIVATE m)
+    endif()
+endif()
+
+set(YUAN_LIBHV_ROOT "${YUAN_NETWORK_REPOS_ROOT}/libhv")
+set(YUAN_LIBHV_LIBRARY "")
+option(YUAN_BENCH_ENABLE_LIBHV "Enable libhv benchmark implementation" ON)
+if (YUAN_BENCH_ENABLE_LIBHV)
+    if (EXISTS "${YUAN_LIBHV_ROOT}/build-release/lib/libhv.so")
+        set(YUAN_LIBHV_LIBRARY "${YUAN_LIBHV_ROOT}/build-release/lib/libhv.so")
+    elseif (EXISTS "${YUAN_LIBHV_ROOT}/build/lib/libhv.so")
+        set(YUAN_LIBHV_LIBRARY "${YUAN_LIBHV_ROOT}/build/lib/libhv.so")
+    elseif (EXISTS "${YUAN_LIBHV_ROOT}/lib/libhv.so")
+        set(YUAN_LIBHV_LIBRARY "${YUAN_LIBHV_ROOT}/lib/libhv.so")
+    elseif (EXISTS "${YUAN_LIBHV_ROOT}/build-release/lib/libhv_static.a")
+        set(YUAN_LIBHV_LIBRARY "${YUAN_LIBHV_ROOT}/build-release/lib/libhv_static.a")
+    elseif (EXISTS "${YUAN_LIBHV_ROOT}/build/lib/libhv_static.a")
+        set(YUAN_LIBHV_LIBRARY "${YUAN_LIBHV_ROOT}/build/lib/libhv_static.a")
+    elseif (EXISTS "${YUAN_LIBHV_ROOT}/lib/libhv_static.a")
+        set(YUAN_LIBHV_LIBRARY "${YUAN_LIBHV_ROOT}/lib/libhv_static.a")
+    elseif (EXISTS "${YUAN_LIBHV_ROOT}/lib/libhv.a")
+        set(YUAN_LIBHV_LIBRARY "${YUAN_LIBHV_ROOT}/lib/libhv.a")
+    endif()
+endif()
+if (YUAN_BENCH_ENABLE_LIBHV AND YUAN_LIBHV_LIBRARY)
+    target_compile_definitions(http_worker_pool_benchmark PRIVATE YUAN_BENCH_WITH_LIBHV=1)
+    target_include_directories(http_worker_pool_benchmark PRIVATE
+        "${YUAN_LIBHV_ROOT}"
+        "${YUAN_LIBHV_ROOT}/include"
+        "${YUAN_LIBHV_ROOT}/base"
+        "${YUAN_LIBHV_ROOT}/ssl"
+        "${YUAN_LIBHV_ROOT}/event"
+        "${YUAN_LIBHV_ROOT}/util"
+        "${YUAN_LIBHV_ROOT}/cpputil"
+        "${YUAN_LIBHV_ROOT}/evpp"
+        "${YUAN_LIBHV_ROOT}/http"
+        "${YUAN_LIBHV_ROOT}/http/server")
+    target_link_libraries(http_worker_pool_benchmark PRIVATE "${YUAN_LIBHV_LIBRARY}")
+    if (YUAN_LIBHV_LIBRARY MATCHES "\\.so$")
+        get_filename_component(YUAN_LIBHV_LIBDIR "${YUAN_LIBHV_LIBRARY}" DIRECTORY)
+        set_property(TARGET http_worker_pool_benchmark APPEND PROPERTY BUILD_RPATH "${YUAN_LIBHV_LIBDIR}")
+    endif()
+    if (WIN32)
+        target_link_libraries(http_worker_pool_benchmark PRIVATE ws2_32 iphlpapi)
+    else()
+        target_link_libraries(http_worker_pool_benchmark PRIVATE pthread dl)
+    endif()
+endif()
+
+# workflow and libhv both export http_parser symbols; avoid dual-link conflict
+if (YUAN_LIBHV_LIBRARY)
+    set(YUAN_BENCH_ENABLE_WORKFLOW_DEFAULT OFF)
+else()
+    set(YUAN_BENCH_ENABLE_WORKFLOW_DEFAULT ON)
+endif()
+option(YUAN_BENCH_ENABLE_WORKFLOW "Enable workflow benchmark implementation" ${YUAN_BENCH_ENABLE_WORKFLOW_DEFAULT})
+
 set(YUAN_WORKFLOW_ROOT "${YUAN_NETWORK_REPOS_ROOT}/workflow")
-if (EXISTS "${YUAN_WORKFLOW_ROOT}/_lib/libworkflow.so"
+if (YUAN_BENCH_ENABLE_WORKFLOW
+    AND EXISTS "${YUAN_WORKFLOW_ROOT}/_lib/libworkflow.so"
     AND EXISTS "${YUAN_WORKFLOW_ROOT}/_include/workflow/WFHttpServer.h")
     target_compile_definitions(http_worker_pool_benchmark PRIVATE YUAN_BENCH_WITH_WORKFLOW=1)
     target_include_directories(http_worker_pool_benchmark PRIVATE "${YUAN_WORKFLOW_ROOT}/_include")

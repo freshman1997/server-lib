@@ -33,6 +33,13 @@ namespace yuan::net::http
 
         bool on_data(::yuan::buffer::ByteBuffer *buf) override;
 
+        bool write_to_connection(::yuan::net::Connection *conn) override;
+
+        void set_sendfile_enabled(bool enabled)
+        {
+            sendfile_enabled_ = enabled;
+        }
+
         HttpTaskType get_task_type() const override
         {
             return HttpTaskType::upload_file_;
@@ -57,10 +64,16 @@ namespace yuan::net::http
 
     private:
         std::shared_ptr<AttachmentInfo> attachment_info_;
+#ifndef _WIN32
+        int file_fd_ = -1;
+#endif
         std::fstream file_stream_;
         std::function<void()> completed_callback_;
+        bool sendfile_enabled_ = false;
+#ifdef __linux__
+        std::size_t sendfile_chunk_size_ = 256 * 1024;
+#endif
     };
 }
 
 #endif // __UPLOAD_FILE_TASK_H__
-

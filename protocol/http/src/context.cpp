@@ -96,6 +96,10 @@ namespace yuan::net::http
     bool HttpSessionContext::write() const
     {
         if (response_->is_uploading() && conn_ && conn_->is_connected()) {
+            if (auto *task = response_->get_task(); task && task->write_to_connection(conn_)) {
+                return true;
+            }
+
             ::yuan::buffer::ByteBuffer buffer(256 * 1024);
             response_->write(buffer);
             if (!buffer.empty()) {

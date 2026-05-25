@@ -2,6 +2,12 @@
 #define __NET_HTTP_TASK_H__
 
 #include "buffer/byte_buffer.h"
+
+namespace yuan::net
+{
+    class Connection;
+}
+
 namespace yuan::net::http 
 {
     enum class HttpTaskType
@@ -17,6 +23,11 @@ namespace yuan::net::http
         virtual ~HttpTask() {}
         virtual bool on_data(::yuan::buffer::ByteBuffer *buf) { return false; }
         virtual bool on_data(const ::yuan::buffer::ByteBuffer &buf) { return false; }
+        virtual bool write_to_connection(::yuan::net::Connection *conn)
+        {
+            (void)conn;
+            return false;
+        }
         virtual bool init() { return true; }
         virtual void reset() {}
         virtual bool is_done() const { return false; }

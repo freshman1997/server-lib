@@ -3,6 +3,7 @@
 
 #include <string>
 #include <string_view>
+#include <cstddef>
 #include <vector>
 
 #include "packet.h"
@@ -107,6 +108,7 @@ namespace yuan::net::http
     private:
         HttpMethod method_;
         std::string url_;
+        std::size_t query_pos_ = std::string::npos;
         bool connection_close_requested_ = false;
         bool connection_keep_alive_requested_ = false;
         mutable std::vector<std::string> url_domain_;

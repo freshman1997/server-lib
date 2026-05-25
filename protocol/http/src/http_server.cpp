@@ -266,6 +266,7 @@ namespace yuan::net::http
             if (!req || !resp) {
                 return true;
             }
+
             if (resp->is_sse()) {
                 return false;
             }
@@ -1279,8 +1280,6 @@ namespace yuan::net::http
 
     bool HttpServer::dispatch_request(HttpSessionContext * context)
     {
-        cleanup_stale_upload_sessions();
-
         auto *request = context->get_request();
         auto *response = context->get_response();
 
@@ -1416,6 +1415,8 @@ namespace yuan::net::http
         clear_sessions();
         uploaded_chunks_.clear();
         upload_session_count_.store(0, std::memory_order_relaxed);
+        upload_cleanup_last_ms_.store(0, std::memory_order_relaxed);
+        upload_cleanup_probe_count_.store(0, std::memory_order_relaxed);
         proxy_.reset();
         listener_.close();
 
@@ -2552,6 +2553,8 @@ namespace yuan::net::http
             return;
         }
 
+        task->set_sendfile_enabled(true);
+
         resp->set_task(task.release());
         resp->set_upload_file(true);
         resp->send();
@@ -2741,6 +2744,8 @@ namespace yuan::net::http
             resp->process_error(ResponseCode::internal_server_error);
             return;
         }
+
+        task->set_sendfile_enabled(true);
 
         resp->add_header("Content-Type", get_content_type(ext));
         resp->add_header("Connection", "close");
@@ -3194,6 +3199,10 @@ namespace yuan::net::http
 
     void HttpServer::serve_upload(HttpRequest * req, HttpResponse * resp)
     {
+        if (upload_session_count_.load(std::memory_order_relaxed) != 0) {
+            cleanup_stale_upload_sessions();
+        }
+
         FormDataContent *form = nullptr;
         FormDataFileItem *file_item = nullptr;
         std::string upload_id;

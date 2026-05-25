@@ -102,6 +102,7 @@ namespace yuan::net::http
     void HttpRequest::reset()
     {
         HttpPacket::reset();
+        query_pos_ = std::string::npos;
         url_domain_.clear();
         url_domain_parsed_ = false;
         url_domain_valid_ = true;
@@ -125,6 +126,7 @@ namespace yuan::net::http
     void HttpRequest::set_raw_url(std::string url)
     {
         url_ = std::move(url);
+        query_pos_ = url_.find('?');
         url_domain_.clear();
         url_domain_parsed_ = false;
         url_domain_valid_ = true;
@@ -195,16 +197,14 @@ namespace yuan::net::http
     std::string_view HttpRequest::get_path() const
     {
         if (url_.empty()) return {};
-        auto pos = url_.find_first_of('?');
-        return std::string_view(url_.data(), pos == std::string::npos ? url_.size() : pos);
+        return std::string_view(url_.data(), query_pos_ == std::string::npos ? url_.size() : query_pos_);
     }
 
     std::string_view HttpRequest::get_query_string() const
     {
         if (url_.empty()) return {};
-        auto pos = url_.find_first_of('?');
-        if (pos == std::string::npos) return {};
-        return std::string_view(url_.data() + pos + 1, url_.size() - pos - 1);
+        if (query_pos_ == std::string::npos || query_pos_ + 1 >= url_.size()) return {};
+        return std::string_view(url_.data() + query_pos_ + 1, url_.size() - query_pos_ - 1);
     }
 
     std::string HttpRequest::get_param(const std::string &key, const std::string &default_val) const

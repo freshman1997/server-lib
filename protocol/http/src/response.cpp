@@ -85,6 +85,47 @@ namespace yuan::net::http
             cache.header.append("\r\n\r\n");
             return cache.header;
         }
+
+        std::string_view cached_simple_response_payload(ResponseCode code,
+                                                        std::string_view content_type,
+                                                        std::string_view body)
+        {
+            constexpr std::size_t kMaxCachedPayloadBodySize = 256;
+            if (body.size() > kMaxCachedPayloadBodySize) {
+                return {};
+            }
+
+            const auto header = cached_simple_response_header(code, content_type, body.size());
+            if (header.empty()) {
+                return {};
+            }
+
+            struct Cache
+            {
+                ResponseCode code = ResponseCode::invalid;
+                std::string content_type;
+                std::string body;
+                std::string payload;
+            };
+
+            thread_local Cache cache;
+            if (cache.code == code &&
+                cache.content_type.size() == content_type.size() &&
+                std::string_view(cache.content_type) == content_type &&
+                cache.body.size() == body.size() &&
+                std::string_view(cache.body) == body) {
+                return cache.payload;
+            }
+
+            cache.code = code;
+            cache.content_type.assign(content_type);
+            cache.body.assign(body);
+            cache.payload.clear();
+            cache.payload.reserve(header.size() + body.size());
+            cache.payload.append(header);
+            cache.payload.append(body);
+            return cache.payload;
+        }
     }
 
     HttpResponse::HttpResponse(HttpSessionContext *context) : HttpPacket(context)
@@ -126,6 +167,13 @@ namespace yuan::net::http
         }
 
         if (headers_.empty()) {
+            if (const auto cached_payload = cached_simple_response_payload(respCode_, content_type, body);
+                !cached_payload.empty()) {
+                conn->write_raw_and_flush(cached_payload);
+                headers_sent_ = true;
+                return;
+            }
+
             if (const auto cached_header = cached_simple_response_header(respCode_, content_type, body.size());
                 !cached_header.empty()) {
                 thread_local std::string payload;
