@@ -88,6 +88,18 @@ namespace yuan::net
             co_return co_await runtime_.read(conn_handle_, timeout_ms, complete_with_buffered_data_on_terminal_event);
         }
 
+        coroutine::AsyncReadAwaiter read_awaiter(uint32_t timeout_ms = 0)
+        {
+            return runtime_.read(conn_handle_, timeout_ms);
+        }
+
+        coroutine::AsyncReadAwaiter read_awaiter(
+            uint32_t timeout_ms,
+            bool complete_with_buffered_data_on_terminal_event)
+        {
+            return runtime_.read(conn_handle_, timeout_ms, complete_with_buffered_data_on_terminal_event);
+        }
+
         coroutine::Task<coroutine::WriteResult> write_async(const ::yuan::buffer::ByteBuffer &buffer, uint32_t timeout_ms = 0)
         {
             if (!conn_handle_ || closed_) {

@@ -138,7 +138,7 @@ namespace yuan::net::smb
         ByteBuffer recv_buf;
 
         while (running_.load() && ctx.is_connected()) {
-            auto read_result = co_await ctx.read_async(config_.idle_timeout_ms);
+            auto read_result = co_await ctx.read_awaiter(config_.idle_timeout_ms);
             if (read_result.status != coroutine::IoStatus::success) {
                 break;
             }

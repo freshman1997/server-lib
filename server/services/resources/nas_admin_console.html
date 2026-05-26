@@ -12,6 +12,12 @@
     h1 { font-size: 22px; margin: 0; }
     h2 { font-size: 16px; margin: 0 0 12px; }
     button { padding: 6px 10px; border: 1px solid #94a3b8; background: #f8fafc; border-radius: 6px; cursor: pointer; }
+    input { padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; }
+    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .toolbar input[type="text"] { min-width: 280px; flex: 1; }
+    .actions { display: flex; gap: 8px; }
+    a { color: #0369a1; text-decoration: none; }
+    a:hover { text-decoration: underline; }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; border-bottom: 1px solid #eef1f5; padding: 8px; }
     .muted { color: #64748b; }
@@ -24,9 +30,28 @@
   </header>
   <main>
     <section>
+      <h2>Credentials</h2>
+      <div class="toolbar">
+        <input id="authUser" type="text" value="admin" aria-label="Username">
+        <input id="authPassword" type="password" aria-label="Password">
+        <button id="saveAuth" type="button">Save</button>
+        <button id="clearAuth" type="button">Clear</button>
+        <span id="authStatus" class="muted">Not saved</span>
+      </div>
+    </section>
+    <section>
       <h2>Health</h2>
       <button id="probeHealth" type="button">Probe</button>
       <pre id="health" class="muted">Loading...</pre>
+    </section>
+    <section>
+      <h2>Files</h2>
+      <div class="toolbar">
+        <input id="filePath" type="text" value="/dav/public/" aria-label="WebDAV path">
+        <button id="refreshFiles" type="button">Refresh</button>
+        <input id="uploadFile" type="file">
+      </div>
+      <div id="files" class="muted">Loading...</div>
     </section>
     <section>
       <h2>Create User</h2>
@@ -74,8 +99,26 @@
     </section>
   </main>
   <script>
+    function authHeaders(extra) {
+      const headers = Object.assign({}, extra || {});
+      const user = sessionStorage.getItem('nasAdminUser') || document.getElementById('authUser')?.value || '';
+      const password = sessionStorage.getItem('nasAdminPassword') || document.getElementById('authPassword')?.value || '';
+      if (user && password) {
+        headers.Authorization = 'Basic ' + btoa(user + ':' + password);
+      }
+      return headers;
+    }
+
+    function updateAuthStatus() {
+      const saved = sessionStorage.getItem('nasAdminUser') && sessionStorage.getItem('nasAdminPassword');
+      document.getElementById('authStatus').textContent = saved ? 'Saved for this tab' : 'Not saved';
+    }
+
     async function getJson(url) {
-      const response = await fetch(url, { credentials: 'same-origin' });
+      const response = await fetch(url, {
+        credentials: 'same-origin',
+        headers: authHeaders()
+      });
       if (!response.ok) throw new Error(response.status);
       return response.json();
     }
@@ -83,7 +126,7 @@
     async function postJson(url, body) {
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         credentials: 'same-origin',
         body: JSON.stringify(body)
       });
@@ -100,6 +143,72 @@
           return '<td>' + String(v === undefined || v === null ? '' : v) + '</td>';
         }).join('') + '</tr>').join('') +
         '</tbody></table>';
+    }
+
+    function ensureDirPath(path) {
+      if (!path.startsWith('/')) path = '/' + path;
+      return path.endsWith('/') ? path : path + '/';
+    }
+
+    function parentPath(path) {
+      path = ensureDirPath(path);
+      const trimmed = path.slice(0, -1);
+      const idx = trimmed.lastIndexOf('/');
+      return idx <= 0 ? '/dav/public/' : trimmed.slice(0, idx + 1);
+    }
+
+    function displayNameFromHref(href) {
+      const clean = decodeURIComponent(href.split('?')[0]).replace(/\/$/, '');
+      const idx = clean.lastIndexOf('/');
+      return idx >= 0 ? clean.slice(idx + 1) : clean;
+    }
+
+    async function loadFiles() {
+      const pathInput = document.getElementById('filePath');
+      const path = ensureDirPath(pathInput.value || '/dav/public/');
+      pathInput.value = path;
+      const box = document.getElementById('files');
+      box.textContent = 'Loading...';
+      try {
+        const response = await fetch(path, {
+          method: 'PROPFIND',
+          headers: authHeaders({ Depth: '1' }),
+          credentials: 'same-origin'
+        });
+        if (!response.ok) throw new Error(response.status);
+        const text = await response.text();
+        const xml = new DOMParser().parseFromString(text, 'application/xml');
+        const responses = Array.from(xml.getElementsByTagNameNS('*', 'response'));
+        const rows = responses.map(item => {
+          const href = item.getElementsByTagNameNS('*', 'href')[0]?.textContent || '';
+          const typeNode = item.getElementsByTagNameNS('*', 'resourcetype')[0];
+          const isDir = !!typeNode && typeNode.getElementsByTagNameNS('*', 'collection').length > 0;
+          const size = item.getElementsByTagNameNS('*', 'getcontentlength')[0]?.textContent || '';
+          const modified = item.getElementsByTagNameNS('*', 'getlastmodified')[0]?.textContent || '';
+          return { href, name: displayNameFromHref(href), isDir, size, modified };
+        }).filter(row => row.href && decodeURIComponent(row.href).replace(/\/$/, '') !== path.replace(/\/$/, ''));
+
+        let html = '<div class="toolbar"><button type="button" data-open="' + parentPath(path) + '">Up</button></div>';
+        if (!rows.length) {
+          html += '<p class="muted">Empty</p>';
+        } else {
+          html += '<table><thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th><th>Actions</th></tr></thead><tbody>';
+          html += rows.map(row => {
+            const href = decodeURIComponent(row.href);
+            const openTarget = row.isDir ? ensureDirPath(href) : href;
+            const name = row.name || openTarget;
+            const actions = row.isDir
+              ? '<button type="button" data-open="' + openTarget + '">Open</button>'
+              : '<span class="actions"><button type="button" data-download="' + href + '">Download</button><button type="button" data-delete="' + href + '">Delete</button></span>';
+            return '<tr><td>' + name + '</td><td>' + (row.isDir ? 'folder' : 'file') + '</td><td>' +
+              (row.size || '') + '</td><td>' + (row.modified || '') + '</td><td>' + actions + '</td></tr>';
+          }).join('');
+          html += '</tbody></table>';
+        }
+        box.innerHTML = html;
+      } catch (e) {
+        box.innerHTML = '<p class="error">File API error: ' + e.message + '</p>';
+      }
     }
 
     async function load() {
@@ -127,6 +236,7 @@
       } catch (e) {
         document.querySelector('main').insertAdjacentHTML('afterbegin', '<section class="error">Admin API error: ' + e.message + '</section>');
       }
+      loadFiles();
     }
 
     document.getElementById('userForm').addEventListener('submit', async (e) => {
@@ -164,6 +274,67 @@
       load();
     });
 
+    document.getElementById('refreshFiles').addEventListener('click', loadFiles);
+    document.getElementById('saveAuth').addEventListener('click', () => {
+      sessionStorage.setItem('nasAdminUser', document.getElementById('authUser').value);
+      sessionStorage.setItem('nasAdminPassword', document.getElementById('authPassword').value);
+      updateAuthStatus();
+      load();
+    });
+    document.getElementById('clearAuth').addEventListener('click', () => {
+      sessionStorage.removeItem('nasAdminUser');
+      sessionStorage.removeItem('nasAdminPassword');
+      document.getElementById('authPassword').value = '';
+      updateAuthStatus();
+    });
+    document.getElementById('files').addEventListener('click', async (e) => {
+      const open = e.target.getAttribute('data-open');
+      const del = e.target.getAttribute('data-delete');
+      const download = e.target.getAttribute('data-download');
+      if (open) {
+        document.getElementById('filePath').value = open;
+        loadFiles();
+      }
+      if (download) {
+        const response = await fetch(download, { credentials: 'same-origin', headers: authHeaders() });
+        if (!response.ok) {
+          alert('Download failed: ' + response.status);
+          return;
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = displayNameFromHref(download);
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+      if (del && confirm('Delete ' + del + '?')) {
+        const response = await fetch(del, { method: 'DELETE', credentials: 'same-origin', headers: authHeaders() });
+        if (!response.ok) alert('Delete failed: ' + response.status);
+        loadFiles();
+      }
+    });
+    document.getElementById('uploadFile').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const base = ensureDirPath(document.getElementById('filePath').value || '/dav/public/');
+      const response = await fetch(base + encodeURIComponent(file.name), {
+        method: 'PUT',
+        headers: authHeaders(),
+        credentials: 'same-origin',
+        body: file
+      });
+      if (!response.ok) alert('Upload failed: ' + response.status);
+      e.target.value = '';
+      loadFiles();
+    });
+
+    const savedUser = sessionStorage.getItem('nasAdminUser');
+    const savedPassword = sessionStorage.getItem('nasAdminPassword');
+    if (savedUser) document.getElementById('authUser').value = savedUser;
+    if (savedPassword) document.getElementById('authPassword').value = savedPassword;
+    updateAuthStatus();
     load();
   </script>
 </body>

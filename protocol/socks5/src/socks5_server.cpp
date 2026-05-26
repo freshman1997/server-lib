@@ -639,7 +639,7 @@ namespace yuan::net::socks5
         auto prev_state = session.state();
         ::yuan::buffer::ByteBuffer pending;
         auto read_more = [&]() -> coroutine::Task<bool> {
-            auto read_result = co_await ctx.read_async();
+            auto read_result = co_await ctx.read_awaiter();
             if (read_result.status != coroutine::IoStatus::success) {
                 co_return false;
             }
@@ -1101,7 +1101,7 @@ namespace yuan::net::socks5
             LOG_INFO("socks5 server: UDP associate established, relay port {}, client_ip={}", bind_port, client_ip);
 
             while (true) {
-                auto result = co_await ctx.read_async(config_.idle_timeout_ms);
+                auto result = co_await ctx.read_awaiter(config_.idle_timeout_ms);
                 if (result.status != coroutine::IoStatus::success) {
                     break;
                 }

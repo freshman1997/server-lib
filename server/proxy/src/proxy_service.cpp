@@ -608,7 +608,7 @@ namespace
     {
         AsyncHttpReadResult result;
         while (result.request.size() < max_header_bytes) {
-            auto read_result = co_await ctx.read_async(timeout_ms);
+            auto read_result = co_await ctx.read_awaiter(timeout_ms);
             if (read_result.status != yuan::coroutine::IoStatus::success) {
                 result.status = read_result.status;
                 co_return result;
@@ -696,7 +696,7 @@ namespace
 
             if (read_result.status == yuan::coroutine::IoStatus::connection_error) {
                 auto ctx = yuan::net::AsyncConnectionContext(src->shared_from_this(), runtime);
-                auto shutdown_result = co_await ctx.read_async(idle_timeout_ms, false);
+                auto shutdown_result = co_await ctx.read_awaiter(idle_timeout_ms, false);
                 if (shutdown_result.status == yuan::coroutine::IoStatus::connection_closed && src->input_shutdown()) {
                     LOG_DEBUG("[ProxyService] session relay {}->{} target={}:{} client={} upstream={} shutdown observed after read race, forwarding FIN",
                               client_to_upstream ? "client" : "upstream",
@@ -1140,7 +1140,7 @@ namespace
                 }
             }
 
-            auto first_byte_probe = co_await upstream_ctx.read_async(static_cast<uint32_t>(config.upstream_first_byte_timeout_ms));
+            auto first_byte_probe = co_await upstream_ctx.read_awaiter(static_cast<uint32_t>(config.upstream_first_byte_timeout_ms));
             if (first_byte_probe.status != yuan::coroutine::IoStatus::success ||
                 first_byte_probe.data.readable_bytes() == 0) {
                 LOG_WARN("[ProxyService] session #{} {} upstream first-byte timeout/failure status={} target={}:{}",
@@ -1202,7 +1202,7 @@ namespace
                     break;
                 }
 
-                auto chunk_result = co_await upstream_ctx.read_async(static_cast<uint32_t>(config.idle_timeout_ms));
+                auto chunk_result = co_await upstream_ctx.read_awaiter(static_cast<uint32_t>(config.idle_timeout_ms));
                 if (chunk_result.status != yuan::coroutine::IoStatus::success) {
                     if (chunk_result.status == yuan::coroutine::IoStatus::timed_out) {
                         close_reason = "idle_timeout";

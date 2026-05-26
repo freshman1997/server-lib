@@ -62,6 +62,7 @@ Supported config keys:
 
 ```json
 {
+  "production_mode": true,
   "smb": {
     "enabled": false,
     "port": 445,
@@ -75,6 +76,15 @@ Supported config keys:
 
 Operational notes:
 
+- `production_mode=true` enables stricter readiness policy for paid/pilot rollout:
+  weak password hashes, anonymous read, relative share roots, and unsigned SMB
+  beta exposure become blockers instead of silent misconfiguration.
+- Share config accepts platform-specific roots: `root_path` for the default,
+  `windows_root_path` on Windows, `unix_root_path` on non-Windows, and `root_env`
+  to override from an environment variable such as `YUAN_NAS_SHARE_ROOT`.
+- `release_nas_server --config <path>` from `release/nas` is the production service
+  entry point. It loads `load_nas_service_config(...)`, registers `NasService`,
+  and exits non-zero if production startup checks fail.
 - When `smb.enabled=true`, `NasService` creates `SmbService` and `NasSmbHandler`
   during `init()`, starts SMB in `start()`, and stops SMB in `stop()`.
 - SMB share mapping comes from NAS shares via `make_smb_config_from_nas(...)`.

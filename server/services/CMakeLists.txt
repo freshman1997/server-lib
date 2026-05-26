@@ -81,6 +81,8 @@ endif()
 if (TARGET NasCore)
     yuan_add_server_service_library(ServerServiceNas
         "${CMAKE_CURRENT_SOURCE_DIR}/src/nas/nas_service.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/nas/nas_service_config.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/nas/nas_service_readiness.cpp"
     )
     target_link_libraries(ServerServiceNas PUBLIC NasCore ServerServiceHttp)
     if (TARGET ServerServiceSmb)

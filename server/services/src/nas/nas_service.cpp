@@ -1,6 +1,7 @@
 #include "nas/nas_service.h"
 
 #include "nas/nas_smb_adapter.h"
+#include "nas/nas_service_readiness.h"
 #include "smb/smb_service.h"
 
 #include "request.h"
@@ -12,10 +13,12 @@
 #include <filesystem>
 #include <fstream>
 #include <deque>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <system_error>
 #include <functional>
+#include <unordered_map>
 
 namespace yuan::server
 {
@@ -485,6 +488,9 @@ namespace yuan::server
         if (!apply_bootstrap_data()) {
             return false;
         }
+        if (config_.production_mode && !production_startup_check()) {
+            return false;
+        }
 
         http_ = std::make_unique<HttpService>(config_.port, config_.http);
         if (has_runtime_context_) {
@@ -554,6 +560,21 @@ namespace yuan::server
             (void)config_.metadata->upsert_share(share);
         }
         return true;
+    }
+
+    bool NasService::production_startup_check() const
+    {
+        const auto metadata_available = config_.metadata && config_.metadata->available();
+        const auto body = build_nas_service_readiness_json({
+            config_,
+            true,
+            true,
+            true,
+            metadata_available,
+            metadata_available ? config_.metadata->list_users() : std::vector<yuan::server::nas::NasUser>{},
+            effective_shares()
+        });
+        return body.value("ready", false);
     }
 
     nlohmann::json NasService::health_status_json() const
@@ -1197,126 +1218,16 @@ namespace yuan::server
 
     nlohmann::json NasService::build_admin_readiness_json() const
     {
-        constexpr std::uint32_t kIssueNotInitialized = 1u << 0;
-        constexpr std::uint32_t kIssueNotMounted = 1u << 1;
-        constexpr std::uint32_t kIssueMetadataUnavailable = 1u << 2;
-        constexpr std::uint32_t kIssueNoAdminUser = 1u << 3;
-        constexpr std::uint32_t kIssueNoEnabledShare = 1u << 4;
-        constexpr std::uint32_t kIssueNoWritableShare = 1u << 5;
-        constexpr std::uint32_t kIssueAnonymousReadEnabled = 1u << 6;
-        constexpr std::uint32_t kIssueSmbSigningDisabled = 1u << 7;
-
-        auto push_issue = [](nlohmann::json &items,
-                             std::uint32_t &mask,
-                             std::uint32_t bit,
-                             const char *code,
-                             const char *severity,
-                             const char *message,
-                             bool blocker = true) {
-            mask |= bit;
-            nlohmann::json issue;
-            issue["code"] = code;
-            issue["severity"] = severity;
-            issue["blocker"] = blocker;
-            issue["message"] = message;
-            items.push_back(std::move(issue));
-        };
-
         const auto metadata_available = config_.metadata && config_.metadata->available();
-        const auto users = metadata_available
-            ? config_.metadata->list_users()
-            : std::vector<yuan::server::nas::NasUser>{};
-        const auto shares = effective_shares();
-
-        bool has_admin_user = false;
-        for (const auto &user : users) {
-            if (user.enabled && user.admin) {
-                has_admin_user = true;
-                break;
-            }
-        }
-
-        bool has_enabled_share = false;
-        bool has_writable_share = false;
-        for (const auto &share : shares) {
-            if (!share.enabled) {
-                continue;
-            }
-            has_enabled_share = true;
-            if (!share.readonly && yuan::server::nas::has_permission(share.default_permissions, yuan::server::nas::NasPermission::write)) {
-                has_writable_share = true;
-            }
-        }
-
-        nlohmann::json blockers = nlohmann::json::array();
-        nlohmann::json warnings = nlohmann::json::array();
-        std::uint32_t blocker_mask = 0;
-        std::uint32_t warning_mask = 0;
-
-        if (!initialized_) {
-            push_issue(blockers, blocker_mask, kIssueNotInitialized,
-                       "service_not_initialized", "error",
-                       "NAS service is not initialized");
-        }
-        if (!mounted_) {
-            push_issue(blockers, blocker_mask, kIssueNotMounted,
-                       "webdav_not_mounted", "error",
-                       "NAS WebDAV mount is not active");
-        }
-        if (!metadata_available) {
-            push_issue(blockers, blocker_mask, kIssueMetadataUnavailable,
-                       "metadata_unavailable", "error",
-                       "Metadata store is unavailable");
-        }
-        if (!has_admin_user) {
-            push_issue(blockers, blocker_mask, kIssueNoAdminUser,
-                       "admin_user_missing", "error",
-                       "No enabled NAS admin user configured");
-        }
-        if (!has_enabled_share) {
-            push_issue(blockers, blocker_mask, kIssueNoEnabledShare,
-                       "share_missing", "error",
-                       "No enabled NAS share configured");
-        }
-        if (!has_writable_share) {
-            push_issue(blockers, blocker_mask, kIssueNoWritableShare,
-                       "writable_share_missing", "error",
-                       "No writable NAS share available");
-        }
-
-        if (config_.nas.allow_anonymous_read) {
-            push_issue(warnings, warning_mask, kIssueAnonymousReadEnabled,
-                       "anonymous_read_enabled", "warning",
-                       "Anonymous read is enabled", false);
-        }
-        if (config_.smb.enabled && !config_.smb.require_signing) {
-            push_issue(warnings, warning_mask, kIssueSmbSigningDisabled,
-                       "smb_signing_disabled", "warning",
-                       "SMB signing is disabled", false);
-        }
-
-        nlohmann::json body;
-        body["ready"] = blocker_mask == 0;
-        body["score"] = blocker_mask == 0 ? 100 : 0;
-        body["blocker_count"] = blockers.size();
-        body["warning_count"] = warnings.size();
-        body["blockers"] = std::move(blockers);
-        body["warnings"] = std::move(warnings);
-        body["blocker_mask"] = blocker_mask;
-        body["warning_mask"] = warning_mask;
-        body["checks"] = {
-            {"initialized", initialized_},
-            {"started", started_},
-            {"mounted", mounted_},
-            {"metadata_available", metadata_available},
-            {"admin_user_present", has_admin_user},
-            {"enabled_share_present", has_enabled_share},
-            {"writable_share_present", has_writable_share},
-            {"anonymous_read_enabled", config_.nas.allow_anonymous_read},
-            {"smb_enabled", config_.smb.enabled},
-            {"smb_require_signing", config_.smb.require_signing}
-        };
-        return body;
+        return build_nas_service_readiness_json({
+            config_,
+            initialized_,
+            started_,
+            mounted_,
+            metadata_available,
+            metadata_available ? config_.metadata->list_users() : std::vector<yuan::server::nas::NasUser>{},
+            effective_shares()
+        });
     }
 
     void NasService::install_admin_console()
@@ -1452,128 +1363,5 @@ namespace yuan::server
     const NasServiceConfig &NasService::config() const
     {
         return config_;
-    }
-
-    std::optional<NasServiceConfig> load_nas_service_config(const std::filesystem::path &path)
-    {
-        std::ifstream in(path, std::ios::binary);
-        if (!in.good()) {
-            return std::nullopt;
-        }
-
-        nlohmann::json j;
-        try {
-            in >> j;
-        } catch (...) {
-            return std::nullopt;
-        }
-
-        NasServiceConfig config;
-        config.port = json_int(j, "port", config.port);
-        const auto config_dir = path.has_parent_path() ? path.parent_path() : std::filesystem::current_path();
-
-        if (j.contains("http")) {
-            const auto &http = j.at("http");
-            config.http.thread_pool_size = json_int(http, "thread_pool_size", config.http.thread_pool_size);
-            config.http.enable_ssl = json_bool(http, "enable_ssl", config.http.enable_ssl);
-            config.http.enable_cors = json_bool(http, "enable_cors", config.http.enable_cors);
-            config.http.enable_keep_alive = json_bool(http, "enable_keep_alive", config.http.enable_keep_alive);
-            config.http.enable_http2 = json_bool(http, "enable_http2", config.http.enable_http2);
-            config.http.enable_http3 = json_bool(http, "enable_http3", config.http.enable_http3);
-            if (http.contains("max_body_size")) {
-                config.http.max_body_size = http.at("max_body_size").get<std::size_t>();
-            }
-            config.http.server_name = json_string(http, "server_name", config.http.server_name);
-        }
-
-        if (j.contains("nas")) {
-            const auto &nas = j.at("nas");
-            config.nas.webdav_mount = json_string(nas, "webdav_mount", config.nas.webdav_mount);
-            config.nas.admin_console_path = json_string(nas, "admin_console_path", config.nas.admin_console_path);
-            config.nas.allow_anonymous_read = json_bool(nas, "allow_anonymous_read", config.nas.allow_anonymous_read);
-
-            if (nas.contains("redis")) {
-                const auto &redis = nas.at("redis");
-                config.nas.redis.enabled = json_bool(redis, "enabled", config.nas.redis.enabled);
-                config.nas.redis.host = json_string(redis, "host", config.nas.redis.host);
-                config.nas.redis.port = json_int(redis, "port", config.nas.redis.port);
-                config.nas.redis.password = json_string(redis, "password", config.nas.redis.password);
-                config.nas.redis.db = json_int(redis, "db", config.nas.redis.db);
-                config.nas.redis.key_prefix = json_string(redis, "key_prefix", config.nas.redis.key_prefix);
-            }
-
-            if (nas.contains("audit")) {
-                const auto &audit = nas.at("audit");
-                config.nas.audit.file_enabled = json_bool(audit, "file_enabled", config.nas.audit.file_enabled);
-                config.nas.audit.file_path = json_string(audit, "file_path", config.nas.audit.file_path);
-                if (audit.contains("max_events")) {
-                    config.nas.audit.max_events = audit.at("max_events").get<std::size_t>();
-                }
-            }
-
-            if (nas.contains("redis") && nas.at("redis").is_object()) {
-                config.nas.redis.audit_max_events = config.nas.audit.max_events;
-            }
-
-            if (nas.contains("shares") && nas.at("shares").is_array()) {
-                for (const auto &item : nas.at("shares")) {
-                    yuan::server::nas::NasShare share;
-                    share.id = json_string(item, "id");
-                    share.name = json_string(item, "name");
-                    share.root_path = json_string(item, "root_path");
-                    share.enabled = json_bool(item, "enabled", share.enabled);
-                    share.readonly = json_bool(item, "readonly", share.readonly);
-                    if (item.contains("default_permissions")) {
-                        share.default_permissions = parse_permissions(item.at("default_permissions"), share.default_permissions);
-                    }
-                    if (!share.id.empty() && !share.name.empty() && !share.root_path.empty()) {
-                        config.nas.shares.push_back(std::move(share));
-                    }
-                }
-            }
-
-            if (nas.contains("users") && nas.at("users").is_array()) {
-                for (const auto &item : nas.at("users")) {
-                    yuan::server::nas::NasUser user;
-                    user.id = json_string(item, "id");
-                    user.username = json_string(item, "username");
-                    user.password_hash = json_string(item, "password_hash");
-                    user.enabled = json_bool(item, "enabled", user.enabled);
-                    user.admin = json_bool(item, "admin", user.admin);
-                    if (!user.id.empty() && !user.username.empty() && !user.password_hash.empty()) {
-                        config.bootstrap_users.push_back(std::move(user));
-                    }
-                }
-            }
-        }
-
-        if (j.contains("smb")) {
-            const auto &smb = j.at("smb");
-            config.smb.enabled = json_bool(smb, "enabled", config.smb.enabled);
-            config.smb.port = json_int(smb, "port", config.smb.port);
-            config.smb.require_signing = json_bool(smb, "require_signing", config.smb.require_signing);
-            config.smb.enable_encryption = json_bool(smb, "enable_encryption", config.smb.enable_encryption);
-            config.smb.server_name = json_string(smb, "server_name", config.smb.server_name);
-            config.smb.domain_name = json_string(smb, "domain_name", config.smb.domain_name);
-            if (config.smb.port <= 0) {
-                config.smb.port = 445;
-            }
-        }
-
-        if (config.nas.audit.file_enabled && !config.nas.audit.file_path.empty()) {
-            std::filesystem::path audit_path(config.nas.audit.file_path);
-            if (audit_path.is_relative()) {
-                config.nas.audit.file_path = (config_dir / audit_path).lexically_normal().string();
-            }
-        }
-
-        if (!config.nas.admin_console_path.empty()) {
-            std::filesystem::path admin_console_path(config.nas.admin_console_path);
-            if (admin_console_path.is_relative()) {
-                config.nas.admin_console_path = (config_dir / admin_console_path).lexically_normal().string();
-            }
-        }
-
-        return config;
     }
 }

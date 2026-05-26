@@ -248,7 +248,7 @@ namespace yuan::net::ftp
                 co_return std::move(responses.back());
             }
 
-            auto read_result = co_await control_session_.read_async();
+            auto read_result = co_await control_session_.read_awaiter();
             if (read_result.status != coroutine::IoStatus::success) {
                 co_return FtpClientResponse{ 0, {} };
             }
@@ -530,7 +530,7 @@ namespace yuan::net::ftp
             (void)data_ctx.connection()->shutdown_write();
         } else {
             while (true) {
-                auto read_result = co_await data_ctx.read_async(0, false);
+                auto read_result = co_await data_ctx.read_awaiter(0, false);
                 if (read_result.status != coroutine::IoStatus::success) {
                     break;
                 }

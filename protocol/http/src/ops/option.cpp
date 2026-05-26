@@ -407,6 +407,8 @@ R"(
             }
         }
     </style>
+)"
+R"(
 </head>
 <body>
     <div class="container">
@@ -704,6 +706,8 @@ R"(
                 uploadBtn.disabled = true;
                 uploadBtn.textContent = '开始上传';
                 debugInfo.style.display = 'none';
+)"
+R"(
             };
             
             // 暂停/恢复上传

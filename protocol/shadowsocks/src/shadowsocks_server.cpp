@@ -607,7 +607,7 @@ namespace yuan::net::shadowsocks
         bool running = true;
 
         while (running && ctx.is_connected() && !stop_requested_.load(std::memory_order_relaxed)) {
-            auto read_result = co_await ctx.read_async(config_.idle_timeout_ms);
+            auto read_result = co_await ctx.read_awaiter(config_.idle_timeout_ms);
             if (read_result.status != coroutine::IoStatus::success) {
                 break;
             }

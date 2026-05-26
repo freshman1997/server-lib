@@ -2,6 +2,7 @@
 #include "bootstrap.h"
 #include "nas/nas_service.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -47,10 +48,11 @@ void print_usage(const char *program)
     std::cout
         << "release_nas_server\n"
         << "usage:\n"
-        << "  " << program << " [--config <file>]\n"
+        << "  " << program << " [--config <file>] [--workers <n>]\n"
         << "  " << program << " <config.json>\n\n"
         << "options:\n"
         << "  -f, --config <file>      Read NAS config JSON\n"
+        << "      --workers <n>       Run HTTP runtime with n worker threads\n"
         << "      --version            Print version\n"
         << "  -h, --help               Show this help\n\n"
         << "env overrides:\n"
@@ -60,13 +62,14 @@ void print_usage(const char *program)
 
 int main(int argc, char **argv)
 {
-#ifndef _WIN32
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
+#ifndef _WIN32
     std::signal(SIGPIPE, SIG_IGN);
 #endif
 
     std::filesystem::path config_path = default_config_path();
+    std::size_t worker_threads = 1;
 
     for (int i = 1; i < argc; ++i) {
         const std::string opt = argv[i];
@@ -94,6 +97,19 @@ int main(int argc, char **argv)
             config_path = value;
             continue;
         }
+        if (opt == "--workers") {
+            const auto value = need_value(opt);
+            if (value.empty()) {
+                return 2;
+            }
+            try {
+                worker_threads = std::max<std::size_t>(1, std::stoull(value));
+            } catch (...) {
+                std::cerr << "invalid worker count: " << value << '\n';
+                return 2;
+            }
+            continue;
+        }
         if (!opt.empty() && opt.front() == '-') {
             std::cerr << "unknown option: " << opt << '\n';
             print_usage(argv[0]);
@@ -110,8 +126,9 @@ int main(int argc, char **argv)
 
     yuan::app::RuntimeContext context;
     context.app_name = "release-nas";
-    context.run_mode = yuan::app::RunMode::single_thread;
-    context.worker_threads = 1;
+    context.run_mode = worker_threads > 1 ? yuan::app::RunMode::multi_thread
+                                          : yuan::app::RunMode::single_thread;
+    context.worker_threads = worker_threads;
 
     yuan::app::Application application(context);
     auto service = std::make_shared<yuan::server::NasService>(std::move(*loaded));

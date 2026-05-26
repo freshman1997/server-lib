@@ -55,8 +55,22 @@ $buildDir = if ($env:YUAN_BUILD_DIR) { $env:YUAN_BUILD_DIR } else { Join-Path $r
 Require-Path $buildDir
 
 Invoke-Step -Name 'Build targeted NAS tests' -Action {
-    & cmake --build $buildDir --target test_nas_service test_nas_webdav_integration test_nas_concurrency test_nas_smb_adapter test_smb_internal_client_smoke test_smb_nas_fixture --config Debug
+    & cmake --build $buildDir --target release_nas_server test_nas_service test_nas_webdav_integration test_nas_concurrency test_nas_smb_adapter test_smb_internal_client_smoke test_smb_nas_fixture --config Debug
     if ($LASTEXITCODE -ne 0) { throw 'build failed' }
+}
+
+Invoke-Step -Name 'Verify production NAS server binary exists' -Action {
+    $candidates = @(
+        (Join-Path $buildDir 'release\nas\release_nas_server.exe'),
+        (Join-Path $buildDir 'release\nas\release_nas_server'),
+        (Join-Path $buildDir 'release\nas\Debug\release_nas_server.exe'),
+        (Join-Path $buildDir 'release\nas\Release\release_nas_server.exe'),
+        (Join-Path $buildDir 'release\nas\RelWithDebInfo\release_nas_server.exe'),
+        (Join-Path $buildDir 'release\nas\MinSizeRel\release_nas_server.exe')
+    )
+    if (-not ($candidates | Where-Object { Test-Path -LiteralPath $_ })) {
+        throw 'release_nas_server binary was not produced'
+    }
 }
 
 Invoke-Step -Name 'Run targeted NAS tests' -Action {

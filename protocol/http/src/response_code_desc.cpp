@@ -30,6 +30,7 @@ namespace yuan::net::http
         {ResponseCode::http_version_not_supported, "505 HTTP Version Not Supported"},
         {ResponseCode::not_implemented, "501 Not Implemented"},
         {ResponseCode::internal_server_error, "500 Internal Server Error"},
+        {ResponseCode::service_unavailable, "503 Service Unavailable"},
         {ResponseCode::gateway_timeout, "504 Gateway Timeout"},
         {ResponseCode::bad_gateway, "502 Bad Gateway"},
         {ResponseCode::insufficient_storage, "507 Insufficient Storage"},

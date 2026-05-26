@@ -54,15 +54,26 @@ namespace yuan::net
 
         coroutine::Task<coroutine::ReadResult> read_async(uint32_t timeout_ms = 0)
         {
-            auto result = co_await ctx_.read_async(timeout_ms);
+            auto result = co_await ctx_.read_awaiter(timeout_ms);
             co_return result;
         }
 
         coroutine::Task<coroutine::ReadResult> read_async(uint32_t timeout_ms,
                                                           bool complete_with_buffered_data_on_terminal_event)
         {
-            auto result = co_await ctx_.read_async(timeout_ms, complete_with_buffered_data_on_terminal_event);
+            auto result = co_await ctx_.read_awaiter(timeout_ms, complete_with_buffered_data_on_terminal_event);
             co_return result;
+        }
+
+        coroutine::AsyncReadAwaiter read_awaiter(uint32_t timeout_ms = 0)
+        {
+            return ctx_.read_awaiter(timeout_ms);
+        }
+
+        coroutine::AsyncReadAwaiter read_awaiter(uint32_t timeout_ms,
+                                                 bool complete_with_buffered_data_on_terminal_event)
+        {
+            return ctx_.read_awaiter(timeout_ms, complete_with_buffered_data_on_terminal_event);
         }
 
         coroutine::Task<coroutine::WriteResult> write_async(const ::yuan::buffer::ByteBuffer &buffer,

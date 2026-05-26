@@ -1826,7 +1826,7 @@ namespace yuan::net::http
             const uint32_t read_timeout_ms = (!http2_mode && !http1_long_lived_response)
                 ? (use_session_idle_timer ? uint32_t{0} : keep_alive_idle_timeout_ms())
                 : uint32_t{0};
-            auto read_result = co_await ctx.read_async(read_timeout_ms);
+            auto read_result = co_await ctx.read_awaiter(read_timeout_ms);
             if (read_result.status == coroutine::IoStatus::timed_out) {
                 LOG_DEBUG("HTTP/1 idle read timeout from {}", conn->get_remote_address().to_address_key());
                 break;

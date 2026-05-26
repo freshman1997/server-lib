@@ -2258,7 +2258,7 @@ coroutine::Task<void> RtspServer::handle_connection(AsyncConnectionContext ctx)
     RtspStreamFramer framer;
 
     while (ctx.is_connected()) {
-        auto read_result = co_await ctx.read_async(30000);
+        auto read_result = co_await ctx.read_awaiter(30000);
         if (read_result.status != coroutine::IoStatus::success) {
             break;
         }

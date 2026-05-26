@@ -133,16 +133,23 @@ namespace yuan::coroutine
         {
             restore_handler_if_needed();
 
+            auto *connection = connection_handle_.get();
+            if (!connection || !runtime_.event_loop()) {
+                return ReadResult::with_status(IoStatus::invalid_state);
+            }
+
             if (timeout_state_ && timeout_state_->timed_out && !completed_) {
                 completed_ = true;
                 result_.status = IoStatus::timed_out;
             }
             detail::cancel_awaiter_timeout(timeout_state_);
 
-            auto *connection = connection_handle_.get();
-            if (result_.status == IoStatus::success && connection) {
+            if (result_.status == IoStatus::success) {
                 result_.data = connection->take_and_clear_input_byte_buffer();
-                if (result_.data.readable_bytes() == 0 && connection->input_shutdown()) {
+                const bool empty_read = result_.data.readable_bytes() == 0;
+                if (empty_read && connection->input_shutdown()) {
+                    result_.status = IoStatus::connection_closed;
+                } else if (empty_read && connection->get_connection_state() == net::ConnectionState::closed) {
                     result_.status = IoStatus::connection_closed;
                 }
             }

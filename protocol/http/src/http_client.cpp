@@ -158,7 +158,7 @@ namespace yuan::net::http
         const uint32_t read_timeout = timeout_ms > 0 ? timeout_ms : config::connection_idle_timeout;
 
         while (true) {
-            auto read_result = co_await session_.read_async(read_timeout);
+            auto read_result = co_await session_.read_awaiter(read_timeout);
             if (read_result.status != coroutine::IoStatus::success) {
                 break;
             }

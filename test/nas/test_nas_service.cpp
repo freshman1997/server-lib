@@ -304,6 +304,7 @@ int main()
     {
         std::ofstream out(config_path, std::ios::binary | std::ios::trunc);
         out << "{"
+            << "\"production_mode\":true,"
             << "\"port\":" << port << ","
             << "\"http\":{\"enable_ssl\":false,\"enable_keep_alive\":false},"
             << "\"nas\":{"
@@ -321,6 +322,7 @@ int main()
     }
     auto loaded = yuan::server::load_nas_service_config(config_path);
     check(loaded.has_value(), "nas service config should load from JSON");
+    check(loaded && loaded->production_mode, "nas service config should parse production mode");
     check(loaded && loaded->port == port, "nas service config should parse port");
     check(loaded && loaded->nas.shares.size() == 1, "nas service config should parse shares");
     check(loaded && loaded->bootstrap_users.size() == 2, "nas service config should parse bootstrap users");
@@ -334,6 +336,21 @@ int main()
     }
     loaded->metadata = metadata;
     metadata->audit_max_events = loaded->nas.audit.max_events;
+    {
+        auto weak_metadata = std::make_shared<MemoryMetadataStore>();
+        auto weak_config = *loaded;
+        weak_config.port = reserve_tcp_port();
+        weak_config.metadata = weak_metadata;
+        weak_config.bootstrap_users.clear();
+        nas::NasUser weak_admin;
+        weak_admin.id = "weak-admin";
+        weak_admin.username = "weak-admin";
+        weak_admin.password_hash = "plain:weak";
+        weak_admin.admin = true;
+        weak_config.bootstrap_users.push_back(weak_admin);
+        yuan::server::NasService weak_service(std::move(weak_config));
+        check(!weak_service.init(), "production NAS service init should fail closed on weak password hashes");
+    }
 
     yuan::server::NasService service(*loaded);
     check(service.init(), "nas service init should succeed");
@@ -498,6 +515,24 @@ int main()
           "admin readiness should report no blockers");
     check(readiness_resp.find("\"warning_count\":0") != std::string::npos,
           "admin readiness should report no warnings by default");
+    check(readiness_resp.find("\"production_mode\":true") != std::string::npos,
+          "admin readiness should include production mode");
+    nas::NasUser legacy_user;
+    legacy_user.id = "legacy";
+    legacy_user.username = "legacy";
+    legacy_user.password_hash = "plain:legacy";
+    metadata->upsert_user(legacy_user);
+    const auto weak_readiness_resp = roundtrip(port,
+        "GET /nas/admin/readiness HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Authorization: " + admin_auth + "\r\n"
+        "Connection: close\r\n\r\n");
+    check(weak_readiness_resp.find("503") != std::string::npos,
+          "production readiness should fail on weak password hashes");
+    check(weak_readiness_resp.find("\"weak_password_hash\"") != std::string::npos,
+          "production readiness should name weak password hash blocker");
+    legacy_user.enabled = false;
+    metadata->upsert_user(legacy_user);
     const auto sessions_resp = roundtrip(port,
         "GET /nas/admin/sessions HTTP/1.1\r\n"
         "Host: 127.0.0.1\r\n"

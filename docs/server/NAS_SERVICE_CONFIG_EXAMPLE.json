@@ -1,4 +1,5 @@
 {
+  "production_mode": true,
   "port": 8080,
   "http": {
     "enable_keep_alive": true,
@@ -17,7 +18,7 @@
     "admin_console_path": "./server/services/resources/nas_admin_console.html",
     "allow_anonymous_read": false,
     "redis": {
-      "enabled": false,
+      "enabled": true,
       "host": "127.0.0.1",
       "port": 6379,
       "db": 0,
@@ -42,7 +43,9 @@
       {
         "id": "share-public",
         "name": "public",
-        "root_path": "/srv/nas/public",
+        "root_path": "/srv/yuan/nas/public",
+        "windows_root_path": "D:/misc",
+        "root_env": "YUAN_NAS_SHARE_ROOT",
         "enabled": true,
         "readonly": false,
         "default_permissions": ["read", "write", "remove"]

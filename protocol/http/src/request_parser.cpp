@@ -124,6 +124,9 @@ namespace yuan::net::http
         req->url_ = needs_decode
                         ? url::url_decode(raw_url.data(), raw_url.data() + raw_url.size())
                         : std::string(raw_url);
+        req->query_pos_ = needs_decode && query_pos != std::string_view::npos
+                              ? req->url_.find('?')
+                              : query_pos;
 
         buff.consume(token_len + 1);
 

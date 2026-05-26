@@ -15,6 +15,9 @@
 #include <io.h>
 #include <sys/stat.h>
 #include <windows.h>
+#ifndef S_IWUSR
+#define S_IWUSR _S_IWRITE
+#endif
 #else
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -310,13 +313,13 @@ namespace yuan::net::smb
         DWORD creation = OPEN_EXISTING;
         switch (create_disposition) {
         case SMB_FILE_SUPERSEDE:
-        case FILE_OVERWRITE:
+        case SMB_FILE_OVERWRITE:
             creation = CREATE_ALWAYS;
             break;
-        case FILE_OVERWRITE_IF:
+        case SMB_FILE_OVERWRITE_IF:
             creation = OPEN_ALWAYS;
             break;
-        case FILE_CREATE:
+        case SMB_FILE_CREATE:
             creation = CREATE_NEW;
             break;
         case SMB_FILE_OPEN:
@@ -371,7 +374,7 @@ namespace yuan::net::smb
             result.last_access_time = filetime_to_nt(info.ftLastAccessTime);
             result.last_write_time = filetime_to_nt(info.ftLastWriteTime);
             result.change_time = result.last_write_time;
-            result.create_action = (create_disposition == FILE_CREATE) ? SMB_FILE_CREATED : SMB_FILE_OPENED;
+            result.create_action = (create_disposition == SMB_FILE_CREATE) ? SMB_FILE_CREATED : SMB_FILE_OPENED;
         } else {
             result.create_action = SMB_FILE_OPENED;
         }

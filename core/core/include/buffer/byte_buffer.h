@@ -26,7 +26,7 @@ public:
     }
 
     explicit ByteBuffer(std::size_t capacity)
-        : storage_(capacity == 0 ? kDefaultCapacity : capacity)
+        : storage_(capacity)
     {
     }
 

@@ -141,7 +141,7 @@ namespace yuan::net::websocket
             httpCtx.set_mode(http::Mode::server);
 
             while (!wsConn.handshaker().is_handshake_done()) {
-                auto read_result = co_await ctx.read_async();
+                auto read_result = co_await ctx.read_awaiter();
                 if (read_result.status != coroutine::IoStatus::success) {
                     co_return;
                 }
@@ -207,7 +207,7 @@ namespace yuan::net::websocket
         }
 
         while (wsConn.connected()) {
-            auto read_result = co_await ctx.read_async();
+            auto read_result = co_await ctx.read_awaiter();
             if (read_result.status != coroutine::IoStatus::success) {
                 break;
             }

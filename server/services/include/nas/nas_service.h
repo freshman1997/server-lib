@@ -3,6 +3,7 @@
 
 #include "http/http_service.h"
 #include "nas/nas.h"
+#include "nas/nas_service_config.h"
 #include "smb.h"
 
 #include <nlohmann/json.hpp>
@@ -14,26 +15,6 @@
 
 namespace yuan::server
 {
-    struct NasServiceConfig
-    {
-        struct SmbConfig
-        {
-            bool enabled = false;
-            int port = 445;
-            bool require_signing = false;
-            bool enable_encryption = false;
-            std::string server_name = "YUAN-NAS";
-            std::string domain_name = "WORKGROUP";
-        };
-
-        int port = 8080;
-        yuan::net::http::HttpServerConfig http;
-        yuan::server::nas::NasConfig nas;
-        SmbConfig smb;
-        std::shared_ptr<yuan::server::nas::NasMetadataStore> metadata;
-        std::vector<yuan::server::nas::NasUser> bootstrap_users;
-    };
-
     class SmbService;
     class NasSmbHandler;
 
@@ -58,6 +39,7 @@ namespace yuan::server
     private:
         bool prepare_metadata();
         bool apply_bootstrap_data();
+        bool production_startup_check() const;
         yuan::net::smb::SmbServerConfig build_smb_server_config() const;
         bool init_smb_service();
         void stop_smb_service();
@@ -120,8 +102,6 @@ namespace yuan::server
         bool initialized_ = false;
         bool started_ = false;
     };
-
-    std::optional<NasServiceConfig> load_nas_service_config(const std::filesystem::path &path);
 }
 
 #endif

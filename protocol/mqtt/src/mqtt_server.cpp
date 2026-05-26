@@ -122,7 +122,7 @@ namespace yuan::net::mqtt
 
         while (ctx.is_connected()) {
             uint32_t timeout_ms = config_.idle_timeout_ms;
-            auto read_result = co_await ctx.read_async(timeout_ms);
+            auto read_result = co_await ctx.read_awaiter(timeout_ms);
             if (read_result.status != coroutine::IoStatus::success) {
                 LOG_DEBUG("[mqtt] session {} read end status={}", session.session_id(), static_cast<int>(read_result.status));
                 break;

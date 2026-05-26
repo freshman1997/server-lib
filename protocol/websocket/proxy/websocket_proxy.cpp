@@ -189,7 +189,7 @@ namespace yuan::net::websocket
         bool handshake_ok = false;
 
         for (int i = 0; i < 64; ++i) {
-            auto read_result = co_await session.read_async();
+            auto read_result = co_await session.read_awaiter();
             if (read_result.status != coroutine::IoStatus::success) {
                 break;
             }
@@ -272,7 +272,7 @@ namespace yuan::net::websocket
                 }
                 initial_data.clear();
             } else {
-                auto read_result = co_await src_ctx.read_async();
+                auto read_result = co_await src_ctx.read_awaiter();
                 if (read_result.status != coroutine::IoStatus::success) {
                     break;
                 }

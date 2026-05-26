@@ -72,7 +72,7 @@ namespace yuan::net
                 co_return coroutine::ReadResult::with_status(write_result.status);
             }
 
-            auto read_result = co_await session.read_async(read_timeout_ms);
+            auto read_result = co_await session.read_awaiter(read_timeout_ms);
 
             if (response_transformer_ && read_result.status == coroutine::IoStatus::success) {
                 read_result.data = response_transformer_(std::move(read_result.data));
@@ -99,7 +99,7 @@ namespace yuan::net
                 co_return coroutine::ReadResult::with_status(write_result.status);
             }
 
-            auto read_result = co_await session_.read_async(read_timeout_ms);
+            auto read_result = co_await session_.read_awaiter(read_timeout_ms);
 
             if (response_transformer_ && read_result.status == coroutine::IoStatus::success) {
                 read_result.data = response_transformer_(std::move(read_result.data));
