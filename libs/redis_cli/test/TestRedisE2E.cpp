@@ -17,6 +17,8 @@
 #include <utility>
 #include <vector>
 
+#include "native_platform.h"
+
 #undef assert
 #define assert(expr)                                                                                                   \
     do {                                                                                                               \
@@ -108,13 +110,7 @@ namespace
 
 int main()
 {
-#ifdef _WIN32
-    WSADATA wsa;
-    if (const int result = WSAStartup(MAKEWORD(2, 2), &wsa); result != NO_ERROR) {
-        std::cerr << "WSAStartup failed: " << result << std::endl;
-        return 1;
-    }
-#endif
+    yuan::app::NativePlatformGuard guard;
 
     using namespace yuan::redis;
 
@@ -133,9 +129,6 @@ int main()
             std::cerr << " (" << error->to_string() << ")";
         }
         std::cerr << std::endl;
-#ifdef _WIN32
-        WSACleanup();
-#endif
         return 0;
     }
 
@@ -235,10 +228,6 @@ int main()
     assert_ok(client->del({string_key, list_key, hash_key, set_key, zset_key}), "DEL cleanup");
     client->close();
     RedisCliManager::get_instance()->release_all();
-
-#ifdef _WIN32
-    WSACleanup();
-#endif
 
     return 0;
 }

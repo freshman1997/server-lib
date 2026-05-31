@@ -1,6 +1,7 @@
 #include "redis_cli_manager.h"
 #include "logger.h"
 #include "value/int_value.h"
+#include "native_platform.h"
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -116,13 +117,7 @@ int main()
     LOG_GET_REGISTRY()->set_global_level(yuan::log::Level::warn);
     LOG_GET_REGISTRY()->disable_file_log();
 
-#ifdef _WIN32
-    WSADATA wsa;
-    if (const int result = WSAStartup(MAKEWORD(2, 2), &wsa); result != NO_ERROR) {
-        std::cerr << "WSAStartup failed: " << result << std::endl;
-        return 1;
-    }
-#endif
+    yuan::app::NativePlatformGuard guard;
 
     using namespace yuan::redis;
 
@@ -147,9 +142,6 @@ int main()
             std::cerr << " (" << error->to_string() << ")";
         }
         std::cerr << std::endl;
-#ifdef _WIN32
-        WSACleanup();
-#endif
         return 0;
     }
 
@@ -282,10 +274,6 @@ int main()
     assert_ok(client->del({data_key, counter_key}), "DEL cleanup");
     client->close();
     RedisCliManager::get_instance()->release_all();
-
-#ifdef _WIN32
-    WSACleanup();
-#endif
 
     return 0;
 }

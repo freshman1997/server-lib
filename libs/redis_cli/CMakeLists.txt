@@ -7,7 +7,7 @@ include_directories(${CMAKE_CURRENT_LIST_DIR}/src/)
 FILE(GLOB_RECURSE REDIS_CLI_SRC "./src/*.cpp")
 
 add_library(redisCli ${REDIS_CLI_SRC})
-target_link_libraries(redisCli PUBLIC Core)
+target_link_libraries(redisCli PUBLIC Core App)
 target_include_directories(redisCli PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/src>" "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 
 if (YUAN_BUILD_TESTS)
