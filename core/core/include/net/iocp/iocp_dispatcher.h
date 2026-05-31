@@ -28,17 +28,21 @@ namespace yuan::net
         bool start_operations(IocpCompletionPort &port, std::size_t worker_count, OperationCallback callback);
         void stop();
 
+        void set_completion_batch_size(std::size_t batch_size) noexcept;
         bool running() const noexcept;
         std::size_t worker_count() const noexcept;
 
     private:
         void worker_loop();
+        void worker_loop_single();
+        void worker_loop_batched();
 
         IocpCompletionPort *port_ = nullptr;
         CompletionCallback callback_;
         OperationCallback operation_callback_;
         std::vector<std::thread> workers_;
         std::atomic_bool running_{false};
+        std::size_t completion_batch_size_ = 1;
     };
 }
 

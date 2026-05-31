@@ -704,6 +704,15 @@ namespace
         check(conn->get_connection_handler() != existing_handler.get(),
               "install_default_handler should explicitly replace the handler");
 
+        auto limited_conn = std::make_shared<ImmediateFlushConnection>();
+        limited_conn->set_max_output_buffer_size(4);
+        yuan::net::AsyncConnectionContext limited_ctx(limited_conn, rv);
+        limited_ctx.append_output("too-large");
+        check(limited_conn->output_limit_exceeded(),
+              "append_output should mark output limit overflow");
+        check(!limited_ctx.is_connected(),
+              "append_output overflow should close the connection context");
+
         auto test_async_read_keeps_handler = [&](yuan::coroutine::RuntimeView view)->yuan::coroutine::Task<int>
         {
             auto read_conn = std::make_shared<ImmediateFlushConnection>();

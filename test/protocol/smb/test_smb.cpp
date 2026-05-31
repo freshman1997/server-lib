@@ -57,6 +57,27 @@ static std::vector<uint8_t> utf16_bytes(const std::string &text)
     return out;
 }
 
+static std::filesystem::path test_path_from_utf8(const std::string &text)
+{
+    std::u8string u8;
+    u8.reserve(text.size());
+    for (const auto ch : text) {
+        u8.push_back(static_cast<char8_t>(static_cast<unsigned char>(ch)));
+    }
+    return std::filesystem::path(u8);
+}
+
+static std::string test_path_to_utf8(const std::filesystem::path &path)
+{
+    const auto u8 = path.u8string();
+    std::string out;
+    out.reserve(u8.size());
+    for (const auto ch : u8) {
+        out.push_back(static_cast<char>(ch));
+    }
+    return out;
+}
+
 static void append_security_buffer(std::vector<uint8_t> &msg,
                                    size_t descriptor_offset,
                                    const std::vector<uint8_t> &data)
@@ -1272,6 +1293,64 @@ bool test_local_file_system_directory_cursor()
     return true;
 }
 
+bool test_local_file_system_unicode_paths()
+{
+    const auto root = std::filesystem::temp_directory_path() /
+                      test_path_from_utf8("smb_fs_中文_" + std::to_string(std::hash<std::thread::id> {}(std::this_thread::get_id())));
+    const auto dir = root / test_path_from_utf8("子目录");
+    const auto file = dir / test_path_from_utf8("中文 文件.txt");
+    std::filesystem::create_directories(dir);
+
+    {
+        std::ofstream ofs(file, std::ios::binary);
+        ofs << "unicode smb";
+    }
+
+    LocalFileSystem fs(test_path_to_utf8(root));
+
+    auto open_result = fs.open("子目录/中文 文件.txt", SMB_FILE_GENERIC_READ, SMB_FILE_OPEN, 0);
+    TEST_ASSERT(open_result.success, "Open UTF-8 SMB path should succeed");
+    auto read_result = fs.read(open_result.handle, 0, 1024);
+    TEST_ASSERT(read_result.success, "Read UTF-8 SMB path should succeed");
+    std::string content(read_result.data.begin(), read_result.data.end());
+    TEST_ASSERT(content == "unicode smb", "UTF-8 SMB path read content should match");
+    fs.close(open_result.handle);
+
+    auto dir_open = fs.open("子目录", SMB_FILE_GENERIC_READ, SMB_FILE_OPEN, SMB_FILE_DIRECTORY_FILE);
+    TEST_ASSERT(dir_open.success, "Open UTF-8 directory should succeed");
+    auto entries = fs.query_directory(dir_open.handle, "*", FileInfoClass::FileIdBothDirectoryInformation, true);
+    TEST_ASSERT(entries.has_value(), "Query UTF-8 directory should succeed");
+    bool found = false;
+    for (const auto &entry : *entries) {
+        if (Smb2Codec::utf16le_to_utf8(entry.file_name) == "中文 文件.txt") {
+            found = true;
+            break;
+        }
+    }
+    TEST_ASSERT(found, "Directory listing should return UTF-16 name for Chinese file");
+    fs.close(dir_open.handle);
+
+    auto rename_open = fs.open("子目录/中文 文件.txt", SMB_FILE_GENERIC_READ | SMB_FILE_GENERIC_WRITE, SMB_FILE_OPEN, 0);
+    TEST_ASSERT(rename_open.success, "Open UTF-8 file for rename should succeed");
+    auto new_name = Smb2Codec::utf8_to_utf16le("\\子目录\\改名.txt");
+    std::vector<uint8_t> rename_info(20 + new_name.size() * 2, 0);
+    rename_info[0] = 1;
+    uint32_t name_len = static_cast<uint32_t>(new_name.size() * 2);
+    std::memcpy(rename_info.data() + 16, &name_len, sizeof(name_len));
+    for (size_t i = 0; i < new_name.size(); ++i) {
+        rename_info[20 + i * 2] = static_cast<uint8_t>(new_name[i] & 0xFF);
+        rename_info[21 + i * 2] = static_cast<uint8_t>((new_name[i] >> 8) & 0xFF);
+    }
+    auto rename_status = fs.set_info(rename_open.handle, FileInfoClass::FileRenameInformation,
+                                     rename_info.data(), static_cast<uint32_t>(rename_info.size()));
+    TEST_ASSERT(rename_status == NtStatus::SUCCESS, "Rename UTF-8 SMB path should succeed");
+    fs.close(rename_open.handle);
+    TEST_ASSERT(std::filesystem::exists(dir / test_path_from_utf8("改名.txt")), "Renamed Chinese file should exist");
+
+    std::filesystem::remove_all(root);
+    return true;
+}
+
 bool test_dispatcher_negotiate()
 {
     SmbServerConfig config;
@@ -2203,6 +2282,7 @@ int main()
     RUN_TEST(test_local_file_system_set_info_rename_delete);
     RUN_TEST(test_local_file_system_absolute_rename);
     RUN_TEST(test_local_file_system_directory_cursor);
+    RUN_TEST(test_local_file_system_unicode_paths);
 
     std::cout << "\n--- Dispatcher ---" << std::endl;
     RUN_TEST(test_dispatcher_negotiate);

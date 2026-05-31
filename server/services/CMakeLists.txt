@@ -133,6 +133,8 @@ if (TARGET ServerServiceNas)
 endif()
 
 install(
-    FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/nas_admin_console.html"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/nas_admin_console.html"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/nas_file_console.html"
     DESTINATION "${CMAKE_INSTALL_DATADIR}/yuan/server/services/resources"
 )

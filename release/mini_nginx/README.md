@@ -15,6 +15,12 @@ This is a lightweight nginx-like reverse proxy app built on top of `HttpService`
 - Windows IOCP listener selection via config/env
 - Static-only mode for simple file hosting
 - Health endpoint, redirect rules, global response headers, and method allow-list
+- nginx-like static cache headers (`expires`, `cache_control`, per-location headers)
+- nginx-like static toggles (`autoindex`, `sendfile`, `gzip`, `gzip_static`, `types`, `default_type`)
+- nginx-like proxy request header controls (`proxy_set_header`, `preserve_host`, request-header hiding)
+- nginx-like proxy response header controls (`proxy_hide_header`, `proxy_set_response_header`)
+- nginx-like size/time values such as `client_max_body_size: "10m"` and `proxy_read_timeout: "30s"`
+- direct `proxy_pass` URLs such as `http://127.0.0.1:9001`
 
 ## Build
 
@@ -83,6 +89,7 @@ Top-level fields:
   - `ssl_certificate_key` string
   - `enable_keep_alive` bool
   - `enable_cors` bool
+  - `client_max_body_size` size string/int (alias of `max_body_size`, examples `10485760`, `10m`, `1g`)
   - `backlog` int
   - `reuse_addr` bool
   - `reuse_port` bool
@@ -91,7 +98,9 @@ Top-level fields:
   - `use_iocp` bool (Windows IOCP accept/read/write backend)
   - `iocp_worker_count` int
   - `allowed_methods` array (global allow-list, returns 405 when rejected)
-  - `max_body_size` number
+  - `max_body_size` size string/int
+  - `keepalive_timeout` duration string/int (examples `60000`, `60s`, `5m`)
+  - `send_timeout` duration string/int (alias of `write_timeout_ms`)
   - `write_timeout_ms` int (static response/body flush timeout)
   - `max_connections` int
   - `max_connections_per_ip` int
@@ -101,15 +110,21 @@ Top-level fields:
   - key is upstream name
   - value fields:
     - `balance` (`round_robin|random|least_conn|weighted_rr`)
-    - `connect_timeout`, `read_timeout`, `write_timeout` (ms)
+    - `connect_timeout`, `read_timeout`, `write_timeout` (ms or duration strings)
+    - `proxy_connect_timeout`, `proxy_read_timeout`, `proxy_send_timeout` aliases
     - `max_retries`, `pool_size`, `idle_timeout`
     - `failure_threshold`, `unhealthy_cooldown_ms` (passive health circuit-break)
     - `servers` array of `{ "host": "...", "port": 9001, "weight": 1 }`
 - `routes` array
   - each route:
-    - `path` prefix, e.g. `/api/`
-    - `proxy_pass` upstream name
+    - `path` / `location` prefix, e.g. `/api/`
+    - `proxy_pass` upstream name or direct URL (`http://host:port[/prefix]`)
     - optional `strip_prefix`, `rewrite`
+    - optional `preserve_host` / `proxy_preserve_host`
+    - optional `proxy_set_header` object. Supported variables: `$host`, `$http_host`, `$remote_addr`, `$proxy_add_x_forwarded_for`, `$scheme`, `$request_uri`, `$uri`
+    - optional `hide_request_headers` / `proxy_hide_request_headers` array
+    - optional `proxy_hide_header` / `hide_response_headers` array for upstream response headers
+    - optional `proxy_set_response_header` / `proxy_response_headers` object to add or replace response headers
 
 Additional top-level fields:
 
@@ -136,8 +151,20 @@ Additional top-level fields:
   - each item:
     - `location` URL prefix (example `/static`)
     - `root` local directory path
-    - `auto_index` bool
+    - `alias` local directory path (same serving semantics as `root`, useful for nginx-style configs)
+    - `auto_index` / `autoindex` bool
     - `enable_range` bool
+    - `sendfile` bool
+    - `gzip` bool (dynamic compression for text assets when zlib/brotli is available)
+    - `gzip_static` bool (serve matching `.gz`/`.br` precompressed assets when available)
+    - `gzip_min_length` size string/int (examples `1024`, `1k`)
+    - `gzip_types` array of MIME patterns (examples `text/*`, `application/json`)
+    - `default_type` fallback MIME type for unknown extensions
+    - `types` nginx-style MIME map, where keys are MIME types and values are extensions/extension arrays
+    - `mime_types` extension-to-MIME shorthand object
+    - `cache_control` string
+    - `expires` integer seconds or duration string (`30s`, `10m`, `1h`, `7d`, `off`)
+    - `headers` / `add_headers` object of response headers for this static location
     - `index` array of index file names
     - `try_files` array (example `[$uri, $uri/index.html, /index.html, =404]`)
     - `error_page` object (example `{ "404": "/404.html" }`)
@@ -165,7 +192,7 @@ Only the new structured format is supported. Use `server` plus at least one of:
 - Add `?json=1` to get JSON directory listing output.
 - URL traversal (`..`, backslash escape) is denied.
 - `try_files` is supported for nginx-like fallback resolution.
-- `error_page.404` can map not-found requests to a local static file.
+- `error_page.404` can map not-found requests to a local static file while preserving the 404 status.
 - `try_files` follows order strictly: if `/index.html` is before `=404`, unknown paths will return index page with 200 (SPA style).
 
 ## Access log fields

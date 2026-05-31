@@ -81,6 +81,44 @@ namespace yuan::server
             return fallback;
         }
 
+        nlohmann::json permissions_to_json(yuan::server::nas::NasPermission permissions)
+        {
+            using yuan::server::nas::NasPermission;
+            nlohmann::json out = nlohmann::json::array();
+            if (yuan::server::nas::has_permission(permissions, NasPermission::read)) {
+                out.push_back("read");
+            }
+            if (yuan::server::nas::has_permission(permissions, NasPermission::write)) {
+                out.push_back("write");
+            }
+            if (yuan::server::nas::has_permission(permissions, NasPermission::remove)) {
+                out.push_back("remove");
+            }
+            if (yuan::server::nas::has_permission(permissions, NasPermission::admin)) {
+                out.push_back("admin");
+            }
+            return out;
+        }
+
+        nlohmann::json subject_permissions_to_json(
+            const std::unordered_map<std::string, yuan::server::nas::NasPermission> &permissions,
+            const std::unordered_map<std::string, std::string> &usernames_by_id)
+        {
+            nlohmann::json out = nlohmann::json::array();
+            for (const auto &[subject, mask] : permissions) {
+                nlohmann::json item;
+                item["subject"] = subject;
+                auto name = usernames_by_id.find(subject);
+                if (name != usernames_by_id.end()) {
+                    item["username"] = name->second;
+                }
+                item["permissions"] = permissions_to_json(mask);
+                item["mask"] = static_cast<std::uint32_t>(mask);
+                out.push_back(std::move(item));
+            }
+            return out;
+        }
+
         bool require_admin(yuan::net::http::HttpRequest *req,
                            yuan::net::http::HttpResponse *resp,
                            const std::shared_ptr<yuan::server::nas::NasMetadataStore> &metadata,
@@ -330,6 +368,17 @@ namespace yuan::server
             }
         }
 
+        std::optional<yuan::server::nas::NasUser> find_user_by_id_or_name(
+            const std::vector<yuan::server::nas::NasUser> &users,
+            std::string_view id,
+            std::string_view username)
+        {
+            auto it = std::find_if(users.begin(), users.end(), [&](const auto &user) {
+                return (!id.empty() && user.id == id) || (!username.empty() && user.username == username);
+            });
+            return it == users.end() ? std::nullopt : std::optional<yuan::server::nas::NasUser>(*it);
+        }
+
         void upsert_config_share(std::vector<yuan::server::nas::NasShare> &shares,
                                  const yuan::server::nas::NasShare &share)
         {
@@ -340,6 +389,30 @@ namespace yuan::server
                 shares.push_back(share);
             } else {
                 *it = share;
+            }
+        }
+
+        std::optional<yuan::server::nas::NasShare> find_share_by_id_or_name(
+            const std::vector<yuan::server::nas::NasShare> &shares,
+            std::string_view id,
+            std::string_view name)
+        {
+            auto it = std::find_if(shares.begin(), shares.end(), [&](const auto &share) {
+                return (!id.empty() && share.id == id) || (!name.empty() && share.name == name);
+            });
+            return it == shares.end() ? std::nullopt : std::optional<yuan::server::nas::NasShare>(*it);
+        }
+
+        void update_config_share_permissions(std::vector<yuan::server::nas::NasShare> &shares,
+                                             const yuan::server::nas::NasShare &updated)
+        {
+            auto it = std::find_if(shares.begin(), shares.end(), [&](const auto &share) {
+                return share.id == updated.id || share.name == updated.name;
+            });
+            if (it == shares.end()) {
+                shares.push_back(updated);
+            } else {
+                *it = updated;
             }
         }
 
@@ -434,10 +507,19 @@ namespace yuan::server
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
             "<title>Yuan NAS Admin</title></head><body>"
             "<h1>Yuan NAS Admin</h1><p>Probe</p><p>Create User</p><p>Create Share</p>"
-            "<p>Quota</p><p>Activity</p><p>Sessions</p><p>Audit</p>"
+            "<p>Share Permissions</p><p>Quota</p><p>Activity</p><p>Sessions</p><p>Audit</p>"
             "</body></html>";
 
-        std::string load_nas_admin_console_html(const std::string &configured_path)
+        constexpr std::string_view kNasFileConsoleFallbackHtml =
+            "<!doctype html><html><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            "<title>Yuan NAS Files</title></head><body>"
+            "<h1>Yuan NAS Files</h1><p>Use WebDAV at /dav/public/ with your NAS account.</p>"
+            "</body></html>";
+
+        std::string load_nas_console_html(const std::string &configured_path,
+                                          const std::string &file_name,
+                                          std::string_view fallback)
         {
             const auto source_dir = std::filesystem::path(__FILE__).parent_path().parent_path();
             const auto cwd = std::filesystem::current_path();
@@ -445,11 +527,12 @@ namespace yuan::server
             if (!configured_path.empty()) {
                 candidates.emplace_back(configured_path);
             }
-            const std::array<std::filesystem::path, 4> defaults = {
-                source_dir / "resources" / "nas_admin_console.html",
-                cwd / "resources" / "nas_admin_console.html",
-                cwd / "server" / "services" / "resources" / "nas_admin_console.html",
-                cwd / ".." / "server" / "services" / "resources" / "nas_admin_console.html"
+            const std::array<std::filesystem::path, 5> defaults = {
+                source_dir / "resources" / file_name,
+                cwd / file_name,
+                cwd / "resources" / file_name,
+                cwd / "server" / "services" / "resources" / file_name,
+                cwd / ".." / "server" / "services" / "resources" / file_name
             };
             candidates.insert(candidates.end(), defaults.begin(), defaults.end());
 
@@ -466,7 +549,7 @@ namespace yuan::server
                 }
             }
 
-            return std::string(kNasAdminConsoleFallbackHtml);
+            return std::string(fallback);
         }
     }
 
@@ -511,6 +594,7 @@ namespace yuan::server
         install_health_endpoint();
         install_admin_endpoints();
         install_admin_console();
+        install_file_console();
         mounted_ = true;
         initialized_ = true;
         return true;
@@ -798,6 +882,10 @@ namespace yuan::server
             handle_admin_shares(req, resp);
         });
 
+        http_->server().on("/nas/admin/permissions", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
+            handle_admin_permissions(req, resp);
+        });
+
         http_->server().on("/nas/admin/users", [this](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
             handle_admin_users(req, resp);
         });
@@ -863,14 +951,34 @@ namespace yuan::server
             json_error(resp, yuan::net::http::ResponseCode::bad_request, "invalid_json");
             return;
         }
+        const auto share_token = json_string(*body, "share");
+        const auto requested_id = json_string(*body, "id", share_token);
+        const auto requested_name = json_string(*body, "name", share_token);
         yuan::server::nas::NasShare share;
-        share.id = json_string(*body, "id");
-        share.name = json_string(*body, "name");
-        share.root_path = json_string(*body, "root_path");
+        if (auto existing = find_share_by_id_or_name(effective_shares(), requested_id, requested_name)) {
+            share = std::move(*existing);
+        }
+        share.id = json_string(*body, "id", share.id);
+        share.name = json_string(*body, "name", share.name);
+        share.root_path = json_string(*body, "root_path", share.root_path);
         share.enabled = json_bool(*body, "enabled", share.enabled);
         share.readonly = json_bool(*body, "readonly", share.readonly);
         if (body->contains("default_permissions")) {
             share.default_permissions = parse_permissions(body->at("default_permissions"), share.default_permissions);
+        }
+        if (body->contains("subject_permissions") && body->at("subject_permissions").is_object()) {
+            for (const auto &[subject, permissions] : body->at("subject_permissions").items()) {
+                if (!subject.empty()) {
+                    if (permissions.is_null()) {
+                        share.subject_permissions.erase(subject);
+                        if (config_.metadata) {
+                            (void)config_.metadata->remove_permissions(share.id, subject);
+                        }
+                    } else {
+                        share.subject_permissions[subject] = parse_permissions(permissions, yuan::server::nas::NasPermission::none);
+                    }
+                }
+            }
         }
         if (share.id.empty() || share.name.empty() || share.root_path.empty()) {
             json_error(resp, yuan::net::http::ResponseCode::bad_request, "missing_required_share_fields");
@@ -891,6 +999,106 @@ namespace yuan::server
         out["ok"] = true;
         out["id"] = share.id;
         out["name"] = share.name;
+        resp->json(out.dump(), yuan::net::http::ResponseCode::ok_);
+        resp->send();
+    }
+
+    void NasService::handle_admin_permissions(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp)
+    {
+        auto actor = guard_admin_request(req, resp);
+        if (!actor) {
+            return;
+        }
+        if (req && req->get_method() == yuan::net::http::HttpMethod::post_) {
+            handle_admin_permissions_post(req, resp, *actor);
+            return;
+        }
+        if (!ensure_admin_get_or_default(req, resp)) {
+            return;
+        }
+        handle_admin_shares_get(resp);
+    }
+
+    void NasService::handle_admin_permissions_post(yuan::net::http::HttpRequest *req,
+                                                   yuan::net::http::HttpResponse *resp,
+                                                   const std::string &actor)
+    {
+        if (!ensure_admin_post(req, resp)) {
+            return;
+        }
+
+        auto body = request_json_bounded(req, kAdminMaxJsonBytes);
+        if (!body) {
+            json_error(resp, yuan::net::http::ResponseCode::bad_request, "invalid_json");
+            return;
+        }
+
+        const auto share_token = json_string(*body, "share");
+        const auto share_id = json_string(*body, "share_id", share_token);
+        const auto share_name = json_string(*body, "share_name", share_token);
+        auto share = find_share_by_id_or_name(effective_shares(), share_id, share_name);
+        if (!share) {
+            json_error(resp, yuan::net::http::ResponseCode::not_found, "share_not_found");
+            return;
+        }
+
+        auto subject = json_string(*body, "user_id", json_string(*body, "subject"));
+        const auto username = json_string(*body, "username");
+        if (!username.empty()) {
+            auto user = config_.metadata ? config_.metadata->find_user_by_name(username) : std::nullopt;
+            if (!user) {
+                json_error(resp, yuan::net::http::ResponseCode::not_found, "user_not_found");
+                return;
+            }
+            subject = user->id;
+        }
+        if (subject.empty()) {
+            json_error(resp, yuan::net::http::ResponseCode::bad_request, "missing_subject");
+            return;
+        }
+
+        const bool clear_rule = json_bool(*body, "clear", false) || json_bool(*body, "inherit", false);
+        const auto permissions = clear_rule
+                                     ? yuan::server::nas::NasPermission::none
+                                     : parse_permissions(body->contains("permissions") ? body->at("permissions")
+                                                                                       : nlohmann::json::array(),
+                                                       yuan::server::nas::NasPermission::none);
+
+        bool stored = false;
+        if (clear_rule) {
+            share->subject_permissions.erase(subject);
+            stored = config_.metadata && config_.metadata->remove_permissions(share->id, subject) &&
+                     config_.metadata->upsert_share(*share);
+        } else {
+            share->subject_permissions[subject] = permissions;
+            stored = config_.metadata && config_.metadata->set_permissions(share->id, subject, permissions) &&
+                     config_.metadata->upsert_share(*share);
+        }
+        if (!stored) {
+            json_error(resp, yuan::net::http::ResponseCode::internal_server_error, "store_failed");
+            return;
+        }
+
+        update_config_share_permissions(config_.nas.shares, *share);
+        if (mount_result_.share_manager) {
+            mount_result_.share_manager->replace(effective_shares());
+            mount_result_.share_count = mount_result_.share_manager->shares().size();
+        }
+        refresh_smb_shares();
+        record_audit(actor,
+                     clear_rule ? "share.permission.clear" : "share.permission.set",
+                     share->name + ":" + subject,
+                     std::to_string(static_cast<std::uint32_t>(permissions)));
+
+        nlohmann::json out;
+        out["ok"] = true;
+        out["share_id"] = share->id;
+        out["share_name"] = share->name;
+        out["subject"] = subject;
+        out["username"] = username;
+        out["inherited"] = clear_rule;
+        out["permissions"] = permissions_to_json(permissions);
+        out["mask"] = static_cast<std::uint32_t>(permissions);
         resp->json(out.dump(), yuan::net::http::ResponseCode::ok_);
         resp->send();
     }
@@ -931,14 +1139,46 @@ namespace yuan::server
             json_error(resp, yuan::net::http::ResponseCode::bad_request, "invalid_json");
             return;
         }
+        const auto requested_id = json_string(*body, "id");
+        const auto requested_username = json_string(*body, "username");
         yuan::server::nas::NasUser user;
-        user.id = json_string(*body, "id");
-        user.username = json_string(*body, "username");
-        user.password_hash = json_string(*body, "password_hash");
+        if (config_.metadata) {
+            if (!requested_username.empty()) {
+                if (auto existing = config_.metadata->find_user_by_name(requested_username)) {
+                    user = std::move(*existing);
+                }
+            }
+            if (user.id.empty() && !requested_id.empty()) {
+                user = find_user_by_id_or_name(config_.metadata->list_users(), requested_id, requested_username)
+                           .value_or(user);
+            }
+        }
+        user.id = json_string(*body, "id", user.id);
+        user.username = json_string(*body, "username", user.username);
+        user.password_hash = json_string(*body, "password_hash", user.password_hash);
+        user.smb_password_hash = json_string(*body, "smb_password_hash", user.smb_password_hash);
         if (user.password_hash.empty() && body->contains("password")) {
             user.password_hash = yuan::server::nas::NasAuthService::hash_password_for_config(
                 body->at("password").get<std::string>(),
                 json_string(*body, "salt", "nas"));
+        } else if (body->contains("password")) {
+            user.password_hash = yuan::server::nas::NasAuthService::hash_password_for_config(
+                body->at("password").get<std::string>(),
+                json_string(*body, "salt", "nas"));
+        }
+        if (user.smb_password_hash.empty() && body->contains("smb_password")) {
+            user.smb_password_hash = yuan::server::nas::NasAuthService::nt_hash_for_config(
+                body->at("smb_password").get<std::string>());
+        } else if (body->contains("smb_password")) {
+            user.smb_password_hash = yuan::server::nas::NasAuthService::nt_hash_for_config(
+                body->at("smb_password").get<std::string>());
+        } else if (user.smb_password_hash.empty() &&
+                   json_bool(*body, "smb_enabled", false) &&
+                   body->contains("password")) {
+            user.smb_password_hash = yuan::server::nas::NasAuthService::nt_hash_for_config(
+                body->at("password").get<std::string>());
+        } else if (body->contains("smb_enabled") && !json_bool(*body, "smb_enabled", false)) {
+            user.smb_password_hash.clear();
         }
         user.enabled = json_bool(*body, "enabled", user.enabled);
         user.admin = json_bool(*body, "admin", user.admin);
@@ -1108,20 +1348,29 @@ namespace yuan::server
 
     nlohmann::json NasService::build_admin_shares_json() const
     {
+        std::unordered_map<std::string, std::string> usernames_by_id;
+        const auto users = config_.metadata ? config_.metadata->list_users() : std::vector<yuan::server::nas::NasUser>{};
+        for (const auto &user : users) {
+            usernames_by_id[user.id] = user.username;
+        }
+
         nlohmann::json shares = nlohmann::json::array();
-        for (const auto &share : config_.nas.shares) {
+        const auto listed = effective_shares();
+        for (const auto &share : listed) {
             nlohmann::json item;
             item["id"] = share.id;
             item["name"] = share.name;
             item["root_path"] = share.root_path;
             item["enabled"] = share.enabled;
             item["readonly"] = share.readonly;
-            item["default_permissions"] = static_cast<std::uint32_t>(share.default_permissions);
+            item["default_permissions"] = permissions_to_json(share.default_permissions);
+            item["default_permissions_mask"] = static_cast<std::uint32_t>(share.default_permissions);
+            item["subject_permissions"] = subject_permissions_to_json(share.subject_permissions, usernames_by_id);
             shares.push_back(std::move(item));
         }
         nlohmann::json body;
         body["shares"] = std::move(shares);
-        body["count"] = config_.nas.shares.size();
+        body["count"] = listed.size();
         return body;
     }
 
@@ -1135,6 +1384,7 @@ namespace yuan::server
             item["username"] = user.username;
             item["enabled"] = user.enabled;
             item["admin"] = user.admin;
+            item["smb_enabled"] = !user.smb_password_hash.empty();
             users.push_back(std::move(item));
         }
         nlohmann::json body;
@@ -1237,9 +1487,37 @@ namespace yuan::server
         }
 
         const auto html = std::make_shared<std::string>(
-            load_nas_admin_console_html(config_.nas.admin_console_path));
+            load_nas_console_html(config_.nas.admin_console_path,
+                                  "nas_admin_console.html",
+                                  kNasAdminConsoleFallbackHtml));
 
         http_->server().on("/nas/admin", [html](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
+            if (req && req->get_method() != yuan::net::http::HttpMethod::get_) {
+                resp->json("{\"error\":\"method_not_allowed\"}", yuan::net::http::ResponseCode::method_not_allowed);
+                resp->send();
+                return;
+            }
+
+            resp->set_response_code(yuan::net::http::ResponseCode::ok_);
+            resp->add_header("Content-Type", "text/html; charset=utf-8");
+            resp->append_body(*html);
+            resp->add_header("Content-Length", std::to_string(resp->body_buffer_size()));
+            resp->send();
+        });
+    }
+
+    void NasService::install_file_console()
+    {
+        if (!http_) {
+            return;
+        }
+
+        const auto html = std::make_shared<std::string>(
+            load_nas_console_html({},
+                                  "nas_file_console.html",
+                                  kNasFileConsoleFallbackHtml));
+
+        http_->server().on("/nas/files", [html](yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp) {
             if (req && req->get_method() != yuan::net::http::HttpMethod::get_) {
                 resp->json("{\"error\":\"method_not_allowed\"}", yuan::net::http::ResponseCode::method_not_allowed);
                 resp->send();

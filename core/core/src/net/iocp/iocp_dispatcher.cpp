@@ -1,6 +1,7 @@
 #include "net/iocp/iocp_dispatcher.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 
 namespace yuan::net
@@ -97,12 +98,26 @@ namespace yuan::net
         return running_.load(std::memory_order_acquire);
     }
 
+    void IocpDispatcher::set_completion_batch_size(std::size_t batch_size) noexcept
+    {
+        completion_batch_size_ = (std::max<std::size_t>)(1, batch_size);
+    }
+
     std::size_t IocpDispatcher::worker_count() const noexcept
     {
         return workers_.size();
     }
 
     void IocpDispatcher::worker_loop()
+    {
+        if (completion_batch_size_ <= 1) {
+            worker_loop_single();
+        } else {
+            worker_loop_batched();
+        }
+    }
+
+    void IocpDispatcher::worker_loop_single()
     {
         for (;;) {
             IocpCompletion completion;
@@ -129,6 +144,61 @@ namespace yuan::net
             auto completion_callback = callback_;
             if (completion_callback) {
                 completion_callback(completion);
+            }
+        }
+    }
+
+    void IocpDispatcher::worker_loop_batched()
+    {
+        auto handle_completion = [this](IocpCompletion &completion) {
+            if (!completion.operation) {
+                return false;
+            }
+
+            auto operation_callback = operation_callback_;
+            if (operation_callback) {
+                if (auto *operation = IocpOperation::from_completion(completion)) {
+                    operation_callback(*operation, completion);
+                }
+                return true;
+            }
+
+            auto completion_callback = callback_;
+            if (completion_callback) {
+                completion_callback(completion);
+            }
+            return true;
+        };
+
+        constexpr std::size_t kMaxDrainBatchSize = 32;
+        for (;;) {
+            IocpCompletion completion;
+            auto *port = port_;
+            if (!port || !port->wait(kInfiniteTimeoutMs, completion)) {
+                if (!running_.load(std::memory_order_acquire)) {
+                    break;
+                }
+                continue;
+            }
+
+            if (!handle_completion(completion)) {
+                break;
+            }
+
+            if (completion_batch_size_ <= 1) {
+                continue;
+            }
+
+            std::array<IocpCompletion, kMaxDrainBatchSize> drained{};
+            std::size_t drained_count = 0;
+            const auto drain_capacity = (std::min)(completion_batch_size_ - 1, drained.size());
+            if (!port->wait_many(0, drained.data(), drain_capacity, drained_count)) {
+                continue;
+            }
+            for (std::size_t i = 0; i < drained_count; ++i) {
+                if (!handle_completion(drained[i])) {
+                    return;
+                }
             }
         }
     }

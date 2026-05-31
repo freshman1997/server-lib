@@ -169,7 +169,8 @@ namespace yuan::net
                                             worker_count,
                                             std::move(callbacks),
                                             0,
-                                            options_.backlog);
+                                            options_.backlog,
+                                            options_.iocp_completion_batch_size);
         if (started) {
             std::lock_guard<std::mutex> lock(state_->mutex);
             state_->closed = false;

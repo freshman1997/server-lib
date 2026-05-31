@@ -1,9 +1,16 @@
 #include "webdav_resource.h"
 #include "webdav_xml.h"
 
+#include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <system_error>
+#ifdef _WIN32
+#include <cwctype>
+#include <windows.h>
+#endif
 
 namespace yuan::net::webdav
 {
@@ -24,15 +31,145 @@ namespace yuan::net::webdav
 
         std::string extension_content_type(const std::filesystem::path &path)
         {
-            const auto ext = path.extension().string();
+#ifdef _WIN32
+            auto ext = path.extension().native();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](wchar_t ch) {
+                return static_cast<wchar_t>(std::towlower(ch));
+            });
+            if (ext == L".html" || ext == L".htm") return "text/html; charset=utf-8";
+            if (ext == L".txt" || ext == L".log" || ext == L".md" || ext == L".ini" || ext == L".conf" || ext == L".cmake") return "text/plain; charset=utf-8";
+            if (ext == L".csv") return "text/csv; charset=utf-8";
+            if (ext == L".css") return "text/css; charset=utf-8";
+            if (ext == L".js" || ext == L".mjs") return "text/javascript; charset=utf-8";
+            if (ext == L".json") return "application/json";
+            if (ext == L".xml") return "application/xml";
+            if (ext == L".pdf") return "application/pdf";
+            if (ext == L".jpg" || ext == L".jpeg") return "image/jpeg";
+            if (ext == L".png") return "image/png";
+            if (ext == L".gif") return "image/gif";
+            if (ext == L".webp") return "image/webp";
+            if (ext == L".bmp") return "image/bmp";
+            if (ext == L".svg") return "image/svg+xml";
+            if (ext == L".ico") return "image/x-icon";
+            if (ext == L".tif" || ext == L".tiff") return "image/tiff";
+            if (ext == L".mp4" || ext == L".m4v") return "video/mp4";
+            if (ext == L".webm") return "video/webm";
+            if (ext == L".ogv") return "video/ogg";
+            if (ext == L".mov") return "video/quicktime";
+            if (ext == L".mp3") return "audio/mpeg";
+            if (ext == L".wav") return "audio/wav";
+            if (ext == L".ogg" || ext == L".oga") return "audio/ogg";
+            if (ext == L".flac") return "audio/flac";
+            if (ext == L".aac") return "audio/aac";
+            if (ext == L".m4a") return "audio/mp4";
+            if (ext == L".opus") return "audio/opus";
+            if (ext == L".zip") return "application/zip";
+            if (ext == L".7z") return "application/x-7z-compressed";
+            if (ext == L".rar") return "application/vnd.rar";
+            if (ext == L".tar") return "application/x-tar";
+            if (ext == L".gz") return "application/gzip";
+            if (ext == L".bz2") return "application/x-bzip2";
+            if (ext == L".xz") return "application/x-xz";
+            if (ext == L".doc") return "application/msword";
+            if (ext == L".docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            if (ext == L".xls") return "application/vnd.ms-excel";
+            if (ext == L".xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            if (ext == L".ppt") return "application/vnd.ms-powerpoint";
+            if (ext == L".pptx") return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+            if (ext == L".wasm") return "application/wasm";
+            if (ext == L".woff") return "font/woff";
+            if (ext == L".woff2") return "font/woff2";
+            if (ext == L".ttf") return "font/ttf";
+            if (ext == L".otf") return "font/otf";
+#else
+            auto ext = path.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
             if (ext == ".html" || ext == ".htm") return "text/html; charset=utf-8";
-            if (ext == ".txt" || ext == ".log") return "text/plain; charset=utf-8";
+            if (ext == ".txt" || ext == ".log" || ext == ".md" || ext == ".ini" || ext == ".conf" || ext == ".cmake") return "text/plain; charset=utf-8";
+            if (ext == ".csv") return "text/csv; charset=utf-8";
+            if (ext == ".css") return "text/css; charset=utf-8";
+            if (ext == ".js" || ext == ".mjs") return "text/javascript; charset=utf-8";
             if (ext == ".json") return "application/json";
             if (ext == ".xml") return "application/xml";
+            if (ext == ".pdf") return "application/pdf";
             if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
             if (ext == ".png") return "image/png";
+            if (ext == ".gif") return "image/gif";
             if (ext == ".webp") return "image/webp";
+            if (ext == ".bmp") return "image/bmp";
+            if (ext == ".svg") return "image/svg+xml";
+            if (ext == ".ico") return "image/x-icon";
+            if (ext == ".tif" || ext == ".tiff") return "image/tiff";
+            if (ext == ".mp4" || ext == ".m4v") return "video/mp4";
+            if (ext == ".webm") return "video/webm";
+            if (ext == ".ogv") return "video/ogg";
+            if (ext == ".mov") return "video/quicktime";
+            if (ext == ".mp3") return "audio/mpeg";
+            if (ext == ".wav") return "audio/wav";
+            if (ext == ".ogg" || ext == ".oga") return "audio/ogg";
+            if (ext == ".flac") return "audio/flac";
+            if (ext == ".aac") return "audio/aac";
+            if (ext == ".m4a") return "audio/mp4";
+            if (ext == ".opus") return "audio/opus";
+            if (ext == ".zip") return "application/zip";
+            if (ext == ".7z") return "application/x-7z-compressed";
+            if (ext == ".rar") return "application/vnd.rar";
+            if (ext == ".tar") return "application/x-tar";
+            if (ext == ".gz") return "application/gzip";
+            if (ext == ".bz2") return "application/x-bzip2";
+            if (ext == ".xz") return "application/x-xz";
+            if (ext == ".doc") return "application/msword";
+            if (ext == ".docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            if (ext == ".xls") return "application/vnd.ms-excel";
+            if (ext == ".xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            if (ext == ".ppt") return "application/vnd.ms-powerpoint";
+            if (ext == ".pptx") return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+            if (ext == ".wasm") return "application/wasm";
+            if (ext == ".woff") return "font/woff";
+            if (ext == ".woff2") return "font/woff2";
+            if (ext == ".ttf") return "font/ttf";
+            if (ext == ".otf") return "font/otf";
+#endif
             return "application/octet-stream";
+        }
+
+        std::filesystem::path path_from_utf8(std::string_view text)
+        {
+#ifdef _WIN32
+            if (text.empty()) {
+                return {};
+            }
+            const int wide_len = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+            if (wide_len <= 0) {
+                return std::filesystem::path(std::string(text));
+            }
+            std::wstring wide(static_cast<std::size_t>(wide_len), L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), wide_len);
+            return std::filesystem::path(wide);
+#else
+            return std::filesystem::path(std::string(text));
+#endif
+        }
+
+        std::string path_to_utf8(const std::filesystem::path &path)
+        {
+#ifdef _WIN32
+            const auto wide = path.native();
+            if (wide.empty()) {
+                return {};
+            }
+            const int utf8_len = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+            if (utf8_len <= 0) {
+                return {};
+            }
+            std::string utf8(static_cast<std::size_t>(utf8_len), '\0');
+            WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), utf8.data(), utf8_len, nullptr, nullptr);
+            return utf8;
+#else
+            return path.string();
+#endif
         }
 
         std::chrono::system_clock::time_point file_time_to_sys(std::filesystem::file_time_type ft)
@@ -87,7 +224,7 @@ namespace yuan::net::webdav
                 continue;
             }
             ChildResource child;
-            child.name = entry.path().filename().string();
+            child.name = path_to_utf8(entry.path().filename());
             child.info = stat_path(entry.path());
             out.push_back(std::move(child));
         }
@@ -291,7 +428,7 @@ namespace yuan::net::webdav
 
     std::filesystem::path LocalWebDavBackend::resolve(std::string_view href) const
     {
-        std::filesystem::path relative = std::filesystem::path(clean_href(href)).lexically_normal();
+        std::filesystem::path relative = path_from_utf8(clean_href(href)).lexically_normal();
         if (relative.is_absolute()) {
             relative = relative.relative_path();
         }
@@ -300,17 +437,19 @@ namespace yuan::net::webdav
 
     bool LocalWebDavBackend::contains_root(const std::filesystem::path &path) const
     {
-        const auto p = std::filesystem::absolute(path).lexically_normal().string();
-        const auto r = root_.lexically_normal().string();
 #ifdef _WIN32
-        auto lower = [](std::string s) {
-            for (char &ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        const auto p = std::filesystem::absolute(path).lexically_normal().native();
+        const auto r = root_.lexically_normal().native();
+        auto lower = [](std::wstring s) {
+            for (wchar_t &ch : s) ch = static_cast<wchar_t>(std::towlower(ch));
             return s;
         };
         const auto pp = lower(p);
         const auto rr = lower(r);
-        return pp == rr || pp.rfind(rr + "\\", 0) == 0 || pp.rfind(rr + "/", 0) == 0;
+        return pp == rr || pp.rfind(rr + L"\\", 0) == 0 || pp.rfind(rr + L"/", 0) == 0;
 #else
+        const auto p = std::filesystem::absolute(path).lexically_normal().string();
+        const auto r = root_.lexically_normal().string();
         return p == r || p.rfind(r + "/", 0) == 0;
 #endif
     }
@@ -324,7 +463,7 @@ namespace yuan::net::webdav
         }
         info.exists = true;
         info.is_collection = std::filesystem::is_directory(path, ec);
-        info.display_name = path.filename().string();
+        info.display_name = path_to_utf8(path.filename());
         info.content_type = info.is_collection ? "httpd/unix-directory" : extension_content_type(path);
         if (!info.is_collection) {
             info.content_length = std::filesystem::file_size(path, ec);

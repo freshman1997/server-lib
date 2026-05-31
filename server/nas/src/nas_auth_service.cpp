@@ -237,13 +237,52 @@ namespace yuan::server::nas
             return digest;
         }
 
-        std::vector<std::uint8_t> ascii_to_utf16le(std::string_view text)
+        void append_utf16le_codepoint(std::vector<std::uint8_t> &out, std::uint32_t cp)
+        {
+            if (cp <= 0xFFFF) {
+                out.push_back(static_cast<std::uint8_t>(cp & 0xFF));
+                out.push_back(static_cast<std::uint8_t>((cp >> 8) & 0xFF));
+                return;
+            }
+            cp -= 0x10000;
+            const std::uint32_t hi = 0xD800 + (cp >> 10);
+            const std::uint32_t lo = 0xDC00 + (cp & 0x3FF);
+            out.push_back(static_cast<std::uint8_t>(hi & 0xFF));
+            out.push_back(static_cast<std::uint8_t>((hi >> 8) & 0xFF));
+            out.push_back(static_cast<std::uint8_t>(lo & 0xFF));
+            out.push_back(static_cast<std::uint8_t>((lo >> 8) & 0xFF));
+        }
+
+        std::vector<std::uint8_t> utf8_to_utf16le_bytes(std::string_view text)
         {
             std::vector<std::uint8_t> out;
             out.reserve(text.size() * 2);
-            for (unsigned char ch : text) {
-                out.push_back(ch);
-                out.push_back(0);
+            for (std::size_t i = 0; i < text.size();) {
+                const auto b = static_cast<std::uint8_t>(text[i]);
+                std::uint32_t cp = 0;
+                if (b < 0x80) {
+                    cp = b;
+                    ++i;
+                } else if ((b & 0xE0) == 0xC0 && i + 1 < text.size()) {
+                    cp = ((b & 0x1F) << 6) |
+                         (static_cast<std::uint8_t>(text[i + 1]) & 0x3F);
+                    i += 2;
+                } else if ((b & 0xF0) == 0xE0 && i + 2 < text.size()) {
+                    cp = ((b & 0x0F) << 12) |
+                         ((static_cast<std::uint8_t>(text[i + 1]) & 0x3F) << 6) |
+                         (static_cast<std::uint8_t>(text[i + 2]) & 0x3F);
+                    i += 3;
+                } else if ((b & 0xF8) == 0xF0 && i + 3 < text.size()) {
+                    cp = ((b & 0x07) << 18) |
+                         ((static_cast<std::uint8_t>(text[i + 1]) & 0x3F) << 12) |
+                         ((static_cast<std::uint8_t>(text[i + 2]) & 0x3F) << 6) |
+                         (static_cast<std::uint8_t>(text[i + 3]) & 0x3F);
+                    i += 4;
+                } else {
+                    cp = 0xFFFD;
+                    ++i;
+                }
+                append_utf16le_codepoint(out, cp);
             }
             return out;
         }
@@ -308,7 +347,7 @@ namespace yuan::server::nas
 
     std::string NasAuthService::nt_hash_for_config(std::string_view password)
     {
-        auto digest = md4(ascii_to_utf16le(password));
+        auto digest = md4(utf8_to_utf16le_bytes(password));
         std::ostringstream oss;
         oss << "nthash:" << std::hex << std::setfill('0');
         for (std::uint8_t byte : digest) {

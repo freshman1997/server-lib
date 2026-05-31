@@ -4,6 +4,8 @@
 #include <memory>
 #include "logger.h"
 #include <algorithm>
+#include <cctype>
+#include <unordered_set>
 
 #include "base/time.h"
 
@@ -53,6 +55,152 @@ namespace yuan::net::http
             default:
                 return "unknown";
             }
+        }
+
+        void replace_all(std::string &value, const std::string &from, const std::string &to)
+        {
+            if (from.empty()) {
+                return;
+            }
+            std::size_t pos = 0;
+            while ((pos = value.find(from, pos)) != std::string::npos) {
+                value.replace(pos, from.size(), to);
+                pos += to.size();
+            }
+        }
+
+        std::string expand_proxy_header_value(HttpRequest *req,
+                                              std::string value,
+                                              const std::string &original_host,
+                                              const std::string &remote_addr,
+                                              const std::string &proxy_add_x_forwarded_for)
+        {
+            const std::string request_uri = req ? req->get_raw_url() : "/";
+            const std::string uri = req ? std::string(req->get_path()) : "/";
+            replace_all(value, "$host", original_host);
+            replace_all(value, "$http_host", original_host);
+            replace_all(value, "$remote_addr", remote_addr);
+            replace_all(value, "$proxy_add_x_forwarded_for", proxy_add_x_forwarded_for);
+            replace_all(value, "$scheme", "http");
+            replace_all(value, "$request_uri", request_uri.empty() ? "/" : request_uri);
+            replace_all(value, "$uri", uri.empty() ? "/" : uri);
+            return value;
+        }
+
+        void append_header_map(const nlohmann::json &obj,
+                               std::vector<std::pair<std::string, std::string>> &headers)
+        {
+            if (!obj.is_object()) {
+                return;
+            }
+            for (auto it = obj.begin(); it != obj.end(); ++it) {
+                if (it.key().empty() || !it.value().is_string()) {
+                    continue;
+                }
+                headers.emplace_back(it.key(), it.value().get<std::string>());
+            }
+        }
+
+        void append_string_array(const nlohmann::json &arr, std::vector<std::string> &values)
+        {
+            if (!arr.is_array()) {
+                return;
+            }
+            for (const auto &item : arr) {
+                if (item.is_string()) {
+                    values.push_back(item.get<std::string>());
+                }
+            }
+        }
+
+        std::string lower_ascii(std::string value)
+        {
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            return value;
+        }
+
+        std::string trim_ascii_copy(std::string value)
+        {
+            std::size_t begin = 0;
+            while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+                ++begin;
+            }
+            std::size_t end = value.size();
+            while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+                --end;
+            }
+            return value.substr(begin, end - begin);
+        }
+
+        std::string header_name_lower(std::string_view line)
+        {
+            const auto colon = line.find(':');
+            if (colon == std::string_view::npos) {
+                return {};
+            }
+            return lower_ascii(trim_ascii_copy(std::string(line.substr(0, colon))));
+        }
+
+        bool route_has_response_header_rules(const ProxyRoute &route)
+        {
+            return !route.response_headers.empty() || !route.hide_response_headers.empty();
+        }
+
+        std::string rewrite_proxy_response_headers(std::string_view data, const ProxyRoute &route)
+        {
+            const auto header_end = data.find("\r\n\r\n");
+            if (header_end == std::string_view::npos) {
+                return std::string(data);
+            }
+
+            std::unordered_set<std::string> remove_names;
+            for (const auto &name : route.hide_response_headers) {
+                remove_names.insert(lower_ascii(trim_ascii_copy(name)));
+            }
+            for (const auto &header : route.response_headers) {
+                remove_names.insert(lower_ascii(trim_ascii_copy(header.first)));
+            }
+
+            std::string out;
+            out.reserve(data.size() + 128);
+
+            std::size_t line_begin = 0;
+            const auto status_end = data.find("\r\n");
+            if (status_end == std::string_view::npos || status_end > header_end) {
+                return std::string(data);
+            }
+            out.append(data.substr(0, status_end + 2));
+            line_begin = status_end + 2;
+
+            while (line_begin < header_end) {
+                const auto line_end = data.find("\r\n", line_begin);
+                if (line_end == std::string_view::npos || line_end > header_end) {
+                    break;
+                }
+                const auto line = data.substr(line_begin, line_end - line_begin);
+                const auto name = header_name_lower(line);
+                if (name.empty() || remove_names.find(name) == remove_names.end()) {
+                    out.append(line);
+                    out.append("\r\n");
+                }
+                line_begin = line_end + 2;
+            }
+
+            for (const auto &header : route.response_headers) {
+                if (header.first.empty() || header.second.empty()) {
+                    continue;
+                }
+                out.append(header.first);
+                out.append(": ");
+                out.append(header.second);
+                out.append("\r\n");
+            }
+
+            out.append("\r\n");
+            out.append(data.substr(header_end + 4));
+            return out;
         }
     }
 
@@ -347,7 +495,52 @@ namespace yuan::net::http
         }
 
         if (is_server && mapping.client_conn) {
-            forward_data(conn_ptr, mapping.client_conn);
+            ProxyRoute route;
+            bool have_route = false;
+            {
+                std::lock_guard<std::mutex> route_lock(route_mutex_);
+                auto route_it = routes_.find(mapping.route_key);
+                if (route_it != routes_.end()) {
+                    route = route_it->second;
+                    have_route = true;
+                }
+            }
+
+            if (!have_route || !route_has_response_header_rules(route)) {
+                forward_data(conn_ptr, mapping.client_conn);
+            } else {
+                constexpr std::size_t kMaxProxyResponseHeaderBytes = 64 * 1024;
+                const auto input = conn_ptr->take_input_byte_buffer();
+                if (!input.empty()) {
+                    std::string out;
+                    {
+                        std::lock_guard<std::mutex> lock(mapping_mutex_);
+                        auto server_it = sc_mapping_.find(conn_ptr);
+                        if (server_it == sc_mapping_.end()) {
+                            return;
+                        }
+                        auto &state = server_it->second;
+                        if (state.response_header_done) {
+                            out.assign(input.read_ptr(), input.readable_bytes());
+                        } else {
+                            state.response_header_buffer.append(input.read_ptr(), input.readable_bytes());
+                            const auto header_end = state.response_header_buffer.find("\r\n\r\n");
+                            if (header_end != std::string::npos) {
+                                out = rewrite_proxy_response_headers(state.response_header_buffer, route);
+                                state.response_header_buffer.clear();
+                                state.response_header_done = true;
+                            } else if (state.response_header_buffer.size() > kMaxProxyResponseHeaderBytes) {
+                                out = std::move(state.response_header_buffer);
+                                state.response_header_buffer.clear();
+                                state.response_header_done = true;
+                            }
+                        }
+                    }
+                    if (!out.empty()) {
+                        mapping.client_conn->write(::yuan::buffer::ByteBuffer(std::string_view(out)));
+                    }
+                }
+            }
             mapping.client_conn->flush();
         }
     }
@@ -469,6 +662,36 @@ namespace yuan::net::http
             }
             if (proxyCfg.contains("idle_timeout") && proxyCfg["idle_timeout"].is_number()) {
                 route.idle_timeout_seconds = proxyCfg["idle_timeout"].get<size_t>();
+            }
+            if (proxyCfg.contains("preserve_host") && proxyCfg["preserve_host"].is_boolean()) {
+                route.preserve_host = proxyCfg["preserve_host"].get<bool>();
+            }
+            if (proxyCfg.contains("proxy_preserve_host") && proxyCfg["proxy_preserve_host"].is_boolean()) {
+                route.preserve_host = proxyCfg["proxy_preserve_host"].get<bool>();
+            }
+            if (proxyCfg.contains("proxy_set_header")) {
+                append_header_map(proxyCfg["proxy_set_header"], route.request_headers);
+            }
+            if (proxyCfg.contains("proxy_headers")) {
+                append_header_map(proxyCfg["proxy_headers"], route.request_headers);
+            }
+            if (proxyCfg.contains("hide_request_headers")) {
+                append_string_array(proxyCfg["hide_request_headers"], route.hide_request_headers);
+            }
+            if (proxyCfg.contains("proxy_hide_request_headers")) {
+                append_string_array(proxyCfg["proxy_hide_request_headers"], route.hide_request_headers);
+            }
+            if (proxyCfg.contains("proxy_set_response_header")) {
+                append_header_map(proxyCfg["proxy_set_response_header"], route.response_headers);
+            }
+            if (proxyCfg.contains("proxy_response_headers")) {
+                append_header_map(proxyCfg["proxy_response_headers"], route.response_headers);
+            }
+            if (proxyCfg.contains("hide_response_headers")) {
+                append_string_array(proxyCfg["hide_response_headers"], route.hide_response_headers);
+            }
+            if (proxyCfg.contains("proxy_hide_header")) {
+                append_string_array(proxyCfg["proxy_hide_header"], route.hide_response_headers);
             }
 
             add_route(route);
@@ -908,26 +1131,58 @@ namespace yuan::net::http
     void HttpProxy::build_forward_request(HttpRequest * orig_req, const ProxyRoute & route,
                                             const ProxyTarget & target, bool is_websocket)
     {
-        orig_req->add_header("Host", target.host + ":" + std::to_string(target.port));
-
-        auto *xff = orig_req->get_header("x-forwarded-for");
-        if (xff && orig_req->get_context() && orig_req->get_context()->get_connection()) {
-            const auto &addr = orig_req->get_context()->get_connection()->get_remote_address();
-            std::string new_xff = xff->c_str();
-            new_xff += ", ";
-            new_xff += addr.to_address_key();
-            orig_req->add_header("X-Forwarded-For", std::move(new_xff));
-        } else if (orig_req->get_context() && orig_req->get_context()->get_connection()) {
-            const auto &addr = orig_req->get_context()->get_connection()->get_remote_address();
-            orig_req->add_header("X-Forwarded-For", addr.to_address_key());
+        std::string original_host;
+        if (const auto *host = orig_req->get_header("host")) {
+            original_host = *host;
         }
 
+        std::string remote_addr;
         if (orig_req->get_context() && orig_req->get_context()->get_connection()) {
             const auto &addr = orig_req->get_context()->get_connection()->get_remote_address();
-            orig_req->add_header("X-Real-IP", addr.to_address_key());
+            remote_addr = addr.to_address_key();
+        }
+
+        std::string proxy_add_x_forwarded_for;
+        if (auto *xff = orig_req->get_header("x-forwarded-for")) {
+            proxy_add_x_forwarded_for = *xff;
+            if (!remote_addr.empty()) {
+                proxy_add_x_forwarded_for += ", ";
+                proxy_add_x_forwarded_for += remote_addr;
+            }
+        } else {
+            proxy_add_x_forwarded_for = remote_addr;
+        }
+
+        if (!route.preserve_host || original_host.empty()) {
+            orig_req->add_header("Host", target.host + ":" + std::to_string(target.port));
+        }
+
+        if (!proxy_add_x_forwarded_for.empty()) {
+            orig_req->add_header("X-Forwarded-For", proxy_add_x_forwarded_for);
+        }
+
+        if (!remote_addr.empty()) {
+            orig_req->add_header("X-Real-IP", remote_addr);
         }
 
         orig_req->add_header("X-Forwarded-Proto", "http");
+
+        for (const auto &header : route.request_headers) {
+            if (header.second.empty()) {
+                orig_req->remove_header(header.first);
+                continue;
+            }
+            orig_req->add_header(header.first,
+                                 expand_proxy_header_value(orig_req,
+                                                           header.second,
+                                                           original_host,
+                                                           remote_addr,
+                                                           proxy_add_x_forwarded_for));
+        }
+
+        for (const auto &header : route.hide_request_headers) {
+            orig_req->remove_header(header);
+        }
 
         if (!is_websocket) {
             orig_req->remove_header("connection");

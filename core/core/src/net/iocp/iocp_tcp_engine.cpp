@@ -196,14 +196,31 @@ namespace yuan::net
         const auto span = buffer.readable_span();
         if (!span.empty()) {
             append_output(span.data(), span.size());
+            if (output_limit_exceeded()) {
+                close_now();
+            }
         }
     }
 
     void IocpTcpConnection::write_owned(::yuan::buffer::ByteBuffer buffer)
     {
         if (!buffer.empty()) {
-            std::lock_guard<std::mutex> lock(output_buffer_mutex_);
-            output_buffer_.push_back(std::make_unique<::yuan::buffer::ByteBuffer>(std::move(buffer)));
+            bool overflow = false;
+            {
+                std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+                const auto bytes = buffer.readable_bytes();
+                const auto limit = max_output_buffer_size();
+                if (limit != 0 && (bytes > limit || output_buffer_.readable_bytes() > limit - bytes)) {
+                    output_limit_exceeded_.store(true, std::memory_order_release);
+                    overflow = true;
+                } else {
+                    output_buffer_.push_back(std::make_unique<::yuan::buffer::ByteBuffer>(std::move(buffer)));
+                }
+            }
+            if (overflow) {
+                close_now();
+                return;
+            }
         }
     }
 
@@ -226,25 +243,43 @@ namespace yuan::net
         }
         if (state_.load(std::memory_order_acquire) == ConnectionState::closed || closing() || get_ssl_handler()) {
             append_output(data);
+            if (output_limit_exceeded()) {
+                close_now();
+                return;
+            }
             flush();
             return;
         }
 
         auto *operation = new IocpTcpEngine::Operation{};
         bool should_flush = false;
+        bool overflow = false;
         {
             std::lock_guard<std::mutex> lock(output_buffer_mutex_);
             if (output_flush_pending_ || output_buffer_.readable_bytes() != 0) {
-                ensure_output_chunk(data.size())->append(data);
-                should_flush = !output_flush_pending_;
-                delete operation;
-                operation = nullptr;
+                const auto limit = max_output_buffer_size();
+                if (limit != 0 &&
+                    (data.size() > limit || output_buffer_.readable_bytes() > limit - data.size())) {
+                    output_limit_exceeded_.store(true, std::memory_order_release);
+                    overflow = true;
+                    delete operation;
+                    operation = nullptr;
+                } else {
+                    ensure_output_chunk(data.size())->append(data);
+                    should_flush = !output_flush_pending_;
+                    delete operation;
+                    operation = nullptr;
+                }
             } else {
                 operation->buffer.assign(data.data(), data.data() + data.size());
                 operation->drains_output = true;
                 operation->direct_output = true;
                 output_flush_pending_ = true;
             }
+        }
+        if (overflow) {
+            close_now();
+            return;
         }
 
         if (!operation) {
@@ -632,7 +667,8 @@ namespace yuan::net
                                std::size_t worker_count,
                                IocpTcpEngineCallbacks callbacks,
                                std::size_t accept_count,
-                               int backlog)
+                               int backlog,
+                               std::size_t completion_batch_size)
     {
         stop();
 #ifdef _WIN32
@@ -665,6 +701,7 @@ namespace yuan::net
         }
 
         const std::size_t actual_workers = (std::max<std::size_t>)(1, worker_count);
+        dispatcher_.set_completion_batch_size(completion_batch_size);
         if (!dispatcher_.start_operations(port_, actual_workers, [this](IocpOperation &operation,
                                                                         const IocpCompletion &completion) {
                 handle_completion(operation, completion);

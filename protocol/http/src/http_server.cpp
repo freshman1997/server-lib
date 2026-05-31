@@ -145,6 +145,82 @@ namespace yuan::net::http
                    content_type.find("javascript") != std::string::npos;
         }
 
+        std::string lowercase_ascii(std::string value)
+        {
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            return value;
+        }
+
+        std::string normalize_extension(std::string ext)
+        {
+            ext = lowercase_ascii(std::move(ext));
+            if (!ext.empty() && ext.front() != '.') {
+                ext.insert(ext.begin(), '.');
+            }
+            return ext;
+        }
+
+        std::string mime_type_without_params(std::string content_type)
+        {
+            const auto semicolon = content_type.find(';');
+            if (semicolon != std::string::npos) {
+                content_type.resize(semicolon);
+            }
+            std::size_t begin = 0;
+            while (begin < content_type.size() &&
+                   std::isspace(static_cast<unsigned char>(content_type[begin])) != 0) {
+                ++begin;
+            }
+            std::size_t end = content_type.size();
+            while (end > begin &&
+                   std::isspace(static_cast<unsigned char>(content_type[end - 1])) != 0) {
+                --end;
+            }
+            return lowercase_ascii(content_type.substr(begin, end - begin));
+        }
+
+        std::string resolve_static_content_type(const StaticMountOptions &options, const std::string &ext)
+        {
+            const std::string normalized_ext = normalize_extension(ext);
+            auto custom = options.mime_types.find(normalized_ext);
+            if (custom != options.mime_types.end()) {
+                return custom->second;
+            }
+
+            const std::string detected = get_content_type(normalized_ext);
+            if (detected == "application/octet-stream" && !options.default_type.empty()) {
+                return options.default_type;
+            }
+            return detected;
+        }
+
+        bool content_type_matches_pattern(std::string_view content_type, std::string_view pattern)
+        {
+            if (pattern == "*") {
+                return true;
+            }
+            if (pattern.size() > 2 && pattern.substr(pattern.size() - 2) == "/*") {
+                return content_type.rfind(pattern.substr(0, pattern.size() - 1), 0) == 0;
+            }
+            return iequals_ascii(content_type, pattern);
+        }
+
+        bool compression_type_allowed(const StaticMountOptions &options, const std::string &content_type)
+        {
+            const std::string normalized = mime_type_without_params(content_type);
+            if (options.gzip_types.empty()) {
+                return is_textual_content_type(normalized);
+            }
+            for (const auto &pattern : options.gzip_types) {
+                if (content_type_matches_pattern(normalized, lowercase_ascii(pattern))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         std::optional<std::string> parse_accept_encoding_preferred(std::string_view value)
         {
             std::optional<double> best_q;
@@ -247,8 +323,11 @@ namespace yuan::net::http
             return false;
         }
 
-        uint32_t keep_alive_idle_timeout_ms()
+        uint32_t keep_alive_idle_timeout_ms(const HttpServerConfig &config)
         {
+            if (config.keep_alive_timeout_ms > 0) {
+                return static_cast<uint32_t>(config.keep_alive_timeout_ms);
+            }
             return config::connection_idle_timeout > 0
                 ? static_cast<uint32_t>(config::connection_idle_timeout)
                 : uint32_t{30000};
@@ -258,7 +337,7 @@ namespace yuan::net::http
         {
             return config.write_timeout_ms > 0
                 ? static_cast<uint32_t>(config.write_timeout_ms)
-                : keep_alive_idle_timeout_ms();
+                : keep_alive_idle_timeout_ms(config);
         }
 
         bool should_close_http1_connection(HttpRequest *req, HttpResponse *resp, bool keep_alive_enabled)
@@ -901,8 +980,11 @@ namespace yuan::net::http
         try
         {
             config::load_config();
-            config_.enable_http2 = config::enable_http2;
-            config_.enable_http3 = config::enable_http3;
+            config_.enable_http2 = config_.enable_http2 || config::enable_http2;
+            config_.enable_http3 = config_.enable_http3 || config::enable_http3;
+            if (config_.keep_alive_timeout_ms > 0) {
+                config::connection_idle_timeout = config_.keep_alive_timeout_ms;
+            }
             load_static_paths();
             register_builtin_routes();
             if (!init_proxy_if_needed()) {
@@ -1749,7 +1831,7 @@ namespace yuan::net::http
 
         bool alpn_h2 = false;
         if (conn->is_ssl_handshaking()) {
-            auto hs_result = co_await ctx.ssl_handshake_async(keep_alive_idle_timeout_ms());
+            auto hs_result = co_await ctx.ssl_handshake_async(keep_alive_idle_timeout_ms(config_));
             if (hs_result != coroutine::SslHandshakeResult::success) {
                 if (ctx.is_connected()) {
                     ctx.close();
@@ -1771,7 +1853,8 @@ namespace yuan::net::http
 
         auto httpCtx = std::make_unique<HttpSessionContext>(conn);
         httpCtx->set_request_timing_enabled(config_.track_request_time || static_cast<bool>(access_log_hook_));
-        const bool use_session_idle_timer = config::close_idle_connection && config::connection_idle_timeout > 0;
+        const bool use_session_idle_timer = config::close_idle_connection &&
+                                            (config_.keep_alive_timeout_ms > 0 || config::connection_idle_timeout > 0);
         auto session = std::make_unique<HttpSession>(
             sessionId,
             std::move(httpCtx),
@@ -1824,7 +1907,7 @@ namespace yuan::net::http
 
         while (ctx.is_connected()) {
             const uint32_t read_timeout_ms = (!http2_mode && !http1_long_lived_response)
-                ? (use_session_idle_timer ? uint32_t{0} : keep_alive_idle_timeout_ms())
+                ? (use_session_idle_timer ? uint32_t{0} : keep_alive_idle_timeout_ms(config_))
                 : uint32_t{0};
             auto read_result = co_await ctx.read_awaiter(read_timeout_ms);
             if (read_result.status == coroutine::IoStatus::timed_out) {
@@ -2155,6 +2238,17 @@ namespace yuan::net::http
         }
         mount = &static_path_it->second;
 
+        if (prefix == "/") {
+            file_relative_path = request_path.size() > 1 ? request_path.substr(1) : "";
+            if (file_relative_path.find("..") != std::string::npos ||
+                file_relative_path.find('\\') != std::string::npos ||
+                (!file_relative_path.empty() && file_relative_path.front() == '/')) {
+                resp->process_error(ResponseCode::forbidden);
+                return false;
+            }
+            return true;
+        }
+
         if (request_path.size() <= prefix_idx) {
             file_relative_path.clear();
             return true;
@@ -2251,11 +2345,15 @@ namespace yuan::net::http
 
     bool HttpServer::maybe_compress_static_response(HttpRequest *req,
                                                     HttpResponse *resp,
+                                                    const StaticMountOptions &options,
                                                     const std::string &content_type,
                                                     const std::string &source_path,
                                                     std::size_t source_length)
     {
         if (!req || !resp) {
+            return false;
+        }
+        if (!options.enable_gzip && !options.enable_gzip_static) {
             return false;
         }
 
@@ -2268,7 +2366,7 @@ namespace yuan::net::http
             return false;
         }
 
-        if (!is_textual_content_type(content_type)) {
+        if (!compression_type_allowed(options, content_type)) {
             return false;
         }
 
@@ -2278,21 +2376,29 @@ namespace yuan::net::http
         }
 
         std::string precompressed_body;
-        if (iequals_ascii(*preferred, "br") && load_precompressed_asset(source_path, "br", precompressed_body)) {
+        if (options.enable_gzip_static &&
+            iequals_ascii(*preferred, "br") &&
+            load_precompressed_asset(source_path, "br", precompressed_body)) {
             resp->append_body(std::move(precompressed_body));
             resp->add_header(http_header_key::content_encoding, "br");
             resp->add_header(http_header_key::vary, "accept-encoding");
             return true;
         }
 
-        if (iequals_ascii(*preferred, "gzip") && load_precompressed_asset(source_path, "gz", precompressed_body)) {
+        if (options.enable_gzip_static &&
+            iequals_ascii(*preferred, "gzip") &&
+            load_precompressed_asset(source_path, "gz", precompressed_body)) {
             resp->append_body(std::move(precompressed_body));
             resp->add_header(http_header_key::content_encoding, "gzip");
             resp->add_header(http_header_key::vary, "accept-encoding");
             return true;
         }
 
-        if (source_length < 256) {
+        if (!options.enable_gzip) {
+            return false;
+        }
+
+        if (source_length < options.gzip_min_length) {
             return false;
         }
 
@@ -2389,7 +2495,8 @@ namespace yuan::net::http
         HttpResponse * resp,
         const StaticMount & mount,
         const std::string & file_relative_path,
-        const std::string & full_path)
+        const std::string & full_path,
+        std::optional<ResponseCode> status_override)
     {
         const std::string &path = full_path;
 
@@ -2443,7 +2550,7 @@ namespace yuan::net::http
         }
 
         const auto length = static_cast<std::size_t>(file_size);
-        const std::string content_type = get_content_type(ext);
+        const std::string content_type = resolve_static_content_type(mount.options, ext);
         if (content_type.empty()) {
             resp->process_error(ResponseCode::bad_request);
             return;
@@ -2453,7 +2560,7 @@ namespace yuan::net::http
         uint64_t range_end = 0;
         bool has_explicit_range_end = false;
         bool has_range = false;
-        if (mount.options.enable_range) {
+        if (!status_override && mount.options.enable_range) {
             if (const std::string *range = req->get_header(http_header_key::range)) {
             int ret = 0;
             const auto &ranges = helper::parse_range(*range, ret);
@@ -2494,7 +2601,13 @@ namespace yuan::net::http
             resp->set_response_code(ResponseCode::not_modified);
             resp->add_header(http_header_key::etag, etag);
             resp->add_header(http_header_key::last_modified, format_http_date(modified_at));
-            resp->add_header("Cache-Control", "no-cache");
+            resp->add_header("Cache-Control", mount.options.cache_control.empty() ? "no-cache" : mount.options.cache_control);
+            if (mount.options.expires_seconds >= 0) {
+                resp->add_header("Expires", format_http_date(std::time(nullptr) + mount.options.expires_seconds));
+            }
+            for (const auto &header : mount.options.headers) {
+                resp->add_header(header.first, header.second);
+            }
             resp->add_header("Content-Length", "0");
             resp->send();
             return;
@@ -2505,6 +2618,8 @@ namespace yuan::net::http
                              "bytes " + std::to_string(offset) + "-" +
                                   std::to_string(effective_end) + "/" + std::to_string(length));
             resp->set_response_code(ResponseCode::partial_content);
+        } else if (status_override) {
+            resp->set_response_code(*status_override);
         } else {
             resp->set_response_code(ResponseCode::ok_);
         }
@@ -2515,7 +2630,13 @@ namespace yuan::net::http
         resp->add_header(http_header_key::last_modified, format_http_date(modified_at));
         resp->add_header("Accept-Ranges", "bytes");
         resp->add_header("X-Content-Type-Options", "nosniff");
-        resp->add_header("Cache-Control", "no-cache");
+        resp->add_header("Cache-Control", mount.options.cache_control.empty() ? "no-cache" : mount.options.cache_control);
+        if (mount.options.expires_seconds >= 0) {
+            resp->add_header("Expires", format_http_date(std::time(nullptr) + mount.options.expires_seconds));
+        }
+        for (const auto &header : mount.options.headers) {
+            resp->add_header(header.first, header.second);
+        }
 
         stream.close();
 
@@ -2525,7 +2646,7 @@ namespace yuan::net::http
             return;
         }
 
-        if (!has_range && maybe_compress_static_response(req, resp, content_type, path, sz)) {
+        if (!has_range && maybe_compress_static_response(req, resp, mount.options, content_type, path, sz)) {
             resp->add_header("Content-Length", std::to_string(resp->body_buffer_size()));
             resp->send();
             return;
@@ -2553,7 +2674,7 @@ namespace yuan::net::http
             return;
         }
 
-        task->set_sendfile_enabled(true);
+        task->set_sendfile_enabled(mount.options.enable_sendfile);
 
         resp->set_task(task.release());
         resp->set_upload_file(true);
@@ -2635,7 +2756,7 @@ namespace yuan::net::http
                         ep_path += ep;
                     }
                     if (std::filesystem::exists(std::filesystem::path(std::u8string(ep_path.begin(), ep_path.end())))) {
-                        serve_static_file(req, resp, *mount, ep, ep_path);
+                        serve_static_file(req, resp, *mount, ep, ep_path, static_cast<ResponseCode>(forced_status));
                         return;
                     }
                 }
@@ -2704,7 +2825,7 @@ namespace yuan::net::http
                     ep_path += ep;
                 }
                 if (std::filesystem::exists(std::filesystem::path(std::u8string(ep_path.begin(), ep_path.end())))) {
-                    serve_static_file(req, resp, *mount, ep, ep_path);
+                    serve_static_file(req, resp, *mount, ep, ep_path, ResponseCode::not_found);
                     return;
                 }
             }

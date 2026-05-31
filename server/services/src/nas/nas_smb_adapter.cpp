@@ -204,10 +204,13 @@ namespace yuan::server
         if (!nas_user || !nas_user->enabled) {
             return std::nullopt;
         }
-        if (is_pbkdf2_hash(nas_user->password_hash)) {
+        const auto &smb_hash = nas_user->smb_password_hash.empty()
+            ? nas_user->password_hash
+            : nas_user->smb_password_hash;
+        if (is_pbkdf2_hash(smb_hash)) {
             return std::nullopt;
         }
-        return plain_password_from_hash(nas_user->password_hash);
+        return plain_password_from_hash(smb_hash);
     }
 
     std::optional<std::string> NasSmbHandler::on_nt_hash_lookup(yuan::net::smb::SmbSession *session,
@@ -223,7 +226,10 @@ namespace yuan::server
         if (!nas_user || !nas_user->enabled) {
             return std::nullopt;
         }
-        return nt_hash_from_hash(nas_user->password_hash);
+        const auto &smb_hash = nas_user->smb_password_hash.empty()
+            ? nas_user->password_hash
+            : nas_user->smb_password_hash;
+        return nt_hash_from_hash(smb_hash);
     }
 
     bool NasSmbHandler::on_tree_connect(yuan::net::smb::SmbSession *session, const std::string &path)

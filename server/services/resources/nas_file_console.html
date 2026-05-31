@@ -1,0 +1,402 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Yuan NAS 文件</title>
+  <style>
+    body { font-family: Segoe UI, Arial, sans-serif; margin: 0; background: #f6f7f9; color: #1f2937; }
+    header { background: #12312f; color: white; padding: 16px 24px; }
+    main { max-width: 1080px; margin: 0 auto; padding: 24px; }
+    section { background: white; border: 1px solid #d8dee8; border-radius: 8px; margin-bottom: 16px; padding: 16px; }
+    h1 { font-size: 22px; margin: 0; }
+    h2 { font-size: 16px; margin: 0 0 12px; }
+    button { padding: 6px 10px; border: 1px solid #94a3b8; background: #f8fafc; border-radius: 6px; cursor: pointer; }
+    input { padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; }
+    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .toolbar input[type="text"] { min-width: 280px; flex: 1; }
+    .actions { display: flex; gap: 8px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; border-bottom: 1px solid #eef1f5; padding: 8px; }
+    .preview-box { min-height: 240px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; overflow: hidden; }
+    .preview-box img, .preview-box video, .preview-box iframe { display: block; width: 100%; max-height: 70vh; border: 0; background: white; }
+    .preview-box img { object-fit: contain; }
+    .preview-box audio { width: 100%; margin: 16px; max-width: calc(100% - 32px); }
+    .preview-box pre { margin: 0; padding: 16px; max-height: 70vh; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: Consolas, ui-monospace, monospace; font-size: 13px; background: white; }
+    .modal { position: fixed; inset: 0; z-index: 1000; background: rgba(15, 23, 42, 0.66); display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .modal-panel { width: min(1120px, 100%); max-height: calc(100vh - 48px); background: white; border-radius: 8px; box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35); display: flex; flex-direction: column; overflow: hidden; }
+    .modal-header { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #e2e8f0; }
+    .modal-header h2 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .modal-body { padding: 16px; overflow: auto; background: #f8fafc; }
+    .modal-body .preview-box { min-height: min(520px, 60vh); }
+    body.modal-open { overflow: hidden; }
+    .muted { color: #64748b; }
+    .error { color: #b91c1c; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Yuan NAS 文件</h1>
+  </header>
+  <main>
+    <section>
+      <h2>登录</h2>
+      <div class="toolbar">
+        <label>用户名 <input id="authUser" type="text" aria-label="用户名" placeholder="admin"></label>
+        <label>密码 <input id="authPassword" type="password" aria-label="密码" placeholder="输入密码"></label>
+        <button id="saveAuth" type="button">登录并打开</button>
+        <button id="clearAuth" type="button">退出</button>
+        <span id="authStatus" class="muted">未登录</span>
+      </div>
+    </section>
+    <section>
+      <h2>文件</h2>
+      <div class="toolbar">
+        <input id="filePath" type="text" value="/dav/public/" aria-label="WebDAV path">
+        <button id="refreshFiles" type="button">刷新</button>
+        <input id="uploadFile" type="file">
+      </div>
+      <div id="files" class="muted">请先输入用户名和密码，然后点击“登录并打开”。</div>
+    </section>
+    <div id="previewModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+      <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="previewTitle">预览</h2>
+        <button id="closePreview" type="button">关闭预览</button>
+      </div>
+      <div class="modal-body">
+      <div id="preview" class="preview-box muted">请选择文件预览。</div>
+      </div>
+      </div>
+    </div>
+  </main>
+  <script>
+    let previewObjectUrl = '';
+    let pendingInitialFilePath = '';
+    let pendingInitialHandled = false;
+
+    function authHeaders(extra) {
+      const headers = Object.assign({}, extra || {});
+      const user = sessionStorage.getItem('nasFileUser') || document.getElementById('authUser')?.value || '';
+      const password = sessionStorage.getItem('nasFilePassword') || document.getElementById('authPassword')?.value || '';
+      if (user && password) {
+        headers.Authorization = 'Basic ' + btoa(user + ':' + password);
+      }
+      return headers;
+    }
+
+    function updateAuthStatus() {
+      const saved = sessionStorage.getItem('nasFileUser') && sessionStorage.getItem('nasFilePassword');
+      document.getElementById('authStatus').textContent = saved ? '已登录，本标签页有效' : '未登录';
+    }
+
+    function ensureDirPath(path) {
+      if (!path.startsWith('/')) path = '/' + path;
+      return path.endsWith('/') ? path : path + '/';
+    }
+
+    function parentPath(path) {
+      path = ensureDirPath(path);
+      const trimmed = path.slice(0, -1);
+      const idx = trimmed.lastIndexOf('/');
+      return idx <= 0 ? '/dav/public/' : trimmed.slice(0, idx + 1);
+    }
+
+    function mountPrefixFromPath(path) {
+      path = ensureDirPath(path || '/dav/public/');
+      const parts = path.split('/').filter(Boolean);
+      return parts.length ? '/' + parts[0] : '/dav';
+    }
+
+    function safeDecodeURIComponent(value) {
+      try {
+        return decodeURIComponent(value);
+      } catch (_) {
+        return value;
+      }
+    }
+
+    function requestUrl(path) {
+      const clean = String(path || '').split('?')[0].split('#')[0];
+      const leading = clean.startsWith('/') ? '/' : '';
+      return leading + clean.split('/').filter(Boolean)
+        .map(part => encodeURIComponent(safeDecodeURIComponent(part)))
+        .join('/') + (clean.endsWith('/') ? '/' : '');
+    }
+
+    function initialPathFromUrl() {
+      const value = new URLSearchParams(window.location.search).get('path') || '';
+      return value && value.startsWith('/') ? value : '';
+    }
+
+    function looksLikeDirectoryPath(path) {
+      return !path || path.endsWith('/');
+    }
+
+    function webdavUrlFromHref(href, currentPath) {
+      let out = safeDecodeURIComponent((href || '').split('?')[0]);
+      if (!out.startsWith('/')) out = '/' + out;
+      const mount = mountPrefixFromPath(currentPath);
+      return out === mount || out.startsWith(mount + '/') ? out : mount + out;
+    }
+
+    function displayNameFromHref(href) {
+      const clean = safeDecodeURIComponent(href.split('?')[0]).replace(/\/$/, '');
+      const idx = clean.lastIndexOf('/');
+      return idx >= 0 ? clean.slice(idx + 1) : clean;
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, ch => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }[ch]));
+    }
+
+    function fileExtension(url) {
+      const name = displayNameFromHref(url).toLowerCase();
+      const idx = name.lastIndexOf('.');
+      return idx >= 0 ? name.slice(idx + 1) : '';
+    }
+
+    function previewKind(url, contentType) {
+      const ext = fileExtension(url);
+      const type = (contentType || '').split(';')[0].toLowerCase();
+      if (type.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image';
+      if (type === 'application/pdf' || ext === 'pdf') return 'pdf';
+      if (type.startsWith('video/') || ['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext)) return 'video';
+      if (type.startsWith('audio/') || ['mp3', 'wav', 'flac', 'aac', 'm4a', 'oga'].includes(ext)) return 'audio';
+      if (type.startsWith('text/') || ['txt', 'md', 'json', 'xml', 'csv', 'log', 'ini', 'conf', 'cpp', 'h', 'hpp', 'c', 'js', 'ts', 'html', 'css', 'py', 'sh', 'ps1', 'cmake'].includes(ext)) return 'text';
+      return '';
+    }
+
+    function isPreviewable(url) {
+      return previewKind(url, '');
+    }
+
+    function clearPreviewObjectUrl() {
+      if (previewObjectUrl) {
+        URL.revokeObjectURL(previewObjectUrl);
+        previewObjectUrl = '';
+      }
+    }
+
+    function closePreviewModal() {
+      clearPreviewObjectUrl();
+      document.getElementById('previewModal').classList.add('hidden');
+      document.body.classList.remove('modal-open');
+      document.getElementById('preview').className = 'preview-box muted';
+      document.getElementById('preview').textContent = '请选择文件预览。';
+    }
+
+    async function previewFile(url) {
+      const modal = document.getElementById('previewModal');
+      const box = document.getElementById('preview');
+      const title = document.getElementById('previewTitle');
+      modal.classList.remove('hidden');
+      document.body.classList.add('modal-open');
+      title.textContent = '预览：' + displayNameFromHref(url);
+      box.className = 'preview-box muted';
+      box.textContent = '加载预览中...';
+      clearPreviewObjectUrl();
+      try {
+        const response = await fetch(requestUrl(url), { credentials: 'same-origin', headers: authHeaders() });
+        if (!response.ok) throw new Error(response.status);
+        let blob = await response.blob();
+        const kind = previewKind(url, blob.type || response.headers.get('Content-Type'));
+        if (!kind) {
+          box.innerHTML = '<p style="padding:16px">该类型暂不支持预览，请下载后打开。</p>';
+          return;
+        }
+        if (kind === 'pdf' && blob.type !== 'application/pdf') {
+          blob = new Blob([blob], { type: 'application/pdf' });
+        }
+        if (kind === 'text') {
+          if (blob.size > 5 * 1024 * 1024) {
+            box.innerHTML = '<p style="padding:16px">文本文件超过 5MB，请下载后打开。</p>';
+            return;
+          }
+          const text = await blob.text();
+          box.className = 'preview-box';
+          box.innerHTML = '<pre>' + escapeHtml(text) + '</pre>';
+          return;
+        }
+        previewObjectUrl = URL.createObjectURL(blob);
+        box.className = 'preview-box';
+        if (kind === 'image') {
+          box.innerHTML = '<img alt="' + escapeHtml(displayNameFromHref(url)) + '" src="' + previewObjectUrl + '">';
+        } else if (kind === 'pdf') {
+          box.innerHTML = '<iframe title="' + escapeHtml(displayNameFromHref(url)) + '" src="' + previewObjectUrl + '" style="height:70vh"></iframe>';
+        } else if (kind === 'video') {
+          box.innerHTML = '<video controls src="' + previewObjectUrl + '"></video>';
+        } else if (kind === 'audio') {
+          box.innerHTML = '<audio controls src="' + previewObjectUrl + '"></audio>';
+        }
+      } catch (e) {
+        box.className = 'preview-box error';
+        box.innerHTML = '<p style="padding:16px">预览失败：' + escapeHtml(e.message) + '</p>';
+      }
+    }
+
+    async function loadFiles() {
+      const pathInput = document.getElementById('filePath');
+      const path = ensureDirPath(pathInput.value || '/dav/public/');
+      pathInput.value = path;
+      const box = document.getElementById('files');
+      const user = sessionStorage.getItem('nasFileUser') || document.getElementById('authUser')?.value || '';
+      const password = sessionStorage.getItem('nasFilePassword') || document.getElementById('authPassword')?.value || '';
+      if (!user || !password) {
+        box.textContent = '请先输入用户名和密码，然后点击“登录并打开”。';
+        return;
+      }
+      box.textContent = '加载中...';
+      try {
+        const response = await fetch(requestUrl(path), {
+          method: 'PROPFIND',
+          headers: authHeaders({ Depth: '1' }),
+          credentials: 'same-origin'
+        });
+        if (!response.ok) throw new Error(response.status);
+        const text = await response.text();
+        const xml = new DOMParser().parseFromString(text, 'application/xml');
+        const responses = Array.from(xml.getElementsByTagNameNS('*', 'response'));
+        const rows = responses.map(item => {
+          const href = item.getElementsByTagNameNS('*', 'href')[0]?.textContent || '';
+          const typeNode = item.getElementsByTagNameNS('*', 'resourcetype')[0];
+          const isDir = !!typeNode && typeNode.getElementsByTagNameNS('*', 'collection').length > 0;
+          const size = item.getElementsByTagNameNS('*', 'getcontentlength')[0]?.textContent || '';
+          const modified = item.getElementsByTagNameNS('*', 'getlastmodified')[0]?.textContent || '';
+          const url = webdavUrlFromHref(href, path);
+          return { href, url, name: displayNameFromHref(href), isDir, size, modified };
+        }).filter(row => row.href && row.url.replace(/\/$/, '') !== path.replace(/\/$/, ''));
+
+        let html = '<div class="toolbar"><button type="button" data-open="' + escapeHtml(parentPath(path)) + '">上一级</button></div>';
+        if (!rows.length) {
+          html += '<p class="muted">空目录</p>';
+        } else {
+          html += '<table><thead><tr><th>名称</th><th>类型</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead><tbody>';
+          html += rows.map(row => {
+            const href = row.url;
+            const openTarget = row.isDir ? ensureDirPath(href) : href;
+            const name = row.name || openTarget;
+            const actions = row.isDir
+              ? '<button type="button" data-open="' + escapeHtml(openTarget) + '">打开</button>'
+              : '<span class="actions">' +
+                  (isPreviewable(href) ? '<button type="button" data-preview="' + escapeHtml(href) + '">预览</button>' : '') +
+                  '<button type="button" data-download="' + escapeHtml(href) + '">下载</button>' +
+                  '<button type="button" data-delete="' + escapeHtml(href) + '">删除</button>' +
+                '</span>';
+            return '<tr><td>' + escapeHtml(name) + '</td><td>' + (row.isDir ? '文件夹' : '文件') + '</td><td>' +
+              (row.size || '') + '</td><td>' + (row.modified || '') + '</td><td>' + actions + '</td></tr>';
+          }).join('');
+          html += '</tbody></table>';
+        }
+        box.innerHTML = html;
+      } catch (e) {
+        box.innerHTML = '<p class="error">文件接口错误：' + e.message + '</p>';
+      }
+    }
+
+    async function openInitialTargetIfNeeded() {
+      if (pendingInitialHandled) return;
+      pendingInitialHandled = true;
+      if (!pendingInitialFilePath) return;
+      await previewFile(pendingInitialFilePath);
+    }
+
+    document.getElementById('refreshFiles').addEventListener('click', loadFiles);
+    document.getElementById('saveAuth').addEventListener('click', async () => {
+      sessionStorage.setItem('nasFileUser', document.getElementById('authUser').value);
+      sessionStorage.setItem('nasFilePassword', document.getElementById('authPassword').value);
+      updateAuthStatus();
+      await loadFiles();
+      await openInitialTargetIfNeeded();
+    });
+    document.getElementById('clearAuth').addEventListener('click', () => {
+      sessionStorage.removeItem('nasFileUser');
+      sessionStorage.removeItem('nasFilePassword');
+      document.getElementById('authPassword').value = '';
+      updateAuthStatus();
+    });
+    document.getElementById('files').addEventListener('click', async (e) => {
+      const open = e.target.getAttribute('data-open');
+      const del = e.target.getAttribute('data-delete');
+      const download = e.target.getAttribute('data-download');
+      const preview = e.target.getAttribute('data-preview');
+      if (open) {
+        document.getElementById('filePath').value = open;
+        loadFiles();
+      }
+      if (preview) {
+        previewFile(preview);
+      }
+      if (download) {
+        const response = await fetch(requestUrl(download), { credentials: 'same-origin', headers: authHeaders() });
+        if (!response.ok) {
+          alert('下载失败：' + response.status);
+          return;
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = displayNameFromHref(download);
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+      if (del && confirm('删除 ' + del + '?')) {
+        const response = await fetch(requestUrl(del), { method: 'DELETE', credentials: 'same-origin', headers: authHeaders() });
+        if (!response.ok) alert('删除失败：' + response.status);
+        loadFiles();
+      }
+    });
+    document.getElementById('uploadFile').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const base = ensureDirPath(document.getElementById('filePath').value || '/dav/public/');
+      const response = await fetch(requestUrl(base) + encodeURIComponent(file.name), {
+        method: 'PUT',
+        headers: authHeaders(),
+        credentials: 'same-origin',
+        body: file
+      });
+      if (!response.ok) alert('上传失败：' + response.status);
+      e.target.value = '';
+      loadFiles();
+    });
+    document.getElementById('closePreview').addEventListener('click', () => {
+      closePreviewModal();
+    });
+    document.getElementById('previewModal').addEventListener('click', (e) => {
+      if (e.target.id === 'previewModal') closePreviewModal();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !document.getElementById('previewModal').classList.contains('hidden')) {
+        closePreviewModal();
+      }
+    });
+
+    const savedUser = sessionStorage.getItem('nasFileUser');
+    const savedPassword = sessionStorage.getItem('nasFilePassword');
+    const initialPath = initialPathFromUrl();
+    if (initialPath) {
+      if (looksLikeDirectoryPath(initialPath)) {
+        document.getElementById('filePath').value = ensureDirPath(initialPath);
+      } else {
+        document.getElementById('filePath').value = parentPath(initialPath);
+        pendingInitialFilePath = initialPath;
+      }
+    }
+    if (savedUser) document.getElementById('authUser').value = savedUser;
+    if (savedPassword) document.getElementById('authPassword').value = savedPassword;
+    updateAuthStatus();
+    if (savedUser && savedPassword) {
+      loadFiles().then(openInitialTargetIfNeeded);
+    }
+  </script>
+</body>
+</html>

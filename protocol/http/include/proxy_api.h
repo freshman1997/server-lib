@@ -8,6 +8,7 @@
 #include <mutex>
 #include <random>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -67,6 +68,11 @@ namespace yuan::net::http
         int unhealthy_cooldown_ms = 5000;
         size_t max_pool_size_per_target = 8;
         size_t idle_timeout_seconds = 60;
+        bool preserve_host = false;
+        std::vector<std::pair<std::string, std::string>> request_headers;
+        std::vector<std::string> hide_request_headers;
+        std::vector<std::pair<std::string, std::string>> response_headers;
+        std::vector<std::string> hide_response_headers;
     };
 
     struct HttpProxyStats
@@ -302,6 +308,8 @@ namespace yuan::net::http
         {
             Connection *client_conn = nullptr;
             std::string route_key;
+            bool response_header_done = false;
+            std::string response_header_buffer;
         };
 
         std::unordered_map<Connection *, ServerMapping> sc_mapping_;

@@ -59,6 +59,10 @@ namespace yuan::server
         void handle_admin_shares_post(yuan::net::http::HttpRequest *req,
                                       yuan::net::http::HttpResponse *resp,
                                       const std::string &actor);
+        void handle_admin_permissions(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp);
+        void handle_admin_permissions_post(yuan::net::http::HttpRequest *req,
+                                           yuan::net::http::HttpResponse *resp,
+                                           const std::string &actor);
         void handle_admin_users(yuan::net::http::HttpRequest *req, yuan::net::http::HttpResponse *resp);
         void handle_admin_users_get(yuan::net::http::HttpResponse *resp) const;
         void handle_admin_users_post(yuan::net::http::HttpRequest *req,
@@ -90,6 +94,7 @@ namespace yuan::server
         void install_health_endpoint();
         void install_admin_endpoints();
         void install_admin_console();
+        void install_file_console();
 
         NasServiceConfig config_;
         std::unique_ptr<HttpService> http_;

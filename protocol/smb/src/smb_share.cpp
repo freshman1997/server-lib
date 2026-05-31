@@ -1,4 +1,6 @@
 #include "smb_share.h"
+#include "protocol/smb2_codec.h"
+
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -23,12 +25,7 @@ namespace yuan::net::smb
 
     std::string SmbShare::resolve_path(const std::u16string & relative) const
     {
-        std::string narrow;
-        narrow.reserve(relative.size());
-        for (char16_t c : relative) {
-            narrow.push_back(static_cast<char>(c));
-        }
-        return resolve_path(narrow);
+        return resolve_path(Smb2Codec::utf16le_to_utf8(relative));
     }
 
     std::string SmbShare::resolve_path(const std::string & relative) const

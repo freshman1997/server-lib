@@ -19,6 +19,7 @@
 #include <initializer_list>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -127,6 +128,14 @@ namespace
             return static_cast<std::size_t>(-1);
         }
         return static_cast<std::size_t>(std::strtoull(lower.substr(p, end - p).c_str(), nullptr, 10));
+    }
+
+    bool contains_header_fragment(std::string text, const std::string &fragment)
+    {
+        for (char &ch : text) {
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+        return text.find(fragment) != std::string::npos;
     }
 
     std::string trim_http_value(std::string text)
@@ -654,6 +663,42 @@ namespace
               "proxy root strip route should return 200");
         check(resp.find("GET / HTTP/1.1") != std::string::npos,
               "proxy root strip should normalize forwarded path to /");
+    }
+
+    void test_proxy_header_controls(uint16_t port, const std::filesystem::path &upstream_log_path)
+    {
+        {
+            std::ofstream clear(upstream_log_path, std::ios::binary | std::ios::trunc);
+        }
+
+        const std::string resp = http_get(
+            port,
+            "/proxy-headers/demo?x=1",
+            "Host: client.local\r\n"
+            "X-Remove-Me: secret\r\n");
+        check(resp.find("200") != std::string::npos,
+              "proxy header-control route should return 200");
+
+        std::ifstream in(upstream_log_path, std::ios::binary);
+        std::stringstream buffer;
+        buffer << in.rdbuf();
+        const std::string upstream_req = buffer.str();
+        check(upstream_req.find("Host: client.local") != std::string::npos,
+              "proxy preserve_host should forward original host");
+        check(upstream_req.find("X-Forwarded-Host: client.local") != std::string::npos,
+              "proxy_set_header should expand $host");
+        check(upstream_req.find("X-Request-Uri: /proxy-headers/demo?x=1") != std::string::npos,
+              "proxy_set_header should expand $request_uri");
+        check(upstream_req.find("X-Proxy-Added:") != std::string::npos,
+              "proxy_set_header should add custom header");
+        check(upstream_req.find("X-Remove-Me:") == std::string::npos,
+              "hide_request_headers should remove configured request headers");
+        check(resp.find("X-Upstream-Secret:") == std::string::npos,
+              "proxy_hide_header should remove configured upstream response headers");
+        check(resp.find("X-Replace-Me: edge") != std::string::npos,
+              "proxy_set_response_header should replace upstream response headers");
+        check(resp.find("X-Proxy-Response: yes") != std::string::npos,
+              "proxy_set_response_header should add configured response headers");
     }
 
     void test_http_caps_with_config_flags(uint16_t port)
@@ -2184,6 +2229,64 @@ namespace
         check(resp.find("fake-br-payload") != std::string::npos, "precompressed br should serve .br payload");
     }
 
+    void test_static_mime_and_gzip_types(uint16_t port, const std::filesystem::path &root)
+    {
+        {
+            std::ofstream out(root / "style.CSS", std::ios::binary);
+            out << "body { color: #123456; }\n";
+        }
+        {
+            std::ofstream out(root / "module.mjs", std::ios::binary);
+            out << "export const ok = true;\n";
+        }
+        {
+            std::ofstream out(root / "app.wasm", std::ios::binary);
+            out << "fake-wasm";
+        }
+        {
+            std::ofstream out(root / "data.foo", std::ios::binary);
+            for (int i = 0; i < 2048; ++i) {
+                out << "custom-compressible-type-" << (i % 5) << '\n';
+            }
+        }
+        {
+            std::ofstream out(root / "blob.unknown", std::ios::binary);
+            out << "unknown-default";
+        }
+
+        const std::string css = http_get(port, "/static/style.CSS");
+        check(css.find("200") != std::string::npos, "css static fetch should be 200");
+        check(contains_header_fragment(css, "content-type: text/css"),
+              "css content type should be text/css");
+
+        const std::string mjs = http_get(port, "/static/module.mjs");
+        check(contains_header_fragment(mjs, "content-type: text/javascript"),
+              "mjs content type should be text/javascript");
+
+        const std::string wasm = http_get(port, "/static/app.wasm");
+        check(contains_header_fragment(wasm, "content-type: application/wasm"),
+              "wasm content type should be application/wasm");
+
+        const std::string custom = http_get(port, "/typed/data.foo");
+        check(contains_header_fragment(custom, "content-type: application/x-test"),
+              "custom static types map should override MIME type");
+
+        const std::string fallback = http_get(port, "/typed/blob.unknown");
+        check(contains_header_fragment(fallback, "content-type: application/x-default"),
+              "static default_type should apply to unknown extensions");
+
+        const std::string compressed = http_get(port, "/typed/data.foo", "Accept-Encoding: gzip\r\n");
+#if YUAN_HTTP_HAS_ZLIB
+        if (compressed.find("content-encoding: gzip") == std::string::npos) {
+            std::cerr << "[DEBUG] custom gzip_types response:\n" << compressed << "\n";
+        }
+        check(compressed.find("content-encoding: gzip") != std::string::npos,
+              "gzip_types should allow compression for custom MIME types");
+#else
+        (void)compressed;
+#endif
+    }
+
     void test_keep_alive_client_close_releases_connection()
     {
         const uint16_t port = reserve_tcp_port();
@@ -2670,13 +2773,15 @@ int main()
             const std::string req_line = req_line_end == std::string::npos ? req : req.substr(0, req_line_end);
             {
                 std::ofstream out(upstream_log_path, std::ios::binary | std::ios::app);
-                out << req_line << '\n';
+                out << req << "\n---\n";
             }
 
             const std::string body = req_line;
             const std::string response =
                 "HTTP/1.1 200 OK\r\n"
                 "Content-Type: text/plain\r\n"
+                "X-Upstream-Secret: hidden\r\n"
+                "X-Replace-Me: upstream\r\n"
                 "Connection: close\r\n"
                 "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
             (void)send_all(client, response);
@@ -2727,6 +2832,27 @@ int main()
             {"root", "/proxy-root/"},
             {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
             {"strip_prefix", true},
+            {"connect_timeout", 300},
+            {"read_timeout", 1200},
+            {"write_timeout", 800},
+            {"max_retries", 0}
+        },
+        {
+            {"root", "/proxy-headers/"},
+            {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+            {"strip_prefix", false},
+            {"preserve_host", true},
+            {"proxy_set_header", {
+                {"X-Forwarded-Host", "$host"},
+                {"X-Request-Uri", "$request_uri"},
+                {"X-Proxy-Added", "$remote_addr"}
+            }},
+            {"hide_request_headers", nlohmann::json::array({"X-Remove-Me"})},
+            {"proxy_hide_header", nlohmann::json::array({"X-Upstream-Secret"})},
+            {"proxy_set_response_header", {
+                {"X-Replace-Me", "edge"},
+                {"X-Proxy-Response", "yes"}
+            }},
             {"connect_timeout", 300},
             {"read_timeout", 1200},
             {"write_timeout", 800},
@@ -2827,6 +2953,7 @@ int main()
     test_proxy_connect_failure_returns_502(port);
     test_proxy_strip_prefix_rewrite(port);
     test_proxy_strip_prefix_empty_path(port);
+    test_proxy_header_controls(port, upstream_log_path);
 
     std::filesystem::remove("http.json", cleanup_ec);
     const nlohmann::json reset_cfg = {
@@ -2842,8 +2969,15 @@ int main()
     const std::string reload_back = http_get(port, "/reload_config");
     check(reload_back.find("200") != std::string::npos, "reload_config should restore defaults before static tests");
     service->server().mount_static("/static", static_root.string());
+    yuan::net::http::StaticMountOptions typed_options;
+    typed_options.default_type = "application/x-default";
+    typed_options.mime_types[".foo"] = "application/x-test";
+    typed_options.gzip_min_length = 1;
+    typed_options.gzip_types = { "application/x-test" };
+    service->server().mount_static("/typed", static_root.string(), typed_options);
 
     test_static_etag_and_304(port, static_root);
+    test_static_mime_and_gzip_types(port, static_root);
     test_static_gzip(port, static_root);
     test_static_precompressed_br(port, static_root);
     test_static_stream_client_abort_releases_connection(port, static_root, *service);

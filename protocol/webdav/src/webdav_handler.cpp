@@ -28,6 +28,17 @@ namespace yuan::net::webdav
             return path;
         }
 
+        std::string path_to_utf8_string(const std::filesystem::path &path)
+        {
+            const auto utf8 = path.u8string();
+            std::string out;
+            out.reserve(utf8.size());
+            for (const auto ch : utf8) {
+                out.push_back(static_cast<char>(ch));
+            }
+            return out;
+        }
+
         http::ResponseCode code_of(int status)
         {
             return static_cast<http::ResponseCode>(status);
@@ -260,7 +271,7 @@ namespace yuan::net::webdav
                     resp->set_upload_file(false);
                 });
                 auto attachment = std::make_shared<http::AttachmentInfo>();
-                attachment->origin_file_name_ = path->string();
+                attachment->origin_file_name_ = path_to_utf8_string(*path);
                 attachment->length_ = static_cast<std::size_t>(info.content_length);
                 task->set_attachment_info(std::move(attachment));
                 if (task->init()) {

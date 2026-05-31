@@ -326,10 +326,33 @@ namespace yuan::net
             return output_buffer_.readable_bytes();
         }
 
+        void set_max_output_buffer_size(std::size_t size) noexcept
+        {
+            max_output_buffer_size_.store(size, std::memory_order_release);
+        }
+
+        std::size_t max_output_buffer_size() const noexcept
+        {
+            return max_output_buffer_size_.load(std::memory_order_acquire);
+        }
+
+        bool output_limit_exceeded() const noexcept
+        {
+            return output_limit_exceeded_.load(std::memory_order_acquire);
+        }
+
+        void clear_output_limit_exceeded() noexcept
+        {
+            output_limit_exceeded_.store(false, std::memory_order_release);
+        }
+
         void append_output(std::string_view text)
         {
             if (!text.empty()) {
                 std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+                if (!can_append_output_locked(text.size())) {
+                    return;
+                }
                 ensure_output_chunk()->append(text);
             }
         }
@@ -338,6 +361,9 @@ namespace yuan::net
         {
             if (data && size > 0) {
                 std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+                if (!can_append_output_locked(size)) {
+                    return;
+                }
                 ensure_output_chunk()->append(data, size);
             }
         }
@@ -347,6 +373,9 @@ namespace yuan::net
             const auto span = buffer.readable_span();
             if (!span.empty()) {
                 std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+                if (!can_append_output_locked(span.size())) {
+                    return;
+                }
                 ensure_output_chunk()->append(span);
             }
         }
@@ -433,6 +462,19 @@ namespace yuan::net
             return chunk;
         }
 
+        bool can_append_output_locked(std::size_t bytes)
+        {
+            const auto limit = max_output_buffer_size_.load(std::memory_order_acquire);
+            if (limit == 0) {
+                return true;
+            }
+            if (bytes > limit || output_buffer_.readable_bytes() > limit - bytes) {
+                output_limit_exceeded_.store(true, std::memory_order_release);
+                return false;
+            }
+            return true;
+        }
+
         void replace_input_buffer(::yuan::buffer::ByteBuffer buffer)
         {
             input_buffer_ = std::move(buffer);
@@ -487,6 +529,8 @@ namespace yuan::net
         ::yuan::buffer::ByteBuffer input_buffer_;
         mutable std::mutex output_buffer_mutex_;
         ::yuan::buffer::BufferChain output_buffer_;
+        std::atomic_size_t max_output_buffer_size_{0};
+        std::atomic_bool output_limit_exceeded_{false};
 
     private:
         struct WaiterEntry

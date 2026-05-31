@@ -14,6 +14,7 @@ namespace yuan::net
                                           uint16_t port,
                                           std::size_t shard_count,
                                           std::size_t iocp_worker_count,
+                                          std::size_t completion_batch_size,
                                           AsyncConnectionHandler handler,
                                           int backlog)
     {
@@ -59,7 +60,13 @@ namespace yuan::net
         };
 
         const auto actual_iocp_workers = (std::max<std::size_t>)(1, iocp_worker_count);
-        if (!engine_.listen(host, port, actual_iocp_workers, std::move(callbacks), 0, backlog)) {
+        if (!engine_.listen(host,
+                            port,
+                            actual_iocp_workers,
+                            std::move(callbacks),
+                            0,
+                            backlog,
+                            completion_batch_size)) {
             close();
             return false;
         }
@@ -70,6 +77,7 @@ namespace yuan::net
         (void)port;
         (void)shard_count;
         (void)iocp_worker_count;
+        (void)completion_batch_size;
         (void)handler;
         (void)backlog;
         return false;

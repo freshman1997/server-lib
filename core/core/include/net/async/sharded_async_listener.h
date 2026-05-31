@@ -1,10 +1,12 @@
-#ifndef __YUAN_NET_ASYNC_IOCP_SHARDED_ASYNC_LISTENER_H__
-#define __YUAN_NET_ASYNC_IOCP_SHARDED_ASYNC_LISTENER_H__
+#ifndef __YUAN_NET_ASYNC_SHARDED_ASYNC_LISTENER_H__
+#define __YUAN_NET_ASYNC_SHARDED_ASYNC_LISTENER_H__
 
 #include "coroutine/task.h"
+#include "net/acceptor/stream_acceptor.h"
 #include "net/async/async_connection_context.h"
-#include "net/iocp/iocp_tcp_engine.h"
+#include "net/handler/connection_handler.h"
 #include "net/runtime/network_runtime.h"
+#include "net/socket/listen_options.h"
 
 #include <atomic>
 #include <cstddef>
@@ -17,24 +19,22 @@
 
 namespace yuan::net
 {
-    class IocpShardedAsyncListener
+    class ShardedAsyncListener
     {
     public:
         using AsyncConnectionHandler = std::function<coroutine::Task<void>(AsyncConnectionContext)>;
 
-        IocpShardedAsyncListener() = default;
-        ~IocpShardedAsyncListener();
+        ShardedAsyncListener() = default;
+        ~ShardedAsyncListener();
 
-        IocpShardedAsyncListener(const IocpShardedAsyncListener &) = delete;
-        IocpShardedAsyncListener &operator=(const IocpShardedAsyncListener &) = delete;
+        ShardedAsyncListener(const ShardedAsyncListener &) = delete;
+        ShardedAsyncListener &operator=(const ShardedAsyncListener &) = delete;
 
         bool listen(const std::string &host,
                     uint16_t port,
                     std::size_t shard_count,
-                    std::size_t iocp_worker_count,
-                    std::size_t completion_batch_size,
-                    AsyncConnectionHandler handler,
-                    int backlog = 128);
+                    ListenOptions options,
+                    AsyncConnectionHandler handler);
 
         void close();
 
@@ -43,21 +43,26 @@ namespace yuan::net
         std::size_t shard_count() const noexcept;
 
     private:
+        class DispatchHandler;
+
         struct Shard
         {
             std::unique_ptr<NetworkRuntime> runtime;
+            std::unique_ptr<StreamAcceptor> acceptor;
+            std::shared_ptr<DispatchHandler> dispatch_handler;
             std::thread thread;
         };
 
-        bool start_shards(std::size_t count);
+        bool start_one_shard(const std::string &host,
+                             uint16_t port,
+                             ListenOptions options,
+                             bool first_shard);
         void stop_shards();
-        NetworkRuntime *next_runtime();
 
-        IocpTcpEngine engine_;
         std::vector<Shard> shards_;
         AsyncConnectionHandler handler_;
-        std::atomic_size_t next_shard_{0};
         std::atomic_bool running_{false};
+        uint16_t local_port_ = 0;
     };
 }
 

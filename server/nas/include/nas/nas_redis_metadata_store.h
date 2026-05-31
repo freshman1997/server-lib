@@ -32,6 +32,7 @@ namespace yuan::server::nas
 
         NasPermission permissions_for(std::string_view share_id, std::string_view subject) const override;
         bool set_permissions(std::string_view share_id, std::string_view subject, NasPermission permissions) override;
+        bool remove_permissions(std::string_view share_id, std::string_view subject) override;
 
         std::unordered_map<std::string, std::string> dead_properties(std::string_view share_id,
                                                                      std::string_view path) const override;

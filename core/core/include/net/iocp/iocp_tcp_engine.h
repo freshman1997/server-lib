@@ -140,7 +140,8 @@ namespace yuan::net
                     std::size_t worker_count,
                     IocpTcpEngineCallbacks callbacks,
                     std::size_t accept_count = 0,
-                    int backlog = 128);
+                    int backlog = 128,
+                    std::size_t completion_batch_size = 1);
         bool connect(const std::string &host,
                      uint16_t port,
                      std::size_t worker_count,

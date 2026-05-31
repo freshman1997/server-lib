@@ -56,9 +56,12 @@
     <section>
       <h2>Create User</h2>
       <form id="userForm">
-        <input name="id" placeholder="id" required>
+        <input name="id" placeholder="id">
         <input name="username" placeholder="username" required>
-        <input name="password" type="password" placeholder="password" required>
+        <input name="password" type="password" placeholder="password">
+        <input name="smb_password" type="password" placeholder="SMB password (blank = same)">
+        <label><input name="enabled" type="checkbox" checked> enabled</label>
+        <label><input name="smb_enabled" type="checkbox"> smb</label>
         <label><input name="admin" type="checkbox"> admin</label>
         <button type="submit">Save User</button>
       </form>
@@ -69,8 +72,22 @@
         <input name="id" placeholder="id" required>
         <input name="name" placeholder="name" required>
         <input name="root_path" placeholder="root path" required>
+        <label><input name="enabled" type="checkbox" checked> enabled</label>
         <label><input name="readonly" type="checkbox"> readonly</label>
         <button type="submit">Save Share</button>
+      </form>
+    </section>
+    <section>
+      <h2>Share Permissions</h2>
+      <form id="permissionForm">
+        <input name="share" placeholder="share id or name" required>
+        <input name="username" placeholder="username" required>
+        <label><input name="read" type="checkbox" checked> read</label>
+        <label><input name="write" type="checkbox"> write</label>
+        <label><input name="remove" type="checkbox"> delete</label>
+        <label><input name="admin" type="checkbox"> admin</label>
+        <label><input name="clear" type="checkbox"> use default</label>
+        <button type="submit">Save Permission</button>
       </form>
     </section>
     <section>
@@ -140,7 +157,8 @@
         '</tr></thead><tbody>' +
         rows.map(r => '<tr>' + cols.map(c => {
           const v = r[c];
-          return '<td>' + String(v === undefined || v === null ? '' : v) + '</td>';
+          const text = Array.isArray(v) || (v && typeof v === 'object') ? JSON.stringify(v) : String(v === undefined || v === null ? '' : v);
+          return '<td>' + text + '</td>';
         }).join('') + '</tr>').join('') +
         '</tbody></table>';
     }
@@ -155,6 +173,19 @@
       const trimmed = path.slice(0, -1);
       const idx = trimmed.lastIndexOf('/');
       return idx <= 0 ? '/dav/public/' : trimmed.slice(0, idx + 1);
+    }
+
+    function mountPrefixFromPath(path) {
+      path = ensureDirPath(path || '/dav/public/');
+      const parts = path.split('/').filter(Boolean);
+      return parts.length ? '/' + parts[0] : '/dav';
+    }
+
+    function webdavUrlFromHref(href, currentPath) {
+      let out = decodeURIComponent((href || '').split('?')[0]);
+      if (!out.startsWith('/')) out = '/' + out;
+      const mount = mountPrefixFromPath(currentPath);
+      return out === mount || out.startsWith(mount + '/') ? out : mount + out;
     }
 
     function displayNameFromHref(href) {
@@ -185,8 +216,9 @@
           const isDir = !!typeNode && typeNode.getElementsByTagNameNS('*', 'collection').length > 0;
           const size = item.getElementsByTagNameNS('*', 'getcontentlength')[0]?.textContent || '';
           const modified = item.getElementsByTagNameNS('*', 'getlastmodified')[0]?.textContent || '';
-          return { href, name: displayNameFromHref(href), isDir, size, modified };
-        }).filter(row => row.href && decodeURIComponent(row.href).replace(/\/$/, '') !== path.replace(/\/$/, ''));
+          const url = webdavUrlFromHref(href, path);
+          return { href, url, name: displayNameFromHref(href), isDir, size, modified };
+        }).filter(row => row.href && row.url.replace(/\/$/, '') !== path.replace(/\/$/, ''));
 
         let html = '<div class="toolbar"><button type="button" data-open="' + parentPath(path) + '">Up</button></div>';
         if (!rows.length) {
@@ -194,7 +226,7 @@
         } else {
           html += '<table><thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th><th>Actions</th></tr></thead><tbody>';
           html += rows.map(row => {
-            const href = decodeURIComponent(row.href);
+            const href = row.url;
             const openTarget = row.isDir ? ensureDirPath(href) : href;
             const name = row.name || openTarget;
             const actions = row.isDir
@@ -217,10 +249,10 @@
         document.getElementById('health').textContent = JSON.stringify(health, null, 2);
 
         const users = await getJson('/nas/admin/users');
-        document.getElementById('users').innerHTML = table(users.users || [], ['id', 'username', 'enabled', 'admin']);
+        document.getElementById('users').innerHTML = table(users.users || [], ['id', 'username', 'enabled', 'admin', 'smb_enabled']);
 
         const shares = await getJson('/nas/admin/shares');
-        document.getElementById('shares').innerHTML = table(shares.shares || [], ['id', 'name', 'root_path', 'enabled', 'readonly']);
+        document.getElementById('shares').innerHTML = table(shares.shares || [], ['id', 'name', 'root_path', 'enabled', 'readonly', 'default_permissions', 'subject_permissions']);
 
         const quota = await getJson('/nas/admin/quota');
         document.getElementById('quota').innerHTML = table(quota.shares || [], ['id', 'name', 'exists', 'used_bytes', 'available_bytes']);
@@ -243,13 +275,16 @@
       e.preventDefault();
       const form = e.target;
       await postJson('/nas/admin/users', {
-        id: form.id.value,
-        username: form.username.value,
-        password: form.password.value,
-        enabled: true,
-        admin: form.admin.checked
+        id: form.elements.id.value,
+        username: form.elements.username.value,
+        password: form.elements.password.value,
+        smb_password: form.elements.smb_password.value || undefined,
+        smb_enabled: form.elements.smb_enabled.checked,
+        enabled: form.elements.enabled.checked,
+        admin: form.elements.admin.checked
       });
       form.reset();
+      form.elements.enabled.checked = true;
       load();
     });
 
@@ -257,14 +292,34 @@
       e.preventDefault();
       const form = e.target;
       await postJson('/nas/admin/shares', {
-        id: form.id.value,
-        name: form.name.value,
-        root_path: form.root_path.value,
-        readonly: form.readonly.checked,
-        enabled: true,
+        id: form.elements.id.value,
+        name: form.elements.name.value,
+        root_path: form.elements.root_path.value,
+        readonly: form.elements.readonly.checked,
+        enabled: form.elements.enabled.checked,
         default_permissions: ['read', 'write', 'remove']
       });
       form.reset();
+      form.elements.enabled.checked = true;
+      load();
+    });
+
+    document.getElementById('permissionForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const permissions = [];
+      if (form.elements.read.checked) permissions.push('read');
+      if (form.elements.write.checked) permissions.push('write');
+      if (form.elements.remove.checked) permissions.push('remove');
+      if (form.elements.admin.checked) permissions.push('admin');
+      await postJson('/nas/admin/permissions', {
+        share: form.elements.share.value,
+        username: form.elements.username.value,
+        permissions,
+        clear: form.elements.clear.checked
+      });
+      form.reset();
+      form.elements.read.checked = true;
       load();
     });
 

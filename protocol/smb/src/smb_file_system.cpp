@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cstring>
+#include <cwctype>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -83,6 +84,27 @@ namespace yuan::net::smb
         }
 #endif
 
+        static std::filesystem::path path_from_utf8(std::string_view text)
+        {
+            std::u8string u8;
+            u8.reserve(text.size());
+            for (const auto ch : text) {
+                u8.push_back(static_cast<char8_t>(static_cast<unsigned char>(ch)));
+            }
+            return std::filesystem::path(u8);
+        }
+
+        static std::string path_to_utf8(const std::filesystem::path &path)
+        {
+            const auto u8 = path.u8string();
+            std::string out;
+            out.reserve(u8.size());
+            for (const auto ch : u8) {
+                out.push_back(static_cast<char>(ch));
+            }
+            return out;
+        }
+
         static bool wildcard_match(const std::string &pattern, const std::string &name)
         {
             if (pattern == "*" || pattern == "*.*") {
@@ -124,13 +146,26 @@ namespace yuan::net::smb
 
         static bool is_path_within(const std::filesystem::path &root, const std::filesystem::path &path)
         {
+#ifdef _WIN32
+            auto root_str = root.native();
+            auto path_str = path.native();
+            std::transform(root_str.begin(), root_str.end(), root_str.begin(), [](wchar_t ch) {
+                return static_cast<wchar_t>(std::towlower(ch));
+            });
+            std::transform(path_str.begin(), path_str.end(), path_str.begin(), [](wchar_t ch) {
+                return static_cast<wchar_t>(std::towlower(ch));
+            });
+            constexpr wchar_t sep = L'\\';
+#else
             auto root_str = root.string();
             auto path_str = path.string();
+            constexpr char sep = std::filesystem::path::preferred_separator;
+#endif
             if (path_str == root_str) {
                 return true;
             }
-            if (!root_str.empty() && root_str.back() != std::filesystem::path::preferred_separator) {
-                root_str.push_back(std::filesystem::path::preferred_separator);
+            if (!root_str.empty() && root_str.back() != sep) {
+                root_str.push_back(sep);
             }
             return path_str.rfind(root_str, 0) == 0;
         }
@@ -235,15 +270,15 @@ namespace yuan::net::smb
         }
 
         namespace fs = std::filesystem;
-        fs::path root(root_path_);
-        fs::path combined = root / normalized;
+        fs::path root = path_from_utf8(root_path_);
+        fs::path combined = root / path_from_utf8(normalized);
         fs::path canonical = fs::weakly_canonical(combined);
         fs::path canonical_root = fs::weakly_canonical(root);
 
         if (!is_path_within(canonical_root, canonical)) {
             return root_path_;
         }
-        return canonical.string();
+        return path_to_utf8(canonical);
     }
 
     uint64_t LocalFileSystem::filetime_now()
@@ -291,8 +326,9 @@ namespace yuan::net::smb
 
         namespace fs = std::filesystem;
         std::error_code ec;
-        const bool existed_before = fs::exists(full_path, ec);
-        const bool is_existing_directory = existed_before && fs::is_directory(full_path, ec);
+        const fs::path native_full_path = path_from_utf8(full_path);
+        const bool existed_before = fs::exists(native_full_path, ec);
+        const bool is_existing_directory = existed_before && fs::is_directory(native_full_path, ec);
         if ((create_options & SMB_FILE_NON_DIRECTORY_FILE) != 0 && is_existing_directory) {
             result.status = NtStatus::NOT_SUPPORTED;
             return result;
@@ -337,7 +373,7 @@ namespace yuan::net::smb
             attrs |= FILE_FLAG_BACKUP_SEMANTICS;
         }
 
-        HANDLE handle = CreateFileA(full_path.c_str(), access,
+        HANDLE handle = CreateFileW(native_full_path.c_str(), access,
                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                     nullptr, creation, attrs, nullptr);
         if (handle == INVALID_HANDLE_VALUE) {
@@ -388,7 +424,7 @@ namespace yuan::net::smb
                     result.status = NtStatus::OBJECT_NAME_NOT_FOUND;
                     return result;
                 }
-                if (!fs::create_directories(full_path, ec) || ec) {
+                if (!fs::create_directories(native_full_path, ec) || ec) {
                     result.status = NtStatus::UNSUCCESSFUL;
                     return result;
                 }
@@ -527,7 +563,7 @@ namespace yuan::net::smb
 
         if (h->delete_on_close) {
             std::error_code ec;
-            std::filesystem::path p(h->path);
+            std::filesystem::path p = path_from_utf8(h->path);
             if (h->is_directory || std::filesystem::is_directory(p, ec)) {
                 std::filesystem::remove_all(p, ec);
             } else {
@@ -818,7 +854,7 @@ namespace yuan::net::smb
 
         namespace fs = std::filesystem;
         std::error_code ec;
-        fs::path dir_path(h->path);
+        fs::path dir_path = path_from_utf8(h->path);
         if (!fs::exists(dir_path, ec) || !fs::is_directory(dir_path, ec)) {
             return std::nullopt;
         }
@@ -834,7 +870,7 @@ namespace yuan::net::smb
                 if (ec) {
                     break;
                 }
-                const auto name = entry.path().filename().string();
+                const auto name = path_to_utf8(entry.path().filename());
                 if (!wildcard_match(pat, name)) {
                     continue;
                 }
@@ -844,14 +880,11 @@ namespace yuan::net::smb
                 auto fsize = entry.is_regular_file(st_ec) ? fs::file_size(entry.path(), st_ec) : 0ULL;
 
                 DirEntry de;
-                de.file_name.reserve(name.size());
-                for (char c : name) {
-                    de.file_name.push_back(static_cast<char16_t>(static_cast<unsigned char>(c)));
-                }
+                de.file_name = Smb2Codec::utf8_to_utf16le(name);
                 de.end_of_file = fsize;
                 de.allocation_size = fsize;
                 de.file_attributes = entry.is_directory(st_ec) ? SMB_FILE_ATTRIBUTE_DIRECTORY : SMB_FILE_ATTRIBUTE_NORMAL;
-                de.file_id.persistent = static_cast<uint64_t>(std::hash<std::string>{}(entry.path().string()));
+                de.file_id.persistent = static_cast<uint64_t>(std::hash<std::string>{}(path_to_utf8(entry.path())));
                 de.file_id.volatile_id = de.file_id.persistent;
                 if (status.type() == fs::file_type::symlink) {
                     de.file_attributes |= SMB_FILE_ATTRIBUTE_REPARSE_POINT;
@@ -892,16 +925,16 @@ namespace yuan::net::smb
 
         namespace fs = std::filesystem;
         std::error_code ec;
-        fs::path dest = resolve(new_path);
+        fs::path dest = path_from_utf8(resolve(new_path));
         if (!replace && fs::exists(dest, ec)) {
             return NtStatus::OBJECT_NAME_COLLISION;
         }
 
-        fs::rename(fs::path(h->path), dest, ec);
+        fs::rename(path_from_utf8(h->path), dest, ec);
         if (ec) {
             return NtStatus::UNSUCCESSFUL;
         }
-        h->path = dest.string();
+        h->path = path_to_utf8(dest);
         return NtStatus::SUCCESS;
     }
 
@@ -914,7 +947,7 @@ namespace yuan::net::smb
 
         namespace fs = std::filesystem;
         std::error_code ec;
-        fs::path p(h->path);
+        fs::path p = path_from_utf8(h->path);
         bool removed = false;
         if (h->is_directory || fs::is_directory(p, ec)) {
             removed = fs::remove_all(p, ec) > 0;

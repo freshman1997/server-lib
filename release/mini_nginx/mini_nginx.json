@@ -9,14 +9,19 @@
     "enable_cors": true,
     "enable_http2": true,
     "use_iocp": true,
+    "scheduling_mode": "throughput",
+    "shard_count": 4,
     "iocp_worker_count": 4,
+    "iocp_completion_batch_size": 1,
     "backlog": 1024,
     "allowed_methods": ["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     "max_connections": 0,
     "max_connections_per_ip": 0,
     "max_inflight_requests_per_ip": 0,
     "max_concurrent_requests_per_ip": 0,
-    "max_body_size": 10485760
+    "client_max_body_size": "10m",
+    "keepalive_timeout": "60s",
+    "send_timeout": "10s"
   },
   "access_log": {
     "enabled": true,
@@ -56,6 +61,22 @@
       "root": "release/mini_nginx/www",
       "auto_index": true,
       "enable_range": true,
+      "sendfile": true,
+      "gzip": true,
+      "gzip_static": true,
+      "gzip_min_length": "1k",
+      "gzip_types": ["text/*", "application/json", "application/javascript", "application/wasm", "image/svg+xml"],
+      "default_type": "application/octet-stream",
+      "types": {
+        "text/css": ["css"],
+        "application/wasm": ["wasm"],
+        "image/svg+xml": ["svg"]
+      },
+      "cache_control": "public, max-age=60",
+      "expires": "1h",
+      "headers": {
+        "X-Static-Served-By": "mini_nginx"
+      },
       "index": ["index.html", "index.htm"],
       "try_files": ["$uri", "$uri/index.html", "/index.html", "=404"],
       "error_page": {
@@ -66,9 +87,9 @@
   "upstreams": {
     "api_backend": {
       "balance": "round_robin",
-      "connect_timeout": 3000,
-      "read_timeout": 30000,
-      "write_timeout": 10000,
+      "proxy_connect_timeout": "3s",
+      "proxy_read_timeout": "30s",
+      "proxy_send_timeout": "10s",
       "max_retries": 1,
       "pool_size": 16,
       "idle_timeout": 60,
@@ -79,9 +100,9 @@
     },
     "ws_backend": {
       "balance": "round_robin",
-      "connect_timeout": 3000,
-      "read_timeout": 60000,
-      "write_timeout": 60000,
+      "proxy_connect_timeout": "3s",
+      "proxy_read_timeout": "60s",
+      "proxy_send_timeout": "60s",
       "max_retries": 0,
       "pool_size": 4,
       "idle_timeout": 30,
@@ -94,7 +115,16 @@
     {
       "path": "/api/",
       "proxy_pass": "api_backend",
-      "strip_prefix": false
+      "strip_prefix": false,
+      "preserve_host": true,
+      "proxy_set_header": {
+        "X-Forwarded-Host": "$host",
+        "X-Request-Uri": "$request_uri"
+      },
+      "proxy_hide_header": ["X-Upstream-Internal"],
+      "proxy_set_response_header": {
+        "X-Proxied-By": "mini_nginx"
+      }
     },
     {
       "path": "/ws/",

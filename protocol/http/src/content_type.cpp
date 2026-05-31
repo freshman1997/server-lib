@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cctype>
 #include <unordered_map>
 #include <utility>
 #include "content_type.h"
@@ -8,7 +10,7 @@ namespace yuan::net::http
         {
             "text/plain",
             "text/html",
-            "text/style",
+            "text/css",
             "text/javascript",
             "application/json",
             "multipart/form-data",
@@ -25,7 +27,7 @@ namespace yuan::net::http
         {
             { "text/plain", { ".txt", ContentType::text_plain } },
             { "text/html", { ".html", ContentType::text_html } },
-            { "text/style", { ".css", ContentType::text_style_sheet } },
+            { "text/css", { ".css", ContentType::text_style_sheet } },
             { "text/javascript", { ".js", ContentType::text_javascript } },
             { "application/json", { ".json", ContentType::application_json } },
             { "multipart/form-data", { "", ContentType::multpart_form_data } },
@@ -46,10 +48,44 @@ namespace yuan::net::http
 
     std::string get_content_type(const std::string & ext)
     {
+        std::string normalized = ext;
+        std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+
         for (const auto &item : ContentType_mapping) {
-            if (!item.first.empty() && item.second.first == ext) {
+            if (!item.first.empty() && item.second.first == normalized) {
                 return item.first;
             }
+        }
+
+        static const std::unordered_map<std::string, std::string> common_types = {
+            { ".htm", "text/html" },
+            { ".mjs", "text/javascript" },
+            { ".xml", "application/xml" },
+            { ".svg", "image/svg+xml" },
+            { ".wasm", "application/wasm" },
+            { ".png", "image/png" },
+            { ".jpg", "image/jpeg" },
+            { ".jpeg", "image/jpeg" },
+            { ".gif", "image/gif" },
+            { ".webp", "image/webp" },
+            { ".ico", "image/x-icon" },
+            { ".pdf", "application/pdf" },
+            { ".zip", "application/zip" },
+            { ".gz", "application/gzip" },
+            { ".br", "application/octet-stream" },
+            { ".map", "application/json" },
+            { ".woff", "font/woff" },
+            { ".woff2", "font/woff2" },
+            { ".ttf", "font/ttf" },
+            { ".otf", "font/otf" },
+            { ".eot", "application/vnd.ms-fontobject" },
+        };
+
+        auto it = common_types.find(normalized);
+        if (it != common_types.end()) {
+            return it->second;
         }
 
         return "application/octet-stream";

@@ -1,6 +1,7 @@
 #ifndef __IOCP_COMPLETION_PORT_H__
 #define __IOCP_COMPLETION_PORT_H__
 
+#include <cstddef>
 #include <cstdint>
 
 namespace yuan::net
@@ -33,6 +34,10 @@ namespace yuan::net
         bool associate_socket(int fd, uintptr_t key) noexcept;
         bool post(uintptr_t key = 0, void *operation = nullptr, uint32_t bytes = 0) noexcept;
         bool wait(uint32_t timeout_ms, IocpCompletion &completion) noexcept;
+        bool wait_many(uint32_t timeout_ms,
+                       IocpCompletion *completions,
+                       std::size_t max_completions,
+                       std::size_t &completion_count) noexcept;
 
         void *native_handle() const noexcept;
 

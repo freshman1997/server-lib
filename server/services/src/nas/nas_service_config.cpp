@@ -139,6 +139,13 @@ namespace yuan::server
                 if (item.contains("default_permissions")) {
                     share.default_permissions = parse_permissions(item.at("default_permissions"), share.default_permissions);
                 }
+                if (item.contains("subject_permissions") && item.at("subject_permissions").is_object()) {
+                    for (const auto &[subject, permissions] : item.at("subject_permissions").items()) {
+                        if (!subject.empty()) {
+                            share.subject_permissions[subject] = parse_permissions(permissions, yuan::server::nas::NasPermission::none);
+                        }
+                    }
+                }
                 if (!share.id.empty() && !share.name.empty() && !share.root_path.empty()) {
                     config.nas.shares.push_back(std::move(share));
                 }
@@ -152,6 +159,7 @@ namespace yuan::server
                 user.id = json_string(item, "id");
                 user.username = json_string(item, "username");
                 user.password_hash = json_string(item, "password_hash");
+                user.smb_password_hash = json_string(item, "smb_password_hash");
                 user.enabled = json_bool(item, "enabled", user.enabled);
                 user.admin = json_bool(item, "admin", user.admin);
                 if (!user.id.empty() && !user.username.empty() && !user.password_hash.empty()) {

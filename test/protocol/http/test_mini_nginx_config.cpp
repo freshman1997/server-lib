@@ -469,6 +469,19 @@ namespace
             "TRACE / HTTP/1.1\r\n"
             "Host: 127.0.0.1:18087\r\n"
             "Connection: close\r\n\r\n");
+        const std::string cached_static = request(
+            "GET /index.html HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Connection: close\r\n\r\n");
+        const std::string custom_404 = request(
+            "GET /not-found-for-error-page HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Connection: close\r\n\r\n");
+        const std::string nogzip_static = request(
+            "GET /nogzip/index.html HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Accept-Encoding: gzip\r\n"
+            "Connection: close\r\n\r\n");
 
         kill(pid, SIGTERM);
         waitpid(pid, nullptr, 0);
@@ -478,7 +491,14 @@ namespace
                redirect.find(" 301 ") != std::string::npos &&
                redirect.find("Location: /static/index.html") != std::string::npos &&
                rejected.find(" 405 ") != std::string::npos &&
-               rejected.find("Allow:") != std::string::npos;
+               rejected.find("Allow:") != std::string::npos &&
+               cached_static.find(" 200 ") != std::string::npos &&
+               cached_static.find("Cache-Control: public, max-age=60") != std::string::npos &&
+               cached_static.find("Expires:") != std::string::npos &&
+               cached_static.find("X-Static-Header: asset") != std::string::npos &&
+               custom_404.find(" 404 ") != std::string::npos &&
+               nogzip_static.find(" 200 ") != std::string::npos &&
+               nogzip_static.find("Content-Encoding:") == std::string::npos;
     }
 #endif
 }
@@ -598,7 +618,12 @@ int main()
     {
       "location": "/",
       "root": "release/mini_nginx/www",
-      "auto_index": true
+      "auto_index": true,
+      "cache_control": "public, max-age=60",
+      "expires": "1h",
+      "headers": {
+        "X-Static-Header": "asset"
+      }
     }
   ]
 })";
@@ -683,7 +708,10 @@ int main()
     "backlog": 256,
     "use_iocp": true,
     "iocp_worker_count": 2,
-    "allowed_methods": ["GET", "HEAD"]
+    "allowed_methods": ["GET", "HEAD"],
+    "client_max_body_size": "2m",
+    "keepalive_timeout": "30s",
+    "send_timeout": "5s"
   },
   "health": {
     "enabled": true,
@@ -712,7 +740,41 @@ int main()
     {
       "location": "/",
       "root": "release/mini_nginx/www",
-      "auto_index": true
+      "auto_index": true,
+      "autoindex": true,
+      "gzip": true,
+      "gzip_static": true,
+      "sendfile": true,
+      "gzip_min_length": "1k",
+      "gzip_types": ["text/*", "application/json", "application/x-test"],
+      "default_type": "application/octet-stream",
+      "types": {
+        "application/x-test": ["foo"]
+      },
+      "cache_control": "public, max-age=60",
+      "expires": "1h",
+      "headers": {
+        "X-Static-Header": "asset"
+      },
+      "error_page": {
+        "404": "/404.html"
+      }
+    },
+    {
+      "location": "/nogzip",
+      "root": "release/mini_nginx/www",
+      "autoindex": false,
+      "gzip": false,
+      "gzip_static": false
+    }
+  ],
+  "routes": [
+    {
+      "location": "/direct/",
+      "proxy_pass": "http://127.0.0.1:1/backend",
+      "proxy_connect_timeout": "250ms",
+      "proxy_read_timeout": "1s",
+      "proxy_send_timeout": "1s"
     }
   ]
 })";

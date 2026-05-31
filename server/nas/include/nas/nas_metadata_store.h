@@ -29,6 +29,10 @@ namespace yuan::server::nas
 
         virtual NasPermission permissions_for(std::string_view share_id, std::string_view subject) const = 0;
         virtual bool set_permissions(std::string_view share_id, std::string_view subject, NasPermission permissions) = 0;
+        virtual bool remove_permissions(std::string_view share_id, std::string_view subject)
+        {
+            return set_permissions(share_id, subject, NasPermission::none);
+        }
 
         virtual std::unordered_map<std::string, std::string> dead_properties(std::string_view share_id,
                                                                              std::string_view path) const = 0;

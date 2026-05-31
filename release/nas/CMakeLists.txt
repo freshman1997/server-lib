@@ -43,6 +43,9 @@ add_custom_target(release_nas_assets
             "${CMAKE_SOURCE_DIR}/server/services/resources/nas_admin_console.html"
             "${RELEASE_NAS_ASSET_DIR}/nas_admin_console.html"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/server/services/resources/nas_file_console.html"
+            "${RELEASE_NAS_ASSET_DIR}/nas_file_console.html"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/start.sh"
             "${RELEASE_NAS_ASSET_DIR}/start.sh"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

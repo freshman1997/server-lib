@@ -178,6 +178,7 @@ namespace yuan::server::nas
             { "id", user.id },
             { "username", user.username },
             { "password_hash", user.password_hash },
+            { "smb_password_hash", user.smb_password_hash },
             { "enabled", user.enabled ? "1" : "0" },
             { "admin", user.admin ? "1" : "0" },
         };
@@ -255,6 +256,14 @@ namespace yuan::server::nas
             return false;
         }
         return !redis_error(client_->hset(acl_key(share_id), std::string(subject), permission_to_string(permissions)));
+    }
+
+    bool NasRedisMetadataStore::remove_permissions(std::string_view share_id, std::string_view subject)
+    {
+        if (!available() || share_id.empty() || subject.empty()) {
+            return false;
+        }
+        return !redis_error(client_->hdel(acl_key(share_id), { std::string(subject) }));
     }
 
     std::unordered_map<std::string, std::string> NasRedisMetadataStore::dead_properties(std::string_view share_id,
@@ -560,6 +569,7 @@ namespace yuan::server::nas
         user.id = fields.contains("id") ? fields.at("id") : std::string(user_id);
         user.username = fields.contains("username") ? fields.at("username") : "";
         user.password_hash = fields.contains("password_hash") ? fields.at("password_hash") : "";
+        user.smb_password_hash = fields.contains("smb_password_hash") ? fields.at("smb_password_hash") : "";
         user.enabled = !fields.contains("enabled") || fields.at("enabled") == "1";
         user.admin = fields.contains("admin") && fields.at("admin") == "1";
         return user;

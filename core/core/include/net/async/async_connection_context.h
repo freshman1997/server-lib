@@ -154,6 +154,7 @@ namespace yuan::net
             auto *conn = conn_handle_.get();
             if (conn) {
                 conn->append_output(text);
+                close_on_output_limit(conn);
             }
         }
 
@@ -162,6 +163,7 @@ namespace yuan::net
             auto *conn = conn_handle_.get();
             if (conn) {
                 conn->append_output(data, size);
+                close_on_output_limit(conn);
             }
         }
 
@@ -170,6 +172,7 @@ namespace yuan::net
             auto *conn = conn_handle_.get();
             if (conn) {
                 conn->append_output(buffer);
+                close_on_output_limit(conn);
             }
         }
 
@@ -298,6 +301,14 @@ namespace yuan::net
                 return ConnectionHandle(conn->shared_from_this());
             } catch (const std::bad_weak_ptr &) {
                 return {};
+            }
+        }
+
+        void close_on_output_limit(Connection *conn)
+        {
+            if (conn && conn->output_limit_exceeded() && !closed_) {
+                closed_ = true;
+                conn->close();
             }
         }
 

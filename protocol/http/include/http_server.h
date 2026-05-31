@@ -5,10 +5,12 @@
 #include <atomic>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
 #include <mutex>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -23,6 +25,7 @@
 #include "net/security/ssl_module.h"
 #include "net/socket/listen_options.h"
 #include "request_dispatcher.h"
+#include "response_code.h"
 #include "thread/thread_pool.h"
 
 #include <functional>
@@ -45,6 +48,7 @@ namespace yuan::net::http
         bool enable_http3 = false;
         bool track_request_time = false;
         size_t max_body_size = 0;
+        int keep_alive_timeout_ms = 30000;
         int write_timeout_ms = 10000;
         int max_connections = 0;
         int max_connections_per_ip = 0;
@@ -75,6 +79,16 @@ namespace yuan::net::http
     {
         bool auto_index = true;
         bool enable_range = true;
+        bool enable_gzip = true;
+        bool enable_gzip_static = true;
+        bool enable_sendfile = true;
+        std::size_t gzip_min_length = 256;
+        std::string cache_control;
+        std::string default_type = "application/octet-stream";
+        int expires_seconds = -1;
+        std::vector<std::pair<std::string, std::string>> headers;
+        std::unordered_map<std::string, std::string> mime_types;
+        std::vector<std::string> gzip_types;
         std::vector<std::string> index_files{ "index.html", "index.htm" };
         std::vector<std::string> try_files;
         std::unordered_map<int, std::string> error_pages;
@@ -204,6 +218,7 @@ namespace yuan::net::http
         static bool should_return_not_modified(HttpRequest *req, const std::string &etag, std::time_t modified_at);
         static bool maybe_compress_static_response(HttpRequest *req,
                                                    HttpResponse *resp,
+                                                   const StaticMountOptions &options,
                                                    const std::string &content_type,
                                                    const std::string &source_path,
                                                    std::size_t source_length);
@@ -213,7 +228,8 @@ namespace yuan::net::http
             HttpResponse *resp,
             const StaticMount &mount,
             const std::string &file_relative_path,
-            const std::string &full_path);
+            const std::string &full_path,
+            std::optional<ResponseCode> status_override = std::nullopt);
         static void serve_download(const std::string &filePath, const std::string &ext, HttpResponse *resp);
         static void serve_list_files(const std::string &prefix, const std::string &filePath, const std::string &request_path, HttpResponse *resp, bool as_json = false);
         void reload_config(HttpRequest *req, HttpResponse *resp);

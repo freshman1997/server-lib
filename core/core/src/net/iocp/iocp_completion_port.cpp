@@ -1,5 +1,7 @@
 #include "net/iocp/iocp_completion_port.h"
 
+#include <algorithm>
+
 #ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
@@ -123,6 +125,49 @@ namespace yuan::net
         return completion.ok || completion.operation != nullptr;
 #else
         (void)timeout_ms;
+        return false;
+#endif
+    }
+
+    bool IocpCompletionPort::wait_many(uint32_t timeout_ms,
+                                       IocpCompletion *completions,
+                                       std::size_t max_completions,
+                                       std::size_t &completion_count) noexcept
+    {
+        completion_count = 0;
+#ifdef _WIN32
+        if (!handle_ || !completions || max_completions == 0) {
+            return false;
+        }
+
+        constexpr std::size_t kMaxBatch = 32;
+        OVERLAPPED_ENTRY entries[kMaxBatch]{};
+        const ULONG capacity = static_cast<ULONG>((std::min)(max_completions, kMaxBatch));
+        ULONG removed = 0;
+        const BOOL ok = ::GetQueuedCompletionStatusEx(static_cast<HANDLE>(handle_),
+                                                      entries,
+                                                      capacity,
+                                                      &removed,
+                                                      static_cast<DWORD>(timeout_ms),
+                                                      FALSE);
+        if (!ok || removed == 0) {
+            return false;
+        }
+
+        for (ULONG i = 0; i < removed; ++i) {
+            auto &out = completions[i];
+            out.bytes = static_cast<uint32_t>(entries[i].dwNumberOfBytesTransferred);
+            out.key = static_cast<uintptr_t>(entries[i].lpCompletionKey);
+            out.operation = entries[i].lpOverlapped;
+            out.ok = true;
+            out.error = 0;
+        }
+        completion_count = removed;
+        return true;
+#else
+        (void)timeout_ms;
+        (void)completions;
+        (void)max_completions;
         return false;
 #endif
     }

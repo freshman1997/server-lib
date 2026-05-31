@@ -211,6 +211,10 @@ namespace yuan::net
         }
 
         append_output(buffer);
+        if (output_limit_exceeded()) {
+            do_close();
+            return;
+        }
 
         channel_->enable_write();
         if (eventHandler_) {
@@ -228,7 +232,22 @@ namespace yuan::net
             return;
         }
 
-        output_buffer_.push_back(std::make_unique<::yuan::buffer::ByteBuffer>(std::move(buffer)));
+        bool overflow = false;
+        {
+            std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+            const auto bytes = buffer.readable_bytes();
+            const auto limit = max_output_buffer_size();
+            if (limit != 0 && (bytes > limit || output_buffer_.readable_bytes() > limit - bytes)) {
+                output_limit_exceeded_.store(true, std::memory_order_release);
+                overflow = true;
+            } else {
+                output_buffer_.push_back(std::make_unique<::yuan::buffer::ByteBuffer>(std::move(buffer)));
+            }
+        }
+        if (overflow) {
+            do_close();
+            return;
+        }
 
         channel_->enable_write();
         if (eventHandler_) {
@@ -267,6 +286,10 @@ namespace yuan::net
 
         if (ssl_handler_ || output_buffer_.front()) {
             append_output(data);
+            if (output_limit_exceeded()) {
+                do_close();
+                return;
+            }
             flush();
             return;
         }
@@ -309,6 +332,10 @@ namespace yuan::net
         }
 
         append_output(data);
+        if (output_limit_exceeded()) {
+            do_close();
+            return;
+        }
         channel_->enable_write();
         if (eventHandler_) {
             eventHandler_->update_channel(ptr_of(channel_));

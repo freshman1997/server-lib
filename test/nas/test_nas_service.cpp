@@ -82,7 +82,28 @@ namespace
             return true;
         }
         yuan::server::nas::NasPermission permissions_for(std::string_view, std::string_view) const override { return yuan::server::nas::NasPermission::none; }
-        bool set_permissions(std::string_view, std::string_view, yuan::server::nas::NasPermission) override { return true; }
+        bool set_permissions(std::string_view share_id,
+                             std::string_view subject,
+                             yuan::server::nas::NasPermission permissions) override
+        {
+            for (auto &[_, share] : shares) {
+                if (share.id == share_id) {
+                    share.subject_permissions[std::string(subject)] = permissions;
+                    return true;
+                }
+            }
+            return false;
+        }
+        bool remove_permissions(std::string_view share_id, std::string_view subject) override
+        {
+            for (auto &[_, share] : shares) {
+                if (share.id == share_id) {
+                    share.subject_permissions.erase(std::string(subject));
+                    return true;
+                }
+            }
+            return false;
+        }
         std::unordered_map<std::string, std::string> dead_properties(std::string_view, std::string_view) const override { return {}; }
         bool set_dead_property(std::string_view, std::string_view, std::string_view, std::string_view) override { return true; }
         bool remove_dead_property(std::string_view, std::string_view, std::string_view) override { return true; }
@@ -317,7 +338,8 @@ int main()
             << "{\"id\":\"u2\",\"username\":\"bob\",\"password_hash\":\""
             << reader.password_hash << "\"}],"
             << "\"shares\":[{\"id\":\"s1\",\"name\":\"public\",\"root_path\":\""
-            << root.generic_string() << "\",\"default_permissions\":[\"read\",\"write\",\"remove\"]}]"
+            << root.generic_string() << "\",\"default_permissions\":[\"read\",\"write\",\"remove\"],"
+            << "\"subject_permissions\":{\"u2\":[\"read\"]}}]"
             << "}}";
     }
     auto loaded = yuan::server::load_nas_service_config(config_path);
@@ -325,6 +347,8 @@ int main()
     check(loaded && loaded->production_mode, "nas service config should parse production mode");
     check(loaded && loaded->port == port, "nas service config should parse port");
     check(loaded && loaded->nas.shares.size() == 1, "nas service config should parse shares");
+    check(loaded && loaded->nas.shares.front().subject_permissions.count("u2") == 1,
+          "nas service config should parse share subject permissions");
     check(loaded && loaded->bootstrap_users.size() == 2, "nas service config should parse bootstrap users");
     check(loaded && loaded->nas.audit.file_path == audit_path.generic_string(),
           "nas service config should parse audit file path");
@@ -432,6 +456,21 @@ int main()
     check(!metadata->audit.empty() && metadata->audit.back().action == "user.upsert",
           "admin users POST should write audit event");
 
+    const std::string disable_user_body =
+        "{\"username\":\"charlie\",\"enabled\":false}";
+    const auto disable_user_resp = roundtrip(port,
+        "POST /nas/admin/users HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Authorization: " + admin_auth + "\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: " + std::to_string(disable_user_body.size()) + "\r\n"
+        "Connection: close\r\n\r\n" + disable_user_body);
+    check(disable_user_resp.find("200") != std::string::npos,
+          "admin users POST should allow partial user updates");
+    charlie = metadata->find_user_by_name("charlie");
+    check(charlie && !charlie->enabled && !charlie->password_hash.empty(),
+          "partial user update should preserve password hash and disable user");
+
     const std::string new_share_body =
         "{\"id\":\"s2\",\"name\":\"media\",\"root_path\":\"" + root_admin.generic_string() +
         "\",\"default_permissions\":[\"read\",\"write\",\"remove\"]}";
@@ -446,6 +485,59 @@ int main()
     check(metadata->find_share_by_name("media").has_value(), "admin shares POST should persist share");
     check(!metadata->audit.empty() && metadata->audit.back().action == "share.upsert",
           "admin shares POST should write audit event");
+
+    const std::string permission_body =
+        "{\"share\":\"media\",\"username\":\"bob\",\"permissions\":[\"read\"]}";
+    const auto permission_resp = roundtrip(port,
+        "POST /nas/admin/permissions HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Authorization: " + admin_auth + "\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: " + std::to_string(permission_body.size()) + "\r\n"
+        "Connection: close\r\n\r\n" + permission_body);
+    check(permission_resp.find("200") != std::string::npos, "admin permissions POST should return 200");
+    auto media_acl = metadata->find_share_by_name("media");
+    check(media_acl && media_acl->subject_permissions.count("u2") == 1,
+          "admin permissions POST should persist per-user share permissions");
+    check(media_acl && yuan::server::nas::has_permission(media_acl->subject_permissions["u2"], nas::NasPermission::read) &&
+              !yuan::server::nas::has_permission(media_acl->subject_permissions["u2"], nas::NasPermission::write),
+          "admin permissions POST should store exact permission mask");
+    check(!metadata->audit.empty() && metadata->audit.back().action == "share.permission.set",
+          "admin permissions POST should write audit event");
+
+    const auto acl_shares_resp = roundtrip(port,
+        "GET /nas/admin/shares HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Authorization: " + admin_auth + "\r\n"
+        "Connection: close\r\n\r\n");
+    check(acl_shares_resp.find("\"subject_permissions\"") != std::string::npos,
+          "admin shares should include subject permissions");
+    check(acl_shares_resp.find("\"username\":\"bob\"") != std::string::npos,
+          "admin shares should resolve ACL subjects to usernames");
+
+    const auto media_reader_put_resp = roundtrip(port,
+        "PUT /dav/media/reader-denied.txt HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Authorization: " + reader_auth + "\r\n"
+        "Content-Length: 1\r\n"
+        "Connection: close\r\n\r\nx");
+    check(media_reader_put_resp.find("403") != std::string::npos,
+          "share subject permissions should override defaults for WebDAV writes");
+
+    const std::string clear_permission_body =
+        "{\"share\":\"media\",\"username\":\"bob\",\"clear\":true}";
+    const auto clear_permission_resp = roundtrip(port,
+        "POST /nas/admin/permissions HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Authorization: " + admin_auth + "\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: " + std::to_string(clear_permission_body.size()) + "\r\n"
+        "Connection: close\r\n\r\n" + clear_permission_body);
+    check(clear_permission_resp.find("200") != std::string::npos,
+          "admin permissions POST should clear per-user share permissions");
+    media_acl = metadata->find_share_by_name("media");
+    check(media_acl && media_acl->subject_permissions.count("u2") == 0,
+          "cleared share permissions should fall back to defaults");
 
     const std::string media_body = "media";
     const auto media_put_resp = roundtrip(port,
@@ -551,10 +643,10 @@ int main()
         "Authorization: " + admin_auth + "\r\n"
         "Connection: close\r\n\r\n");
     check(audit_resp.find("200") != std::string::npos, "admin audit should return 200");
-    check(audit_resp.find("\"action\":\"share.upsert\"") != std::string::npos,
-          "admin audit should include share changes");
-    check(audit_resp.find("\"action\":\"user.upsert\"") != std::string::npos,
-          "admin audit should include user changes");
+    check(audit_resp.find("\"action\":\"share.permission.clear\"") != std::string::npos,
+          "admin audit should include permission clear changes");
+    check(audit_resp.find("\"action\":\"share.permission.set\"") != std::string::npos,
+          "admin audit should include permission changes");
 
     metadata->fail_audit_append = true;
     const std::string fallback_user_body =

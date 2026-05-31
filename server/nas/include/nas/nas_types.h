@@ -48,6 +48,7 @@ namespace yuan::server::nas
         std::string id;
         std::string username;
         std::string password_hash;
+        std::string smb_password_hash;
         bool enabled = true;
         bool admin = false;
     };
