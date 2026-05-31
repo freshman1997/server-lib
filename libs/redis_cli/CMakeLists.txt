@@ -7,16 +7,16 @@ include_directories(${CMAKE_CURRENT_LIST_DIR}/src/)
 FILE(GLOB_RECURSE REDIS_CLI_SRC "./src/*.cpp")
 
 add_library(redisCli ${REDIS_CLI_SRC})
-target_link_libraries(redisCli PUBLIC Core App)
+target_link_libraries(redisCli PUBLIC Core)
 target_include_directories(redisCli PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/src>" "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 
 if (YUAN_BUILD_TESTS)
     add_executable(redisCliParsingTest ./test/TestRedisParsing.cpp)
-    target_link_libraries(redisCliParsingTest PUBLIC redisCli)
+    target_link_libraries(redisCliParsingTest PUBLIC redisCli App)
     add_test(NAME redis_cli_parsing COMMAND redisCliParsingTest)
 
     add_executable(redisCliE2ETest ./test/TestRedisE2E.cpp)
-    target_link_libraries(redisCliE2ETest PUBLIC redisCli)
+    target_link_libraries(redisCliE2ETest PUBLIC redisCli App)
     add_test(NAME redis_cli_e2e COMMAND redisCliE2ETest)
 
     add_executable(redisCliStressTest ./test/TestRedisStress.cpp)
