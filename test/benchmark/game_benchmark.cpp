@@ -435,9 +435,40 @@ int main(int argc, char **argv)
     const auto client_threads = argc > 7
         ? static_cast<std::size_t>(std::stoul(argv[7]))
         : static_cast<std::size_t>((std::min<std::size_t>)((std::max)(1u, hardware * 2), (std::max<std::size_t>)(1, connections)));
+#ifdef _WIN32
     const std::string backend = argc > 8 ? argv[8] : "iocp";
-    const bool use_iocp = backend == "iocp" || backend == "iocp_affinity";
-    const bool use_affinity = backend == "iocp_affinity" || backend == "poller_affinity" || backend == "affinity";
+#else
+    const std::string backend = argc > 8 ? argv[8] : "epoll";
+#endif
+
+    const bool wants_iocp = backend == "iocp" || backend == "iocp_affinity";
+    const bool wants_affinity = backend == "iocp_affinity" ||
+                                backend == "epoll_affinity" ||
+                                backend == "poller_affinity" ||
+                                backend == "affinity";
+    const bool wants_epoll = backend == "epoll" ||
+                             backend == "epoll_affinity" ||
+                             backend == "poller" ||
+                             backend == "poller_affinity" ||
+                             backend == "affinity";
+
+    if (!wants_iocp && !wants_epoll) {
+        std::cerr << "unknown backend: " << backend
+                  << " (supported: iocp, iocp_affinity, epoll, epoll_affinity, poller, poller_affinity, affinity)\n";
+        return 1;
+    }
+
+#ifdef _WIN32
+    const bool use_iocp = wants_iocp;
+#else
+    if (wants_iocp) {
+        std::cerr << "backend '" << backend
+                  << "' is not available on this platform; falling back to epoll"
+                  << (wants_affinity ? "_affinity" : "") << "\n";
+    }
+    const bool use_iocp = false;
+#endif
+    const bool use_affinity = wants_affinity;
 
     if (connections == 0 || client_threads == 0) {
         std::cerr << "connections and client_threads must be greater than zero\n";
@@ -461,7 +492,7 @@ int main(int argc, char **argv)
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     if (port == 0) {
-        std::cerr << "failed to start game iocp benchmark server\n";
+        std::cerr << "failed to start game benchmark server\n";
         return 1;
     }
 
@@ -469,7 +500,7 @@ int main(int argc, char **argv)
     const auto effective_client_threads = (std::min)(client_threads, connections);
     const char *backend_label = use_iocp
         ? (use_affinity ? "iocp_affinity" : "iocp")
-        : (use_affinity ? "poller_affinity" : "poller");
+        : (use_affinity ? "epoll_affinity" : "epoll");
     std::cout << "game server benchmark backend=" << backend_label
               << " workers=" << worker_count
               << " duration_s=" << duration.count()

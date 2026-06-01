@@ -1,6 +1,7 @@
 #include "buffer/byte_buffer.h"
 #include "buffer/byte_buffer_reader.h"
 #include "cmd/default_cmd.h"
+#include "cmd/pipeline_cmd.h"
 #include "cmd/subcribe_cmd.h"
 #include "value/int_value.h"
 #include "value/string_value.h"
@@ -169,6 +170,39 @@ int main()
         assert(cmd.unpack(map_reader) == 0);
         assert(cmd.get_result() != nullptr);
         assert(cmd.get_result()->get_type() == resp_map);
+    }
+
+    {
+        PipelineCmd pipeline_cmd;
+        auto set_cmd = std::make_shared<DefaultCmd>();
+        set_cmd->set_args("set", {
+            StringValue::from_string("pkey"),
+            StringValue::from_string("pvalue")
+        });
+        auto incr_cmd = std::make_shared<DefaultCmd>();
+        incr_cmd->set_args("incr", {StringValue::from_string("pcounter")});
+        pipeline_cmd.add_command(set_cmd);
+        pipeline_cmd.add_command(incr_cmd);
+
+        assert(
+            pipeline_cmd.pack() ==
+            "*3\r\n"
+            "$3\r\nset\r\n"
+            "$4\r\npkey\r\n"
+            "$6\r\npvalue\r\n"
+            "*2\r\n"
+            "$4\r\nincr\r\n"
+            "$8\r\npcounter\r\n");
+
+        yuan::buffer::ByteBufferReader pipeline_reader;
+        fill_reader(pipeline_reader, "+OK\r\n:2\r\n");
+        assert(pipeline_cmd.unpack(pipeline_reader) == 0);
+        assert(pipeline_cmd.get_result() != nullptr);
+        assert(pipeline_cmd.get_result()->get_type() == resp_array);
+        const auto &pipeline_values = pipeline_cmd.get_result()->as<ArrayValue>()->get_values();
+        assert(pipeline_values.size() == 2);
+        assert(pipeline_values[0]->to_string() == "OK");
+        assert(pipeline_values[1]->to_string() == "2");
     }
 
     {

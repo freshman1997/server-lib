@@ -2,8 +2,10 @@
 #define __YUAN_REDIS_CLIENT_H__
 
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -26,11 +28,32 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> message;
     };
 
+    struct PipelineCommand
+    {
+        std::string name;
+        std::vector<std::string> args;
+
+        PipelineCommand() = default;
+        PipelineCommand(std::string command_name, std::vector<std::string> command_args = {});
+        PipelineCommand(std::string command_name, std::initializer_list<std::string_view> command_args);
+
+        static PipelineCommand get(std::string key);
+        static PipelineCommand set(std::string key, std::string value);
+        static PipelineCommand del(std::vector<std::string> keys);
+        static PipelineCommand incr(std::string key);
+        static PipelineCommand expire(std::string key, int seconds);
+        static PipelineCommand hset(std::string key, std::string field, std::string value);
+        static PipelineCommand hget(std::string key, std::string field);
+        static PipelineCommand lpush(std::string key, std::vector<std::string> values);
+        static PipelineCommand rpush(std::string key, std::vector<std::string> values);
+    };
+
     class RedisClient : public std::enable_shared_from_this<RedisClient>
     {
     public:
         RedisClient();
         explicit RedisClient(const Option &opt);
+        RedisClient(const Option &opt, std::shared_ptr<void> registry);
         ~RedisClient();
 
         RedisClient(const RedisClient &) = delete;
@@ -44,6 +67,7 @@ namespace yuan::redis
         bool is_closed() const;
         bool is_timeout() const;
         void close();
+        void disconnect();
 
         std::shared_ptr<RedisValue> get_last_error() const;
         void set_last_error(std::shared_ptr<RedisValue> error);
@@ -53,6 +77,11 @@ namespace yuan::redis
         int receive();
         bool is_subscribing() const;
         void unsubscribe_channel(const std::string &channel);
+
+        std::shared_ptr<RedisValue> pipeline(const std::vector<PipelineCommand> &commands);
+
+        bool ensure_connected();
+        bool wait_in_flight(uint32_t timeout_ms);
 
     public: // key commands
 #include "api/redis_client_key_commands.inc"
@@ -89,7 +118,7 @@ namespace yuan::redis
 
     private:
         class Impl;
-        std::unique_ptr<Impl> impl_;
+        std::shared_ptr<Impl> impl_;
     };
 }
 

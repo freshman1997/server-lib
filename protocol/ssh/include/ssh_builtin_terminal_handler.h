@@ -14,7 +14,20 @@ namespace yuan::net::ssh
         {
             (void)session;
             (void)channel;
-            return channel_type == SSH_CHANNEL_SESSION;
+            return channel_type == SSH_CHANNEL_SESSION ||
+                   channel_type == SSH_CHANNEL_DIRECT_TCPIP;
+        }
+
+        bool on_direct_tcpip(SshSession *session,
+                             SshChannel *channel,
+                             const std::string &target_host,
+                             uint16_t target_port) override
+        {
+            (void)session;
+            (void)channel;
+            (void)target_host;
+            (void)target_port;
+            return true;
         }
 
         bool on_pty_request(SshSession *session,

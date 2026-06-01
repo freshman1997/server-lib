@@ -1,5 +1,5 @@
 #include "internal/def.h"
-#include "redis_cli_manager.h"
+#include "redis_client.h"
 #include "value/array_value.h"
 #include "value/int_value.h"
 #include "value/map_value.h"
@@ -180,6 +180,22 @@ int main()
     assert_ok(value, "EVAL");
     assert(value->to_string() == "script-ok");
 
+    const std::string pipeline_key = prefix + "pipeline";
+    value = client->pipeline({
+        PipelineCommand::set(pipeline_key, "v1"),
+        PipelineCommand::get(pipeline_key),
+        PipelineCommand::incr(pipeline_key + ":counter"),
+        PipelineCommand::expire(pipeline_key, 60)
+    });
+    assert_ok(value, "PIPELINE");
+    assert(value->get_type() == resp_array);
+    const auto &pipeline_values = value->as<ArrayValue>()->get_values();
+    assert(pipeline_values.size() == 4);
+    assert(pipeline_values[0]->to_string() == "OK");
+    assert(pipeline_values[1]->to_string() == "v1");
+    assert(pipeline_values[2]->to_string() == "1");
+    assert(pipeline_values[3]->to_string() == "1");
+
     const std::string channel = prefix + "channel";
     Option sub_option = option;
     sub_option.name_ = "redis-e2e-sub";
@@ -225,9 +241,8 @@ int main()
     subscriber->close();
     publisher->close();
 
-    assert_ok(client->del({string_key, list_key, hash_key, set_key, zset_key}), "DEL cleanup");
+    assert_ok(client->del({string_key, list_key, hash_key, set_key, zset_key, pipeline_key, pipeline_key + ":counter", prefix + "pool"}), "DEL cleanup");
     client->close();
-    RedisCliManager::get_instance()->release_all();
 
     return 0;
 }

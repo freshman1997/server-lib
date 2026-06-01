@@ -205,6 +205,8 @@ int main()
     const auto exec_output = smoke_dir / "exec_output.txt";
     const auto shell_output = smoke_dir / "shell_output.txt";
     const auto sftp_root = smoke_dir / "root";
+    const auto user_pub_key = std::filesystem::path(user_key.string() + ".pub");
+    const auto auth_keys = smoke_dir / "authorized_keys";
 
     std::error_code ec;
     std::filesystem::create_directories(sftp_root, ec);
@@ -241,12 +243,53 @@ int main()
         std::cerr << "failed to generate client key via ssh-keygen" << std::endl;
         return 1;
     }
+
+    {
+        std::ifstream pub_in(user_pub_key, std::ios::binary);
+        std::ofstream auth_out(auth_keys, std::ios::binary);
+        auth_out << pub_in.rdbuf();
+    }
+
+    const std::string auth_env_name = "YUAN_SSH_AUTHORIZED_KEYS";
+    const std::string auth_env_value = auth_keys.string();
+    const char *auth_env_old = std::getenv(auth_env_name.c_str());
+    std::string auth_env_old_value = auth_env_old ? std::string(auth_env_old) : std::string();
+#ifdef _WIN32
+    _putenv_s(auth_env_name.c_str(), auth_env_value.c_str());
+#else
+    setenv(auth_env_name.c_str(), auth_env_value.c_str(), 1);
+#endif
+
+    struct ScopedAuthEnvReset
+    {
+        std::string name;
+        bool had_old = false;
+        std::string old_value;
+        ~ScopedAuthEnvReset()
+        {
+#ifdef _WIN32
+            if (had_old) {
+                _putenv_s(name.c_str(), old_value.c_str());
+            } else {
+                _putenv_s(name.c_str(), "");
+            }
+#else
+            if (had_old) {
+                setenv(name.c_str(), old_value.c_str(), 1);
+            } else {
+                unsetenv(name.c_str());
+            }
+#endif
+        }
+    } scoped_auth_env_reset{auth_env_name, auth_env_old != nullptr, auth_env_old_value};
+
     std::cout << "client key ready" << std::endl;
 
     SshServerConfig config;
     config.host_key_paths = { host_key.string() };
     config.host_key_algorithms = { "rsa-sha2-512", "rsa-sha2-256" };
     config.auth_methods = { "publickey" };
+    config.idle_timeout_ms = 1500;
     config.enable_sftp = true;
     config.sftp_root_dir = sftp_root.string();
     config.enable_builtin_terminal_handler = true;

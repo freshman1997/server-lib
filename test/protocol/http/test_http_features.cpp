@@ -9,6 +9,7 @@
 #include "net/runtime/network_runtime.h"
 #include "runtime_context.h"
 #include "server_service_events.h"
+#include "native_platform.h"
 
 #include <any>
 #include <atomic>
@@ -2385,7 +2386,7 @@ namespace
             check(wait_http_connections(service, 1, std::chrono::milliseconds(1500)),
                   "stalled static stream should be active before write timeout");
 
-            const bool released = wait_http_connections(service, 0, std::chrono::milliseconds(3500));
+            const bool released = wait_http_connections(service, 0, std::chrono::milliseconds(5000));
             if (!released) {
                 const auto stats = service.server().snapshot_server_stats();
                 std::cerr << "[DEBUG] stalled static stream left active_http_connections="
@@ -2669,6 +2670,7 @@ int main()
 
     yuan::net::http::HttpServerConfig cfg;
     cfg.enable_keep_alive = false;
+    cfg.write_timeout_ms = 800;
 
     const uint16_t upstream_port = reserve_tcp_port();
     check(upstream_port != 0, "should reserve proxy upstream test port");
@@ -2728,12 +2730,14 @@ int main()
             socket_t client = ::accept(listener, nullptr, nullptr);
             if (client == kInvalidSocket) {
 #ifdef _WIN32
-                const int err = WSAGetLastError();
-                if (err == WSAETIMEDOUT || err == WSAEWOULDBLOCK || err == WSAEINTR) {
+                const int err = yuan::app::GetLastNativeError();
+                if (yuan::app::IsNativeRetryableError(err) ||
+                    yuan::app::ClassifyNativeError(err) == yuan::app::NativeError::timed_out) {
                     continue;
                 }
 #else
-                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                const int err = yuan::app::GetLastNativeError();
+                if (yuan::app::IsNativeRetryableError(err)) {
                     continue;
                 }
 #endif

@@ -4,6 +4,7 @@
 #include "net/socket/inet_address.h"
 #include "net/acceptor/udp/udp_instance.h"
 #include "net/acceptor/udp/adapter.h"
+#include "native_platform.h"
 #include "logger.h"
 #include <cassert>
 #include <cerrno>
@@ -200,10 +201,11 @@ namespace yuan::net
                     ++i;
                 } else if (sent < 0) {
 #ifdef _WIN32
-                    int err = WSAGetLastError();
-                    if (err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
+                    int err = app::GetLastNativeError();
+                    if (!app::IsNativeRetryableError(err)) {
 #else
-                    if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINPROGRESS) {
+                    int err = app::GetLastNativeError();
+                    if (!app::IsNativeRetryableError(err)) {
 #endif
                         abort();
                         return;

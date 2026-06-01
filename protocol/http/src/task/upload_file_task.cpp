@@ -1,9 +1,11 @@
 #include "task/upload_file_task.h"
 
 #include "logger.h"
+#include "base/time.h"
 #include "net/channel/channel.h"
 #include "net/connection/connection.h"
 #include "net/connection/stream_transport.h"
+#include "native_platform.h"
 
 #include <algorithm>
 #include <cstring>
@@ -119,6 +121,7 @@ namespace yuan::net::http
         if (sent > 0) {
             const auto sent_size = static_cast<std::size_t>(sent);
             attachment_info_->offset_ += sent_size;
+            stalled_since_ms_ = 0;
 
             constexpr std::size_t kSendfileMinChunk = 64 * 1024;
             constexpr std::size_t kSendfileMaxChunk = 1024 * 1024;
@@ -137,7 +140,16 @@ namespace yuan::net::http
             return true;
         }
 
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+        const int err = yuan::app::GetLastNativeError();
+        if (yuan::app::IsNativeRetryableError(err)) {
+            if (write_timeout_ms_ > 0) {
+                const uint64_t now_ms = base::time::steady_now_ms();
+                if (stalled_since_ms_ == 0) {
+                    stalled_since_ms_ = now_ms;
+                } else if (now_ms >= stalled_since_ms_ + write_timeout_ms_) {
+                    return false;
+                }
+            }
             constexpr std::size_t kSendfileMinChunk = 64 * 1024;
             if (sendfile_chunk_size_ > kSendfileMinChunk) {
                 sendfile_chunk_size_ = (std::max)(kSendfileMinChunk, sendfile_chunk_size_ / 2);

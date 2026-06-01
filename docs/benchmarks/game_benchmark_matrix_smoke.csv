@@ -1,0 +1,3 @@
+run_ts,backend,workers,duration_s,connections,pps_per_conn,completion_batch_size,frame_size,client_threads,sent,received,failed,packets_per_second,avg_rtt_us,p50_rtt_us,p95_rtt_us,p99_rtt_us,max_rtt_us
+2026-06-01T01:54:43Z,epoll,4,3,512,20,1,32,16,31232,31232,0,10316,182.144,200,500,1000,47029
+2026-06-01T01:54:46Z,epoll_affinity,4,3,512,20,1,32,16,31229,31229,0,10262.7,109.381,100,200,500,49896

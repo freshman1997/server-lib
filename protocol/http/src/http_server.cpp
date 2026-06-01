@@ -2521,16 +2521,7 @@ namespace yuan::net::http
 
         const auto dot_pos = file_relative_path.find_last_of('.');
         const bool has_ext = dot_pos != std::string::npos && dot_pos > 0;
-        if (!has_ext) {
-            serve_download(path, "", resp);
-            return;
-        }
-
-        const std::string ext = file_relative_path.substr(dot_pos);
-        if (req && req->get_request_params().contains("justDownload")) {
-            serve_download(path, ext, resp);
-            return;
-        }
+        const std::string ext = has_ext ? file_relative_path.substr(dot_pos) : "";
 
 #ifdef _WIN32
         std::ifstream stream(std::filesystem::path(std::u8string(path.begin(), path.end())), std::ios::in | std::ios::binary);
@@ -2625,7 +2616,9 @@ namespace yuan::net::http
         }
 
         resp->add_header("Content-Type", content_type);
-        resp->add_header("Content-Disposition", "inline; filename=\"" + url::url_encode(file_relative_path) + "\"");
+        const bool force_download = req &&
+            (req->get_request_params().contains("download") || req->get_request_params().contains("justDownload"));
+        resp->add_header("Content-Disposition", (force_download ? "attachment" : "inline") + std::string("; filename=\"") + url::url_encode(file_relative_path) + "\"");
         resp->add_header(http_header_key::etag, etag);
         resp->add_header(http_header_key::last_modified, format_http_date(modified_at));
         resp->add_header("Accept-Ranges", "bytes");
@@ -2675,6 +2668,7 @@ namespace yuan::net::http
         }
 
         task->set_sendfile_enabled(mount.options.enable_sendfile);
+        task->set_write_timeout_ms(response_write_timeout_ms(config_));
 
         resp->set_task(task.release());
         resp->set_upload_file(true);
@@ -2834,48 +2828,6 @@ namespace yuan::net::http
         }
 
         serve_static_file(req, resp, *mount, file_relative_path, full_path);
-    }
-
-    void HttpServer::serve_download(const std::string & filePath, const std::string & ext, HttpResponse * resp)
-    {
-        std::fstream file;
-        file.open(std::filesystem::path(std::u8string(filePath.begin(), filePath.end())), std::ios::in | std::ios::binary);
-        if (!file.good()) {
-            resp->process_error(ResponseCode::not_found);
-            return;
-        }
-
-        file.seekg(0, std::ios_base::end);
-        std::size_t sz = file.tellg();
-        file.close();
-
-        auto task = std::make_unique<net::http::HttpUploadFileTask>([resp, filePath]() {
-            LOG_INFO("Download completed: {}", filePath);
-            resp->set_upload_file(false);
-        });
-
-        const auto attachment_info = std::make_shared<net::http::AttachmentInfo>();
-        attachment_info->origin_file_name_ = filePath;
-        attachment_info->source_offset_ = 0;
-        attachment_info->offset_ = 0;
-        attachment_info->length_ = sz;
-        task->set_attachment_info(attachment_info);
-
-        if (!task->init()) {
-            resp->process_error(ResponseCode::internal_server_error);
-            return;
-        }
-
-        task->set_sendfile_enabled(true);
-
-        resp->add_header("Content-Type", get_content_type(ext));
-        resp->add_header("Connection", "close");
-        resp->set_response_code(ResponseCode::ok_);
-        resp->add_header("Content-Length", std::to_string(sz));
-
-        resp->set_task(task.release());
-        resp->set_upload_file(true);
-        resp->send();
     }
 
     void HttpServer::serve_list_files(const std::string & prefix, const std::string & filePath, const std::string & request_path, HttpResponse * resp, bool as_json)

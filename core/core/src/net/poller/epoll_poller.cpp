@@ -11,6 +11,7 @@
 #include "base/time.h"
 #include "net/poller/epoll_poller.h"
 #include "net/channel/channel.h"
+#include "native_platform.h"
 
 namespace yuan::net
 {
@@ -75,7 +76,7 @@ namespace yuan::net
         int nevent = -1;
         do {
             nevent = ::epoll_wait(data_->epoll_fd_, &*data_->epoll_events_.begin(), (int)data_->epoll_events_.size(), timeout);
-        } while (nevent < 0 && errno == EINTR);
+        } while (nevent < 0 && app::ClassifyNativeError(app::GetLastNativeError()) == app::NativeError::interrupted);
 
         uint64_t tm = base::time::get_tick_count();
         if (nevent < 0) {

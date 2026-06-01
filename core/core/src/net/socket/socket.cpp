@@ -14,6 +14,7 @@
 #include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
 #include "net/socket/socket_ops.h"
+#include "native_platform.h"
 
 namespace yuan::net
 {
@@ -21,20 +22,18 @@ namespace yuan::net
     {
         bool is_connect_in_progress_error()
         {
-#ifdef _WIN32
-            const auto err = WSAGetLastError();
-            return err == WSAEWOULDBLOCK || err == WSAEINPROGRESS || err == WSAEALREADY || err == WSAEINVAL;
-#else
-            return errno == EINPROGRESS || errno == EALREADY || errno == EWOULDBLOCK;
-#endif
+            const auto err = app::GetLastNativeError();
+            const auto kind = app::ClassifyNativeError(err);
+            return kind == app::NativeError::would_block || kind == app::NativeError::in_progress ||
+                   kind == app::NativeError::already || kind == app::NativeError::invalid_argument;
         }
 
         bool is_connect_success_error()
         {
 #ifdef _WIN32
-            return WSAGetLastError() == WSAEISCONN;
+            return app::GetLastNativeError() == WSAEISCONN;
 #else
-            return errno == EISCONN;
+            return app::GetLastNativeError() == EISCONN;
 #endif
         }
     } // namespace

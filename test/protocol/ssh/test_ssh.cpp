@@ -1212,6 +1212,38 @@ bool test_cancel_tcpip_forward_unknown_binding_returns_failure()
     return true;
 }
 
+bool test_keepalive_global_request_returns_success()
+{
+    SshConnectionManager mgr(nullptr);
+
+    SshGlobalRequestMessage msg;
+    msg.request_name = "keepalive@openssh.com";
+    msg.want_reply = true;
+
+    auto response = mgr.handle_global_request(msg, nullptr);
+    auto span = response.readable_span();
+    TEST_ASSERT(!span.empty(), "keepalive request should produce a reply");
+    TEST_ASSERT(span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_SUCCESS),
+                "keepalive request should return REQUEST_SUCCESS");
+    return true;
+}
+
+bool test_no_more_sessions_global_request_returns_success()
+{
+    SshConnectionManager mgr(nullptr);
+
+    SshGlobalRequestMessage msg;
+    msg.request_name = "no-more-sessions@openssh.com";
+    msg.want_reply = true;
+
+    auto response = mgr.handle_global_request(msg, nullptr);
+    auto span = response.readable_span();
+    TEST_ASSERT(!span.empty(), "no-more-sessions request should produce a reply");
+    TEST_ASSERT(span.data()[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_REQUEST_SUCCESS),
+                "no-more-sessions request should return REQUEST_SUCCESS");
+    return true;
+}
+
 bool test_publickey_rsa_fallback_verifies_signature()
 {
     SshCryptoOpenSSL crypto;
@@ -2341,20 +2373,20 @@ bool test_process_kex_init_negotiates_config_preference_and_hash()
 
     auto negotiated = transport.process_kex_init(peer, config);
     TEST_ASSERT(negotiated.has_value(), "kex negotiation should succeed");
-    TEST_ASSERT(negotiated->kex_name == "curve25519-sha256",
-                "kex negotiation should prefer server config order over peer order");
-    TEST_ASSERT(negotiated->host_key_name == "ssh-ed25519",
-                "host key negotiation should prefer server config order");
-    TEST_ASSERT(negotiated->client_to_server_cipher_name == "aes128-ctr",
-                "cipher negotiation should prefer server config order");
-    TEST_ASSERT(negotiated->kex_hash_name == "sha256",
-                "curve25519 negotiation should select sha256 hash");
-
-    config.kex_algorithms = { "diffie-hellman-group18-sha512" };
-    auto negotiated_sha512 = transport.process_kex_init(peer, config);
-    TEST_ASSERT(negotiated_sha512.has_value(), "sha512 kex negotiation should succeed");
-    TEST_ASSERT(negotiated_sha512->kex_hash_name == "sha512",
+    TEST_ASSERT(negotiated->kex_name == "diffie-hellman-group18-sha512",
+                "server-side negotiation should follow peer order for KEX selection");
+    TEST_ASSERT(negotiated->host_key_name == "rsa-sha2-256",
+                "server-side negotiation should follow peer order for host key selection");
+    TEST_ASSERT(negotiated->client_to_server_cipher_name == "aes256-ctr",
+                "server-side negotiation should follow peer order for cipher selection");
+    TEST_ASSERT(negotiated->kex_hash_name == "sha512",
                 "group18 negotiation should select sha512 hash");
+
+    config.kex_algorithms = { "curve25519-sha256" };
+    auto negotiated_sha256 = transport.process_kex_init(peer, config);
+    TEST_ASSERT(negotiated_sha256.has_value(), "sha256 kex negotiation should succeed");
+    TEST_ASSERT(negotiated_sha256->kex_hash_name == "sha256",
+                "curve25519 negotiation should select sha256 hash");
     return true;
 }
 
@@ -2380,8 +2412,8 @@ bool test_first_kex_packet_follows_ignores_only_wrong_guess()
     config.compression_algorithms = { "none" };
 
     SshKexInitMessage wrong_guess = {};
-    wrong_guess.kex_algorithms = "diffie-hellman-group18-sha512,curve25519-sha256";
-    wrong_guess.server_host_key_algorithms = "rsa-sha2-256,ssh-ed25519";
+    wrong_guess.kex_algorithms = "unknown-kex,curve25519-sha256,diffie-hellman-group18-sha512";
+    wrong_guess.server_host_key_algorithms = "unknown-host,ssh-ed25519,rsa-sha2-256";
     wrong_guess.encryption_algorithms_client_to_server = "aes128-ctr";
     wrong_guess.encryption_algorithms_server_to_client = "aes128-ctr";
     wrong_guess.mac_algorithms_client_to_server = "hmac-sha2-256";
@@ -5520,6 +5552,8 @@ int main()
     RUN_TEST(test_direct_tcpip_open_fails_when_port_forwarding_disabled);
     RUN_TEST(test_tcpip_forward_duplicate_request_returns_failure);
     RUN_TEST(test_cancel_tcpip_forward_unknown_binding_returns_failure);
+    RUN_TEST(test_keepalive_global_request_returns_success);
+    RUN_TEST(test_no_more_sessions_global_request_returns_success);
     RUN_TEST(test_publickey_rsa_fallback_verifies_signature);
     RUN_TEST(test_publickey_ecdsa_fallback_verifies_signature);
     RUN_TEST(test_publickey_authorized_keys_from_option_blocks_mismatched_remote_ip);

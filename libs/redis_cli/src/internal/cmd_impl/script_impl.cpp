@@ -9,7 +9,7 @@ namespace yuan::redis
     {
         if (script.empty())
         {
-            impl_->last_error_ = ErrorValue::from_string("script is empty");
+            impl_->last_error_.store(ErrorValue::from_string("script is empty"));
             return nullptr;
         }
 
@@ -25,7 +25,7 @@ namespace yuan::redis
     {
         if (sha1.empty())
         {
-            impl_->last_error_ = ErrorValue::from_string("sha1 is empty");
+            impl_->last_error_.store(ErrorValue::from_string("sha1 is empty"));
             return nullptr;
         }
         
@@ -41,7 +41,7 @@ namespace yuan::redis
     {
         if (script.empty())
         {
-            impl_->last_error_ = ErrorValue::from_string("script is empty");
+            impl_->last_error_.store(ErrorValue::from_string("script is empty"));
             return nullptr;
         }
         
@@ -57,7 +57,7 @@ namespace yuan::redis
     {
         if (sha1s.empty())
         {
-            impl_->last_error_ = ErrorValue::from_string("sha1s is empty");
+            impl_->last_error_.store(ErrorValue::from_string("sha1s is empty"));
             return nullptr;
         }
         

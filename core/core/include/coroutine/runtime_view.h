@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <thread>
 
 #include "buffer/byte_buffer.h"
 #include "coroutine/scheduler.h"
@@ -47,6 +49,18 @@ namespace yuan::coroutine
         {
         }
 
+        RuntimeView(
+            net::EventLoop *event_loop,
+            timer::TimerManager *timer_manager,
+            std::recursive_mutex *run_mutex,
+            std::thread::id *owner_thread) noexcept
+            : event_loop_(event_loop),
+              timer_manager_(timer_manager),
+              run_mutex_(run_mutex),
+              owner_thread_(owner_thread)
+        {
+        }
+
         net::EventLoop *event_loop() const noexcept
         {
             return event_loop_;
@@ -67,6 +81,39 @@ namespace yuan::coroutine
             if (event_loop_) {
                 event_loop_->request_coroutine_resume();
             }
+        }
+
+        bool is_event_loop_thread() const noexcept
+        {
+            return owner_thread_ && *owner_thread_ == std::this_thread::get_id();
+        }
+
+        bool try_acquire_run_lock() const noexcept
+        {
+            if (!run_mutex_ || !owner_thread_) {
+                return true;
+            }
+
+            if (is_event_loop_thread()) {
+                return true;
+            }
+
+            if (run_mutex_->try_lock()) {
+                *owner_thread_ = std::this_thread::get_id();
+                return true;
+            }
+
+            return false;
+        }
+
+        void release_run_lock() const noexcept
+        {
+            if (!run_mutex_ || !owner_thread_ || !is_event_loop_thread()) {
+                return;
+            }
+
+            *owner_thread_ = {};
+            run_mutex_->unlock();
         }
 
         ScheduledQueueInLoopAwaiter dispatch_in_loop(std::function<void()> callback = {}) const
@@ -145,6 +192,8 @@ namespace yuan::coroutine
     private:
         net::EventLoop *event_loop_ = nullptr;
         timer::TimerManager *timer_manager_ = nullptr;
+        std::recursive_mutex *run_mutex_ = nullptr;
+        std::thread::id *owner_thread_ = nullptr;
         mutable EventLoopScheduler scheduler_{};
     };
 

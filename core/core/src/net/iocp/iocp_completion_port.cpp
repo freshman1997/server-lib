@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "native_platform.h"
+
 #ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
@@ -121,7 +123,7 @@ namespace yuan::net
         completion.key = static_cast<uintptr_t>(key);
         completion.operation = operation;
         completion.ok = ok != FALSE;
-        completion.error = completion.ok ? 0U : static_cast<uint32_t>(::GetLastError());
+        completion.error = completion.ok ? 0U : static_cast<uint32_t>(app::GetLastSystemError());
         return completion.ok || completion.operation != nullptr;
 #else
         (void)timeout_ms;

@@ -4,6 +4,7 @@
 #include "net/connection/connection.h"
 #include "net/connection/datagram_transport.h"
 #include "net/socket/inet_address.h"
+#include "native_platform.h"
 #include <cstring>
 #include <iostream>
 #include <cassert>
@@ -140,10 +141,11 @@ namespace yuan::net
                 }
 
 #ifdef _WIN32
-                int err = WSAGetLastError();
-                if (err != WSAEINTR && err != WSAEWOULDBLOCK) {
+                int err = app::GetLastNativeError();
+                if (!app::IsNativeRetryableError(err)) {
 #else
-                if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
+                int err = app::GetLastNativeError();
+                if (!app::IsNativeRetryableError(err)) {
 #endif
                     break;
                 }

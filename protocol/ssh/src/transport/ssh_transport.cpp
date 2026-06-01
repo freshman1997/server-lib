@@ -48,6 +48,38 @@ namespace yuan::net::ssh
                 reinterpret_cast<const uint8_t *>(value.data()) + value.size());
         }
 
+        std::vector<std::string> split_name_list(const std::string & names)
+        {
+            std::vector<std::string> out;
+            size_t start = 0;
+            while (start <= names.size()) {
+                size_t comma = names.find(',', start);
+                if (comma == std::string::npos) {
+                    comma = names.size();
+                }
+                if (comma > start) {
+                    out.push_back(names.substr(start, comma - start));
+                }
+                if (comma == names.size()) {
+                    break;
+                }
+                start = comma + 1;
+            }
+            return out;
+        }
+
+        std::string join_name_list(const std::vector<std::string> & names)
+        {
+            std::string out;
+            for (size_t i = 0; i < names.size(); ++i) {
+                if (i > 0) {
+                    out.push_back(',');
+                }
+                out += names[i];
+            }
+            return out;
+        }
+
         bool parse_signature_blob(const std::vector<uint8_t> & signature_field,
                                   std::string & signature_algorithm,
                                   std::vector<uint8_t> & signature_blob)
@@ -375,20 +407,77 @@ namespace yuan::net::ssh
         if (!registry_)
             return std::nullopt;
 
+        const auto local_kex = filter_supported_algorithms(config.kex_algorithms, registry_->supported_kex_names());
+        const auto local_host_key = filter_supported_algorithms(config.host_key_algorithms,
+                                                                registry_->supported_host_key_names());
+        const auto local_cipher = filter_supported_algorithms(config.cipher_algorithms,
+                                                              registry_->supported_cipher_names());
+        const auto local_mac = filter_supported_algorithms(config.mac_algorithms,
+                                                           registry_->supported_mac_names());
+        const auto local_compression = filter_supported_algorithms(config.compression_algorithms,
+                                                                   registry_->supported_compression_names());
+
+        std::vector<std::string> preferred_kex;
+        std::vector<std::string> preferred_host_key;
+        std::vector<std::string> preferred_cipher;
+        std::vector<std::string> preferred_mac;
+        std::vector<std::string> preferred_compression;
+
+        std::string peer_kex_algorithms;
+        std::string peer_host_key_algorithms;
+        std::string peer_encryption_c2s;
+        std::string peer_encryption_s2c;
+        std::string peer_mac_c2s;
+        std::string peer_mac_s2c;
+        std::string peer_compression_c2s;
+        std::string peer_compression_s2c;
+
+        if (we_are_server_) {
+            preferred_kex = split_name_list(msg.kex_algorithms);
+            preferred_host_key = split_name_list(msg.server_host_key_algorithms);
+            preferred_cipher = split_name_list(msg.encryption_algorithms_client_to_server);
+            preferred_mac = split_name_list(msg.mac_algorithms_client_to_server);
+            preferred_compression = split_name_list(msg.compression_algorithms_client_to_server);
+
+            peer_kex_algorithms = join_name_list(local_kex);
+            peer_host_key_algorithms = join_name_list(local_host_key);
+            peer_encryption_c2s = join_name_list(local_cipher);
+            peer_encryption_s2c = join_name_list(local_cipher);
+            peer_mac_c2s = join_name_list(local_mac);
+            peer_mac_s2c = join_name_list(local_mac);
+            peer_compression_c2s = join_name_list(local_compression);
+            peer_compression_s2c = join_name_list(local_compression);
+        } else {
+            preferred_kex = local_kex;
+            preferred_host_key = local_host_key;
+            preferred_cipher = local_cipher;
+            preferred_mac = local_mac;
+            preferred_compression = local_compression;
+
+            peer_kex_algorithms = msg.kex_algorithms;
+            peer_host_key_algorithms = msg.server_host_key_algorithms;
+            peer_encryption_c2s = msg.encryption_algorithms_client_to_server;
+            peer_encryption_s2c = msg.encryption_algorithms_server_to_client;
+            peer_mac_c2s = msg.mac_algorithms_client_to_server;
+            peer_mac_s2c = msg.mac_algorithms_server_to_client;
+            peer_compression_c2s = msg.compression_algorithms_client_to_server;
+            peer_compression_s2c = msg.compression_algorithms_server_to_client;
+        }
+
         auto result = registry_->negotiate(
-            filter_supported_algorithms(config.kex_algorithms, registry_->supported_kex_names()),
-            filter_supported_algorithms(config.host_key_algorithms, registry_->supported_host_key_names()),
-            filter_supported_algorithms(config.cipher_algorithms, registry_->supported_cipher_names()),
-            filter_supported_algorithms(config.mac_algorithms, registry_->supported_mac_names()),
-            filter_supported_algorithms(config.compression_algorithms, registry_->supported_compression_names()),
-            msg.kex_algorithms,
-            msg.server_host_key_algorithms,
-            msg.encryption_algorithms_client_to_server,
-            msg.encryption_algorithms_server_to_client,
-            msg.mac_algorithms_client_to_server,
-            msg.mac_algorithms_server_to_client,
-            msg.compression_algorithms_client_to_server,
-            msg.compression_algorithms_server_to_client);
+            preferred_kex,
+            preferred_host_key,
+            preferred_cipher,
+            preferred_mac,
+            preferred_compression,
+            peer_kex_algorithms,
+            peer_host_key_algorithms,
+            peer_encryption_c2s,
+            peer_encryption_s2c,
+            peer_mac_c2s,
+            peer_mac_s2c,
+            peer_compression_c2s,
+            peer_compression_s2c);
 
         if (result) {
             negotiated_ = *result;

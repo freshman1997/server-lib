@@ -1,4 +1,5 @@
-#include "redis_cli_manager.h"
+#include "redis_client.h"
+#include "redis_client_pool.h"
 #include "logger.h"
 #include "value/int_value.h"
 #include "native_platform.h"
@@ -16,6 +17,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #undef assert
@@ -125,11 +127,15 @@ int main()
     option.host_ = env_string("REDIS_HOST", "localhost");
     option.port_ = env_int("REDIS_PORT", 6378);
     option.db_ = env_int("REDIS_DB", 1);
-    option.timeout_ms_ = env_int("REDIS_TIMEOUT_MS", 5000);
+    option.connect_timeout_ms_ = env_int("REDIS_CONNECT_TIMEOUT_MS", 5000);
+    option.command_timeout_ms_ = env_int("REDIS_COMMAND_TIMEOUT_MS", 0);
+    option.timeout_ms_ = env_int("REDIS_TIMEOUT_MS", 0);
     option.max_buffered_response_bytes_ = 64 * 1024 * 1024;
     option.name_ = "redis-stress";
 
     const int command_ops = std::max(1, env_int("REDIS_STRESS_COMMANDS", 300));
+    const int pipeline_batch = std::max(1, env_int("REDIS_STRESS_PIPELINE_BATCH", 32));
+    const int pool_size = std::max(1, env_int("REDIS_STRESS_POOL_SIZE", 4));
     const int pubsub_messages = std::max(1, env_int("REDIS_STRESS_PUBSUB", 300));
     const int limited_pubsub_messages = std::max(1, env_int("REDIS_STRESS_LIMITED_PUBSUB", 96));
     const int pending_limit = std::max(1, env_int("REDIS_STRESS_PENDING_LIMIT", 32));
@@ -178,6 +184,116 @@ int main()
               << " rss_before_kb=" << command_mem_before
               << " rss_after_kb=" << command_mem_after
               << std::endl;
+
+    const std::string pipeline_key = prefix + "pipe";
+    assert_ok(client->del({pipeline_key}), "DEL pipeline setup");
+
+    int pipeline_commands = 0;
+    const auto pipeline_mem_before = current_rss_kb();
+    const auto pipeline_start = Clock::now();
+    for (int i = 0; i < command_ops; i += pipeline_batch) {
+        std::vector<std::string> commands;
+        commands.reserve(static_cast<std::size_t>(pipeline_batch));
+        const int limit = std::min(command_ops, i + pipeline_batch);
+        for (int j = i; j < limit; ++j) {
+            commands.push_back("INCR " + pipeline_key);
+            ++pipeline_commands;
+        }
+        assert_ok(client->pipeline(commands), "PIPELINE INCR");
+    }
+    const auto pipeline_end = Clock::now();
+    const auto pipeline_mem_after = current_rss_kb();
+    const double pipeline_seconds = elapsed_seconds(pipeline_start, pipeline_end);
+
+    std::cout << "STRESS_RESULT pipeline_ops=" << pipeline_commands
+              << " batch=" << pipeline_batch
+              << " seconds=" << pipeline_seconds
+              << " ops_per_sec=" << (pipeline_commands / pipeline_seconds)
+              << " rss_before_kb=" << pipeline_mem_before
+              << " rss_after_kb=" << pipeline_mem_after
+              << std::endl;
+
+    int typed_pipeline_commands = 0;
+    const auto typed_pipeline_start = Clock::now();
+    for (int i = 0; i < command_ops; i += pipeline_batch) {
+        std::vector<PipelineCommand> commands;
+        commands.reserve(static_cast<std::size_t>(pipeline_batch));
+        const int limit = std::min(command_ops, i + pipeline_batch);
+        for (int j = i; j < limit; ++j) {
+            commands.emplace_back("incr", std::vector<std::string>{pipeline_key});
+            ++typed_pipeline_commands;
+        }
+        assert_ok(client->pipeline(commands), "TYPED PIPELINE INCR");
+    }
+    const auto typed_pipeline_end = Clock::now();
+    const double typed_pipeline_seconds = elapsed_seconds(typed_pipeline_start, typed_pipeline_end);
+    std::cout << "STRESS_RESULT typed_pipeline_ops=" << typed_pipeline_commands
+              << " batch=" << pipeline_batch
+              << " seconds=" << typed_pipeline_seconds
+              << " ops_per_sec=" << (typed_pipeline_commands / typed_pipeline_seconds)
+              << std::endl;
+
+    auto concurrent_client = connect_client(option);
+    assert(concurrent_client->is_connected());
+    std::atomic<bool> guard_detected{false};
+    std::thread concurrent_worker([concurrent_client, pipeline_key, &guard_detected]() {
+        for (int i = 0; i < 50; ++i) {
+            const auto result = concurrent_client->pipeline({PipelineCommand("incr", {pipeline_key})});
+            if (!result && concurrent_client->get_last_error()) {
+                guard_detected.store(true, std::memory_order_release);
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    for (int i = 0; i < 50; ++i) {
+        client->pipeline({PipelineCommand("incr", {pipeline_key})});
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    concurrent_worker.join();
+    concurrent_client->close();
+    std::cout << "STRESS_RESULT concurrent_guard=" << (guard_detected.load() ? "ok" : "no_contention") << std::endl;
+
+    RedisClientPool pool;
+    Option pool_option = option;
+    pool_option.name_ = "redis-stress-pool";
+    if (pool.init(pool_option, static_cast<std::size_t>(pool_size))) {
+        std::vector<std::thread> workers;
+        workers.reserve(static_cast<std::size_t>(pool_size));
+        const int ops_per_worker = command_ops / pool_size;
+        const int remainder = command_ops % pool_size;
+        const auto pool_start = Clock::now();
+        for (int worker = 0; worker < pool_size; ++worker) {
+            const int worker_ops = ops_per_worker + (worker < remainder ? 1 : 0);
+            const std::string worker_key = prefix + "pool:" + std::to_string(worker);
+            auto pool_client = pool.get_round_robin_client();
+            workers.emplace_back([worker_ops, pipeline_batch, worker_key, pool_client]() {
+                assert(pool_client && pool_client->is_connected());
+                for (int i = 0; i < worker_ops; i += pipeline_batch) {
+                    std::vector<PipelineCommand> commands;
+                    commands.reserve(static_cast<std::size_t>(pipeline_batch));
+                    const int limit = std::min(worker_ops, i + pipeline_batch);
+                    for (int j = i; j < limit; ++j) {
+                        commands.emplace_back("incr", std::vector<std::string>{worker_key});
+                    }
+                    assert_ok(pool_client->pipeline(commands), "POOL PIPELINE INCR");
+                }
+            });
+        }
+
+        for (auto &worker : workers) {
+            worker.join();
+        }
+        const auto pool_end = Clock::now();
+        const double pool_seconds = elapsed_seconds(pool_start, pool_end);
+        std::cout << "STRESS_RESULT pool_pipeline_ops=" << command_ops
+                  << " pool_size=" << pool_size
+                  << " batch=" << pipeline_batch
+                  << " seconds=" << pool_seconds
+                  << " ops_per_sec=" << (command_ops / pool_seconds)
+                  << std::endl;
+        pool.close();
+    }
 
     Option sub_option = option;
     sub_option.name_ = "redis-stress-sub";
@@ -273,7 +389,110 @@ int main()
     publisher->close();
     assert_ok(client->del({data_key, counter_key}), "DEL cleanup");
     client->close();
-    RedisCliManager::get_instance()->release_all();
+
+    {
+        Option rc_option = option;
+        rc_option.name_ = "redis-stress-reconnect";
+        rc_option.reconnect_ = true;
+        rc_option.max_reconnect_retries_ = 3;
+        rc_option.reconnect_delay_ms_ = 50;
+        auto rc_client = connect_client(rc_option);
+        if (rc_client && rc_client->is_connected()) {
+            const std::string rc_key = prefix + "reconnect";
+            assert_ok(rc_client->set(rc_key, "before"), "SET before disconnect");
+            assert_ok(rc_client->get(rc_key), "GET before disconnect");
+
+            rc_client->disconnect();
+            assert(!rc_client->is_connected());
+
+            auto rc_result = rc_client->get(rc_key);
+            assert(rc_result || rc_client->get_last_error());
+
+            if (rc_result) {
+                std::cout << "STRESS_RESULT reconnect=auto_reconnected" << std::endl;
+            } else {
+                std::cout << "STRESS_RESULT reconnect=attempted_error="
+                          << (rc_client->get_last_error() ? rc_client->get_last_error()->to_string() : "null")
+                          << std::endl;
+            }
+
+            rc_client->close();
+        } else {
+            std::cout << "STRESS_RESULT reconnect=skipped_no_connection" << std::endl;
+        }
+    }
+
+    {
+        Option hc_option = option;
+        hc_option.name_ = "redis-stress-healthcheck";
+        RedisClientPool hc_pool;
+        if (hc_pool.init(hc_option, 2)) {
+            auto hc1 = hc_pool.get_round_robin_client();
+            auto hc2 = hc_pool.get_round_robin_client();
+            assert(hc1 && hc1->is_connected());
+            assert(hc2 && hc2->is_connected());
+
+            hc1->disconnect();
+            assert(!hc1->is_connected());
+
+            auto hc_again = hc_pool.get_round_robin_client();
+            assert(hc_again);
+            if (hc_again->is_connected()) {
+                assert_ok(hc_again->ping(), "PING after health check reconnect");
+                std::cout << "STRESS_RESULT health_check=reconnected_and_ping_ok" << std::endl;
+            } else {
+                std::cout << "STRESS_RESULT health_check=reconnect_failed" << std::endl;
+            }
+
+            hc_pool.close();
+        } else {
+            std::cout << "STRESS_RESULT health_check=skipped_pool_init_failed" << std::endl;
+        }
+    }
+
+    {
+        const int soak_seconds = env_int("REDIS_SOAK_SECONDS", 0);
+        if (soak_seconds > 0) {
+            Option soak_option = option;
+            soak_option.name_ = "redis-soak";
+            RedisClientPool soak_pool;
+            if (soak_pool.init(soak_option, 2)) {
+                const std::string soak_key = prefix + "soak";
+                const auto soak_start = Clock::now();
+                const auto soak_deadline = soak_start + std::chrono::seconds(soak_seconds);
+                int soak_ops = 0;
+                int soak_errors = 0;
+                const auto soak_rss_before = current_rss_kb();
+
+                while (Clock::now() < soak_deadline) {
+                    auto soak_client = soak_pool.get_round_robin_client();
+                    if (!soak_client) {
+                        ++soak_errors;
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                        continue;
+                    }
+                    auto res = soak_client->set(soak_key, "v" + std::to_string(soak_ops));
+                    if (res) {
+                        ++soak_ops;
+                    } else {
+                        ++soak_errors;
+                    }
+                }
+
+                const auto soak_rss_after = current_rss_kb();
+                const double soak_elapsed = elapsed_seconds(soak_start, Clock::now());
+                std::cout << "STRESS_RESULT soak_ops=" << soak_ops
+                          << " soak_errors=" << soak_errors
+                          << " soak_seconds=" << soak_elapsed
+                          << " ops_per_sec=" << (soak_ops / soak_elapsed)
+                          << " rss_before_kb=" << soak_rss_before
+                          << " rss_after_kb=" << soak_rss_after
+                          << std::endl;
+
+                soak_pool.close();
+            }
+        }
+    }
 
     return 0;
 }

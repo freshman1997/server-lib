@@ -5,6 +5,8 @@
 #include <windows.h>
 #endif
 
+#include "native_platform.h"
+
 namespace yuan::net
 {
     bool IocpTcpIo::post_recv(int fd,
@@ -40,7 +42,7 @@ namespace yuan::net
             return true;
         }
 
-        const int last_error = ::WSAGetLastError();
+        const int last_error = app::GetLastNativeError();
         if (error) {
             *error = static_cast<uint32_t>(last_error);
         }
@@ -86,7 +88,7 @@ namespace yuan::net
             return true;
         }
 
-        const int last_error = ::WSAGetLastError();
+        const int last_error = app::GetLastNativeError();
         if (error) {
             *error = static_cast<uint32_t>(last_error);
         }
@@ -111,7 +113,7 @@ namespace yuan::net
         if (ok != FALSE) {
             return true;
         }
-        return ::GetLastError() == ERROR_NOT_FOUND;
+        return app::GetLastSystemError() == ERROR_NOT_FOUND;
 #else
         (void)fd;
         return false;

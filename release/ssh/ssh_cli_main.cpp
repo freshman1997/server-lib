@@ -7,6 +7,7 @@
 #include "transport/ssh_transport.h"
 #include "transport/ssh_version_exchange.h"
 #include "base/utils/base64.h"
+#include "native_platform.h"
 
 #include <array>
 #include <cctype>
@@ -523,12 +524,11 @@ namespace
 
     bool socket_would_block_last_error()
     {
-#ifdef _WIN32
-        const int err = WSAGetLastError();
-        return err == WSAEWOULDBLOCK || err == WSAEINTR || err == WSAETIMEDOUT;
-#else
-        return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
-#endif
+        const int err = yuan::app::GetLastNativeError();
+        if (yuan::app::ClassifyNativeError(err) == yuan::app::NativeError::timed_out) {
+            return true;
+        }
+        return yuan::app::IsNativeRetryableError(err);
     }
 
     void shutdown_socket_write(SocketHandle fd)
@@ -719,12 +719,14 @@ namespace
 #endif
         if (n <= 0) {
 #ifdef _WIN32
-            const int err = WSAGetLastError();
-            if (err == WSAEWOULDBLOCK || err == WSAETIMEDOUT || err == WSAEINTR) {
+            const int err = yuan::app::GetLastNativeError();
+            if (yuan::app::IsNativeRetryableError(err) ||
+                yuan::app::ClassifyNativeError(err) == yuan::app::NativeError::timed_out) {
                 return RecvStatus::timeout;
             }
 #else
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            const int err = yuan::app::GetLastNativeError();
+            if (yuan::app::IsNativeRetryableError(err)) {
                 return RecvStatus::timeout;
             }
 #endif
@@ -796,7 +798,8 @@ namespace
             return StdinPollResult::eof;
         }
         if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            const int err = yuan::app::GetLastNativeError();
+            if (yuan::app::IsNativeRetryableError(err)) {
                 return StdinPollResult::no_data;
             }
             return StdinPollResult::error;
@@ -1784,6 +1787,22 @@ namespace
             pending_remote_forward_specs.push_back(*spec);
         }
 
+        {
+            int io_poll_timeout_ms = args.timeout_ms;
+            const bool need_responsive_poll =
+                interactive_mode ||
+                !local_forward_specs.empty() ||
+                !dynamic_forward_specs.empty() ||
+                !pending_remote_forward_specs.empty();
+            if (need_responsive_poll && io_poll_timeout_ms > 100) {
+                io_poll_timeout_ms = 100;
+            }
+            if (io_poll_timeout_ms < 100) {
+                io_poll_timeout_ms = 100;
+            }
+            (void)set_recv_timeout(fd, io_poll_timeout_ms);
+        }
+
         auto close_forward_channel = [&](uint32_t local_id) {
             auto sock_it = forward_local_to_socket.find(local_id);
             if (sock_it != forward_local_to_socket.end()) {
@@ -1799,6 +1818,11 @@ namespace
 
         auto pump_local_forward_accepts = [&]() -> bool {
             if (!auth_ok || local_forward_specs.empty()) {
+                return true;
+            }
+
+            const size_t kMaxPendingForwards = 8;
+            if (pending_local_open_socket.size() + pending_dynamic_open_socket.size() >= kMaxPendingForwards) {
                 return true;
             }
 
@@ -1848,7 +1872,12 @@ namespace
                     close_socket_handle(accepted_fd);
                     return false;
                 }
+                debug("local-forward open sent local=" + std::to_string(local_forward_id));
                 pending_local_open_socket[local_forward_id] = accepted_fd;
+
+                if (pending_local_open_socket.size() + pending_dynamic_open_socket.size() >= kMaxPendingForwards) {
+                    break;
+                }
             }
             return true;
         };
@@ -1884,6 +1913,11 @@ namespace
                 return true;
             }
 
+            const size_t kMaxPendingForwards = 8;
+            if (pending_local_open_socket.size() + pending_dynamic_open_socket.size() >= kMaxPendingForwards) {
+                return true;
+            }
+
             for (const auto &spec : dynamic_forward_specs) {
                 const std::string key = spec.bind_addr + ":" + std::to_string(spec.bind_port);
                 auto listener_it = dynamic_forward_listeners.find(key);
@@ -1914,6 +1948,10 @@ namespace
                 client.origin_host = origin_host;
                 client.origin_port = origin_port;
                 pending_socks_clients[accepted_fd] = std::move(client);
+
+                if (pending_local_open_socket.size() + pending_dynamic_open_socket.size() >= kMaxPendingForwards) {
+                    break;
+                }
             }
             return true;
         };
@@ -2153,6 +2191,9 @@ namespace
                 if (!send_packet(fd, transport, SshMessageCodec::encode_channel_data(data_msg))) {
                     return false;
                 }
+                debug("local-forward send data bytes=" + std::to_string(static_cast<int>(n)) +
+                      " local=" + std::to_string(local_id) +
+                      " remote=" + std::to_string(remote_it->second));
             }
             return true;
         };
@@ -2378,6 +2419,8 @@ namespace
                     forward_local_to_socket[conf->recipient_channel] = pending_it->second;
                     forward_local_to_remote[conf->recipient_channel] = conf->sender_channel;
                     forward_remote_to_local[conf->sender_channel] = conf->recipient_channel;
+                    debug("local-forward open confirmed local=" + std::to_string(conf->recipient_channel) +
+                          " remote=" + std::to_string(conf->sender_channel));
                     pending_local_open_socket.erase(pending_it);
                     continue;
                 }
@@ -2540,6 +2583,8 @@ namespace
                 if (data_msg && !data_msg->data.empty()) {
                 auto forward_it = forward_local_to_socket.find(data_msg->recipient_channel);
                 if (forward_it != forward_local_to_socket.end() && forward_it->second != kInvalidSocket) {
+                    debug("local-forward recv data bytes=" + std::to_string(data_msg->data.size()) +
+                          " local=" + std::to_string(data_msg->recipient_channel));
                     if (!send_all(forward_it->second, data_msg->data.data(), data_msg->data.size())) {
                         auto remote_it = forward_local_to_remote.find(data_msg->recipient_channel);
                         if (remote_it != forward_local_to_remote.end()) {
@@ -2560,6 +2605,8 @@ namespace
                 if (ext_msg && !ext_msg->data.empty()) {
                     write_stderr(ext_msg->data);
                 }
+            } else if (type == SshMessageType::SSH_MSG_CHANNEL_WINDOW_ADJUST) {
+                continue;
             } else if (type == SshMessageType::SSH_MSG_CHANNEL_EOF) {
                 auto eof_msg = SshMessageCodec::decode_channel_eof(payload.data(), payload.size());
                 if (eof_msg) {

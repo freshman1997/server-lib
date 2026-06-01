@@ -1,9 +1,8 @@
 #include "task/download_file_task.h"
 #include "logger.h"
+#include "native_platform.h"
 #include <cstdio>
 #include <filesystem>
-#include <cerrno>
-#include <cstring>
 
 namespace yuan::net::http 
 {
@@ -106,7 +105,10 @@ namespace yuan::net::http
 
             try {
                 if (std::rename(attachment_info_->tmp_file_name_.c_str(), attachment_info_->origin_file_name_.c_str()) != 0) {
-                    LOG_ERROR("Failed to rename file: {}", strerror(errno));
+                    const int rename_error = yuan::app::GetLastSystemError();
+                    LOG_ERROR("Failed to rename file: {} ({})",
+                              rename_error,
+                              yuan::app::DescribeNativeError(rename_error));
                     return false;
                 }
                 return true;

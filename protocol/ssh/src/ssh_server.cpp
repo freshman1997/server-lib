@@ -101,7 +101,6 @@ namespace yuan::net::ssh
         if (config_.enable_openssh_compat_profile) {
             config_.enable_builtin_terminal_handler = true;
             // Prefer conservative, widely interoperable algorithms in compat mode.
-            // This avoids experimental AEAD/chacha paths until full interop hardening.
             config_.cipher_algorithms = {
                 "aes256-ctr",
                 "aes192-ctr",
@@ -256,7 +255,7 @@ namespace yuan::net::ssh
 
         // 2. Read client version
         {
-            auto read_result = co_await ctx.read_awaiter(config_.idle_timeout_ms);
+            auto read_result = co_await ctx.read_async(config_.idle_timeout_ms);
             if (read_result.status != coroutine::IoStatus::success) {
                 std::cerr << "[ssh] read client version failed, session=" << session->session_id() << '\n';
                 ctx.close();
@@ -332,7 +331,7 @@ namespace yuan::net::ssh
                     }
                 }
 
-                auto read_result = co_await ctx.read_awaiter(read_timeout_ms);
+                auto read_result = co_await ctx.read_async(read_timeout_ms);
                 if (read_result.status == coroutine::IoStatus::success) {
                     recv_buf.append(read_result.data);
                 } else if (read_result.status == coroutine::IoStatus::timed_out) {
@@ -367,7 +366,7 @@ namespace yuan::net::ssh
                         }
                     }
 
-                    auto read_result = co_await ctx.read_awaiter(read_timeout_ms);
+                    auto read_result = co_await ctx.read_async(read_timeout_ms);
                     if (read_result.status == coroutine::IoStatus::success) {
                         recv_buf.append(read_result.data);
                     } else if (read_result.status == coroutine::IoStatus::timed_out) {

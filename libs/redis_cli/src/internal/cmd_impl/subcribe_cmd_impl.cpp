@@ -118,7 +118,7 @@ namespace yuan::redis
         std::lock_guard<std::recursive_mutex> lock(impl_->operation_mutex_);
 
         if (channels.empty()) {
-            impl_->last_error_ = ErrorValue::from_string("channels are empty");
+            impl_->last_error_.store(ErrorValue::from_string("channels are empty"));
             return nullptr;
         }
 
@@ -140,7 +140,7 @@ namespace yuan::redis
         std::lock_guard<std::recursive_mutex> lock(impl_->operation_mutex_);
 
         if (patterns.empty()) {
-            impl_->last_error_ = ErrorValue::from_string("patterns are empty");
+            impl_->last_error_.store(ErrorValue::from_string("patterns are empty"));
             return nullptr;
         }
 
@@ -205,7 +205,7 @@ namespace yuan::redis
         }
 
         if (results.empty()) {
-            impl_->last_error_ = ErrorValue::from_string("patterns and channels are empty");
+            impl_->last_error_.store(ErrorValue::from_string("patterns and channels are empty"));
             return nullptr;
         }
 
@@ -233,7 +233,7 @@ namespace yuan::redis
         }
 
         if (results.empty()) {
-            impl_->last_error_ = ErrorValue::from_string("channels and patterns are empty");
+            impl_->last_error_.store(ErrorValue::from_string("channels and patterns are empty"));
             return nullptr;
         }
 
@@ -273,7 +273,7 @@ namespace yuan::redis
         }
 
         if (results.empty()) {
-            impl_->last_error_ = ErrorValue::from_string("subscription update arguments are empty");
+            impl_->last_error_.store(ErrorValue::from_string("subscription update arguments are empty"));
             return nullptr;
         }
 

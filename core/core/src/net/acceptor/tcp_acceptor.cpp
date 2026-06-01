@@ -25,6 +25,7 @@
 #include "net/security/ssl_handler.h"
 #include "net/security/ssl_module.h"
 #include "event/event_loop.h"
+#include "native_platform.h"
 
 namespace yuan::net
 {
@@ -134,8 +135,11 @@ namespace yuan::net
             int conn_fd = socket_->accept(peer_storage);
             if (conn_fd < 0) {
 #ifdef _DEBUG
-                if (errno != EAGAIN && errno != ECONNABORTED && errno != EPROTO && errno != EINTR) {
-                    LOG_ERROR("error connection {}", errno);
+                const int err = app::GetLastNativeError();
+                const auto kind = app::ClassifyNativeError(err);
+                if (!(app::IsNativeRetryableError(err) ||
+                      kind == app::NativeError::connection_aborted)) {
+                    LOG_ERROR("error connection {}", err);
                 }
 #endif
                 break;

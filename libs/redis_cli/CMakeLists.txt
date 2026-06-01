@@ -20,7 +20,7 @@ if (YUAN_BUILD_TESTS)
     add_test(NAME redis_cli_e2e COMMAND redisCliE2ETest)
 
     add_executable(redisCliStressTest ./test/TestRedisStress.cpp)
-    target_link_libraries(redisCliStressTest PUBLIC redisCli)
+    target_link_libraries(redisCliStressTest PUBLIC redisCli App)
     if (WIN32)
         target_link_libraries(redisCliStressTest PUBLIC psapi)
     endif()

@@ -4,10 +4,10 @@ target_link_libraries(core_runtime_benchmark PUBLIC Core App)
 add_executable(http_worker_pool_benchmark http_worker_pool_benchmark.cpp)
 target_link_libraries(http_worker_pool_benchmark PUBLIC HttpProto ServerServiceHttp)
 
-add_executable(game_iocp_benchmark game_iocp_benchmark.cpp)
-target_link_libraries(game_iocp_benchmark PUBLIC Core App)
+add_executable(game_benchmark game_benchmark.cpp)
+target_link_libraries(game_benchmark PUBLIC Core App)
 if (WIN32)
-    target_link_libraries(game_iocp_benchmark PRIVATE ws2_32)
+    target_link_libraries(game_benchmark PRIVATE ws2_32)
 endif()
 
 set(YUAN_NETWORK_REPOS_ROOT "/home/yuan/codes/repos/network" CACHE PATH "Local network library checkout root for optional benchmark comparisons")

@@ -230,7 +230,6 @@ namespace yuan::net::http
             const std::string &file_relative_path,
             const std::string &full_path,
             std::optional<ResponseCode> status_override = std::nullopt);
-        static void serve_download(const std::string &filePath, const std::string &ext, HttpResponse *resp);
         static void serve_list_files(const std::string &prefix, const std::string &filePath, const std::string &request_path, HttpResponse *resp, bool as_json = false);
         void reload_config(HttpRequest *req, HttpResponse *resp);
         void serve_upload(HttpRequest *req, HttpResponse *resp);

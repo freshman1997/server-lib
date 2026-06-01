@@ -55,6 +55,34 @@ namespace yuan::net::http
             }
             return false;
         }
+
+        void merge_exposed_headers(HttpResponse *resp, const std::string &configured)
+        {
+            if (!resp || configured.empty()) {
+                return;
+            }
+
+            std::string merged = configured;
+            const std::string *existing = resp->get_header("Access-Control-Expose-Headers");
+            if (existing && !existing->empty()) {
+                std::size_t pos = 0;
+                std::string_view existing_view(*existing);
+                while (pos <= existing_view.size()) {
+                    const auto comma = existing_view.find(',', pos);
+                    const auto end = comma == std::string_view::npos ? existing_view.size() : comma;
+                    const std::string_view token = trim_token(existing_view.substr(pos, end - pos));
+                    if (!token.empty() && !header_has_token(merged, token)) {
+                        merged += ", ";
+                        merged.append(token.data(), token.size());
+                    }
+                    if (comma == std::string_view::npos) {
+                        break;
+                    }
+                    pos = comma + 1;
+                }
+            }
+            resp->add_header("Access-Control-Expose-Headers", merged);
+        }
     }
 
     // ==================== MiddlewarePipeline ====================
@@ -136,6 +164,7 @@ namespace yuan::net::http
                 resp->add_header("Access-Control-Allow-Origin", config_.allow_origin);
                 resp->add_header("Access-Control-Allow-Methods", config_.allow_methods);
                 resp->add_header("Access-Control-Allow-Headers", config_.allow_headers);
+                merge_exposed_headers(resp, config_.expose_headers);
 
                 const std::string *origin = req->get_header(http_header_key::origin);
                 if (config_.allow_credentials) {

@@ -5,11 +5,13 @@
 #include "cmd/subcribe_cmd.h"
 #include "coroutine/completion_event.h"
 #include "internal/coroutine.h"
+#include "internal/redis_registry.h"
 #include "option.h"
 #include "redis_client.h"
 #include "net/connection/connection.h"
 #include "net/handler/connection_handler.h"
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 
@@ -24,6 +26,9 @@ namespace yuan::redis
     };
     class RedisClient::Impl final : public net::ConnectionHandler
     {
+    public:
+        using Ptr = std::shared_ptr<Impl>;
+
         friend class Psub;
 
     public:
@@ -34,6 +39,8 @@ namespace yuan::redis
 
         Impl(const Impl &) = delete;
         Impl &operator=(const Impl &) = delete;
+        Impl(Impl &&) = delete;
+        Impl &operator=(Impl &&) = delete;
         ~Impl() override;
 
     public:
@@ -52,50 +59,53 @@ namespace yuan::redis
         void on_do_connect(std::shared_ptr<net::Connection> conn);
 
         void close();
+        void disconnect();
 
         void set_mask(RedisState state, const bool only = false)
         {
             if (only)
                 clear_mask();
-            mask_ |= 1 << static_cast<uint8_t>(state);
+            mask_.fetch_or(1 << static_cast<uint8_t>(state), std::memory_order_release);
         }
 
         void clear_mask(RedisState state)
         {
-            mask_ &= ~(1 << static_cast<uint8_t>(state));
+            mask_.fetch_and(~(1 << static_cast<uint8_t>(state)), std::memory_order_release);
         }
 
         void clear_mask()
         {
-            mask_ = 0;
+            mask_.store(0, std::memory_order_release);
         }
 
         bool is_connecting() const
         {
-            return mask_ & 1 << static_cast<uint8_t>(RedisState::connecting);
+            return mask_.load(std::memory_order_acquire) & 1 << static_cast<uint8_t>(RedisState::connecting);
         }
 
         bool is_connected() const
         {
-            return mask_ & 1 << static_cast<uint8_t>(RedisState::connected);
+            return mask_.load(std::memory_order_acquire) & 1 << static_cast<uint8_t>(RedisState::connected);
         }
 
         bool is_closed() const
         {
-            return mask_ & 1 << static_cast<uint8_t>(RedisState::closed);
+            return mask_.load(std::memory_order_acquire) & 1 << static_cast<uint8_t>(RedisState::closed);
         }
 
         bool is_disconnecting() const
         {
-            return mask_ & 1 << static_cast<uint8_t>(RedisState::disconnecting);
+            return mask_.load(std::memory_order_acquire) & 1 << static_cast<uint8_t>(RedisState::disconnecting);
         }
 
         bool is_timeout() const
         {
-            return mask_ & 1 << static_cast<uint8_t>(RedisState::timeout);
+            return mask_.load(std::memory_order_acquire) & 1 << static_cast<uint8_t>(RedisState::timeout);
         }
 
         std::shared_ptr<RedisValue> execute_command(std::shared_ptr<Command> cmd);
+
+        RedisRegistry *registry() const;
 
         buffer::ByteBufferReader *get_reader()
         {
@@ -105,17 +115,20 @@ namespace yuan::redis
         int fetch_next_message(int timeout);
 
     public:
-        uint8_t mask_ = 0;
+        std::atomic<uint8_t> mask_ = 0;
         RedisClient *client_ = nullptr;
+        std::shared_ptr<RedisRegistry> registry_;
         Option option_;
         std::shared_ptr<net::Connection> conn_;
         std::shared_ptr<Command> last_cmd_;
         std::shared_ptr<MultiCmd> multi_cmd_;
         std::shared_ptr<SubcribeCmd> subcribe_cmd;
-        std::shared_ptr<RedisValue> last_error_;
+        std::atomic<std::shared_ptr<RedisValue>> last_error_;
         buffer::ByteBufferReader reader_;
         yuan::coroutine::CompletionEvent completion_event_;
         std::recursive_mutex operation_mutex_;
+        std::atomic<bool> closed_by_user_{false};
+        std::atomic<int> in_flight_{0};
     };
 }
 

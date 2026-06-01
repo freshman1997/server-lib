@@ -90,6 +90,7 @@ namespace yuan::net::http
             std::string allow_origin = "*";
             std::string allow_methods = "GET, POST, PUT, DELETE, OPTIONS, PATCH";
             std::string allow_headers = "Content-Type, Authorization, X-Requested-With";
+            std::string expose_headers = "Content-Length, Content-Range, Accept-Ranges, ETag, Content-Disposition";
             int max_age = 86400;  // 24小时
             bool allow_credentials = false;
         };

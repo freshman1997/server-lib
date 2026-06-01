@@ -97,7 +97,7 @@ namespace yuan::redis
     std::shared_ptr<RedisValue> RedisClient::set(std::string key, std::string value, int expire, int nx, int xx)
     {
         if (nx && xx) {
-            impl_->last_error_ = ErrorValue::from_string("ERR: NX and XX cannot be used together");
+            impl_->last_error_.store(ErrorValue::from_string("ERR: NX and XX cannot be used together"));
             return nullptr;
         }
 

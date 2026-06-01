@@ -8,6 +8,8 @@
 
 #include <cstring>
 
+#include "native_platform.h"
+
 namespace yuan::net
 {
     bool IocpAcceptEx::load(int listener_fd) noexcept
@@ -88,7 +90,7 @@ namespace yuan::net
             return true;
         }
 
-        return ::WSAGetLastError() == WSA_IO_PENDING;
+        return app::GetLastNativeError() == WSA_IO_PENDING;
 #else
         (void)listener_fd;
         (void)accepted_fd;

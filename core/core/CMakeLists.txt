@@ -16,4 +16,7 @@ elseif(WIN32)
     target_link_libraries(Core PUBLIC CoreBase kcp libssl libcrypto ws2_32 crypt32 Logger)
 endif()
 
-target_include_directories(Core PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>" "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+target_include_directories(Core PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/../app/include>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")

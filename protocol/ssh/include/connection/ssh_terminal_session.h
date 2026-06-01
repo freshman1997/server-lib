@@ -22,6 +22,7 @@ namespace yuan::net::ssh
         bool has_pty_request = false;
         bool interactive_shell_requested = false;
         bool exec_requested = false;
+        bool subsystem_requested = false;
         bool pty_bridge_active = false;
         std::string exec_command;
         SshTerminalSpec spec;

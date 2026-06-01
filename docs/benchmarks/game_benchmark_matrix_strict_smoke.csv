@@ -1,0 +1,2 @@
+run_ts,backend,workers,duration_s,connections,pps_per_conn,completion_batch_size,frame_size,client_threads,sent,received,failed,loss_count,loss_ratio,packets_per_second,avg_rtt_us,p50_rtt_us,p95_rtt_us,p99_rtt_us,max_rtt_us,cpu_avg_pct,rss_peak_kb,fd_peak,ctx_voluntary,ctx_nonvoluntary
+2026-06-01T01:56:30Z,epoll,4,3,512,20,1,32,16,31216,31216,0,0,0.000000,10257.8,148.911,200,500,500,41116,0,14636,1030,0,0

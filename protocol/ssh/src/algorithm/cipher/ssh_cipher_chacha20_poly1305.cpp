@@ -91,7 +91,7 @@ namespace yuan::net::ssh
             EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
             EVP_EncryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, nullptr, nullptr);
             EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, 12, nullptr);
-            EVP_EncryptInit_ex(ctx, nullptr, nullptr, k1_.data(), nonce);
+            EVP_EncryptInit_ex(ctx, nullptr, nullptr, k2_.data(), nonce);
 
             int outlen = 0;
             EVP_EncryptUpdate(ctx, nullptr, &outlen, enc_length, 4);
@@ -131,7 +131,7 @@ namespace yuan::net::ssh
             EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
             EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, nullptr, nullptr);
             EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, 12, nullptr);
-            EVP_DecryptInit_ex(ctx, nullptr, nullptr, k1_.data(), nonce);
+            EVP_DecryptInit_ex(ctx, nullptr, nullptr, k2_.data(), nonce);
 
             int outlen = 0;
             EVP_DecryptUpdate(ctx, nullptr, &outlen, data, 4);
@@ -179,10 +179,10 @@ namespace yuan::net::ssh
         void build_nonce(uint8_t nonce[12], const uint8_t *seq_bytes) const
         {
             std::memset(nonce, 0, 12);
-            nonce[8] = seq_bytes[3];
-            nonce[9] = seq_bytes[2];
-            nonce[10] = seq_bytes[1];
-            nonce[11] = seq_bytes[0];
+            nonce[8] = seq_bytes[0];
+            nonce[9] = seq_bytes[1];
+            nonce[10] = seq_bytes[2];
+            nonce[11] = seq_bytes[3];
         }
 
         void encrypt_length_impl(const uint8_t *plain_len, size_t plain_len_size,

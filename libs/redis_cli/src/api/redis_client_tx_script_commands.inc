@@ -6,6 +6,7 @@ std::shared_ptr<RedisValue> unwatch();
 std::shared_ptr<RedisValue> multi_exec(const std::vector<std::string> &commands);
 std::shared_ptr<RedisValue> multi_exec(const std::vector<std::string> &commands, const std::vector<std::string> &keys);
 std::shared_ptr<RedisValue> multi_exec(const std::vector<std::string> &commands, const std::vector<std::string> &keys, const std::vector<std::string> &unwatch_keys);
+std::shared_ptr<RedisValue> pipeline(const std::vector<std::string> &commands);
 std::shared_ptr<RedisValue> eval(std::string script, const std::vector<std::string> &keys, const std::vector<std::string> &args);
 std::shared_ptr<RedisValue> evalsha(std::string sha1, const std::vector<std::string> &keys, const std::vector<std::string> &args);
 std::shared_ptr<RedisValue> script_load(std::string script);

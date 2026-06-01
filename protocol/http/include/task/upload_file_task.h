@@ -2,6 +2,7 @@
 #define __UPLOAD_FILE_TASK_H__
 #include "attachment/attachment.h"
 #include "task.h"
+#include <cstdint>
 #include <fstream>
 #include <functional>
 #include <memory>
@@ -40,6 +41,11 @@ namespace yuan::net::http
             sendfile_enabled_ = enabled;
         }
 
+        void set_write_timeout_ms(uint32_t timeout_ms)
+        {
+            write_timeout_ms_ = timeout_ms;
+        }
+
         HttpTaskType get_task_type() const override
         {
             return HttpTaskType::upload_file_;
@@ -73,6 +79,8 @@ namespace yuan::net::http
 #ifdef __linux__
         std::size_t sendfile_chunk_size_ = 256 * 1024;
 #endif
+        uint32_t write_timeout_ms_ = 0;
+        uint64_t stalled_since_ms_ = 0;
     };
 }
 

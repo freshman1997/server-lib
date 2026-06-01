@@ -7,6 +7,7 @@
 #include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
 #include "net/security/ssl_handler.h"
+#include "native_platform.h"
 #include "logger.h"
 
 #include <cassert>
@@ -68,21 +69,14 @@ namespace yuan::net
             return owner ? const_cast<T *>(&*owner) : nullptr;
         }
 
-#ifdef _WIN32
         bool is_transient_send_error(const int err) noexcept
         {
-            return err == WSAEWOULDBLOCK || err == WSAEINPROGRESS || err == WSAEINTR;
+            return app::IsNativeRetryableError(err);
         }
-#else
-        bool is_transient_send_error(const int err) noexcept
-        {
-            return err == EAGAIN || err == EWOULDBLOCK || err == EINTR;
-        }
-#endif
 
         bool is_transient_errno(const int err) noexcept
         {
-            return err == EAGAIN || err == EWOULDBLOCK || err == EINTR;
+            return app::IsNativeRetryableError(err);
         }
 
         int socket_error_code(const int fd) noexcept
@@ -99,12 +93,12 @@ namespace yuan::net
 #ifdef _WIN32
             int len = static_cast<int>(sizeof(so_error));
             if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&so_error), &len) != 0) {
-                return WSAGetLastError();
+                return app::GetLastNativeError();
             }
 #else
             socklen_t len = static_cast<socklen_t>(sizeof(so_error));
             if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &len) != 0) {
-                return errno;
+                return app::GetLastNativeError();
             }
 #endif
             return so_error;
@@ -298,10 +292,10 @@ namespace yuan::net
         int write_error = 0;
 #ifdef _WIN32
         ret = ::send(channel_->get_fd(), data.data(), static_cast<int>(data.size()), 0);
-        write_error = ret < 0 ? WSAGetLastError() : 0;
+        write_error = ret < 0 ? app::GetLastNativeError() : 0;
 #else
         ret = ::send(channel_->get_fd(), data.data(), data.size(), MSG_NOSIGNAL);
-        write_error = ret < 0 ? errno : 0;
+        write_error = ret < 0 ? app::GetLastNativeError() : 0;
 #endif
 
         if (ret == static_cast<int>(data.size())) {
@@ -372,15 +366,15 @@ namespace yuan::net
             }
             if (ssl_handler_) {
                 ret = ssl_handler_->ssl_write(front->read_ptr(), front->readable_bytes());
-                write_error = ret < 0 ? errno : 0;
+                write_error = ret < 0 ? app::GetLastNativeError() : 0;
                 transient_write_error = ret < 0 && is_transient_errno(write_error);
             } else {
 #ifdef _WIN32
                 ret = ::send(channel_->get_fd(), front->read_ptr(), static_cast<int>(front->readable_bytes()), 0);
-                write_error = ret < 0 ? WSAGetLastError() : 0;
+                write_error = ret < 0 ? app::GetLastNativeError() : 0;
 #else
                 ret = ::send(channel_->get_fd(), front->read_ptr(), front->readable_bytes(), MSG_NOSIGNAL);
-                write_error = ret < 0 ? errno : 0;
+                write_error = ret < 0 ? app::GetLastNativeError() : 0;
 #endif
                 transient_write_error = ret < 0 && is_transient_send_error(write_error);
             }
@@ -425,11 +419,11 @@ namespace yuan::net
                 }
 
 #ifdef _WIN32
-                if (!ssl_handler_ && write_error == WSAEINTR) {
+                if (!ssl_handler_ && app::ClassifyNativeError(write_error) == app::NativeError::interrupted) {
                     continue;
                 }
 #else
-                if (write_error == EINTR) {
+                if (app::ClassifyNativeError(write_error) == app::NativeError::interrupted) {
                     continue;
                 }
 #endif
@@ -615,8 +609,8 @@ namespace yuan::net
                         break;
 #ifdef _WIN32
                     } else if (bytes == SOCKET_ERROR) {
-                        const int err = WSAGetLastError();
-                        if (err != WSAEINTR && err != WSAEWOULDBLOCK && err != WSAEINPROGRESS) {
+                        const int err = app::GetLastNativeError();
+                        if (!app::IsNativeRetryableError(err)) {
                             LOG_ERROR("read error: {}", err);
                             notify_event_waiters(ConnectionEvent::error);
                             if (handler) {
@@ -632,8 +626,9 @@ namespace yuan::net
                         break;
 #else
                     } else if (bytes == -1) {
-                        if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
-                            LOG_ERROR("read error: {}", errno);
+                        const int err = app::GetLastNativeError();
+                        if (!app::IsNativeRetryableError(err)) {
+                            LOG_ERROR("read error: {}", err);
                             notify_event_waiters(ConnectionEvent::error);
                             if (handler) {
                                 handler->on_error(shared_from_this());
@@ -641,7 +636,7 @@ namespace yuan::net
                             close_flag = true;
                             break;
                         }
-                        if (errno == EINTR) {
+                        if (app::ClassifyNativeError(err) == app::NativeError::interrupted) {
                             continue;
                         }
                         channel_->enable_read();
@@ -716,8 +711,9 @@ namespace yuan::net
                         close_flag = true;
                         break;
                     } else if (bytes == -1) {
-                        if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
-                            LOG_ERROR("ssl read error: {}", errno);
+                        const int err = app::GetLastNativeError();
+                        if (!app::IsNativeRetryableError(err)) {
+                            LOG_ERROR("ssl read error: {}", err);
                             notify_event_waiters(ConnectionEvent::error);
                             if (handler) {
                                 handler->on_error(shared_from_this());
@@ -725,7 +721,7 @@ namespace yuan::net
                             close_flag = true;
                             break;
                         }
-                        if (errno == EINTR) {
+                        if (app::ClassifyNativeError(err) == app::NativeError::interrupted) {
                             continue;
                         }
                         channel_->enable_read();

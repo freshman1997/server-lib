@@ -1,4 +1,4 @@
-#include "redis_cli_manager.h"
+#include "redis_client_pool.h"
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -16,9 +16,17 @@ int main()
     }
 #endif
     using namespace yuan::redis;
-    RedisCliManager::get_instance()->init({ { .port_ = 6378, .db_ = 1, .name_ = "redis1" }, });
+    RedisClientPool pool;
+    Option option;
+    option.port_ = 6378;
+    option.db_ = 1;
+    option.name_ = "redis1";
+    if (!pool.init(option, 1)) {
+        std::cout << "connect redis failed" << std::endl;
+        return 0;
+    }
 
-    auto subcribeClient = RedisCliManager::get_instance()->get_round_robin_redis_client();
+    auto subcribeClient = pool.get_round_robin_client();
     std::cout << "subcribeClient: " << subcribeClient->get_name() << std::endl;
 
     auto subRes = subcribeClient->psubscribe({ "test*" }, [](const auto &msgs) {

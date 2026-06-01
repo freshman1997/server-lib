@@ -336,6 +336,9 @@ namespace yuan::net::ssh
         register_mac("hmac-sha1", []()->std::unique_ptr<SshMac> {
             return create_mac_hmac_sha1();
         });
+        register_mac("", []()->std::unique_ptr<SshMac> {
+            return nullptr;
+        });
 
 #if YUAN_SSH_HAS_ZLIB
         register_compression("zlib", []()->std::unique_ptr<SshCompression> {

@@ -6,6 +6,8 @@
 #include <windows.h>
 #endif
 
+#include "native_platform.h"
+
 namespace yuan::net
 {
     bool IocpConnectEx::load(int fd) noexcept
@@ -68,7 +70,7 @@ namespace yuan::net
             return true;
         }
 
-        return ::WSAGetLastError() == WSA_IO_PENDING;
+        return app::GetLastNativeError() == WSA_IO_PENDING;
 #else
         (void)fd;
         (void)remote_address;

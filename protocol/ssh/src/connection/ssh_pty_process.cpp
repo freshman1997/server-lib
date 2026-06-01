@@ -1,4 +1,5 @@
 #include "connection/ssh_pty_process.h"
+#include "native_platform.h"
 
 #include <cerrno>
 #include <clocale>
@@ -262,7 +263,8 @@ namespace yuan::net::ssh
         int master = -1;
         int slave = -1;
         if (::openpty(&master, &slave, nullptr, nullptr, nullptr) != 0) {
-            maybe_set_error(error_message, std::string("openpty failed: ") + std::strerror(errno));
+            const int err = yuan::app::GetLastSystemError();
+            maybe_set_error(error_message, std::string("openpty failed: ") + yuan::app::DescribeNativeError(err));
             return false;
         }
 
@@ -360,7 +362,8 @@ namespace yuan::net::ssh
 
         const int pid = fork();
         if (pid < 0) {
-            maybe_set_error(error_message, std::string("fork failed: ") + std::strerror(errno));
+            const int err = yuan::app::GetLastSystemError();
+            maybe_set_error(error_message, std::string("fork failed: ") + yuan::app::DescribeNativeError(err));
             return false;
         }
 
@@ -448,11 +451,12 @@ namespace yuan::net::ssh
                 break;
             }
 
-            if (errno == EINTR) {
+            const int write_error = yuan::app::GetLastSystemError();
+            if (yuan::app::ClassifyNativeError(write_error) == yuan::app::NativeError::interrupted) {
                 continue;
             }
 
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (yuan::app::ClassifyNativeError(write_error) == yuan::app::NativeError::would_block) {
                 if (std::chrono::steady_clock::now() >= deadline) {
                     break;
                 }
@@ -461,7 +465,7 @@ namespace yuan::net::ssh
                 pfd.fd = backend_.master_fd();
                 pfd.events = POLLOUT;
                 const int rc = poll(&pfd, 1, 5);
-                if (rc < 0 && errno != EINTR) {
+                if (rc < 0 && yuan::app::ClassifyNativeError(yuan::app::GetLastSystemError()) != yuan::app::NativeError::interrupted) {
                     return false;
                 }
                 continue;
@@ -511,7 +515,7 @@ namespace yuan::net::ssh
                 break;
             }
 
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            if (yuan::app::IsNativeRetryableError(yuan::app::GetLastSystemError())) {
                 break;
             }
             return false;
@@ -548,7 +552,8 @@ namespace yuan::net::ssh
         ws.ws_ypixel = static_cast<unsigned short>(pixel_height);
 
         if (ioctl(backend_.master_fd(), TIOCSWINSZ, &ws) != 0) {
-            maybe_set_error(error_message, std::string("TIOCSWINSZ failed: ") + std::strerror(errno));
+            const int err = yuan::app::GetLastSystemError();
+            maybe_set_error(error_message, std::string("TIOCSWINSZ failed: ") + yuan::app::DescribeNativeError(err));
             return false;
         }
         return true;
@@ -585,7 +590,8 @@ namespace yuan::net::ssh
         }
 
         if (kill(-child_pid_, sig) != 0 && kill(child_pid_, sig) != 0) {
-            maybe_set_error(error_message, std::string("kill failed: ") + std::strerror(errno));
+            const int err = yuan::app::GetLastSystemError();
+            maybe_set_error(error_message, std::string("kill failed: ") + yuan::app::DescribeNativeError(err));
             return false;
         }
         return true;
@@ -637,7 +643,7 @@ namespace yuan::net::ssh
                     exited = true;
                     break;
                 }
-                if (rc < 0 && errno == ECHILD) {
+                if (rc < 0 && yuan::app::GetLastSystemError() == ECHILD) {
                     exited = true;
                     break;
                 }

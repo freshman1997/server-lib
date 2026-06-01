@@ -17,6 +17,7 @@
 #include "response.h"
 #include "net/socket/socket_ops.h"
 #include "runtime_context.h"
+#include "native_platform.h"
 
 #include <algorithm>
 #include <atomic>
@@ -301,12 +302,13 @@ namespace
             const int client_fd = ::accept(watcher->fd, reinterpret_cast<sockaddr *>(&addr), &len);
             if (client_fd < 0) {
 #ifdef _WIN32
-                const int err = WSAGetLastError();
-                if (err == WSAEWOULDBLOCK || err == WSAEINTR || err == WSAEINPROGRESS) {
+                const int err = yuan::app::GetLastNativeError();
+                if (yuan::app::IsNativeRetryableError(err)) {
                     break;
                 }
 #else
-                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                const int err = yuan::app::GetLastNativeError();
+                if (yuan::app::IsNativeRetryableError(err)) {
                     break;
                 }
 #endif

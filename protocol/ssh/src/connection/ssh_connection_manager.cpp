@@ -460,6 +460,11 @@ namespace yuan::net::ssh
             channel->handler()->on_eof(channel);
         }
 
+        if (channel->terminal_session_state().subsystem_requested) {
+            channel->set_state(SshChannel::State::closing);
+            return build_channel_close(channel->remote_id());
+        }
+
         return build_channel_eof(channel->remote_id());
     }
 
@@ -468,6 +473,17 @@ namespace yuan::net::ssh
         auto *effective_handler = handler ? handler : &SshHandler::default_handler();
         auto *channel = find_channel_by_remote(msg.recipient_channel);
         if (!channel) {
+            return ByteBuffer();
+        }
+
+        if (channel->state() == SshChannel::State::closing ||
+            channel->state() == SshChannel::State::closed) {
+            auto local_id = channel->local_id();
+            if (channel->handler()) {
+                channel->handler()->on_close(channel);
+            }
+            effective_handler->on_channel_close(session_, channel);
+            remove_channel(local_id);
             return ByteBuffer();
         }
 
@@ -550,6 +566,7 @@ namespace yuan::net::ssh
                               effective_handler->on_subsystem_request(session_, channel, sub_data.subsystem_name);
 
                     if (success) {
+                        channel->terminal_session_state().subsystem_requested = true;
                         if (it != subsystem_factories_.end()) {
                             auto subsystem_handler = it->second();
                             auto *raw = ptr_of(subsystem_handler);
@@ -785,6 +802,20 @@ namespace yuan::net::ssh
                 return build_request_failure();
             }
 
+            if (msg.want_reply) {
+                return build_request_success();
+            }
+            return ByteBuffer();
+        }
+
+        if (msg.request_name == "keepalive@openssh.com") {
+            if (msg.want_reply) {
+                return build_request_success();
+            }
+            return ByteBuffer();
+        }
+
+        if (msg.request_name == "no-more-sessions@openssh.com") {
             if (msg.want_reply) {
                 return build_request_success();
             }

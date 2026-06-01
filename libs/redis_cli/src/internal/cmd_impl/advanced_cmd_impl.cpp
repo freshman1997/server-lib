@@ -1,7 +1,9 @@
 #include "../redis_impl.h"
 #include "../utils.h"
+#include "cmd/pipeline_cmd.h"
 #include "internal/cmd_builder.h"
 #include "redis_client.h"
+#include "value/array_value.h"
 #include "value/error_value.h"
 
 #include <cctype>
@@ -115,6 +117,7 @@ namespace yuan::redis
 
     std::shared_ptr<RedisValue> RedisClient::discard()
     {
+        std::lock_guard<std::recursive_mutex> lock(impl_->operation_mutex_);
         auto cmd = make_cmd("discard");
         impl_->multi_cmd_ = nullptr;
         return impl_->execute_command(cmd);
@@ -173,6 +176,50 @@ namespace yuan::redis
             (void)unwatch();
         }
         return result;
+    }
+
+    std::shared_ptr<RedisValue> RedisClient::pipeline(const std::vector<std::string> &commands)
+    {
+        if (commands.empty()) {
+            auto arr = std::make_shared<ArrayValue>();
+            arr->set_values({});
+            return arr;
+        }
+
+        auto pipeline_cmd = std::make_shared<PipelineCmd>();
+        for (const auto &raw_command : commands) {
+            const auto cmd = parse_raw_command(raw_command);
+            if (!cmd) {
+                return ErrorValue::from_string("ERR: invalid command in PIPELINE");
+            }
+            pipeline_cmd->add_command(cmd);
+        }
+
+        return impl_->execute_command(pipeline_cmd);
+    }
+
+    std::shared_ptr<RedisValue> RedisClient::pipeline(const std::vector<PipelineCommand> &commands)
+    {
+        if (commands.empty()) {
+            auto arr = std::make_shared<ArrayValue>();
+            arr->set_values({});
+            return arr;
+        }
+
+        auto pipeline_cmd = std::make_shared<PipelineCmd>();
+        for (const auto &command : commands) {
+            if (command.name.empty()) {
+                return ErrorValue::from_string("ERR: invalid command in PIPELINE");
+            }
+
+            auto cmd = make_cmd(command.name);
+            for (const auto &arg : command.args) {
+                cmd->add_arg(str_arg(arg));
+            }
+            pipeline_cmd->add_command(cmd);
+        }
+
+        return impl_->execute_command(pipeline_cmd);
     }
 
     std::shared_ptr<RedisValue> RedisClient::setbit(std::string key, int64_t offset, int value)

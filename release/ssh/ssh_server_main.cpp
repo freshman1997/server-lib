@@ -426,7 +426,21 @@ namespace
 
         bool on_channel_open(yuan::net::ssh::SshSession *, const std::string &channel_type, yuan::net::ssh::SshChannel *) override
         {
-            return channel_type == yuan::net::ssh::SSH_CHANNEL_SESSION;
+            if (channel_type == yuan::net::ssh::SSH_CHANNEL_SESSION) {
+                return true;
+            }
+            if (channel_type == yuan::net::ssh::SSH_CHANNEL_DIRECT_TCPIP) {
+                return enable_port_forwarding_;
+            }
+            return false;
+        }
+
+        bool on_direct_tcpip(yuan::net::ssh::SshSession *,
+                             yuan::net::ssh::SshChannel *,
+                             const std::string &,
+                             uint16_t) override
+        {
+            return enable_port_forwarding_;
         }
 
         bool on_pty_request(yuan::net::ssh::SshSession *, yuan::net::ssh::SshChannel *, const std::string &, uint32_t, uint32_t, uint32_t, uint32_t, const std::vector<uint8_t> &) override
@@ -444,9 +458,30 @@ namespace
             return true;
         }
 
+        bool on_env_request(yuan::net::ssh::SshSession *,
+                            yuan::net::ssh::SshChannel *,
+                            const std::string &,
+                            const std::string &) override
+        {
+            return true;
+        }
+
         bool enable_builtin_exec_bridge() const override
         {
             return true;
+        }
+
+        bool on_global_request(yuan::net::ssh::SshSession *,
+                               const std::string &request_name,
+                               const std::vector<uint8_t> &) override
+        {
+            if (request_name == "keepalive@openssh.com") {
+                return true;
+            }
+            if (request_name == "no-more-sessions@openssh.com") {
+                return true;
+            }
+            return false;
         }
 
         uint16_t on_tcpip_forward(yuan::net::ssh::SshSession *session,

@@ -2,6 +2,7 @@
 #include "net/channel/channel.h"
 #include "net/poller/select_poller.h"
 #include "logger.h"
+#include "native_platform.h"
 
 #include <mutex>
 #include <unordered_map>
@@ -158,7 +159,7 @@ namespace yuan::net
                 for (auto i = data_->sockets_.begin(); i != data_->sockets_.end();) {
                     if (!i->second || !is_valid_socket_fd(i->first)) {
                         const int fd = i->first;
-                        const int err = WSAGetLastError();
+                        const int err = app::GetLastNativeError();
                         LOG_WARN("select poll remove invalid socket, fd: {}, wsa_error: {}", fd, err);
                         queue_close_event(fd, i->second);
                         i = data_->sockets_.erase(i);
@@ -170,7 +171,7 @@ namespace yuan::net
                 if (removed_invalid) {
                     return tm;
                 }
-                LOG_WARN("select poll failed, ret: {}, wsa_error: {}, sockets: {}", ret, WSAGetLastError(), data_->sockets_.size());
+                LOG_WARN("select poll failed, ret: {}, wsa_error: {}, sockets: {}", ret, app::GetLastNativeError(), data_->sockets_.size());
 #else
                 LOG_WARN("select poll failed, ret: {}", ret);
 #endif

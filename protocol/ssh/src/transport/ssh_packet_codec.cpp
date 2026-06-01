@@ -15,7 +15,7 @@ namespace yuan::net::ssh
         if (pad < kMinPadding)
             pad += block_size;
         if (pad > kMaxPadding)
-            pad = kMaxPadding;
+            return kMinPadding;
         return pad;
     }
 
