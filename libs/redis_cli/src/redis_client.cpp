@@ -13,6 +13,7 @@
 
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 namespace yuan::redis
@@ -184,7 +185,7 @@ namespace yuan::redis
                 "redis event loop is already running on another thread");
         } catch (const std::exception &ex) {
             impl_->last_error_.store(ErrorValue::from_string(ex.what()));
-            impl_->close();
+            impl_->disconnect();
             return -1;
         }
 
@@ -193,7 +194,7 @@ namespace yuan::redis
                 : (impl_->option_.timeout_ms_ > 0 ? impl_->option_.timeout_ms_ : 0);
             impl_->last_error_.store(ErrorValue::from_string(impl_->option_.name_ + " connect timeout" +
                 (ct > 0 ? " (" + std::to_string(ct) + "ms)" : "")));
-            impl_->close();
+            impl_->disconnect();
             return -1;
         }
 
@@ -205,7 +206,7 @@ namespace yuan::redis
                 : auth(impl_->option_.username_, impl_->option_.password_);
             if (!auth_result) {
                 impl_->last_error_.store(ErrorValue::from_string("auth failed"));
-                close();
+                impl_->disconnect();
                 return -1;
             }
         }
@@ -213,7 +214,7 @@ namespace yuan::redis
         if (impl_->option_.db_ != 0) {
             if (const auto select_result = select(impl_->option_.db_); !select_result) {
                 impl_->last_error_.store(ErrorValue::from_string("select db failed"));
-                close();
+                impl_->disconnect();
                 return -1;
             }
         }
@@ -223,6 +224,7 @@ namespace yuan::redis
 
     void RedisClient::set_option(const Option & opt)
     {
+        std::lock_guard<std::recursive_mutex> lock(impl_->operation_mutex_);
         impl_->option_ = opt;
     }
 
@@ -328,10 +330,12 @@ namespace yuan::redis
         impl_->closed_by_user_.store(false, std::memory_order_release);
 
         for (int i = 0; i < impl_->option_.max_reconnect_retries_; ++i) {
+            impl_->reconnect_attempts_.fetch_add(1, std::memory_order_release);
             if (i > 0 && impl_->option_.reconnect_delay_ms_ > 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(impl_->option_.reconnect_delay_ms_));
             }
             if (connect() == 0) {
+                impl_->reconnect_successes_.fetch_add(1, std::memory_order_release);
                 return true;
             }
         }
@@ -350,5 +354,19 @@ namespace yuan::redis
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         return true;
+    }
+
+    RedisClientStats RedisClient::stats() const
+    {
+        RedisClientStats out;
+        out.connected = impl_->is_connected();
+        out.closed = impl_->is_closed();
+        out.timeout = impl_->is_timeout();
+        out.in_flight = impl_->in_flight_.load(std::memory_order_acquire);
+        out.reconnect_attempts = impl_->reconnect_attempts_.load(std::memory_order_acquire);
+        out.reconnect_successes = impl_->reconnect_successes_.load(std::memory_order_acquire);
+        out.command_timeouts = impl_->command_timeouts_.load(std::memory_order_acquire);
+        out.protocol_errors = impl_->protocol_errors_.load(std::memory_order_acquire);
+        return out;
     }
 }

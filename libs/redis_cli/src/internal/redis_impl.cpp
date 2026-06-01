@@ -20,6 +20,27 @@ namespace yuan::redis
         {
             return cmd && !cmd->get_result() && !cmd->has_pending_messages();
         }
+
+        class InFlightGuard
+        {
+        public:
+            explicit InFlightGuard(std::atomic<int> &counter) noexcept
+                : counter_(counter)
+            {
+                counter_.fetch_add(1, std::memory_order_acq_rel);
+            }
+
+            ~InFlightGuard()
+            {
+                counter_.fetch_sub(1, std::memory_order_acq_rel);
+            }
+
+            InFlightGuard(const InFlightGuard &) = delete;
+            InFlightGuard &operator=(const InFlightGuard &) = delete;
+
+        private:
+            std::atomic<int> &counter_;
+        };
     }
 
     RedisClient::Impl::~Impl()
@@ -116,13 +137,16 @@ namespace yuan::redis
         }
 
         const auto cmd = last_cmd_ ? last_cmd_ : subcribe_cmd;
+        bool protocol_error = false;
         if (const int ret = cmd->unpack(reader_); ret < 0) {
             if (ret == UnpackCode::need_more_bytes) {
                 return;
             } else if (ret == UnpackCode::format_error) {
                 last_error_.store(ErrorValue::from_string("format error"));
+                protocol_error = true;
             } else {
                 last_error_.store(ErrorValue::from_string("unknown error"));
+                protocol_error = true;
             }
         } else {
             if (cmd->get_result() && cmd->get_result()->get_type() == resp_error) {
@@ -138,6 +162,7 @@ namespace yuan::redis
                 }
             } else if (is_subscription_parse_failure(subcribe_cmd)) {
                 last_error_.store(ErrorValue::from_string("subscribe failed"));
+                protocol_error = true;
             }
         }
 
@@ -149,6 +174,11 @@ namespace yuan::redis
         if (!last_cmd_ || cmd->get_result() || last_error_.load() ||
             (subcribe_cmd && subcribe_cmd->has_pending_messages())) {
             completion_event_.notify();
+        }
+
+        if (protocol_error) {
+            protocol_errors_.fetch_add(1, std::memory_order_release);
+            disconnect();
         }
     }
 
@@ -171,31 +201,30 @@ namespace yuan::redis
     std::shared_ptr<RedisValue> RedisClient::Impl::execute_command(std::shared_ptr<Command> cmd)
     {
         std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-        in_flight_.fetch_add(1, std::memory_order_relaxed);
+        InFlightGuard in_flight_guard(in_flight_);
 
         if (!cmd) {
             last_error_.store(ErrorValue::from_string("command is null"));
-            in_flight_.fetch_sub(1, std::memory_order_relaxed);
             return nullptr;
         }
 
         if (is_closed()) {
             if (closed_by_user_.load(std::memory_order_acquire)) {
-                in_flight_.fetch_sub(1, std::memory_order_relaxed);
                 return nullptr;
             }
             if (!option_.reconnect_ || !client_) {
-                in_flight_.fetch_sub(1, std::memory_order_relaxed);
                 return nullptr;
             }
 
             closed_by_user_.store(false, std::memory_order_release);
             bool reconnected = false;
             for (int i = 0; i < option_.max_reconnect_retries_; ++i) {
+                reconnect_attempts_.fetch_add(1, std::memory_order_release);
                 if (i > 0 && option_.reconnect_delay_ms_ > 0) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(option_.reconnect_delay_ms_));
                 }
                 if (client_->connect() == 0) {
+                    reconnect_successes_.fetch_add(1, std::memory_order_release);
                     reconnected = true;
                     break;
                 }
@@ -204,21 +233,18 @@ namespace yuan::redis
             if (!reconnected) {
                 last_error_.store(ErrorValue::from_string(option_.name_ + " reconnect failed after " +
                     std::to_string(option_.max_reconnect_retries_) + " retries"));
-                in_flight_.fetch_sub(1, std::memory_order_relaxed);
                 return nullptr;
             }
         }
 
         if (multi_cmd_) {
             multi_cmd_->add_command(cmd);
-            in_flight_.fetch_sub(1, std::memory_order_relaxed);
             return nullptr;
         }
 
         if (!is_connecting() && !is_connected()) {
             if (!client_) {
                 last_error_.store(ErrorValue::from_string("unexpected error"));
-                in_flight_.fetch_sub(1, std::memory_order_relaxed);
                 return nullptr;
             }
 
@@ -226,20 +252,17 @@ namespace yuan::redis
                 if (!last_error_.load()) {
                     last_error_.store(ErrorValue::from_string(option_.name_ + " connect failed"));
                 }
-                in_flight_.fetch_sub(1, std::memory_order_relaxed);
                 return nullptr;
             }
         }
 
         if (!is_connected()) {
             last_error_.store(ErrorValue::from_string("not connected"));
-            in_flight_.fetch_sub(1, std::memory_order_relaxed);
             return nullptr;
         }
 
         if (last_cmd_) {
             last_error_.store(ErrorValue::from_string("executing"));
-            in_flight_.fetch_sub(1, std::memory_order_relaxed);
             return nullptr;
         }
 
@@ -251,7 +274,6 @@ namespace yuan::redis
         if (!conn_) {
             last_error_.store(ErrorValue::from_string("connection missing"));
             last_cmd_ = nullptr;
-            in_flight_.fetch_sub(1, std::memory_order_relaxed);
             return nullptr;
         }
 
@@ -268,8 +290,9 @@ namespace yuan::redis
                 registry()->get_timer_manager(),
                 timeout_ms);
             if (timed_out) {
+                command_timeouts_.fetch_add(1, std::memory_order_release);
                 last_error_.store(ErrorValue::from_string(option_.name_ + " command timeout"));
-                close();
+                disconnect();
                 co_return nullptr;
             }
             if (client_ && client_->is_closed()) {
@@ -280,12 +303,10 @@ namespace yuan::redis
             last_error_.store(ErrorValue::from_string(ex.what()));
             last_cmd_ = nullptr;
             disconnect();
-            in_flight_.fetch_sub(1, std::memory_order_relaxed);
             return nullptr;
         }
 
         last_cmd_ = nullptr;
-        in_flight_.fetch_sub(1, std::memory_order_relaxed);
 
         return res;
     }

@@ -7,16 +7,11 @@
 #include "net/connector/tcp_connector.h"
 #include "net/handler/connection_handler.h"
 #include "net/handler/connector_handler.h"
-#include "net/poller/select_poller.h"
+#include "net/poller/poller.h"
+#include "net/runtime/network_runtime.h"
 #include "net/socket/inet_address.h"
 #include "timer/timer_handle.h"
 #include "timer/wheel_timer_manager.h"
-
-#if defined(__linux__)
-#include "net/poller/epoll_poller.h"
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-#include "net/poller/kqueue_poller.h"
-#endif
 
 #include <condition_variable>
 #include <cstdarg>
@@ -86,17 +81,6 @@ static std::string vformat_message(const char* fmt, va_list args)
     std::vsnprintf(heap_buf.data(), heap_buf.size(), fmt, args_retry);
     va_end(args_retry);
     return std::string(heap_buf.data(), static_cast<size_t>(written));
-}
-
-static yuan::net::Poller* create_default_poller()
-{
-#if defined(__linux__)
-    return new yuan::net::EpollPoller();
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-    return new yuan::net::KQueuePoller();
-#else
-    return new yuan::net::SelectPoller();
-#endif
 }
 
 #ifdef _WIN32
@@ -177,7 +161,7 @@ void NetLogger::Impl::start_runtime()
     std::lock_guard<std::mutex> lock(mutex_);
     if (runtime_started_) return;
 
-    poller_ = create_default_poller();
+    poller_ = yuan::net::NetworkRuntime::create_default_poller();
     timer_manager_ = new yuan::timer::WheelTimerManager();
     if (!poller_ || !poller_->init()) {
         delete poller_;

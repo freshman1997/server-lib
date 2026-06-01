@@ -2,6 +2,7 @@
 #define __YUAN_REDIS_CLIENT_H__
 
 #include <functional>
+#include <cstdint>
 #include <initializer_list>
 #include <memory>
 #include <string>
@@ -48,6 +49,18 @@ namespace yuan::redis
         static PipelineCommand rpush(std::string key, std::vector<std::string> values);
     };
 
+    struct RedisClientStats
+    {
+        bool connected = false;
+        bool closed = false;
+        bool timeout = false;
+        int in_flight = 0;
+        std::uint64_t reconnect_attempts = 0;
+        std::uint64_t reconnect_successes = 0;
+        std::uint64_t command_timeouts = 0;
+        std::uint64_t protocol_errors = 0;
+    };
+
     class RedisClient : public std::enable_shared_from_this<RedisClient>
     {
     public:
@@ -82,6 +95,7 @@ namespace yuan::redis
 
         bool ensure_connected();
         bool wait_in_flight(uint32_t timeout_ms);
+        RedisClientStats stats() const;
 
     public: // key commands
 #include "api/redis_client_key_commands.inc"

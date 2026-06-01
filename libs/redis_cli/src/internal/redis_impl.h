@@ -12,6 +12,7 @@
 #include "net/handler/connection_handler.h"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 
@@ -129,6 +130,10 @@ namespace yuan::redis
         std::recursive_mutex operation_mutex_;
         std::atomic<bool> closed_by_user_{false};
         std::atomic<int> in_flight_{0};
+        std::atomic<std::uint64_t> reconnect_attempts_{0};
+        std::atomic<std::uint64_t> reconnect_successes_{0};
+        std::atomic<std::uint64_t> command_timeouts_{0};
+        std::atomic<std::uint64_t> protocol_errors_{0};
     };
 }
 

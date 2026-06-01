@@ -1,7 +1,8 @@
 #include "redis_registry.h"
-#include "net/poller/select_poller.h"
 #include "event/event_loop.h"
-#include "timer/wheel_timer_manager.h"
+#include "net/runtime/network_runtime.h"
+#include "net/poller/poller.h"
+#include "timer/timer_manager.h"
 
 #include <thread>
 
@@ -9,22 +10,33 @@ namespace yuan::redis
 {
     RedisRegistry::RedisRegistry()
     {
-        poller_ = new net::SelectPoller();
-        timer_manager_ = new timer::WheelTimerManager();
-        event_loop_ = new net::EventLoop(poller_, timer_manager_);
+        runtime_ = std::make_unique<net::NetworkRuntime>();
     }
 
     RedisRegistry::~RedisRegistry()
     {
         drain_pending();
-        delete event_loop_;
-        delete poller_;
-        delete timer_manager_;
+        runtime_.reset();
+    }
+
+    net::EventLoop *RedisRegistry::get_event_loop() const
+    {
+        return runtime_ ? runtime_->event_loop() : nullptr;
+    }
+
+    net::Poller *RedisRegistry::get_poller() const
+    {
+        return runtime_ ? runtime_->poller() : nullptr;
+    }
+
+    timer::TimerManager *RedisRegistry::get_timer_manager() const
+    {
+        return runtime_ ? runtime_->timer_manager() : nullptr;
     }
 
     yuan::coroutine::RuntimeView RedisRegistry::get_coroutine_runtime() const
     {
-        return {event_loop_, timer_manager_, &run_mutex_, &owner_thread_};
+        return {get_event_loop(), get_timer_manager(), &run_mutex_, &owner_thread_};
     }
 
     void RedisRegistry::run()
@@ -33,7 +45,9 @@ namespace yuan::redis
         if (!runtime.try_acquire_run_lock()) {
             return;
         }
-        event_loop_->loop();
+        if (runtime_) {
+            runtime_->run();
+        }
         runtime.release_run_lock();
     }
 
@@ -43,10 +57,15 @@ namespace yuan::redis
         if (!runtime.try_acquire_run_lock()) {
             return;
         }
-        event_loop_->queue_in_loop([this]() {
-            event_loop_->request_coroutine_resume();
-        });
-        event_loop_->loop();
+        auto *loop = get_event_loop();
+        if (loop) {
+            loop->queue_in_loop([loop]() {
+                loop->request_coroutine_resume();
+            });
+        }
+        if (runtime_) {
+            runtime_->run();
+        }
         runtime.release_run_lock();
     }
 

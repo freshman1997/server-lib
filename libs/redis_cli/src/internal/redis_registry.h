@@ -4,6 +4,7 @@
 #include "coroutine/runtime.h"
 #include "singleton/singleton.h"
 
+#include <memory>
 #include <mutex>
 #include <thread>
 
@@ -11,6 +12,7 @@ namespace yuan::net
 {
     class Poller;
     class EventLoop;
+    class NetworkRuntime;
 }
 
 namespace yuan::timer
@@ -30,11 +32,11 @@ namespace yuan::redis
         RedisRegistry(const RedisRegistry &) = delete;
         RedisRegistry &operator=(const RedisRegistry &) = delete;
 
-        net::EventLoop *get_event_loop() const { return event_loop_; }
+        net::EventLoop *get_event_loop() const;
 
-        net::Poller *get_poller() const { return poller_; }
+        net::Poller *get_poller() const;
 
-        timer::TimerManager *get_timer_manager() const { return timer_manager_; }
+        timer::TimerManager *get_timer_manager() const;
 
         yuan::coroutine::RuntimeView get_coroutine_runtime() const;
 
@@ -49,9 +51,7 @@ namespace yuan::redis
         void run();
 
     private:
-        net::EventLoop *event_loop_;
-        net::Poller *poller_;
-        timer::TimerManager *timer_manager_;
+        std::unique_ptr<net::NetworkRuntime> runtime_;
         mutable std::recursive_mutex run_mutex_;
         mutable std::thread::id owner_thread_;
     };

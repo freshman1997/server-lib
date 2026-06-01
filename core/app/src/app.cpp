@@ -7,15 +7,10 @@
 #include "net/acceptor/datagram_endpoint.h"
 #include "net/acceptor/stream_acceptor.h"
 #include "net/connection/connection.h"
-#include "net/poller/select_poller.h"
+#include "net/poller/poller.h"
+#include "net/runtime/network_runtime.h"
 #include "net/socket/socket.h"
 #include "timer/wheel_timer_manager.h"
-
-#ifdef __linux__
-#include "net/poller/epoll_poller.h"
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-#include "net/poller/kqueue_poller.h"
-#endif
 
 #include <atomic>
 #include <memory>
@@ -34,17 +29,6 @@ namespace yuan::app
         T *ptr_of(const std::unique_ptr<T> &owner)
         {
             return owner ? &*owner : nullptr;
-        }
-
-        std::unique_ptr<net::Poller> create_default_poller()
-        {
-        #ifdef __linux__
-            return std::make_unique<net::EpollPoller>();
-        #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-            return std::make_unique<net::KQueuePoller>();
-        #else
-            return std::make_unique<net::SelectPoller>();
-        #endif
         }
 
     }
@@ -104,7 +88,7 @@ namespace yuan::app
         }
 
         data_->timer_manager_ = std::make_unique<timer::WheelTimerManager>();
-        data_->poller_ = create_default_poller();
+        data_->poller_.reset(net::NetworkRuntime::create_default_poller());
         if (!data_->poller_ || !data_->poller_->init()) {
             data_->reset_runtime_resources();
             return false;

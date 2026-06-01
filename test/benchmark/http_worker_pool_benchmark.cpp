@@ -1293,7 +1293,7 @@ namespace
 
         bool start(uint16_t port, std::size_t worker_count)
         {
-            return listener.listen("127.0.0.1", port, worker_count, worker_count, handle_connection);
+            return listener.listen("127.0.0.1", port, worker_count, worker_count, 1, handle_connection);
         }
 
         void stop()

@@ -24,6 +24,7 @@ if (YUAN_BUILD_TESTS)
     if (WIN32)
         target_link_libraries(redisCliStressTest PUBLIC psapi)
     endif()
+    add_test(NAME redis_cli_stress COMMAND redisCliStressTest)
 endif()
 
 option(REDIS_CLI_BUILD_MANUAL_TESTS "Build interactive redis_cli smoke programs" OFF)

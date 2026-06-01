@@ -258,6 +258,10 @@ int main()
     Option pool_option = option;
     pool_option.name_ = "redis-stress-pool";
     if (pool.init(pool_option, static_cast<std::size_t>(pool_size))) {
+        const auto initial_pool_stats = pool.stats();
+        assert(initial_pool_stats.size == static_cast<std::size_t>(pool_size));
+        assert(initial_pool_stats.connected == static_cast<std::size_t>(pool_size));
+
         std::vector<std::thread> workers;
         workers.reserve(static_cast<std::size_t>(pool_size));
         const int ops_per_worker = command_ops / pool_size;
@@ -291,6 +295,13 @@ int main()
                   << " batch=" << pipeline_batch
                   << " seconds=" << pool_seconds
                   << " ops_per_sec=" << (command_ops / pool_seconds)
+                  << std::endl;
+
+        const auto final_pool_stats = pool.stats();
+        assert(final_pool_stats.size == static_cast<std::size_t>(pool_size));
+        std::cout << "STRESS_RESULT pool_stats size=" << final_pool_stats.size
+                  << " connected=" << final_pool_stats.connected
+                  << " unhealthy=" << final_pool_stats.unhealthy
                   << std::endl;
         pool.close();
     }
@@ -391,6 +402,42 @@ int main()
     client->close();
 
     {
+        Option timeout_option = option;
+        timeout_option.name_ = "redis-stress-command-timeout";
+        timeout_option.command_timeout_ms_ = 50;
+        timeout_option.reconnect_ = true;
+        timeout_option.max_reconnect_retries_ = 3;
+        timeout_option.reconnect_delay_ms_ = 20;
+
+        auto timeout_client = connect_client(timeout_option);
+        if (timeout_client && timeout_client->is_connected()) {
+            const std::string missing_list = prefix + "timeout:missing";
+            const std::string dest_list = prefix + "timeout:dest";
+            (void)timeout_client->del({missing_list, dest_list});
+
+            const auto timed_out = timeout_client->brpoplpush(missing_list, dest_list, 1);
+            assert(!timed_out);
+            const auto timeout_stats = timeout_client->stats();
+            assert(timeout_stats.command_timeouts > 0);
+            assert(timeout_stats.in_flight == 0);
+            assert(timeout_client->is_closed());
+
+            assert_ok(timeout_client->ping(), "PING after command timeout reconnect");
+            const auto recovered_stats = timeout_client->stats();
+            assert(recovered_stats.reconnect_attempts > 0);
+            assert(recovered_stats.reconnect_successes > 0);
+            std::cout << "STRESS_RESULT command_timeout=recovered"
+                      << " timeouts=" << recovered_stats.command_timeouts
+                      << " reconnect_attempts=" << recovered_stats.reconnect_attempts
+                      << " reconnect_successes=" << recovered_stats.reconnect_successes
+                      << std::endl;
+            timeout_client->close();
+        } else {
+            std::cout << "STRESS_RESULT command_timeout=skipped_no_connection" << std::endl;
+        }
+    }
+
+    {
         Option rc_option = option;
         rc_option.name_ = "redis-stress-reconnect";
         rc_option.reconnect_ = true;
@@ -407,8 +454,12 @@ int main()
 
             auto rc_result = rc_client->get(rc_key);
             assert(rc_result || rc_client->get_last_error());
+            const auto rc_stats = rc_client->stats();
+            assert(rc_stats.reconnect_attempts > 0);
+            assert(rc_stats.in_flight == 0);
 
             if (rc_result) {
+                assert(rc_stats.reconnect_successes > 0);
                 std::cout << "STRESS_RESULT reconnect=auto_reconnected" << std::endl;
             } else {
                 std::cout << "STRESS_RESULT reconnect=attempted_error="
@@ -434,12 +485,20 @@ int main()
 
             hc1->disconnect();
             assert(!hc1->is_connected());
+            const auto degraded = hc_pool.stats();
+            assert(degraded.size == 2);
+            assert(degraded.unhealthy >= 1);
 
             auto hc_again = hc_pool.get_round_robin_client();
             assert(hc_again);
             if (hc_again->is_connected()) {
                 assert_ok(hc_again->ping(), "PING after health check reconnect");
+                const auto recovered = hc_pool.stats();
                 std::cout << "STRESS_RESULT health_check=reconnected_and_ping_ok" << std::endl;
+                std::cout << "STRESS_RESULT health_stats size=" << recovered.size
+                          << " connected=" << recovered.connected
+                          << " unhealthy=" << recovered.unhealthy
+                          << std::endl;
             } else {
                 std::cout << "STRESS_RESULT health_check=reconnect_failed" << std::endl;
             }
