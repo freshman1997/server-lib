@@ -44,7 +44,7 @@ target_include_directories(release_dns_server PUBLIC
     "${CMAKE_SOURCE_DIR}"
     "${CMAKE_SOURCE_DIR}/protocol/dns/include"
 )
-if (UNIX AND NOT APPLE)
+if (YUAN_GLOBAL_STATIC_LINK AND UNIX AND NOT APPLE)
     target_link_options(release_dns_server PRIVATE "-static-libgcc" "-static-libstdc++")
 endif()
 set_target_properties(release_dns_server PROPERTIES

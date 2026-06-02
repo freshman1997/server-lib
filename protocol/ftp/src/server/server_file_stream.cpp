@@ -9,7 +9,7 @@
 #include "common/session.h"
 #include "handler/ftp_app.h"
 #include "net/runtime/network_runtime.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 #include <cassert>
 #include <cerrno>
@@ -47,15 +47,15 @@ namespace yuan::net::ftp
                     memset(&peer_storage, 0, sizeof(sockaddr_storage));
                     int conn_fd = socket_->accept(peer_storage);
                     if (conn_fd < 0) {
-                        const int accept_error = yuan::app::GetLastNativeError();
+                        const int accept_error = yuan::platform::GetLastNativeError();
 #ifdef _DEBUG
-                        bool ignorable_error = yuan::app::IsNativeRetryableError(accept_error) ||
-                                               yuan::app::ClassifyNativeError(accept_error) == yuan::app::NativeError::connection_aborted;
+                        bool ignorable_error = yuan::platform::IsNativeRetryableError(accept_error) ||
+                                               yuan::platform::ClassifyNativeError(accept_error) == yuan::platform::NativeError::connection_aborted;
 #ifdef EPROTO
                         ignorable_error = ignorable_error || accept_error == EPROTO;
 #endif
                         if (!ignorable_error) {
-                            LOG_WARN("error connection {} ({})", accept_error, yuan::app::DescribeNativeError(accept_error));
+                            LOG_WARN("error connection {} ({})", accept_error, yuan::platform::DescribeNativeError(accept_error));
                         }
 #endif
                         break;

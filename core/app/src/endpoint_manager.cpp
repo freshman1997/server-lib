@@ -2,8 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
-#include <set>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace yuan::app
@@ -50,48 +51,72 @@ std::string key_to_string(const EndpointKey &key)
     return out.str();
 }
 
-bool same_logical_service(const EndpointBindingPlan &binding)
+struct InstanceKey
 {
+    std::size_t service_index = 0;
+    std::size_t service_instance_index = 0;
+};
+
+bool operator==(const InstanceKey &left, const InstanceKey &right) noexcept
+{
+    return left.service_index == right.service_index &&
+           left.service_instance_index == right.service_instance_index;
+}
+
+struct InstanceKeyHash
+{
+    std::size_t operator()(const InstanceKey &key) const noexcept
+    {
+        const auto service_hash = std::hash<std::size_t>{}(key.service_index);
+        const auto instance_hash = std::hash<std::size_t>{}(key.service_instance_index);
+        return service_hash ^ (instance_hash + 0x9e3779b97f4a7c15ULL + (service_hash << 6U) + (service_hash >> 2U));
+    }
+};
+
+struct BindingClassification
+{
+    bool replicated = false;
+    bool same_logical_service = true;
+};
+
+BindingClassification analyze_binding(const EndpointBindingPlan &binding)
+{
+    BindingClassification result;
     if (binding.owners.empty()) {
-        return true;
+        return result;
     }
 
-    const auto &first = binding.owners.front().service_name;
+    const auto &first_service = binding.owners.front().service_name;
+    std::unordered_set<std::size_t> workers;
+    std::unordered_set<InstanceKey, InstanceKeyHash> instances;
+    workers.reserve(binding.owners.size());
+    instances.reserve(binding.owners.size());
+
     for (const auto &owner : binding.owners) {
-        if (owner.service_name != first) {
-            return false;
+        if (owner.service_name != first_service) {
+            result.same_logical_service = false;
         }
-    }
-    return true;
-}
-
-bool has_multiple_workers(const EndpointBindingPlan &binding)
-{
-    std::set<std::size_t> workers;
-    for (const auto &owner : binding.owners) {
         workers.insert(owner.worker_index);
-    }
-    return workers.size() > 1;
-}
-
-bool has_multiple_service_instances(const EndpointBindingPlan &binding)
-{
-    std::set<std::pair<std::size_t, std::size_t>> instances;
-    for (const auto &owner : binding.owners) {
         instances.insert({ owner.service_index, owner.service_instance_index });
+        result.replicated = workers.size() > 1 || instances.size() > 1;
     }
-    return instances.size() > 1;
+
+    return result;
 }
 
-EndpointBindingPlan *find_binding(std::vector<EndpointBindingPlan> &bindings, const EndpointKey &key)
+struct EndpointKeyHash
 {
-    for (auto &binding : bindings) {
-        if (binding.key == key) {
-            return &binding;
-        }
+    std::size_t operator()(const EndpointKey &key) const noexcept
+    {
+        const auto host_hash = std::hash<std::string>{}(key.host);
+        const auto port_hash = std::hash<int>{}(key.port);
+        const auto protocol_hash = std::hash<std::string>{}(key.protocol);
+        return host_hash ^ (port_hash + 0x9e3779b97f4a7c15ULL + (host_hash << 6U) + (host_hash >> 2U)) ^
+               (protocol_hash + 0x9e3779b97f4a7c15ULL + (port_hash << 6U) + (port_hash >> 2U));
     }
-    return nullptr;
-}
+};
+
+using BindingIndex = std::unordered_map<EndpointKey, std::size_t, EndpointKeyHash>;
 
 void classify_binding(EndpointBindingPlan &binding)
 {
@@ -105,13 +130,13 @@ void classify_binding(EndpointBindingPlan &binding)
         return;
     }
 
-    const bool replicated = has_multiple_workers(binding) || has_multiple_service_instances(binding);
-    if (!replicated) {
+    const auto classification = analyze_binding(binding);
+    if (!classification.replicated) {
         binding.strategy = EndpointBindingStrategy::private_bind;
         return;
     }
 
-    if (same_logical_service(binding)) {
+    if (classification.same_logical_service) {
         binding.strategy = EndpointBindingStrategy::reuse_port;
         return;
     }
@@ -167,6 +192,7 @@ bool EndpointPlan::valid() const noexcept
 EndpointPlan EndpointManager::build_plan(const std::vector<WorkerPlan> &workers)
 {
     EndpointPlan plan;
+    BindingIndex fixed_bindings;
 
     for (const auto &worker : workers) {
         for (const auto &instance : worker.service_instances) {
@@ -182,19 +208,22 @@ EndpointPlan EndpointManager::build_plan(const std::vector<WorkerPlan> &workers)
                 }
 
                 auto key = make_key(endpoint);
-                EndpointBindingPlan *binding = nullptr;
+                std::size_t binding_index = 0;
                 if (key.port == 0) {
                     plan.bindings.push_back(EndpointBindingPlan{ key });
-                    binding = &plan.bindings.back();
+                    binding_index = plan.bindings.size() - 1;
                 } else {
-                    binding = find_binding(plan.bindings, key);
-                    if (!binding) {
+                    const auto existing = fixed_bindings.find(key);
+                    if (existing == fixed_bindings.end()) {
                         plan.bindings.push_back(EndpointBindingPlan{ key });
-                        binding = &plan.bindings.back();
+                        binding_index = plan.bindings.size() - 1;
+                        fixed_bindings.emplace(plan.bindings.back().key, binding_index);
+                    } else {
+                        binding_index = existing->second;
                     }
                 }
 
-                binding->owners.push_back(EndpointOwner{
+                plan.bindings[binding_index].owners.push_back(EndpointOwner{
                     worker.worker_index,
                     instance.service_index,
                     instance.service_instance_index,

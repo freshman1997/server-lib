@@ -12,15 +12,15 @@ target_include_directories(redisCli PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LI
 
 if (YUAN_BUILD_TESTS)
     add_executable(redisCliParsingTest ./test/TestRedisParsing.cpp)
-    target_link_libraries(redisCliParsingTest PUBLIC redisCli App)
+    target_link_libraries(redisCliParsingTest PUBLIC redisCli)
     add_test(NAME redis_cli_parsing COMMAND redisCliParsingTest)
 
     add_executable(redisCliE2ETest ./test/TestRedisE2E.cpp)
-    target_link_libraries(redisCliE2ETest PUBLIC redisCli App)
+    target_link_libraries(redisCliE2ETest PUBLIC redisCli)
     add_test(NAME redis_cli_e2e COMMAND redisCliE2ETest)
 
     add_executable(redisCliStressTest ./test/TestRedisStress.cpp)
-    target_link_libraries(redisCliStressTest PUBLIC redisCli App)
+    target_link_libraries(redisCliStressTest PUBLIC redisCli)
     if (WIN32)
         target_link_libraries(redisCliStressTest PUBLIC psapi)
     endif()

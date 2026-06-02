@@ -1,10 +1,6 @@
 cmake_minimum_required(VERSION 3.12)
 project(Logger)
 
-if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static -fPIC")
-endif()
-
 FILE(GLOB_RECURSE LOG_SRC "./src/*.cpp")
 
 add_library(${PROJECT_NAME} ${LOG_SRC})

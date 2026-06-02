@@ -1,5 +1,5 @@
 #include "mqtt_session.h"
-#include <algorithm>
+#include "base/owner_ptr.h"
 #include <atomic>
 #include <fstream>
 #include <memory>
@@ -7,16 +7,6 @@
 
 namespace yuan::net::mqtt
 {
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(const std::shared_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-
-    }
-
     static std::atomic<uint64_t> global_session_id{ 1 };
 
     MqttSession::MqttSession(TcpConnection * conn)
@@ -25,7 +15,7 @@ namespace yuan::net::mqtt
     }
 
     MqttSession::MqttSession(const std::shared_ptr<TcpConnection> &conn)
-        : session_id_(global_session_id.fetch_add(1)), last_activity_(std::chrono::steady_clock::now()), conn_owner_(conn), conn_(ptr_of(conn))
+        : session_id_(global_session_id.fetch_add(1)), last_activity_(std::chrono::steady_clock::now()), conn_owner_(conn), conn_(yuan::base::owner_ptr(conn))
     {
     }
 
@@ -160,13 +150,13 @@ namespace yuan::net::mqtt
         if (idx_it != client_id_index_.end()) {
             auto sess_it = sessions_.find(idx_it->second);
             if (sess_it != sessions_.end() && sess_it->second->client_id() == client_id)
-                return ptr_of(sess_it->second);
+                return yuan::base::owner_ptr(sess_it->second);
         }
 
         for (auto &pair : sessions_) {
             if (pair.second->client_id() == client_id) {
                 client_id_index_[client_id] = pair.first;
-                return ptr_of(pair.second);
+                return yuan::base::owner_ptr(pair.second);
             }
         }
 
@@ -176,8 +166,8 @@ namespace yuan::net::mqtt
     MqttSession *MqttSessionManager::find_by_connection(TcpConnection * conn)
     {
         for (auto &pair : sessions_) {
-            if (auto current = pair.second->connection(); current && ptr_of(current) == conn)
-                return ptr_of(pair.second);
+            if (auto current = pair.second->connection(); current && yuan::base::owner_ptr(current) == conn)
+                return yuan::base::owner_ptr(pair.second);
         }
         return nullptr;
     }
@@ -187,7 +177,7 @@ namespace yuan::net::mqtt
         std::vector<MqttSession *> result;
         result.reserve(sessions_.size());
         for (auto &pair : sessions_)
-            result.push_back(ptr_of(pair.second));
+            result.push_back(yuan::base::owner_ptr(pair.second));
         return result;
     }
 

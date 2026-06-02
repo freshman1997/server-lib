@@ -5,6 +5,7 @@
 #include "net/runtime/network_runtime.h"
 #include "net/socket/inet_address.h"
 #include "../common/close_code.h"
+#include "base/owner_ptr.h"
 #include "context.h"
 #include "session.h"
 #include "response_code.h"
@@ -22,22 +23,6 @@
 
 namespace yuan::net::websocket
 {
-
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(const std::shared_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-
-        template <typename T>
-        T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-    }
-
     struct WebSocketClient::ClientData
     {
         WebSocketDataHandler *data_handler_ = nullptr;
@@ -120,7 +105,7 @@ namespace yuan::net::websocket
 
 #if defined(WS_USE_SSL)
         if (data_->ssl_module_) {
-            auto *stream = dynamic_cast<StreamTransport *>(ptr_of(conn));
+            auto *stream = dynamic_cast<StreamTransport *>(yuan::base::owner_ptr(conn));
             auto *channel = stream ? stream->stream_channel() : nullptr;
             if (!channel) {
                 if (data_->data_handler_) {
@@ -238,7 +223,7 @@ namespace yuan::net::websocket
         }
 
         wsConn.set_state(WebSocketConnection::State::connected_);
-        wsConn.try_set_heartbeat_timer(ptr_of(data_->owned_runtime_));
+        wsConn.try_set_heartbeat_timer(yuan::base::owner_ptr(data_->owned_runtime_));
         if (wsConn.on_connected_cb) {
             wsConn.on_connected_cb(&wsConn);
         }

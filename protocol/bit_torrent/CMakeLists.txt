@@ -4,7 +4,6 @@ project(BitTorrentProto)
 FILE(GLOB_RECURSE BIT_TORRENT_SRC "./src/*.cpp")
 
 add_library(BitTorrentProto ${BIT_TORRENT_SRC})
-set_target_properties(BitTorrentProto PROPERTIES LINK_FLAGS "-static")
 target_link_libraries(BitTorrentProto PUBLIC Core HttpProto)
 if (WIN32)
     target_link_libraries(BitTorrentProto PUBLIC iphlpapi)

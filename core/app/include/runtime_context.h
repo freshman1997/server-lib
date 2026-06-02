@@ -68,6 +68,9 @@ namespace yuan::app
 
     using RuntimeContextPtr = std::shared_ptr<RuntimeContext>;
 
+    std::size_t normalized_worker_count(std::size_t worker_count) noexcept;
+    void normalize_runtime_context(RuntimeContext &context);
+
 } // namespace yuan::app
 
 #endif

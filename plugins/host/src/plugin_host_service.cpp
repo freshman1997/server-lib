@@ -1,5 +1,6 @@
 #include "plugin_host_service.h"
 
+#include "base/owner_ptr.h"
 #include "eventbus/event_bus.h"
 #include "logger.h"
 #include "plugin_event_bus_adapter.h"
@@ -26,64 +27,49 @@
 namespace yuan::app
 {
 
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(std::unique_ptr<T> &owner)
-        {
-            return owner ? &*owner : nullptr;
-        }
-
-        template <typename T>
-        T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? &*owner : nullptr;
-        }
-    }
-
     plugin::HostEventBus *PluginHostService::event_bus_ptr() const
     {
-        return ptr_of(event_bus_);
+        return yuan::base::owner_ptr(event_bus_);
     }
 
     plugin::HostLogger *PluginHostService::logger_ptr() const
     {
-        return ptr_of(logger_);
+        return yuan::base::owner_ptr(logger_);
     }
 
     plugin::HostServiceCatalog *PluginHostService::service_catalog_ptr() const
     {
-        return ptr_of(service_catalog_);
+        return yuan::base::owner_ptr(service_catalog_);
     }
 
     plugin::HostScheduler *PluginHostService::scheduler_ptr() const
     {
-        return ptr_of(scheduler_);
+        return yuan::base::owner_ptr(scheduler_);
     }
 
     plugin::HostServiceRegistry *PluginHostService::service_registry_ptr() const
     {
-        return ptr_of(service_registry_);
+        return yuan::base::owner_ptr(service_registry_);
     }
 
     plugin::HostPermissionGuard *PluginHostService::permission_guard_ptr() const
     {
-        return ptr_of(permission_guard_);
+        return yuan::base::owner_ptr(permission_guard_);
     }
 
     plugin::HostResourceGuard *PluginHostService::resource_guard_ptr() const
     {
-        return ptr_of(resource_guard_);
+        return yuan::base::owner_ptr(resource_guard_);
     }
 
     plugin::HostHttpInterceptor *PluginHostService::http_interceptor_ptr() const
     {
-        return ptr_of(http_interceptor_);
+        return yuan::base::owner_ptr(http_interceptor_);
     }
 
     plugin::HostNetworkRuntime *PluginHostService::network_runtime_ptr() const
     {
-        return ptr_of(network_runtime_);
+        return yuan::base::owner_ptr(network_runtime_);
     }
 
     plugin::PluginManager &PluginHostService::plugin_manager() const
@@ -203,11 +189,11 @@ namespace yuan::app
     {
         auto it = plugin_storages_.find(plugin_name);
         if (it != plugin_storages_.end()) {
-            return ptr_of(it->second);
+            return yuan::base::owner_ptr(it->second);
         }
 
         auto storage = std::make_unique<PluginRedisStorage>(plugin_name);
-        auto *raw = ptr_of(storage);
+        auto *raw = yuan::base::owner_ptr(storage);
         if (!storage->init()) {
             LOG_WARN("plugin storage for '{}' is present but backend is unavailable", plugin_name);
         }

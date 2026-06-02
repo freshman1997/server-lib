@@ -4,7 +4,6 @@
 #include "eventbus/event_bus.h"
 #include "eventbus/event_type_registry.h"
 
-#include <algorithm>
 #include <exception>
 #include <mutex>
 #include <thread>
@@ -27,40 +26,6 @@ namespace yuan::app
                 : entry.runtime.service_instance_count;
             service_context.listener_reuse_port = entry.runtime.listener_reuse_port;
             return service_context;
-        }
-
-        void fill_application_event(ApplicationEvent &event, const RuntimeContext &context)
-        {
-            event.app_name = context.app_name;
-            event.run_mode = context.run_mode;
-            event.worker_threads = context.worker_threads;
-            event.runtime_worker_count = context.runtime_worker_count == 0
-                ? context.worker_threads
-                : context.runtime_worker_count;
-            event.worker_index = context.worker_index;
-            event.is_worker_process = context.is_worker_process;
-            event.active_service_name = context.active_service_name;
-            event.service_index = context.service_index;
-            event.service_instance_index = context.service_instance_index;
-            event.service_instance_count = context.service_instance_count == 0
-                ? 1
-                : context.service_instance_count;
-            event.listener_reuse_port = context.listener_reuse_port;
-        }
-
-        ApplicationEvent make_application_event(const RuntimeContext &context)
-        {
-            ApplicationEvent event;
-            fill_application_event(event, context);
-            return event;
-        }
-
-        ServiceEvent make_service_event(const RuntimeContext &context, const std::string &service_name)
-        {
-            ServiceEvent event;
-            fill_application_event(event, context);
-            event.service_name = service_name;
-            return event;
         }
 
         void register_builtin_event_types(eventbus::EventTypeRegistry &registry)
@@ -86,13 +51,13 @@ namespace yuan::app
     Application::Application(RuntimeContext context)
         : context_(std::move(context))
     {
-        normalize_context();
+        normalize_runtime_context(context_);
     }
 
     void Application::set_context(RuntimeContext context)
     {
         context_ = std::move(context);
-        normalize_context();
+        normalize_runtime_context(context_);
     }
 
     const RuntimeContext &Application::context() const
@@ -128,6 +93,7 @@ namespace yuan::app
         }
 
         service_definitions_.push_back(ServiceDefinition{ std::move(descriptor), std::move(factory) });
+        service_names_.insert(service_definitions_.back().descriptor.name);
         return true;
     }
 
@@ -155,6 +121,8 @@ namespace yuan::app
             return false;
         }
         service_instances_.push_back(ServiceEntry{ descriptor, std::move(service), runtime });
+        service_names_.insert(service_instances_.back().descriptor.name);
+        service_instance_names_.insert(service_instances_.back().descriptor.name);
         return true;
     }
 
@@ -173,54 +141,14 @@ namespace yuan::app
         return service_instances_;
     }
 
-    void Application::normalize_context()
-    {
-        switch (context_.run_mode) {
-        case RunMode::single_thread:
-            context_.worker_threads = 1;
-            context_.runtime_worker_count = 1;
-            context_.runtime_workers.worker_count = 1;
-            break;
-        case RunMode::multi_thread:
-            if (context_.worker_threads < 2) {
-                const auto hc = std::thread::hardware_concurrency();
-                context_.worker_threads = hc > 1 ? hc : 2;
-            }
-            if (context_.runtime_workers.worker_count == 0) {
-                context_.runtime_workers.worker_count = context_.worker_threads;
-            }
-            context_.runtime_worker_count = context_.runtime_workers.worker_count;
-            break;
-        case RunMode::multi_process:
-            if (context_.worker_threads == 0) {
-                context_.worker_threads = 1;
-            }
-            if (context_.runtime_workers.worker_count == 0) {
-                context_.runtime_workers.worker_count = context_.worker_threads;
-            }
-            context_.runtime_worker_count = context_.runtime_workers.worker_count;
-            break;
-        default:
-            context_.worker_threads = 1;
-            context_.runtime_worker_count = 1;
-            context_.runtime_workers.worker_count = 1;
-            break;
-        }
-    }
-
     bool Application::has_service_name(const std::string &name) const
     {
-        return has_service_instance(name) ||
-               std::any_of(service_definitions_.begin(), service_definitions_.end(), [&](const ServiceDefinition &definition) {
-                   return definition.descriptor.name == name;
-               });
+        return service_names_.find(name) != service_names_.end();
     }
 
     bool Application::has_service_instance(const std::string &name) const
     {
-        return std::any_of(service_instances_.begin(), service_instances_.end(), [&](const ServiceEntry &entry) {
-            return entry.descriptor.name == name;
-        });
+        return service_instance_names_.find(name) != service_instance_names_.end();
     }
 
     bool Application::materialize_service_definitions()
@@ -240,6 +168,7 @@ namespace yuan::app
                 ? 0
                 : static_cast<std::size_t>(&definition - service_definitions_.data());
             service_instances_.push_back(ServiceEntry{definition.descriptor, std::move(service), runtime});
+            service_instance_names_.insert(service_instances_.back().descriptor.name);
         }
         return true;
     }

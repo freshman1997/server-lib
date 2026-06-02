@@ -1,5 +1,6 @@
 #include "net/channel/channel.h"
 #include "net/handler/select_handler.h"
+#include "base/owner_ptr.h"
 
 #include <atomic>
 
@@ -15,12 +16,6 @@ namespace yuan::net
                 generation = next_generation.fetch_add(1, std::memory_order_relaxed);
             }
             return generation;
-        }
-
-        template <typename T>
-        T *ptr_of(const std::shared_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
         }
     }
 
@@ -52,7 +47,7 @@ namespace yuan::net
         handler_owner_ = handler;
         uses_handler_owner_ = true;
         auto locked = handler_owner_.lock();
-        handler_ = ptr_of(locked);
+        handler_ = yuan::base::owner_ptr(locked);
     }
 
     void Channel::clear_handler()
@@ -67,7 +62,7 @@ namespace yuan::net
         SelectHandler *handler = handler_;
         if (uses_handler_owner_) {
             auto locked = handler_owner_.lock();
-            handler = ptr_of(locked);
+            handler = yuan::base::owner_ptr(locked);
             handler_ = handler;
             if (!handler) {
                 return;

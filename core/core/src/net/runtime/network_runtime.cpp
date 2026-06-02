@@ -10,19 +10,11 @@
 #include "net/poller/kqueue_poller.h"
 #include "net/poller/poll_poller.h"
 #include "net/poller/select_poller.h"
+#include "base/owner_ptr.h"
 #include "timer/timer_manager_factory.h"
 
 namespace yuan::net
 {
-
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(std::unique_ptr<T> &owner)
-        {
-            return owner ? &*owner : nullptr;
-        }
-    }
 
     NetworkRuntime::NetworkRuntime()
         : NetworkRuntime(timer::TimerBackend::automatic)
@@ -35,11 +27,11 @@ namespace yuan::net
         owned_poller_.reset(create_default_poller());
         owned_poller_->init();
         owned_timer_manager_ = timer::create_timer_manager(timer_backend);
-        owned_loop_.reset(new EventLoop(ptr_of(owned_poller_), ptr_of(owned_timer_manager_)));
+        owned_loop_.reset(new EventLoop(yuan::base::owner_ptr(owned_poller_), yuan::base::owner_ptr(owned_timer_manager_)));
 
-        poller_ = ptr_of(owned_poller_);
-        timer_manager_ = ptr_of(owned_timer_manager_);
-        loop_ = ptr_of(owned_loop_);
+        poller_ = yuan::base::owner_ptr(owned_poller_);
+        timer_manager_ = yuan::base::owner_ptr(owned_timer_manager_);
+        loop_ = yuan::base::owner_ptr(owned_loop_);
     }
 
     NetworkRuntime::NetworkRuntime(EventLoop * loop, timer::TimerManager * tm)

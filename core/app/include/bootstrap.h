@@ -3,7 +3,7 @@
 
 #include "application.h"
 #include "endpoint_manager.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 #include "worker_plan.h"
 
 #include <atomic>
@@ -119,6 +119,7 @@ private:
     bool run_multi_process();
     bool run_worker_plan_multi_process();
     bool run_in_process_worker_plan();
+    bool prepare_worker_plan(const std::vector<ServiceDefinition> &definitions, const char *diagnostic_scope);
     bool start_worker_process(const ServiceEntry &entry, std::size_t worker_index, std::size_t worker_count, WorkerProcessInfo *worker_info = nullptr);
     bool run_local_service_process(const ServiceEntry &entry, std::size_t worker_index, std::size_t worker_count);
     bool start_worker_process(const WorkerPlan &worker, WorkerProcessInfo *worker_info = nullptr);
@@ -148,7 +149,7 @@ private:
 #ifndef _WIN32
     std::vector<WorkerProcessInfo> worker_processes_;
 #endif
-    std::unique_ptr<NativePlatformGuard> native_platform_guard_;
+    std::unique_ptr<platform::NativePlatformGuard> native_platform_guard_;
 };
 
 } // namespace yuan::app

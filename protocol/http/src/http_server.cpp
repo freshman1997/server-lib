@@ -8,6 +8,7 @@
 #include "task/save_upload_tmp_chunk_task.h"
 #include "task/upload_file_task.h"
 #include "url.h"
+#include "base/owner_ptr.h"
 #include "base/time.h"
 
 #include <cstddef>
@@ -114,12 +115,6 @@ namespace yuan::net::http
                 return 0;
             }
             return static_cast<uint64_t>(age_ms);
-        }
-
-        template <typename T>
-        T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
         }
 
         bool iequals_ascii(std::string_view lhs, std::string_view rhs)
@@ -1860,7 +1855,7 @@ namespace yuan::net::http
             std::move(httpCtx),
             ctx.runtime_view(),
             use_session_idle_timer);
-        auto *session_ptr = ptr_of(session);
+        auto *session_ptr = yuan::base::owner_ptr(session);
         store_session(sessionId, std::move(session));
 
         bool protocol_checked = alpn_h2;

@@ -7,7 +7,7 @@
 #include "transport/ssh_transport.h"
 #include "transport/ssh_version_exchange.h"
 #include "base/utils/base64.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 #include <array>
 #include <cctype>
@@ -524,11 +524,11 @@ namespace
 
     bool socket_would_block_last_error()
     {
-        const int err = yuan::app::GetLastNativeError();
-        if (yuan::app::ClassifyNativeError(err) == yuan::app::NativeError::timed_out) {
+        const int err = yuan::platform::GetLastNativeError();
+        if (yuan::platform::ClassifyNativeError(err) == yuan::platform::NativeError::timed_out) {
             return true;
         }
-        return yuan::app::IsNativeRetryableError(err);
+        return yuan::platform::IsNativeRetryableError(err);
     }
 
     void shutdown_socket_write(SocketHandle fd)
@@ -719,14 +719,14 @@ namespace
 #endif
         if (n <= 0) {
 #ifdef _WIN32
-            const int err = yuan::app::GetLastNativeError();
-            if (yuan::app::IsNativeRetryableError(err) ||
-                yuan::app::ClassifyNativeError(err) == yuan::app::NativeError::timed_out) {
+            const int err = yuan::platform::GetLastNativeError();
+            if (yuan::platform::IsNativeRetryableError(err) ||
+                yuan::platform::ClassifyNativeError(err) == yuan::platform::NativeError::timed_out) {
                 return RecvStatus::timeout;
             }
 #else
-            const int err = yuan::app::GetLastNativeError();
-            if (yuan::app::IsNativeRetryableError(err)) {
+            const int err = yuan::platform::GetLastNativeError();
+            if (yuan::platform::IsNativeRetryableError(err)) {
                 return RecvStatus::timeout;
             }
 #endif
@@ -798,8 +798,8 @@ namespace
             return StdinPollResult::eof;
         }
         if (n < 0) {
-            const int err = yuan::app::GetLastNativeError();
-            if (yuan::app::IsNativeRetryableError(err)) {
+            const int err = yuan::platform::GetLastNativeError();
+            if (yuan::platform::IsNativeRetryableError(err)) {
                 return StdinPollResult::no_data;
             }
             return StdinPollResult::error;

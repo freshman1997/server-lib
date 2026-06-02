@@ -264,6 +264,14 @@ int main()
             "typed service registration should succeed")) {
         return 1;
     }
+    if (!require(!typed_app.add_typed_service<TypedDummyService>(
+            "typed",
+            std::make_shared<TypedDummyService>(),
+            "test.typed.duplicate",
+            2),
+            "duplicate typed service registration should be rejected")) {
+        return 1;
+    }
 
     if (!require(typed_app.start(), "typed service application should start")) {
         return 1;

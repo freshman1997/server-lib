@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.12)
 project(release_proxy)
 
-option(YUAN_PROXY_TOOL_LINK_STATIC_RUNTIME "Link release_proxy_tool with static libstdc++/libgcc when supported" OFF)
+option(YUAN_PROXY_TOOL_LINK_STATIC_RUNTIME "Link release_proxy_tool with static libstdc++/libgcc when supported" ${YUAN_GLOBAL_STATIC_LINK})
 
 set(RELEASE_PROXY_OUTPUT_DIR "${CMAKE_BINARY_DIR}/release/proxy")
 

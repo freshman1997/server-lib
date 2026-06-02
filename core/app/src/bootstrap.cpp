@@ -50,6 +50,74 @@ std::uint64_t now_ms()
     return yuan::base::time::steady_now_ms();
 }
 
+RuntimeContext make_supervisor_context(RuntimeContext context, const std::size_t worker_count)
+{
+    const auto workers = normalized_worker_count(worker_count);
+    context.worker_threads = workers;
+    context.runtime_worker_count = workers;
+    context.runtime_workers.worker_count = workers;
+    context.worker_index = 0;
+    context.is_worker_process = false;
+    context.shared_runtime = nullptr;
+    return context;
+}
+
+RuntimeContext make_worker_context(
+    RuntimeContext context,
+    const WorkerPlan &worker,
+    const bool is_worker_process,
+    net::NetworkRuntime *shared_runtime = nullptr,
+    const bool isolate_service_registry = false)
+{
+    const auto workers = normalized_worker_count(worker.worker_count);
+    context.worker_threads = workers;
+    context.runtime_worker_count = workers;
+    context.runtime_workers.worker_count = workers;
+    context.worker_index = worker.worker_index;
+    context.is_worker_process = is_worker_process;
+    context.shared_runtime = shared_runtime;
+    if (isolate_service_registry) {
+        context.service_registry = std::make_shared<ServiceRegistry>();
+    }
+    return context;
+}
+
+RuntimeContext make_legacy_worker_context(
+    RuntimeContext context,
+    const std::size_t worker_index,
+    const std::size_t worker_count)
+{
+    const auto workers = normalized_worker_count(worker_count);
+    context.worker_threads = workers;
+    context.runtime_worker_count = workers;
+    context.runtime_workers.worker_count = workers;
+    context.worker_index = worker_index;
+    context.is_worker_process = true;
+    context.shared_runtime = nullptr;
+    return context;
+}
+
+ServiceInstanceRuntime make_service_instance_runtime(
+    const ServiceInstancePlan &instance,
+    const EndpointPlan &endpoint_plan)
+{
+    ServiceInstanceRuntime runtime;
+    runtime.service_index = instance.service_index;
+    runtime.service_instance_index = instance.service_instance_index;
+    runtime.service_instance_count = instance.service_instance_count;
+    runtime.listener_reuse_port = service_instance_requires_reuse_port(endpoint_plan, instance);
+    return runtime;
+}
+
+RuntimeWorkerConfig make_runtime_worker_config(const RuntimeContext &context)
+{
+    auto config = context.runtime_workers;
+    if (config.worker_count == 0) {
+        config.worker_count = normalized_worker_count(context.worker_threads);
+    }
+    return config;
+}
+
 } // namespace
 
 #ifndef _WIN32
@@ -75,21 +143,9 @@ void ensure_event_bus(Application &application)
 WorkerProcessEvent make_worker_event(const RuntimeContext &context, const WorkerProcessInfo &worker)
 {
     WorkerProcessEvent event;
-    event.app_name = context.app_name;
-    event.run_mode = context.run_mode;
-    event.worker_threads = context.worker_threads;
-    event.runtime_worker_count = context.runtime_worker_count == 0
-        ? context.worker_threads
-        : context.runtime_worker_count;
+    populate_application_event(event, context);
     event.worker_index = worker.worker_index;
     event.is_worker_process = false;
-    event.active_service_name = context.active_service_name;
-    event.service_index = context.service_index;
-    event.service_instance_index = context.service_instance_index;
-    event.service_instance_count = context.service_instance_count == 0
-        ? 1
-        : context.service_instance_count;
-    event.listener_reuse_port = context.listener_reuse_port;
     event.service_name = worker.service_name;
     event.pid = worker.pid;
     event.restart_count = worker.restart_count;
@@ -115,21 +171,7 @@ SupervisorStateEvent make_supervisor_state_event(
     const bool shutdown_started)
 {
     SupervisorStateEvent event;
-    event.app_name = context.app_name;
-    event.run_mode = context.run_mode;
-    event.worker_threads = context.worker_threads;
-    event.runtime_worker_count = context.runtime_worker_count == 0
-        ? context.worker_threads
-        : context.runtime_worker_count;
-    event.worker_index = context.worker_index;
-    event.is_worker_process = context.is_worker_process;
-    event.active_service_name = context.active_service_name;
-    event.service_index = context.service_index;
-    event.service_instance_index = context.service_instance_index;
-    event.service_instance_count = context.service_instance_count == 0
-        ? 1
-        : context.service_instance_count;
-    event.listener_reuse_port = context.listener_reuse_port;
+    populate_application_event(event, context);
     event.state = to_string(state);
     event.reason_code = to_string(reason);
     event.reason = event.reason_code;
@@ -259,7 +301,7 @@ struct Bootstrap::InProcessWorker
 
 Bootstrap::Bootstrap(Application& application)
     : application_(application),
-      native_platform_guard_(std::make_unique<NativePlatformGuard>())
+      native_platform_guard_(std::make_unique<platform::NativePlatformGuard>())
 {
 }
 
@@ -487,10 +529,7 @@ bool Bootstrap::run_local_service_process(
         return false;
     }
 
-    auto context = application_.context();
-    context.worker_threads = worker_count;
-    context.worker_index = worker_index;
-    context.is_worker_process = true;
+    auto context = make_legacy_worker_context(application_.context(), worker_index, worker_count);
     local_worker_application_ = std::make_unique<Application>(context);
     if (!local_worker_application_->add_service(entry.descriptor, entry.service)) {
         LOG_ERROR("worker process {} failed to register service '{}'", worker_index, entry.descriptor.name);
@@ -575,12 +614,7 @@ bool Bootstrap::run_local_worker_process(const WorkerPlan &worker)
         return false;
     }
 
-    auto context = application_.context();
-    context.worker_threads = worker.worker_count;
-    context.runtime_worker_count = worker.worker_count;
-    context.runtime_workers.worker_count = worker.worker_count;
-    context.worker_index = worker.worker_index;
-    context.is_worker_process = true;
+    auto context = make_worker_context(application_.context(), worker, true);
 
     local_worker_application_ = std::make_unique<Application>(context);
     local_service_names_.clear();
@@ -600,11 +634,7 @@ bool Bootstrap::run_local_worker_process(const WorkerPlan &worker)
             return false;
         }
 
-        ServiceInstanceRuntime runtime;
-        runtime.service_index = instance.service_index;
-        runtime.service_instance_index = instance.service_instance_index;
-        runtime.service_instance_count = instance.service_instance_count;
-        runtime.listener_reuse_port = service_instance_requires_reuse_port(endpoint_plan_, instance);
+        const auto runtime = make_service_instance_runtime(instance, endpoint_plan_);
 
         if (!local_worker_application_->add_service_instance(instance.definition->descriptor, std::move(service), runtime)) {
             LOG_ERROR(
@@ -655,14 +685,7 @@ bool Bootstrap::start_in_process_worker(const WorkerPlan &worker)
         {
             state->runtime = std::make_unique<net::NetworkRuntime>();
 
-            auto context = base_context;
-            context.worker_threads = worker.worker_count;
-            context.runtime_worker_count = worker.worker_count;
-            context.runtime_workers.worker_count = worker.worker_count;
-            context.worker_index = worker.worker_index;
-            context.is_worker_process = false;
-            context.shared_runtime = state->runtime.get();
-            context.service_registry = std::make_shared<ServiceRegistry>();
+            auto context = make_worker_context(base_context, worker, false, state->runtime.get(), true);
 
             state->application = std::make_unique<Application>(context);
 
@@ -678,11 +701,7 @@ bool Bootstrap::start_in_process_worker(const WorkerPlan &worker)
                     return;
                 }
 
-                ServiceInstanceRuntime runtime;
-                runtime.service_index = instance.service_index;
-                runtime.service_instance_index = instance.service_instance_index;
-                runtime.service_instance_count = instance.service_instance_count;
-                runtime.listener_reuse_port = service_instance_requires_reuse_port(endpoint_plan, instance);
+                const auto runtime = make_service_instance_runtime(instance, endpoint_plan);
 
                 if (!state->application->add_service_instance(instance.definition->descriptor, std::move(service), runtime)) {
                     fail("failed to register service '" + instance.definition->descriptor.name + "'");
@@ -749,36 +768,16 @@ bool Bootstrap::run_in_process_worker_plan()
         return false;
     }
 
-    auto runtime_config = application_.context().runtime_workers;
-    if (runtime_config.worker_count == 0) {
-        runtime_config.worker_count = application_.context().worker_threads == 0 ? 1 : application_.context().worker_threads;
-    }
-
     shutdown_in_process_workers();
 
-    worker_plans_ = build_worker_plan(runtime_config, definitions);
-    if (worker_plans_.empty()) {
-        LOG_WARN("in-process worker plan produced no workers");
-        return false;
-    }
-    endpoint_plan_ = EndpointManager::build_plan(worker_plans_);
-    if (!endpoint_plan_.valid()) {
-        for (const auto &diagnostic : endpoint_plan_.diagnostics) {
-            LOG_ERROR("in-process worker endpoint plan invalid: {}", diagnostic);
-        }
+    if (!prepare_worker_plan(definitions, "in-process worker plan")) {
         return false;
     }
 
     worker_failure_detected_ = false;
     supervisor_shutdown_started_ = false;
 
-    auto supervisor_context = application_.context();
-    supervisor_context.worker_threads = worker_plans_.size();
-    supervisor_context.runtime_worker_count = worker_plans_.size();
-    supervisor_context.runtime_workers.worker_count = worker_plans_.size();
-    supervisor_context.worker_index = 0;
-    supervisor_context.is_worker_process = false;
-    supervisor_context.shared_runtime = nullptr;
+    auto supervisor_context = make_supervisor_context(application_.context(), worker_plans_.size());
     if (!supervisor_context.event_bus) {
         supervisor_context.event_bus = std::make_shared<yuan::eventbus::EventBus>();
     }
@@ -800,6 +799,27 @@ bool Bootstrap::run_in_process_worker_plan()
     }
 
     set_supervisor_state(SupervisorState::running, SupervisorReason::initial_workers_started);
+    return true;
+}
+
+bool Bootstrap::prepare_worker_plan(
+    const std::vector<ServiceDefinition> &definitions,
+    const char *diagnostic_scope)
+{
+    worker_plans_ = build_worker_plan(make_runtime_worker_config(application_.context()), definitions);
+    if (worker_plans_.empty()) {
+        LOG_WARN("{} produced no workers", diagnostic_scope);
+        return false;
+    }
+
+    endpoint_plan_ = EndpointManager::build_plan(worker_plans_);
+    if (!endpoint_plan_.valid()) {
+        for (const auto &diagnostic : endpoint_plan_.diagnostics) {
+            LOG_ERROR("{} endpoint plan invalid: {}", diagnostic_scope, diagnostic);
+        }
+        return false;
+    }
+
     return true;
 }
 
@@ -1137,21 +1157,7 @@ bool Bootstrap::run_worker_plan_multi_process()
         return false;
     }
 
-    auto runtime_config = application_.context().runtime_workers;
-    if (runtime_config.worker_count == 0) {
-        runtime_config.worker_count = application_.context().worker_threads == 0 ? 1 : application_.context().worker_threads;
-    }
-
-    worker_plans_ = build_worker_plan(runtime_config, definitions);
-    if (worker_plans_.empty()) {
-        LOG_WARN("worker-plan multi-process mode produced no workers");
-        return false;
-    }
-    endpoint_plan_ = EndpointManager::build_plan(worker_plans_);
-    if (!endpoint_plan_.valid()) {
-        for (const auto &diagnostic : endpoint_plan_.diagnostics) {
-            LOG_ERROR("worker-plan multi-process endpoint plan invalid: {}", diagnostic);
-        }
+    if (!prepare_worker_plan(definitions, "worker-plan multi-process mode")) {
         return false;
     }
 
@@ -1162,12 +1168,7 @@ bool Bootstrap::run_worker_plan_multi_process()
     process_role_ = ProcessRole::supervisor;
     set_supervisor_state(SupervisorState::starting, SupervisorReason::spawning_initial_workers);
 
-    auto supervisor_context = application_.context();
-    supervisor_context.worker_threads = worker_plans_.size();
-    supervisor_context.runtime_worker_count = worker_plans_.size();
-    supervisor_context.runtime_workers.worker_count = worker_plans_.size();
-    supervisor_context.worker_index = 0;
-    supervisor_context.is_worker_process = false;
+    auto supervisor_context = make_supervisor_context(application_.context(), worker_plans_.size());
     application_.set_context(supervisor_context);
     ensure_event_bus(application_);
 
@@ -1213,10 +1214,7 @@ bool Bootstrap::run_multi_process()
     process_role_ = ProcessRole::supervisor;
     set_supervisor_state(SupervisorState::starting, SupervisorReason::spawning_initial_workers);
 
-    auto supervisor_context = application_.context();
-    supervisor_context.worker_threads = worker_count;
-    supervisor_context.worker_index = 0;
-    supervisor_context.is_worker_process = false;
+    auto supervisor_context = make_supervisor_context(application_.context(), worker_count);
     application_.set_context(supervisor_context);
     ensure_event_bus(application_);
 

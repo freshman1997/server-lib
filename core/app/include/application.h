@@ -3,49 +3,17 @@
 
 #include "runtime_context.h"
 #include "runtime_plan.h"
-#include "service.h"
-#include "service_registry.h"
+#include "service_definition.h"
 
-#include <algorithm>
-#include <functional>
-#include <type_traits>
-#include <typeinfo>
 #include <memory>
 #include <string>
+#include <type_traits>
+#include <typeinfo>
+#include <unordered_set>
 #include <vector>
 
 namespace yuan::app
 {
-
-struct ServiceInstanceRuntime
-{
-    std::size_t service_index = 0;
-    std::size_t service_instance_index = 0;
-    std::size_t service_instance_count = 1;
-    bool listener_reuse_port = false;
-};
-
-struct ServiceEntry
-{
-    ServiceDescriptor descriptor;
-    std::shared_ptr<Service> service;
-    ServiceInstanceRuntime runtime;
-};
-
-using ServiceFactory = std::function<std::shared_ptr<Service>()>;
-
-struct ServiceDefinition
-{
-    ServiceDescriptor descriptor;
-    ServiceFactory factory;
-
-    std::shared_ptr<Service> create_instance() const
-    {
-        return factory ? factory() : nullptr;
-    }
-};
-
-using ServiceInstanceEntry = ServiceEntry;
 
 class Application
 {
@@ -97,6 +65,8 @@ public:
         }
 
         service_instances_.push_back(ServiceEntry{descriptor, std::move(service), {}});
+        service_names_.insert(service_instances_.back().descriptor.name);
+        service_instance_names_.insert(service_instances_.back().descriptor.name);
         return true;
     }
 
@@ -112,7 +82,6 @@ public:
     bool is_running() const;
 
 private:
-    void normalize_context();
     bool has_service_name(const std::string &name) const;
     bool has_service_instance(const std::string &name) const;
     bool materialize_service_definitions();
@@ -121,6 +90,8 @@ private:
     RuntimeContext context_;
     std::vector<ServiceDefinition> service_definitions_;
     std::vector<ServiceInstanceEntry> service_instances_;
+    std::unordered_set<std::string> service_names_;
+    std::unordered_set<std::string> service_instance_names_;
     bool initialized_ = false;
     bool running_ = false;
 };

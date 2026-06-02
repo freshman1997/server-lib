@@ -4,7 +4,8 @@
 #include "net/connection/connection.h"
 #include "net/connection/datagram_transport.h"
 #include "net/socket/inet_address.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
+#include "base/owner_ptr.h"
 #include <cstring>
 #include <iostream>
 #include <cassert>
@@ -28,27 +29,6 @@
 
 namespace yuan::net
 {
-    namespace
-    {
-        template<typename T>
-        T *ptr_of(std::unique_ptr<T> &owner)
-        {
-            return owner ? &*owner : nullptr;
-        }
-
-        template<typename T>
-        const T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? &*owner : nullptr;
-        }
-
-        template<typename T>
-        T *ptr_of(std::shared_ptr<T> &owner)
-        {
-            return owner ? &*owner : nullptr;
-        }
-    }
-
     UdpAcceptor::UdpAcceptor(Socket * socket, timer::TimerManager * timerManager)
         : sock_(socket), timer_manager_(timerManager)
     {
@@ -91,7 +71,7 @@ namespace yuan::net
         if (channel_) {
             channel_->disable_all();
             if (handler_) {
-                handler_->close_channel(ptr_of(channel_));
+                handler_->close_channel(yuan::base::owner_ptr(channel_));
                 handler_ = nullptr;
             }
             channel_->clear_handler();
@@ -102,7 +82,7 @@ namespace yuan::net
     {
         assert(channel_);
         if (handler_) {
-            handler_->update_channel(ptr_of(channel_));
+            handler_->update_channel(yuan::base::owner_ptr(channel_));
         }
     }
 
@@ -141,17 +121,17 @@ namespace yuan::net
                 }
 
 #ifdef _WIN32
-                int err = app::GetLastNativeError();
-                if (!app::IsNativeRetryableError(err)) {
+                int err = platform::GetLastNativeError();
+                if (!platform::IsNativeRetryableError(err)) {
 #else
-                int err = app::GetLastNativeError();
-                if (!app::IsNativeRetryableError(err)) {
+                int err = platform::GetLastNativeError();
+                if (!platform::IsNativeRetryableError(err)) {
 #endif
                     break;
                 }
 
                 channel_->enable_read();
-                handler_->update_channel(ptr_of(channel_));
+                handler_->update_channel(yuan::base::owner_ptr(channel_));
                 break;
             }
 
@@ -222,20 +202,20 @@ namespace yuan::net
     {
         if (handler_ == handler) {
             if (handler_ && channel_) {
-                handler_->update_channel(ptr_of(channel_));
+                handler_->update_channel(yuan::base::owner_ptr(channel_));
             }
             return;
         }
 
         if (handler_ && handler_ != handler && channel_) {
             LOG_WARN("udp acceptor event handler switched, fd: {}", channel_->get_fd());
-            handler_->close_channel(ptr_of(channel_));
+            handler_->close_channel(yuan::base::owner_ptr(channel_));
         }
         handler_ = handler;
         assert(channel_);
         if (handler_) {
             channel_->set_handler(std::weak_ptr<SelectHandler>(self_handler_owner_));
-            handler_->update_channel(ptr_of(channel_));
+            handler_->update_channel(yuan::base::owner_ptr(channel_));
         } else {
             channel_->clear_handler();
         }

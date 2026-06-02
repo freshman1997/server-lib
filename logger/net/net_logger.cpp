@@ -1,4 +1,5 @@
 #include "net_logger.h"
+#include "base/owner_ptr.h"
 #include "base/time.h"
 #include "buffer/byte_buffer.h"
 #include "formatter.h"
@@ -28,21 +29,6 @@
 
 namespace yuan::log
 {
-
-namespace
-{
-    template <typename T>
-    T *ptr_of(std::unique_ptr<T> &owner)
-    {
-        return owner ? &*owner : nullptr;
-    }
-
-    template <typename T>
-    const T *ptr_of(const std::unique_ptr<T> &owner)
-    {
-        return owner ? &*owner : nullptr;
-    }
-}
 
 static inline LogItem make_log_item(Level level, const std::string& msg, const std::string& name,
                                     const char* file = nullptr, int line = 0, const char* func = nullptr)
@@ -564,7 +550,7 @@ void NetLogger::log_impl(Level level, const std::string& msg)
     }
 
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    auto* impl = ptr_of(connection_impl_);
+    auto* impl = yuan::base::owner_ptr(connection_impl_);
     if (impl) impl->send(formatted);
 }
 
@@ -580,35 +566,35 @@ void NetLogger::log_impl(Level level, const std::string& msg,
     }
 
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    auto* impl = ptr_of(connection_impl_);
+    auto* impl = yuan::base::owner_ptr(connection_impl_);
     if (impl) impl->send(formatted);
 }
 
 void NetLogger::flush()
 {
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    auto* impl = ptr_of(connection_impl_);
+    auto* impl = yuan::base::owner_ptr(connection_impl_);
     if (impl) impl->flush();
 }
 
 bool NetLogger::connect()
 {
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    auto* impl = ptr_of(connection_impl_);
+    auto* impl = yuan::base::owner_ptr(connection_impl_);
     return impl ? impl->connect() : false;
 }
 
 void NetLogger::disconnect()
 {
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    auto* impl = ptr_of(connection_impl_);
+    auto* impl = yuan::base::owner_ptr(connection_impl_);
     if (impl) impl->disconnect();
 }
 
 bool NetLogger::is_connected() const
 {
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    const auto* impl = ptr_of(connection_impl_);
+    const auto* impl = yuan::base::owner_ptr(connection_impl_);
     return impl ? impl->is_connected() : false;
 }
 

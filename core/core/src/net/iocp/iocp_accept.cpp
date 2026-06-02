@@ -8,7 +8,7 @@
 
 #include <cstring>
 
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 namespace yuan::net
 {
@@ -90,7 +90,7 @@ namespace yuan::net
             return true;
         }
 
-        return app::GetLastNativeError() == WSA_IO_PENDING;
+        return platform::GetLastNativeError() == WSA_IO_PENDING;
 #else
         (void)listener_fd;
         (void)accepted_fd;

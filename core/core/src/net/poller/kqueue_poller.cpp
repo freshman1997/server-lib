@@ -1,11 +1,10 @@
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #include <signal.h>
-#include <algorithm>
 #include <unistd.h>
 #include <sys/event.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <set>
+#include <unordered_set>
 #include <unordered_map>
 
 #include "base/time.h"
@@ -20,10 +19,11 @@ namespace yuan::net
     {
     public:
         int kqueuefd_;
-        std::set<int> fds_;
+        std::unordered_set<int> fds_;
         std::unordered_map<int, Channel *> channels_;
         std::vector<struct kevent> kqueue_events_;
         std::vector<PollEvent> merged_events_;
+        std::unordered_map<int, std::size_t> merged_event_indices_;
     };
 
     namespace
@@ -84,15 +84,17 @@ namespace yuan::net
         }
 
         if (count > 0) {
-            // Kqueue 返回的事件粒度是“每个 filter 一条 kevent”。
-            // 如果同一个 fd 同时就绪读/写，就会出现同一个 Channel* 被 push 多次。
-            // 但 EventLoop 遍历时会反复调用 channel->on_event()，而 channel->revent_ 会在
-            // poll 循环内被后一次 set_revent 覆盖，导致前一次回调丢失。
-            // 因此这里按 Channel 聚合 revent，只 push 一次。
+            // kqueue may report read/write filters separately for the same fd.
+            // Merge by fd so EventLoop dispatches each Channel once per poll.
             auto &merged_events = data_->merged_events_;
+            auto &merged_event_indices = data_->merged_event_indices_;
             merged_events.clear();
+            merged_event_indices.clear();
             if (merged_events.capacity() < static_cast<size_t>(count)) {
                 merged_events.reserve(static_cast<size_t>(count));
+            }
+            if (merged_event_indices.bucket_count() < static_cast<size_t>(count)) {
+                merged_event_indices.reserve(static_cast<size_t>(count));
             }
 
             for (int i = 0; i < count; ++i) {
@@ -103,8 +105,7 @@ namespace yuan::net
                 auto channel_it = data_->channels_.find(fd);
                 Channel *channel = channel_it != data_->channels_.end() ? channel_it->second : nullptr;
 
-                // kqueue 对 TCP 关闭/错误会在 flags 里给出 EV_EOF/EV_ERROR。
-                // 这里按 epoll 的策略：把“异常/挂断”当作 READ 事件交给连接层处理（read() 会返回 0 / errno）。
+                // Treat TCP close/error notifications like epoll: surface the requested read/write event.
                 if (event.flags & (EV_EOF | EV_ERROR)) {
                     ev |= channel ? (channel->get_events() & (Channel::READ_EVENT | Channel::WRITE_EVENT)) : Channel::READ_EVENT;
                     if (ev == Channel::NONE_EVENT) {
@@ -121,14 +122,13 @@ namespace yuan::net
                 }
 
                 if (ev != Channel::NONE_EVENT) {
-                    auto found = std::find_if(merged_events.begin(), merged_events.end(), [fd](const PollEvent &item) {
-                        return item.fd == fd;
-                    });
-                    if (found == merged_events.end()) {
+                    const auto found = merged_event_indices.find(fd);
+                    if (found == merged_event_indices.end()) {
+                        merged_event_indices.emplace(fd, merged_events.size());
                         merged_events.push_back(PollEvent{ fd, ev, decode_kqueue_generation(token) });
                         continue;
                     }
-                    auto &pe = *found;
+                    auto &pe = merged_events[found->second];
                     pe.fd = fd;
                     pe.generation = decode_kqueue_generation(token);
                     pe.revents |= ev;

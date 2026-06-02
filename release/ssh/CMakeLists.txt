@@ -10,7 +10,7 @@ target_include_directories(release_ssh_server PUBLIC
     "${CMAKE_SOURCE_DIR}"
     "${CMAKE_SOURCE_DIR}/protocol/ssh/include"
 )
-if (UNIX AND NOT APPLE)
+if (YUAN_GLOBAL_STATIC_LINK AND UNIX AND NOT APPLE)
     target_link_options(release_ssh_server PRIVATE "-static-libgcc" "-static-libstdc++")
 endif()
 set_target_properties(release_ssh_server PROPERTIES
@@ -21,7 +21,7 @@ add_executable(release_ssh_cli ssh_cli_main.cpp)
 target_compile_features(release_ssh_cli PUBLIC cxx_std_20)
 target_link_libraries(release_ssh_cli PUBLIC SshProto Core)
 target_include_directories(release_ssh_cli PUBLIC "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/protocol/ssh/include")
-if (UNIX AND NOT APPLE)
+if (YUAN_GLOBAL_STATIC_LINK AND UNIX AND NOT APPLE)
     target_link_options(release_ssh_cli PRIVATE "-static-libgcc" "-static-libstdc++")
 endif()
 set_target_properties(release_ssh_cli PROPERTIES

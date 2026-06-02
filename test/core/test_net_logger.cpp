@@ -1,5 +1,5 @@
 #include "net_logger.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -67,7 +67,7 @@ int reserve_free_port()
 
 int main()
 {
-    const yuan::app::NativePlatformGuard platform_guard;
+    const yuan::platform::NativePlatformGuard platform_guard;
     require(platform_guard.ok(), "WSAStartup failed");
 
     using namespace yuan::log;

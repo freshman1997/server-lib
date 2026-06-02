@@ -9,7 +9,7 @@
 #include "net/runtime/network_runtime.h"
 #include "runtime_context.h"
 #include "server_service_events.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 #include <any>
 #include <atomic>
@@ -2730,14 +2730,14 @@ int main()
             socket_t client = ::accept(listener, nullptr, nullptr);
             if (client == kInvalidSocket) {
 #ifdef _WIN32
-                const int err = yuan::app::GetLastNativeError();
-                if (yuan::app::IsNativeRetryableError(err) ||
-                    yuan::app::ClassifyNativeError(err) == yuan::app::NativeError::timed_out) {
+                const int err = yuan::platform::GetLastNativeError();
+                if (yuan::platform::IsNativeRetryableError(err) ||
+                    yuan::platform::ClassifyNativeError(err) == yuan::platform::NativeError::timed_out) {
                     continue;
                 }
 #else
-                const int err = yuan::app::GetLastNativeError();
-                if (yuan::app::IsNativeRetryableError(err)) {
+                const int err = yuan::platform::GetLastNativeError();
+                if (yuan::platform::IsNativeRetryableError(err)) {
                     continue;
                 }
 #endif

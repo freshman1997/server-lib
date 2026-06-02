@@ -1,29 +1,14 @@
 #include "net/connection/connection.h"
 #include "context.h"
-#include "ops/option.h"
 #include "packet.h"
 #include "request.h"
 #include "response.h"
 #include "response_code.h"
+#include "base/owner_ptr.h"
 #include "base/time.h"
 
 namespace yuan::net::http
 {
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(const std::shared_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-
-        template <typename T>
-        T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-    }
-
     HttpSessionContext::HttpSessionContext(Connection *conn)
         : mode_(Mode::server), has_parsed_(false), request_start_ms_(0), conn_(conn)
     {
@@ -32,7 +17,7 @@ namespace yuan::net::http
     }
 
     HttpSessionContext::HttpSessionContext(const std::shared_ptr<Connection> &conn)
-        : mode_(Mode::server), has_parsed_(false), request_start_ms_(0), conn_owner_(conn), conn_(ptr_of(conn))
+        : mode_(Mode::server), has_parsed_(false), request_start_ms_(0), conn_owner_(conn), conn_(yuan::base::owner_ptr(conn))
     {
         request_ = std::make_unique<HttpRequest>(this);
         response_ = std::make_unique<HttpResponse>(this);
@@ -155,7 +140,7 @@ namespace yuan::net::http
 
     HttpPacket *HttpSessionContext::get_packet() const
     {
-        return mode_ == Mode::server ? static_cast<HttpPacket *>(ptr_of(request_)) : static_cast<HttpPacket *>(ptr_of(response_));
+        return mode_ == Mode::server ? static_cast<HttpPacket *>(yuan::base::owner_ptr(request_)) : static_cast<HttpPacket *>(yuan::base::owner_ptr(response_));
     }
 
     bool HttpSessionContext::is_downloading() const

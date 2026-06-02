@@ -25,30 +25,13 @@
 #include "net/security/ssl_handler.h"
 #include "net/security/ssl_module.h"
 #include "event/event_loop.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
+#include "base/owner_ptr.h"
 
 namespace yuan::net
 {
     namespace
     {
-        template<typename T>
-        T *ptr_of(std::unique_ptr<T> &owner)
-        {
-            return owner ? &*owner : nullptr;
-        }
-
-        template<typename T>
-        const T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? &*owner : nullptr;
-        }
-
-        template<typename T>
-        T *ptr_of(std::shared_ptr<T> &owner)
-        {
-            return owner ? &*owner : nullptr;
-        }
-
         void close_socket_fd(int fd)
         {
 #ifdef _WIN32
@@ -104,7 +87,7 @@ namespace yuan::net
         if (channel_) {
             channel_->disable_all();
             if (handler_) {
-                handler_->close_channel(ptr_of(channel_));
+                handler_->close_channel(yuan::base::owner_ptr(channel_));
                 handler_ = nullptr;
             }
             channel_->clear_handler();
@@ -119,7 +102,7 @@ namespace yuan::net
     {
         assert(channel_);
         if (handler_) {
-            handler_->update_channel(ptr_of(channel_));
+            handler_->update_channel(yuan::base::owner_ptr(channel_));
         }
     }
 
@@ -135,10 +118,10 @@ namespace yuan::net
             int conn_fd = socket_->accept(peer_storage);
             if (conn_fd < 0) {
 #ifdef _DEBUG
-                const int err = app::GetLastNativeError();
-                const auto kind = app::ClassifyNativeError(err);
-                if (!(app::IsNativeRetryableError(err) ||
-                      kind == app::NativeError::connection_aborted)) {
+                const int err = platform::GetLastNativeError();
+                const auto kind = platform::ClassifyNativeError(err);
+                if (!(platform::IsNativeRetryableError(err) ||
+                      kind == platform::NativeError::connection_aborted)) {
                     LOG_ERROR("error connection {}", err);
                 }
 #endif
@@ -199,20 +182,20 @@ namespace yuan::net
     {
         if (handler_ == handler) {
             if (handler_ && channel_) {
-                handler_->update_channel(ptr_of(channel_));
+                handler_->update_channel(yuan::base::owner_ptr(channel_));
             }
             return;
         }
 
         if (handler_ && handler_ != handler && channel_) {
             LOG_WARN("tcp acceptor event handler switched, fd: {}", channel_->get_fd());
-            handler_->close_channel(ptr_of(channel_));
+            handler_->close_channel(yuan::base::owner_ptr(channel_));
         }
         handler_ = handler;
         assert(channel_);
         if (handler_) {
             channel_->set_handler(std::weak_ptr<SelectHandler>(self_handler_owner_));
-            handler_->update_channel(ptr_of(channel_));
+            handler_->update_channel(yuan::base::owner_ptr(channel_));
         } else {
             channel_->clear_handler();
         }

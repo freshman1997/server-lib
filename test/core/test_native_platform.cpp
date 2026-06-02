@@ -1,4 +1,4 @@
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -17,11 +17,11 @@ namespace
 
 int main()
 {
-    using yuan::app::ClassifyNativeError;
-    using yuan::app::DescribeNativeError;
-    using yuan::app::GetLastNativeError;
-    using yuan::app::IsNativeRetryableError;
-    using yuan::app::NativeError;
+    using yuan::platform::ClassifyNativeError;
+    using yuan::platform::DescribeNativeError;
+    using yuan::platform::GetLastNativeError;
+    using yuan::platform::IsNativeRetryableError;
+    using yuan::platform::NativeError;
 
     const int no_err = 0;
     if (!require(ClassifyNativeError(no_err) == NativeError::none, "zero should classify to none")) {

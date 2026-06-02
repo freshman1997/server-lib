@@ -15,7 +15,7 @@ set(src_lib
         ${LUA_SRC_DIR}/liolib.c ${LUA_SRC_DIR}/lmathlib.c ${LUA_SRC_DIR}/loadlib.c ${LUA_SRC_DIR}/loslib.c
         ${LUA_SRC_DIR}/lstrlib.c ${LUA_SRC_DIR}/ltablib.c ${LUA_SRC_DIR}/lutf8lib.c ${LUA_SRC_DIR}/linit.c)
 
-add_library(lua_static STATIC ${src_code} ${src_lib})
+add_library(lua_static ${src_code} ${src_lib})
 
 target_include_directories(lua_static PUBLIC
     "$<BUILD_INTERFACE:${LUA_SRC_DIR}>"

@@ -15,7 +15,7 @@ if (TARGET redisCli)
     list(APPEND NAS_CORE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/nas_redis_metadata_store.cpp")
 endif()
 
-add_library(NasCore STATIC ${NAS_CORE_SRC})
+add_library(NasCore ${NAS_CORE_SRC})
 target_compile_features(NasCore PUBLIC cxx_std_20)
 target_link_libraries(NasCore PUBLIC CoreBase HttpProto WebDavProto)
 if (TARGET redisCli)

@@ -5,7 +5,7 @@
 #include <windows.h>
 #endif
 
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 namespace yuan::net
 {
@@ -42,7 +42,7 @@ namespace yuan::net
             return true;
         }
 
-        const int last_error = app::GetLastNativeError();
+        const int last_error = platform::GetLastNativeError();
         if (error) {
             *error = static_cast<uint32_t>(last_error);
         }
@@ -88,7 +88,7 @@ namespace yuan::net
             return true;
         }
 
-        const int last_error = app::GetLastNativeError();
+        const int last_error = platform::GetLastNativeError();
         if (error) {
             *error = static_cast<uint32_t>(last_error);
         }
@@ -113,7 +113,7 @@ namespace yuan::net
         if (ok != FALSE) {
             return true;
         }
-        return app::GetLastSystemError() == ERROR_NOT_FOUND;
+        return platform::GetLastSystemError() == ERROR_NOT_FOUND;
 #else
         (void)fd;
         return false;

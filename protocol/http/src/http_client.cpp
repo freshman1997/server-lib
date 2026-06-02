@@ -11,18 +11,10 @@
 #include "response.h"
 #include "session.h"
 #include "net/security/openssl.h"
+#include "base/owner_ptr.h"
 
 namespace yuan::net::http
 {
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(const std::shared_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-    }
-
     HttpClient::HttpClient()
         : port_(80), ssl_module_(nullptr)
     {
@@ -128,7 +120,7 @@ namespace yuan::net::http
                 }
             }
 
-            auto *stream = dynamic_cast<StreamTransport *>(ptr_of(conn));
+            auto *stream = dynamic_cast<StreamTransport *>(yuan::base::owner_ptr(conn));
             auto *channel = stream ? stream->stream_channel() : nullptr;
             if (!channel) {
                 co_return nullptr;
@@ -151,7 +143,7 @@ namespace yuan::net::http
         httpCtx->set_mode(Mode::client);
 
         last_session_.reset();
-        auto httpSession = std::make_unique<HttpSession>(reinterpret_cast<uintptr_t>(ptr_of(conn)), std::move(httpCtx), runtime);
+        auto httpSession = std::make_unique<HttpSession>(reinterpret_cast<uintptr_t>(yuan::base::owner_ptr(conn)), std::move(httpCtx), runtime);
 
         ccb(httpSession->get_context()->get_request());
 

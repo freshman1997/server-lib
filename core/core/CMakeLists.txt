@@ -18,5 +18,4 @@ endif()
 
 target_include_directories(Core PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
-    "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/../app/include>"
     "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")

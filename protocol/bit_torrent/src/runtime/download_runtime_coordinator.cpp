@@ -2,27 +2,13 @@
 
 #include "nat/nat_manager.h"
 #include "net/runtime/network_runtime.h"
+#include "base/owner_ptr.h"
+#include "base/time.h"
 
 #include <chrono>
 
 namespace yuan::net::bit_torrent
 {
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-
-        uint64_t monotonic_now_ms()
-        {
-            return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count());
-        }
-    }
-
-
     void DownloadRuntimeCoordinator::configure(DownloadRuntimeConfig config)
     {
         config_ = std::move(config);
@@ -124,7 +110,7 @@ namespace yuan::net::bit_torrent
     {
         PeerSessionConfig peer_config;
         peer_config.runtime_ = config_.runtime_;
-        peer_config.nat_manager_ = ptr_of(nat_manager_);
+        peer_config.nat_manager_ = yuan::base::owner_ptr(nat_manager_);
         peer_config.meta_ = config_.meta_;
         peer_config.peer_id_ = config_.peer_id_;
         peer_config.pieces_have_ = config_.pieces_have_;
@@ -167,7 +153,7 @@ namespace yuan::net::bit_torrent
         nat_manager_->start(config_.nat_config_, *config_.meta_, *config_.peer_id_,
                             *config_.pieces_have_, config_.runtime_);
 
-        peer_session_->set_nat_manager(ptr_of(nat_manager_));
+        peer_session_->set_nat_manager(yuan::base::owner_ptr(nat_manager_));
         configure_peer_session();
         peer_session_->bind_nat_runtime();
     }
@@ -202,7 +188,7 @@ namespace yuan::net::bit_torrent
             config_.stats_tracker_->emit();
 
             if (peer_count == 0 && tracker_session_ && config_.meta_ && !config_.meta_->announce_list_.empty()) {
-                const auto now = monotonic_now_ms();
+                const auto now = base::time::steady_now_ms();
                 if (last_empty_peer_announce_ms_ == 0 || now - last_empty_peer_announce_ms_ >= 30000) {
                     last_empty_peer_announce_ms_ = now;
                     tracker_session_->announce_now();

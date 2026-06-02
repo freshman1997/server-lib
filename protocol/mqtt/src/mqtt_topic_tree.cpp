@@ -1,17 +1,9 @@
 #include "mqtt_topic_tree.h"
+#include "base/owner_ptr.h"
 #include <algorithm>
 
 namespace yuan::net::mqtt
 {
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-    }
-
     static std::vector<std::string> split_topic(const std::string & topic)
     {
         std::vector<std::string> levels;
@@ -33,11 +25,11 @@ namespace yuan::net::mqtt
             if (level == "+") {
                 if (!node->single_level_wildcard)
                     node->single_level_wildcard = std::make_unique<Node>();
-                node = ptr_of(node->single_level_wildcard);
+                node = yuan::base::owner_ptr(node->single_level_wildcard);
             } else if (level == "#") {
                 if (!node->multi_level_wildcard)
                     node->multi_level_wildcard = std::make_unique<Node>();
-                node = ptr_of(node->multi_level_wildcard);
+                node = yuan::base::owner_ptr(node->multi_level_wildcard);
             } else {
                 auto it = node->children.find(level);
                 if (it == node->children.end())
@@ -80,11 +72,11 @@ namespace yuan::net::mqtt
             if (level == "+") {
                 if (!node->single_level_wildcard)
                     return false;
-                node = ptr_of(node->single_level_wildcard);
+                node = yuan::base::owner_ptr(node->single_level_wildcard);
             } else if (level == "#") {
                 if (!node->multi_level_wildcard)
                     return false;
-                node = ptr_of(node->multi_level_wildcard);
+                node = yuan::base::owner_ptr(node->multi_level_wildcard);
             } else {
                 auto it = node->children.find(level);
                 if (it == node->children.end())
@@ -173,12 +165,12 @@ namespace yuan::net::mqtt
 
             if (node->multi_level_wildcard) {
                 std::string child_path = path.empty() ? "#" : path + "/#";
-                stack.emplace_back(ptr_of(node->multi_level_wildcard), std::move(child_path));
+                stack.emplace_back(yuan::base::owner_ptr(node->multi_level_wildcard), std::move(child_path));
             }
 
             if (node->single_level_wildcard) {
                 std::string child_path = path.empty() ? "+" : path + "/+";
-                stack.emplace_back(ptr_of(node->single_level_wildcard), std::move(child_path));
+                stack.emplace_back(yuan::base::owner_ptr(node->single_level_wildcard), std::move(child_path));
             }
         }
 
@@ -204,10 +196,10 @@ namespace yuan::net::mqtt
                 stack.push_back(&pair.second);
 
             if (node->single_level_wildcard)
-                stack.push_back(ptr_of(node->single_level_wildcard));
+                stack.push_back(yuan::base::owner_ptr(node->single_level_wildcard));
 
             if (node->multi_level_wildcard)
-                stack.push_back(ptr_of(node->multi_level_wildcard));
+                stack.push_back(yuan::base::owner_ptr(node->multi_level_wildcard));
         }
     }
 
@@ -294,3 +286,4 @@ namespace yuan::net::mqtt
         return filter.substr(second_slash + 1);
     }
 }
+#include "base/owner_ptr.h"

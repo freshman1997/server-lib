@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 #undef assert
 #define assert(expr)                                                                                                   \
@@ -110,7 +110,7 @@ namespace
 
 int main()
 {
-    yuan::app::NativePlatformGuard guard;
+    yuan::platform::NativePlatformGuard guard;
 
     using namespace yuan::redis;
 

@@ -7,7 +7,7 @@ endif()
 
 FILE(GLOB_RECURSE HTTP_SRC "./src/*.cpp")
 
-add_library(HttpProto STATIC ${HTTP_SRC})
+add_library(HttpProto ${HTTP_SRC})
 target_link_libraries(HttpProto PUBLIC Core)
 
 if (TARGET brotlicommon AND TARGET brotlienc)

@@ -2,7 +2,7 @@
 #include "base/utils/base64.h"
 #include "logger.h"
 #include "net/socket/socket.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 #include <atomic>
 #include <cctype>
@@ -99,7 +99,7 @@ namespace
 
     std::string socket_error_message()
     {
-        return yuan::app::DescribeNativeError(yuan::app::GetLastNativeError());
+        return yuan::platform::DescribeNativeError(yuan::platform::GetLastNativeError());
     }
 
     int read_env_int(const char *name, int default_value)
@@ -709,8 +709,8 @@ namespace
             const socket_t client = static_cast<socket_t>(listen_socket->accept(peer));
 #ifdef _WIN32
             if (client == invalid_socket) {
-                const int err = yuan::app::GetLastNativeError();
-                if (yuan::app::IsNativeRetryableError(err)) {
+                const int err = yuan::platform::GetLastNativeError();
+                if (yuan::platform::IsNativeRetryableError(err)) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
                 }
@@ -719,8 +719,8 @@ namespace
             }
 #else
             if (client == invalid_socket) {
-                const int err = yuan::app::GetLastNativeError();
-                if (yuan::app::IsNativeRetryableError(err)) {
+                const int err = yuan::platform::GetLastNativeError();
+                if (yuan::platform::IsNativeRetryableError(err)) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
                 }

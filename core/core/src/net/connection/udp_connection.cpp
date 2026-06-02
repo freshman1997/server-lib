@@ -4,7 +4,8 @@
 #include "net/socket/inet_address.h"
 #include "net/acceptor/udp/udp_instance.h"
 #include "net/acceptor/udp/adapter.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
+#include "base/owner_ptr.h"
 #include "logger.h"
 #include <cassert>
 #include <cerrno>
@@ -18,21 +19,6 @@
 
 namespace yuan::net
 {
-    namespace
-    {
-        template<typename T>
-        T *ptr_of(std::shared_ptr<T> &owner)
-        {
-            return owner ? &*owner : nullptr;
-        }
-
-        template<typename T>
-        T *ptr_of(const std::shared_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-    }
-
     UdpConnection::UdpConnection(const InetAddress & addr)
         : address_(std::move(addr)), Connection()
     {
@@ -201,11 +187,11 @@ namespace yuan::net
                     ++i;
                 } else if (sent < 0) {
 #ifdef _WIN32
-                    int err = app::GetLastNativeError();
-                    if (!app::IsNativeRetryableError(err)) {
+                    int err = platform::GetLastNativeError();
+                    if (!platform::IsNativeRetryableError(err)) {
 #else
-                    int err = app::GetLastNativeError();
-                    if (!app::IsNativeRetryableError(err)) {
+                    int err = platform::GetLastNativeError();
+                    if (!platform::IsNativeRetryableError(err)) {
 #endif
                         abort();
                         return;
@@ -265,7 +251,7 @@ namespace yuan::net
     void UdpConnection::on_read_event()
     {
         [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
-        auto *handler = ptr_of(handler_owner);
+        auto *handler = yuan::base::owner_ptr(handler_owner);
         assert(state_ == ConnectionState::connected && handler);
         replace_input_buffer(instance_->take_input_packet());
 
@@ -290,7 +276,7 @@ namespace yuan::net
     void UdpConnection::on_write_event()
     {
         [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
-        auto *handler = ptr_of(handler_owner);
+        auto *handler = yuan::base::owner_ptr(handler_owner);
         if (handler) {
             handler->on_write(shared_from_this());
         }
@@ -323,7 +309,7 @@ namespace yuan::net
         alive_timer_.reset();
         auto self = std::static_pointer_cast<UdpConnection>(shared_from_this());
         [[maybe_unused]] auto handler_owner = std::move(connectionHandlerOwner_);
-        auto *handler = ptr_of(handler_owner);
+        auto *handler = yuan::base::owner_ptr(handler_owner);
         if (handler && !close_notified_) {
             close_notified_ = true;
             notify_event_waiters(ConnectionEvent::closed);
@@ -336,7 +322,7 @@ namespace yuan::net
 
     ConnectionHandler *UdpConnection::get_connection_handler() const
     {
-        return ptr_of(connectionHandlerOwner_);
+        return yuan::base::owner_ptr(connectionHandlerOwner_);
     }
 
     void UdpConnection::attach_datagram_instance(UdpInstance * instance)
@@ -353,7 +339,7 @@ namespace yuan::net
         state_ = state;
         if (state_ == ConnectionState::connected) {
             [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
-            auto *handler = ptr_of(handler_owner);
+            auto *handler = yuan::base::owner_ptr(handler_owner);
             if (handler) {
                 notify_event_waiters(ConnectionEvent::connected);
                 handler->on_connected(shared_from_this());
@@ -422,7 +408,7 @@ namespace yuan::net
 
             if (!proc_one_buffer(*front)) {
                 [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
-                auto *handler = ptr_of(handler_owner);
+                auto *handler = yuan::base::owner_ptr(handler_owner);
                 if (handler) {
                     notify_event_waiters(ConnectionEvent::error);
                     handler->on_error(shared_from_this());

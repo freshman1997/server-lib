@@ -491,7 +491,7 @@ Observed while hardening proxy integration and coroutine awaiters:
 
 - Event dispatch generation filtering in `EventLoop` could drop events with generation `0`, which blocked the proxy accept path and produced `accepted=0` under integration tests.
 - The immediate fix is to only enforce generation match when `event.generation != 0`, preserving compatibility with pollers that do not carry generation.
-- Connection ownership semantics were improved with a lightweight `ConnectionRef` (borrowed or owned), replacing scattered `ptr_of(...)` access in key coroutine/context paths.
+- Connection ownership semantics were improved with a lightweight `ConnectionRef` (borrowed or owned), replacing scattered `yuan::base::owner_ptr(...)` access in key coroutine/context paths.
 - This reduced accidental raw-pointer usage across suspend boundaries and made awaiter/context APIs explicit about lifetime intent.
 - The large CONNECT tunnel behavior on Windows is now treated as a half-close smoke scenario rather than a strict full-echo assertion. A strict no-half-close large tunnel check passes, while immediate client half-close remains timing-sensitive at the socket/read boundary.
 

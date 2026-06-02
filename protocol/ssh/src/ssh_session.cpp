@@ -2,19 +2,12 @@
 #include "ssh_handler.h"
 #include "ssh_config.h"
 #include "protocol/ssh_message_codec.h"
+#include "base/owner_ptr.h"
+
 #include <algorithm>
 
 namespace yuan::net::ssh
 {
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-    }
-
     SshSession::SshSession(uint64_t session_id, SshServer * server)
         : session_id_(session_id), server_(server),
           transport_(nullptr, nullptr, true),
@@ -406,7 +399,7 @@ namespace yuan::net::ssh
     {
         auto id = next_session_id_.fetch_add(1, std::memory_order_relaxed);
         auto session = std::make_unique<SshSession>(id, server);
-        auto *ptr = ptr_of(session);
+        auto *ptr = yuan::base::owner_ptr(session);
         std::lock_guard<std::mutex> lock(mutex_);
         sessions_.emplace(id, std::move(session));
         return ptr;
@@ -416,7 +409,7 @@ namespace yuan::net::ssh
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = sessions_.find(session_id);
-        return it != sessions_.end() ? ptr_of(it->second) : nullptr;
+        return it != sessions_.end() ? yuan::base::owner_ptr(it->second) : nullptr;
     }
 
     void SshSessionManager::remove_session(uint64_t session_id)

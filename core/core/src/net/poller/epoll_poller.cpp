@@ -1,7 +1,7 @@
 #ifdef __linux__
 #include <cstring>
 #include <cerrno>
-#include <set>
+#include <unordered_set>
 #include <unordered_map>
 #include <unistd.h>
 #include <sys/epoll.h>
@@ -11,7 +11,7 @@
 #include "base/time.h"
 #include "net/poller/epoll_poller.h"
 #include "net/channel/channel.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 namespace yuan::net
 {
@@ -28,7 +28,7 @@ namespace yuan::net
 
     public:
         int epoll_fd_;
-        std::set<int> fds_;
+        std::unordered_set<int> fds_;
         std::unordered_map<int, Channel *> channels_;
         std::vector<struct epoll_event> epoll_events_;
     };
@@ -58,7 +58,7 @@ namespace yuan::net
         data_ = std::make_unique<EpollPoller::HelperData>();
         //signal(SIGPIPE, SIG_IGN);
         data_->epoll_fd_ = ::epoll_create(65535);
-        // 设置 ET 触发模式 ？
+        // Edge-triggered epoll mode is configured in update().
         data_->epoll_events_.resize(10);
     }
 
@@ -76,7 +76,7 @@ namespace yuan::net
         int nevent = -1;
         do {
             nevent = ::epoll_wait(data_->epoll_fd_, &*data_->epoll_events_.begin(), (int)data_->epoll_events_.size(), timeout);
-        } while (nevent < 0 && app::ClassifyNativeError(app::GetLastNativeError()) == app::NativeError::interrupted);
+        } while (nevent < 0 && platform::ClassifyNativeError(platform::GetLastNativeError()) == platform::NativeError::interrupted);
 
         uint64_t tm = base::time::get_tick_count();
         if (nevent < 0) {

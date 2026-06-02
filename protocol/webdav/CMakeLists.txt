@@ -3,7 +3,7 @@ project(WebDavProto)
 
 file(GLOB_RECURSE WEBDAV_SRC "./src/*.cpp")
 
-add_library(WebDavProto STATIC ${WEBDAV_SRC})
+add_library(WebDavProto ${WEBDAV_SRC})
 target_link_libraries(WebDavProto PUBLIC HttpProto)
 target_include_directories(WebDavProto
     PUBLIC

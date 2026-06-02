@@ -6,7 +6,7 @@
 #include <windows.h>
 #endif
 
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 namespace yuan::net
 {
@@ -70,7 +70,7 @@ namespace yuan::net
             return true;
         }
 
-        return app::GetLastNativeError() == WSA_IO_PENDING;
+        return platform::GetLastNativeError() == WSA_IO_PENDING;
 #else
         (void)fd;
         (void)remote_address;

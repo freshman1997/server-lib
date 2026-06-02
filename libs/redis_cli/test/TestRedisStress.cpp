@@ -2,7 +2,7 @@
 #include "redis_client_pool.h"
 #include "logger.h"
 #include "value/int_value.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -119,7 +119,7 @@ int main()
     LOG_GET_REGISTRY()->set_global_level(yuan::log::Level::warn);
     LOG_GET_REGISTRY()->disable_file_log();
 
-    yuan::app::NativePlatformGuard guard;
+   yuan::platform::NativePlatformGuard guard;
 
     using namespace yuan::redis;
 

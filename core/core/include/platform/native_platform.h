@@ -1,5 +1,5 @@
-#ifndef YUAN_APP_NATIVE_PLATFORM_H
-#define YUAN_APP_NATIVE_PLATFORM_H
+#ifndef YUAN_PLATFORM_NATIVE_PLATFORM_H
+#define YUAN_PLATFORM_NATIVE_PLATFORM_H
 
 #include <string>
 
@@ -11,7 +11,7 @@
 #include <cstring>
 #endif
 
-namespace yuan::app
+namespace yuan::platform
 {
     // Cross-platform normalized network/system error categories.
     // These values are intended for control flow decisions (retry/close/fail),

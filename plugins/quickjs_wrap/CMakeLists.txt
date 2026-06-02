@@ -12,7 +12,7 @@ set(QJS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/quickjs/quickjs-libc.c
 )
 
-add_library(quickjs_static STATIC ${QJS_SRC})
+add_library(quickjs_static ${QJS_SRC})
 
 set(QUICKJS_VERSION "2025-09-13")
 

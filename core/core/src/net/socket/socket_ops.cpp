@@ -13,7 +13,7 @@
 #endif
 
 #include "net/socket/socket_ops.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 namespace yuan::net::socket
 {
@@ -198,7 +198,7 @@ namespace yuan::net::socket
 
     int get_last_error()
     {
-        return yuan::app::GetLastNativeError();
+        return yuan::platform::GetLastNativeError();
     }
 
     bool set_reuse(int fd, bool on, bool exclude)

@@ -6,6 +6,8 @@
 #include "structure/bencoding.h"
 #include "peer_wire/peer_connection.h"
 #include "timer/timer.h"
+#include "base/owner_ptr.h"
+#include "base/time.h"
 
 #include <cstdio>
 #include <cstring>
@@ -14,25 +16,8 @@
 
 namespace yuan::net::bit_torrent
 {
-
     namespace
     {
-        template <typename T>
-        T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-
-        template <typename T>
-        T *ptr_of(const std::shared_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-    }
-
-    namespace
-    {
-
         size_t compute_max_active_pieces(const DownloadRuntimeCoordinator *runtime_coordinator)
         {
             if (!runtime_coordinator) {
@@ -46,14 +31,7 @@ namespace yuan::net::bit_torrent
 
             return std::min<size_t>(8, active_peers);
         }
-
-        uint64_t monotonic_now_ms()
-        {
-            return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count());
-        }
-
-    } // namespace
+    } // namespace`
 
     BitTorrentClient::BitTorrentClient()
         : piece_storage_(std::make_unique<PieceStorage>()),
@@ -83,7 +61,7 @@ namespace yuan::net::bit_torrent
         torrent_completed_emitted_ = false;
         download_budget_bytes_ = 0.0;
         upload_budget_bytes_ = 0.0;
-        bandwidth_last_refill_ms_ = monotonic_now_ms();
+        bandwidth_last_refill_ms_ = base::time::steady_now_ms();
         metadata_mode_ = false;
         magnet_tracker_urls_.clear();
         return true;
@@ -100,7 +78,7 @@ namespace yuan::net::bit_torrent
         torrent_completed_emitted_ = false;
         download_budget_bytes_ = 0.0;
         upload_budget_bytes_ = 0.0;
-        bandwidth_last_refill_ms_ = monotonic_now_ms();
+        bandwidth_last_refill_ms_ = base::time::steady_now_ms();
         metadata_mode_ = false;
         magnet_tracker_urls_.clear();
         return true;
@@ -134,7 +112,7 @@ namespace yuan::net::bit_torrent
         torrent_completed_emitted_ = false;
         download_budget_bytes_ = 0.0;
         upload_budget_bytes_ = 0.0;
-        bandwidth_last_refill_ms_ = monotonic_now_ms();
+        bandwidth_last_refill_ms_ = base::time::steady_now_ms();
         return true;
     }
 
@@ -227,7 +205,7 @@ namespace yuan::net::bit_torrent
 
                 if (!piece_state_.is_complete()) {
                     active_peer->send_interested();
-                    request_next_block(ptr_of(active_peer));
+                    request_next_block(yuan::base::owner_ptr(active_peer));
                 }
             }
 
@@ -383,12 +361,12 @@ namespace yuan::net::bit_torrent
 
         if (!runtime_) {
             owned_runtime_ = std::make_unique<NetworkRuntime>();
-            runtime_ = ptr_of(owned_runtime_);
+            runtime_ = yuan::base::owner_ptr(owned_runtime_);
         }
 
         download_budget_bytes_ = 0.0;
         upload_budget_bytes_ = 0.0;
-        bandwidth_last_refill_ms_ = monotonic_now_ms();
+        bandwidth_last_refill_ms_ = base::time::steady_now_ms();
 
         if (save_path_.empty())
             save_path_ = ".";
@@ -443,7 +421,7 @@ namespace yuan::net::bit_torrent
         torrent_completed_emitted_ = false;
         download_budget_bytes_ = 0.0;
         upload_budget_bytes_ = 0.0;
-        bandwidth_last_refill_ms_ = monotonic_now_ms();
+        bandwidth_last_refill_ms_ = base::time::steady_now_ms();
         metadata_mode_ = false;
         magnet_tracker_urls_.clear();
         if (piece_storage_) {
@@ -504,7 +482,7 @@ namespace yuan::net::bit_torrent
 
             if (piece_state_.is_endgame() && runtime_coordinator_) {
                 for (const auto &active_peer : runtime_coordinator_->get_active_peers()) {
-                    if (active_peer && ptr_of(active_peer) != peer) {
+                    if (active_peer && yuan::base::owner_ptr(active_peer) != peer) {
                         active_peer->send_cancel(piece_index, offset, length);
                     }
                 }
@@ -525,7 +503,7 @@ namespace yuan::net::bit_torrent
 
                 if (piece_state_.is_endgame() || piece_state_.is_complete()) {
                     for (const auto &active_peer : runtime_coordinator_->get_active_peers()) {
-                        if (active_peer && ptr_of(active_peer) != peer) {
+                        if (active_peer && yuan::base::owner_ptr(active_peer) != peer) {
                             active_peer->send_cancel(piece_index, offset, length);
                         }
                     }
@@ -568,8 +546,8 @@ namespace yuan::net::bit_torrent
 
         const auto peers = runtime_coordinator_ ? runtime_coordinator_->get_active_peers() : std::vector<std::shared_ptr<PeerConnection> >{};
         const auto *piece_availability = piece_availability_cache(peers);
-        const auto max_active_pieces = compute_max_active_pieces(ptr_of(runtime_coordinator_));
-        const auto now_ms = monotonic_now_ms();
+        const auto max_active_pieces = compute_max_active_pieces(yuan::base::owner_ptr(runtime_coordinator_));
+        const auto now_ms = base::time::steady_now_ms();
         while (peer->pending_request_count() < peer->request_window_size()) {
             if (download_limit_kbps_ > 0 && download_budget_bytes_ < 1024.0) {
                 break;
@@ -606,7 +584,7 @@ namespace yuan::net::bit_torrent
         }
 
         for (const auto &peer : runtime_coordinator_->get_active_peers()) {
-            request_next_block(ptr_of(peer));
+            request_next_block(yuan::base::owner_ptr(peer));
         }
     }
 
@@ -708,7 +686,7 @@ namespace yuan::net::bit_torrent
 
     void BitTorrentClient::refill_bandwidth_budget()
     {
-        const auto now = monotonic_now_ms();
+        const auto now = base::time::steady_now_ms();
         if (bandwidth_last_refill_ms_ == 0) {
             bandwidth_last_refill_ms_ = now;
             return;
@@ -768,7 +746,7 @@ namespace yuan::net::bit_torrent
             return;
         }
 
-        auto now_ms = monotonic_now_ms();
+        auto now_ms = base::time::steady_now_ms();
         auto peers = runtime_coordinator_->get_active_peers();
 
         for (const auto &peer : peers) {
@@ -782,7 +760,7 @@ namespace yuan::net::bit_torrent
         if (!timed_out.empty()) {
             for (const auto &peer : peers) {
                 if (peer && peer->can_download()) {
-                    request_next_block(ptr_of(peer));
+                    request_next_block(yuan::base::owner_ptr(peer));
                 }
             }
         }

@@ -12,7 +12,7 @@ target_include_directories(release_ftp_server PUBLIC
     "${CMAKE_SOURCE_DIR}"
     "${CMAKE_SOURCE_DIR}/protocol/ftp/include"
 )
-if (UNIX AND NOT APPLE)
+if (YUAN_GLOBAL_STATIC_LINK AND UNIX AND NOT APPLE)
     target_link_options(release_ftp_server PRIVATE "-static-libgcc" "-static-libstdc++")
 endif()
 set_target_properties(release_ftp_server PROPERTIES
@@ -28,7 +28,7 @@ target_include_directories(release_ftp_cli PUBLIC
     "${CMAKE_SOURCE_DIR}"
     "${CMAKE_SOURCE_DIR}/protocol/ftp/include"
 )
-if (UNIX AND NOT APPLE)
+if (YUAN_GLOBAL_STATIC_LINK AND UNIX AND NOT APPLE)
     target_link_options(release_ftp_cli PRIVATE "-static-libgcc" "-static-libstdc++")
 endif()
 set_target_properties(release_ftp_cli PROPERTIES

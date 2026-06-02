@@ -1,4 +1,5 @@
 #include "websocket_connection.h"
+#include "base/owner_ptr.h"
 #include "base/time.h"
 #include "handshake.h"
 #include "net/connection/connection.h"
@@ -13,15 +14,6 @@
 
 namespace yuan::net::websocket
 {
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(const std::shared_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-    }
-
     WebSocketConnection::WebSocketConnection(WorkMode mode)
         : mode_(mode), state_(State::connecting_), conn_(nullptr), config_(nullptr), last_active_time_(0)
     {
@@ -44,7 +36,7 @@ namespace yuan::net::websocket
     void WebSocketConnection::bind_connection(const std::shared_ptr<Connection> &conn)
     {
         conn_owner_ = conn;
-        conn_ = ptr_of(conn);
+        conn_ = yuan::base::owner_ptr(conn);
     }
 
     void WebSocketConnection::set_config(WebSocketConfigManager * config)
@@ -205,7 +197,7 @@ namespace yuan::net::websocket
 
     FrameDispatchResult WebSocketConnection::dispatch_frames(const std::shared_ptr<Connection> &conn)
     {
-        return dispatch_frames(ptr_of(conn));
+        return dispatch_frames(yuan::base::owner_ptr(conn));
     }
 
     WebSocketHandshaker &WebSocketConnection::handshaker()
@@ -279,7 +271,7 @@ namespace yuan::net::websocket
 
     void WebSocketConnection::send_ping_frame_to(const std::shared_ptr<Connection> &conn)
     {
-        send_ping_frame_to(ptr_of(conn));
+        send_ping_frame_to(yuan::base::owner_ptr(conn));
     }
 
     void WebSocketConnection::send_pong_frame_to(Connection * conn, const ::yuan::buffer::ByteBuffer & payload)
@@ -295,7 +287,7 @@ namespace yuan::net::websocket
 
     void WebSocketConnection::send_pong_frame_to(const std::shared_ptr<Connection> &conn, const ::yuan::buffer::ByteBuffer &payload)
     {
-        send_pong_frame_to(ptr_of(conn), payload);
+        send_pong_frame_to(yuan::base::owner_ptr(conn), payload);
     }
 
     void WebSocketConnection::send_close_frame_to(Connection * conn, uint16_t code)
@@ -314,7 +306,7 @@ namespace yuan::net::websocket
 
     void WebSocketConnection::send_close_frame_to(const std::shared_ptr<Connection> &conn, uint16_t code)
     {
-        send_close_frame_to(ptr_of(conn), code);
+        send_close_frame_to(yuan::base::owner_ptr(conn), code);
     }
 
     std::vector< ::yuan::buffer::ByteBuffer> *WebSocketConnection::get_output_buffers()

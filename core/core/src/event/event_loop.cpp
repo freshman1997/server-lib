@@ -44,6 +44,7 @@ namespace yuan::net
         std::atomic_bool quit_{false};
         std::atomic_bool resume_coroutine_requested_{false};
         std::atomic_bool is_waiting_{false};
+        std::atomic_size_t channel_count_{0};
         Poller *poller_ = nullptr;
         timer::TimerManager *timer_manager_ = nullptr;
         std::mutex m;
@@ -63,6 +64,40 @@ namespace yuan::net
             }
             return generation == 0 ? 1 : generation;
         }
+
+        void register_channel_locked(Channel *channel)
+        {
+            const int fd = channel->get_fd();
+            auto it = channels_.find(fd);
+            if (it == channels_.end() || it->second != channel) {
+                channel->set_generation(next_generation());
+            }
+            if (it == channels_.end()) {
+                channel_count_.fetch_add(1, std::memory_order_release);
+            }
+            poller_->update_channel(channel);
+            channels_[fd] = channel;
+            tombstoned_fds_.erase(fd);
+        }
+
+        bool remove_registered_channel_locked(Channel *channel, const bool erase_connection)
+        {
+            const int fd = channel->get_fd();
+            auto it = channels_.find(fd);
+            if (it == channels_.end() || it->second != channel) {
+                return false;
+            }
+
+            poller_->remove_channel(channel);
+            channels_.erase(it);
+            channel_count_.fetch_sub(1, std::memory_order_release);
+            tombstoned_fds_.insert(fd);
+            channel->bump_generation();
+            if (erase_connection) {
+                connections_.erase(fd);
+            }
+            return true;
+        }
     };
 
     EventLoop::EventLoop(Poller *poller, timer::TimerManager *timer_manager)
@@ -81,6 +116,7 @@ namespace yuan::net
             std::lock_guard<std::mutex> lock(data_->m);
             connections.swap(data_->connections_);
             data_->channels_.clear();
+            data_->channel_count_.store(0, std::memory_order_release);
             data_->tombstoned_fds_.clear();
             data_->pending_callbacks_ = {};
             data_->pending_coroutines_ = {};
@@ -155,8 +191,7 @@ namespace yuan::net
         std::vector<PollEvent> events;
         events.reserve(4096);
         auto has_channels = [this]() {
-            std::lock_guard<std::mutex> lock(data_->m);
-            return !data_->channels_.empty();
+            return data_->channel_count_.load(std::memory_order_acquire) > 0;
         };
 
         auto poll_timeout = [this](const bool processed_work) {
@@ -249,40 +284,20 @@ namespace yuan::net
             return;
         }
 
-        if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
-            auto *channel = stream->stream_channel();
-            if (channel) {
-                std::lock_guard<std::mutex> lock(data_->m);
-                data_->connections_[channel->get_fd()] = conn;
-            }
-        }
+        auto stream = std::dynamic_pointer_cast<StreamTransport>(conn);
+        Channel *channel = stream ? stream->stream_channel() : nullptr;
 
         const InetAddress &addr = conn->get_remote_address();
-        Channel *channel = nullptr;
-
-        if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
-            channel = stream->stream_channel();
-        }
-
         if (channel) {
             LOG_INFO("new connection, ip: {}, port: {}, fd: {}", addr.get_ip(), addr.get_port(), channel->get_fd());
         } else {
             LOG_INFO("new connection, ip: {}, port: {}", addr.get_ip(), addr.get_port());
         }
 
-        if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
-            channel = stream->stream_channel();
-            if (!channel) {
-                return;
-            }
+        if (channel) {
             std::lock_guard<std::mutex> lock(data_->m);
-            auto it = data_->channels_.find(channel->get_fd());
-            if (it == data_->channels_.end() || it->second != channel) {
-                channel->set_generation(data_->next_generation());
-            }
-            data_->poller_->update_channel(channel);
-            data_->channels_[channel->get_fd()] = channel;
-            data_->tombstoned_fds_.erase(channel->get_fd());
+            data_->connections_[channel->get_fd()] = conn;
+            data_->register_channel_locked(channel);
         }
     }
 
@@ -308,14 +323,7 @@ namespace yuan::net
                 return;
             }
             LOG_INFO("channel closed, fd: {}", fd);
-            data_->poller_->remove_channel(channel);
-            data_->channels_.erase(it);
-            data_->tombstoned_fds_.insert(fd);
-            channel->bump_generation();
-            auto conn_it = data_->connections_.find(fd);
-            if (conn_it != data_->connections_.end()) {
-                data_->connections_.erase(conn_it);
-            }
+            data_->remove_registered_channel_locked(channel, true);
         } else if (data_->tombstoned_fds_.find(fd) != data_->tombstoned_fds_.end()) {
             channel->bump_generation();
         } else {
@@ -332,25 +340,14 @@ namespace yuan::net
         std::lock_guard<std::mutex> lock(data_->m);
         const int fd = channel->get_fd();
         if (!channel->has_events()) {
-            auto it = data_->channels_.find(fd);
-            if (it != data_->channels_.end() && it->second == channel) {
-                data_->poller_->remove_channel(channel);
-                data_->channels_.erase(it);
-                data_->tombstoned_fds_.insert(fd);
-                channel->bump_generation();
-            } else if (data_->tombstoned_fds_.find(fd) != data_->tombstoned_fds_.end()) {
+            if (!data_->remove_registered_channel_locked(channel, false) &&
+                data_->tombstoned_fds_.find(fd) != data_->tombstoned_fds_.end()) {
                 channel->bump_generation();
             }
             return;
         }
 
-        auto it = data_->channels_.find(fd);
-        if (it == data_->channels_.end() || it->second != channel) {
-            channel->set_generation(data_->next_generation());
-        }
-        data_->channels_[fd] = channel;
-        data_->tombstoned_fds_.erase(fd);
-        data_->poller_->update_channel(channel);
+        data_->register_channel_locked(channel);
     }
 
     void EventLoop::wakeup()

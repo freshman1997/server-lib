@@ -1,5 +1,5 @@
 #include "sftp/ssh_file_system.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 #include <algorithm>
 #include <array>
@@ -92,7 +92,7 @@ namespace yuan::net::ssh
 
         int last_fs_error() noexcept
         {
-            return yuan::app::GetLastSystemError();
+            return yuan::platform::GetLastSystemError();
         }
 
         bool seek_file(std::FILE * file, uint64_t offset)
@@ -383,7 +383,7 @@ namespace yuan::net::ssh
             if (!create_file) {
                 const int err = last_fs_error();
                 result.status = errno_to_status(err);
-                result.status_message = yuan::app::DescribeNativeError(err);
+                result.status_message = yuan::platform::DescribeNativeError(err);
                 return result;
             }
             std::fclose(create_file);
@@ -404,7 +404,7 @@ namespace yuan::net::ssh
         if (!file) {
             const int err = last_fs_error();
             result.status = errno_to_status(err);
-            result.status_message = yuan::app::DescribeNativeError(err);
+            result.status_message = yuan::platform::DescribeNativeError(err);
             return result;
         }
 
@@ -466,7 +466,7 @@ namespace yuan::net::ssh
         if (!seek_file(it->second.file, offset)) {
             const int err = last_fs_error();
             result.status = errno_to_status(err);
-            result.status_message = yuan::app::DescribeNativeError(err);
+            result.status_message = yuan::platform::DescribeNativeError(err);
             return result;
         }
 
@@ -475,7 +475,7 @@ namespace yuan::net::ssh
         if (count == 0 && std::ferror(it->second.file)) {
             const int err = last_fs_error();
             result.status = errno_to_status(err);
-            result.status_message = yuan::app::DescribeNativeError(err);
+            result.status_message = yuan::platform::DescribeNativeError(err);
             return result;
         }
 
@@ -512,7 +512,7 @@ namespace yuan::net::ssh
         if (!seek_file(state.file, write_offset)) {
             const int err = last_fs_error();
             result.status = errno_to_status(err);
-            result.status_message = yuan::app::DescribeNativeError(err);
+            result.status_message = yuan::platform::DescribeNativeError(err);
             return result;
         }
 
@@ -521,7 +521,7 @@ namespace yuan::net::ssh
         if (written != len) {
             const int err = last_fs_error();
             result.status = errno_to_status(err);
-            result.status_message = written == 0 ? yuan::app::DescribeNativeError(err) : "Short write";
+            result.status_message = written == 0 ? yuan::platform::DescribeNativeError(err) : "Short write";
             return result;
         }
 
@@ -630,7 +630,7 @@ namespace yuan::net::ssh
             if (::chown(fs_path.c_str(), sftp_uid_to_native(attrs.uid), sftp_gid_to_native(attrs.gid)) != 0) {
                 const int err = last_fs_error();
                 result.status = errno_to_status(err);
-                result.status_message = yuan::app::DescribeNativeError(err);
+                result.status_message = yuan::platform::DescribeNativeError(err);
                 return result;
             }
         }
@@ -672,7 +672,7 @@ namespace yuan::net::ssh
                 SshFsSimpleResult result;
                 const int err = last_fs_error();
                 result.status = errno_to_status(err);
-                result.status_message = yuan::app::DescribeNativeError(err);
+                result.status_message = yuan::platform::DescribeNativeError(err);
                 return result;
             }
             path_attrs.flags &= ~SSH_FILEXFER_ATTR_UIDGID;

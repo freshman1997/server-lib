@@ -7,6 +7,8 @@
 #include "ssh_config.h"
 #include "ssh_session.h"
 #include "ssh_server.h"
+#include "base/owner_ptr.h"
+
 #include <algorithm>
 
 namespace yuan::net::ssh
@@ -20,12 +22,6 @@ namespace yuan::net::ssh
             std::string originator_host;
             uint16_t originator_port = 0;
         };
-
-        template <typename T>
-        T *ptr_of(std::unique_ptr<T> &owner)
-        {
-            return &*owner;
-        }
 
         std::optional<DirectTcpipOpenData> decode_direct_tcpip_open_data(const SshChannelOpenMessage &msg)
         {
@@ -202,7 +198,7 @@ namespace yuan::net::ssh
         channel->set_remote_max_packet(max_packet_size);
         channel->set_state(SshChannel::State::open);
 
-        auto *ptr = ptr_of(channel);
+        auto *ptr = yuan::base::owner_ptr(channel);
         std::lock_guard<std::mutex> lock(channels_mutex_);
         channels_.emplace(local_id, std::move(channel));
         return ptr;
@@ -212,7 +208,7 @@ namespace yuan::net::ssh
     {
         std::lock_guard<std::mutex> lock(channels_mutex_);
         auto it = channels_.find(local_id);
-        return it != channels_.end() ? ptr_of(it->second) : nullptr;
+        return it != channels_.end() ? yuan::base::owner_ptr(it->second) : nullptr;
     }
 
     SshChannel *SshConnectionManager::find_channel_by_remote(uint32_t remote_id)
@@ -223,7 +219,7 @@ namespace yuan::net::ssh
                         ch
                     ] : channels_) {
             if (ch->remote_id() == remote_id) {
-                return ptr_of(ch);
+                return yuan::base::owner_ptr(ch);
             }
         }
         return nullptr;
@@ -280,7 +276,7 @@ namespace yuan::net::ssh
         channel->set_remote_max_packet(msg.maximum_packet_size);
         channel->set_state(SshChannel::State::open);
 
-        if (!effective_handler->on_channel_open(session_, msg.channel_type, ptr_of(channel))) {
+        if (!effective_handler->on_channel_open(session_, msg.channel_type, yuan::base::owner_ptr(channel))) {
             return build_channel_open_failure(msg.sender_channel,
                                               SshChannelOpenFailureReason::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED,
                                               "Channel open denied");
@@ -313,7 +309,7 @@ namespace yuan::net::ssh
                                                   "Target blocked by permitopen");
             }
 
-            if (!effective_handler->on_direct_tcpip(session_, ptr_of(channel),
+            if (!effective_handler->on_direct_tcpip(session_, yuan::base::owner_ptr(channel),
                                                     open_data->target_host, open_data->target_port)) {
                 return build_channel_open_failure(msg.sender_channel,
                                                   SshChannelOpenFailureReason::SSH_OPEN_ADMINISTRATIVELY_PROHIBITED,
@@ -334,7 +330,7 @@ namespace yuan::net::ssh
                                               "Unknown channel type: " + msg.channel_type);
         }
 
-        auto *ptr = ptr_of(channel);
+        auto *ptr = yuan::base::owner_ptr(channel);
         {
             std::lock_guard<std::mutex> lock(channels_mutex_);
             channels_.emplace(local_id, std::move(channel));
@@ -569,7 +565,7 @@ namespace yuan::net::ssh
                         channel->terminal_session_state().subsystem_requested = true;
                         if (it != subsystem_factories_.end()) {
                             auto subsystem_handler = it->second();
-                            auto *raw = ptr_of(subsystem_handler);
+                            auto *raw = yuan::base::owner_ptr(subsystem_handler);
                             channel->set_handler(std::move(subsystem_handler));
                             raw->on_open(channel);
                         }
@@ -1041,7 +1037,7 @@ namespace yuan::net::ssh
             if (it == channels_.end()) {
                 return false;
             }
-            channel = ptr_of(it->second);
+            channel = yuan::base::owner_ptr(it->second);
             channel->set_handler(std::move(handler));
         }
         return channel != nullptr;

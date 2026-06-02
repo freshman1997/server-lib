@@ -77,6 +77,50 @@ struct SupervisorStateEvent : public ApplicationEvent
     bool shutdown_started = false;
 };
 
+inline std::size_t normalized_runtime_worker_count(const RuntimeContext &context) noexcept
+{
+    return context.runtime_worker_count == 0
+        ? context.worker_threads
+        : context.runtime_worker_count;
+}
+
+inline std::size_t normalized_service_instance_count(const RuntimeContext &context) noexcept
+{
+    return context.service_instance_count == 0
+        ? 1
+        : context.service_instance_count;
+}
+
+inline void populate_application_event(ApplicationEvent &event, const RuntimeContext &context)
+{
+    event.app_name = context.app_name;
+    event.run_mode = context.run_mode;
+    event.worker_threads = context.worker_threads;
+    event.runtime_worker_count = normalized_runtime_worker_count(context);
+    event.worker_index = context.worker_index;
+    event.is_worker_process = context.is_worker_process;
+    event.active_service_name = context.active_service_name;
+    event.service_index = context.service_index;
+    event.service_instance_index = context.service_instance_index;
+    event.service_instance_count = normalized_service_instance_count(context);
+    event.listener_reuse_port = context.listener_reuse_port;
+}
+
+inline ApplicationEvent make_application_event(const RuntimeContext &context)
+{
+    ApplicationEvent event;
+    populate_application_event(event, context);
+    return event;
+}
+
+inline ServiceEvent make_service_event(const RuntimeContext &context, const std::string &service_name)
+{
+    ServiceEvent event;
+    populate_application_event(event, context);
+    event.service_name = service_name;
+    return event;
+}
+
 } // namespace yuan::app
 
 #endif

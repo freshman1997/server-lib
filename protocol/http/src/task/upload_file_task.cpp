@@ -5,7 +5,7 @@
 #include "net/channel/channel.h"
 #include "net/connection/connection.h"
 #include "net/connection/stream_transport.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 #include <algorithm>
 #include <cstring>
@@ -140,8 +140,8 @@ namespace yuan::net::http
             return true;
         }
 
-        const int err = yuan::app::GetLastNativeError();
-        if (yuan::app::IsNativeRetryableError(err)) {
+        const int err = yuan::platform::GetLastNativeError();
+        if (yuan::platform::IsNativeRetryableError(err)) {
             if (write_timeout_ms_ > 0) {
                 const uint64_t now_ms = base::time::steady_now_ms();
                 if (stalled_since_ms_ == 0) {

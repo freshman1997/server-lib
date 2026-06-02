@@ -3,7 +3,7 @@ project(RtcpProto)
 
 file(GLOB_RECURSE RTCP_SRC "./src/*.cpp")
 
-add_library(RtcpProto STATIC ${RTCP_SRC})
+add_library(RtcpProto ${RTCP_SRC})
 target_link_libraries(RtcpProto PUBLIC Core RtcProto)
 target_include_directories(RtcpProto PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"

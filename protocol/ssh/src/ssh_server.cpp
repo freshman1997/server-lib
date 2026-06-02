@@ -4,6 +4,8 @@
 #include "auth/ssh_auth_keyboard_interactive.h"
 #include "connection/ssh_port_forwarding.h"
 #include "crypto/ssh_crypto_openssl.h"
+#include "base/owner_ptr.h"
+
 #if YUAN_ENABLE_SSH_SFTP
 #include "sftp/ssh_sftp_subsystem.h"
 #endif
@@ -19,15 +21,6 @@
 
 namespace yuan::net::ssh
 {
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-    }
-
     namespace
     {
         bool contains_token_ci(const std::string & text, std::string_view token)
@@ -140,7 +133,7 @@ namespace yuan::net::ssh
                 file_system_ = std::make_unique<SshLocalFileSystem>(
                     sftp_root);
             }
-            auto *fs = ptr_of(file_system_);
+            auto *fs = yuan::base::owner_ptr(file_system_);
             register_subsystem("sftp", [fs]()->std::unique_ptr<SshChannelHandler> {
                 return std::make_unique<SshSftpSubsystem>(fs);
             });
@@ -216,7 +209,7 @@ namespace yuan::net::ssh
         std::cerr << "[ssh] session created id=" << session->session_id()
                   << " active_sessions=" << session_mgr_.session_count() << '\n';
 
-        session->transport() = SshTransport(&algo_registry_, ptr_of(crypto_), true);
+        session->transport() = SshTransport(&algo_registry_, yuan::base::owner_ptr(crypto_), true);
 
         session->set_client_connection(ctx.connection());
         session->set_runtime(ctx.runtime_view());
@@ -599,7 +592,7 @@ namespace yuan::net::ssh
             if (method_name == "password") {
                 session->authenticator().register_method(std::make_unique<SshAuthPassword>());
             } else if (method_name == "publickey") {
-                session->authenticator().register_method(std::make_unique<SshAuthPublickey>(ptr_of(crypto_)));
+                session->authenticator().register_method(std::make_unique<SshAuthPublickey>(yuan::base::owner_ptr(crypto_)));
             } else if (method_name == "keyboard-interactive") {
                 session->authenticator().register_method(std::make_unique<SshAuthKeyboardInteractive>());
             }

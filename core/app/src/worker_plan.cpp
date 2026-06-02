@@ -8,14 +8,21 @@ namespace yuan::app
 namespace
 {
 
-std::size_t normalized_worker_count(RuntimeWorkerConfig config)
-{
-    return config.worker_count == 0 ? 1 : config.worker_count;
-}
-
 std::size_t normalized_instance_count(const ServicePlacement &placement)
 {
     return placement.instances == 0 ? 1 : placement.instances;
+}
+
+std::size_t estimate_dedicated_worker_count(const std::vector<ServiceDefinition> &definitions)
+{
+    std::size_t dedicated_worker_count = 0;
+    for (const auto &definition : definitions) {
+        const auto &placement = definition.descriptor.placement;
+        if (placement.mode == PlacementMode::dedicated) {
+            dedicated_worker_count += normalized_instance_count(placement);
+        }
+    }
+    return dedicated_worker_count;
 }
 
 void assign_instance(WorkerPlan &worker,
@@ -38,9 +45,9 @@ std::vector<WorkerPlan> build_worker_plan(
     RuntimeWorkerConfig config,
     const std::vector<ServiceDefinition> &definitions)
 {
-    const auto data_worker_count = normalized_worker_count(config);
+    const auto data_worker_count = normalized_worker_count(config.worker_count);
     std::vector<WorkerPlan> workers;
-    workers.reserve(data_worker_count + definitions.size());
+    workers.reserve(data_worker_count + estimate_dedicated_worker_count(definitions));
 
     for (std::size_t i = 0; i < data_worker_count; ++i) {
         workers.push_back(WorkerPlan{i, data_worker_count, false, {}});

@@ -6,6 +6,7 @@
 #include "net/async/async_listener_host.h"
 #include "server/context.h"
 #include "server/server_file_stream.h"
+#include "base/owner_ptr.h"
 
 #include <cassert>
 #include <filesystem>
@@ -13,15 +14,6 @@
 
 namespace yuan::net::ftp
 {
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(const std::shared_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-    }
-
     namespace
     {
         std::string normalize_dir(const std::string &dir)
@@ -82,7 +74,7 @@ namespace yuan::net::ftp
     FtpSession::FtpSession(const std::shared_ptr<Connection> &conn, FtpApp *app, WorkMode mode, bool keepUtilSent, bool async_mode)
         : work_mode_(mode), keep_util_sent_(keepUtilSent), close_(false), async_mode_(async_mode), conn_owner_(conn)
     {
-        context_.conn_ = ptr_of(conn_owner_);
+        context_.conn_ = yuan::base::owner_ptr(conn_owner_);
         context_.app_ = app;
         if (!async_mode_) {
             context_.conn_->set_connection_handler(make_non_owning_handler(this));

@@ -1,29 +1,15 @@
 #include "smb_session.h"
+#include "base/owner_ptr.h"
 
 namespace yuan::net::smb
 {
-    namespace
-    {
-        template <typename T>
-        T *ptr_of(const std::shared_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-
-        template <typename T>
-        T *ptr_of(const std::unique_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-    }
-
     SmbSession::SmbSession(uint64_t session_id, Connection * conn)
         : session_id_(session_id), conn_(conn)
     {
     }
 
     SmbSession::SmbSession(uint64_t session_id, const std::shared_ptr<Connection> &conn)
-        : session_id_(session_id), conn_owner_(conn), conn_(ptr_of(conn))
+        : session_id_(session_id), conn_owner_(conn), conn_(yuan::base::owner_ptr(conn))
     {
     }
 
@@ -113,7 +99,7 @@ namespace yuan::net::smb
         std::lock_guard<std::mutex> lock(mutex_);
         uint64_t sid = next_session_id_.fetch_add(1);
         auto session = std::make_unique<SmbSession>(sid, conn);
-        auto *ptr = ptr_of(session);
+        auto *ptr = yuan::base::owner_ptr(session);
         sessions_[sid] = std::move(session);
         return ptr;
     }
@@ -123,7 +109,7 @@ namespace yuan::net::smb
         std::lock_guard<std::mutex> lock(mutex_);
         uint64_t sid = next_session_id_.fetch_add(1);
         auto session = std::make_unique<SmbSession>(sid, conn);
-        auto *ptr = ptr_of(session);
+        auto *ptr = yuan::base::owner_ptr(session);
         sessions_[sid] = std::move(session);
         return ptr;
     }
@@ -133,7 +119,7 @@ namespace yuan::net::smb
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = sessions_.find(session_id);
         if (it != sessions_.end()) {
-            return ptr_of(it->second);
+            return yuan::base::owner_ptr(it->second);
         }
         return nullptr;
     }

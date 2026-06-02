@@ -11,7 +11,7 @@
 #include "net/poller/poll_poller.h"
 #include "net/channel/channel.h"
 #include "logger.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 namespace yuan::net
 {
@@ -97,7 +97,7 @@ namespace yuan::net
 #endif
         if (ret < 0) {
 #ifdef _WIN32
-            LOG_WARN("poll poller failed, ret: {}, wsa_error: {}, fds: {}", ret, app::GetLastNativeError(), data_->fds_.size());
+            LOG_WARN("poll poller failed, ret: {}, wsa_error: {}, fds: {}", ret, platform::GetLastNativeError(), data_->fds_.size());
 #else
             LOG_WARN("poll poller failed, ret: {}", ret);
 #endif

@@ -16,7 +16,7 @@ target_link_libraries(release_nas_server PUBLIC App ServerServiceNas)
 target_include_directories(release_nas_server PUBLIC
     "${CMAKE_SOURCE_DIR}"
 )
-if (UNIX AND NOT APPLE)
+if (YUAN_GLOBAL_STATIC_LINK AND UNIX AND NOT APPLE)
     target_link_options(release_nas_server PRIVATE "-static-libgcc" "-static-libstdc++")
 endif()
 set_target_properties(release_nas_server PROPERTIES

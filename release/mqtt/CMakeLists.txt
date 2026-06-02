@@ -18,7 +18,7 @@ target_include_directories(release_mqtt_server PUBLIC
     "${CMAKE_SOURCE_DIR}/protocol/mqtt/include"
     "${CMAKE_SOURCE_DIR}/server/services/include"
 )
-if (UNIX AND NOT APPLE)
+if (YUAN_GLOBAL_STATIC_LINK AND UNIX AND NOT APPLE)
     target_link_options(release_mqtt_server PRIVATE "-static-libgcc" "-static-libstdc++")
 endif()
 set_target_properties(release_mqtt_server PROPERTIES

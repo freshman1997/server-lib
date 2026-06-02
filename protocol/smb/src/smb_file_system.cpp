@@ -1,6 +1,6 @@
 #include "smb_file_system.h"
 #include "protocol/smb2_codec.h"
-#include "native_platform.h"
+#include "platform/native_platform.h"
 
 #include <algorithm>
 #include <cctype>
@@ -188,7 +188,7 @@ namespace yuan::net::smb
             for (;;) {
                 const int fd = has_mode ? ::open(path, flags, mode) : ::open(path, flags);
                 if (fd >= 0 ||
-                    yuan::app::ClassifyNativeError(yuan::app::GetLastSystemError()) != yuan::app::NativeError::interrupted) {
+                    yuan::platform::ClassifyNativeError(yuan::platform::GetLastSystemError()) != yuan::platform::NativeError::interrupted) {
                     return fd;
                 }
             }
@@ -199,7 +199,7 @@ namespace yuan::net::smb
             for (;;) {
                 const int ret = ::fstat(fd, st);
                 if (ret == 0 ||
-                    yuan::app::ClassifyNativeError(yuan::app::GetLastSystemError()) != yuan::app::NativeError::interrupted) {
+                    yuan::platform::ClassifyNativeError(yuan::platform::GetLastSystemError()) != yuan::platform::NativeError::interrupted) {
                     return ret;
                 }
             }
@@ -210,7 +210,7 @@ namespace yuan::net::smb
             for (;;) {
                 const int ret = ::close(fd);
                 if (ret == 0 ||
-                    yuan::app::ClassifyNativeError(yuan::app::GetLastSystemError()) != yuan::app::NativeError::interrupted) {
+                    yuan::platform::ClassifyNativeError(yuan::platform::GetLastSystemError()) != yuan::platform::NativeError::interrupted) {
                     return ret;
                 }
             }
@@ -221,7 +221,7 @@ namespace yuan::net::smb
             for (;;) {
                 const ssize_t ret = ::pread(fd, buf, count, offset);
                 if (ret >= 0 ||
-                    yuan::app::ClassifyNativeError(yuan::app::GetLastSystemError()) != yuan::app::NativeError::interrupted) {
+                    yuan::platform::ClassifyNativeError(yuan::platform::GetLastSystemError()) != yuan::platform::NativeError::interrupted) {
                     return ret;
                 }
             }
@@ -232,7 +232,7 @@ namespace yuan::net::smb
             for (;;) {
                 const ssize_t ret = ::pwrite(fd, buf, count, offset);
                 if (ret >= 0 ||
-                    yuan::app::ClassifyNativeError(yuan::app::GetLastSystemError()) != yuan::app::NativeError::interrupted) {
+                    yuan::platform::ClassifyNativeError(yuan::platform::GetLastSystemError()) != yuan::platform::NativeError::interrupted) {
                     return ret;
                 }
             }
@@ -243,7 +243,7 @@ namespace yuan::net::smb
             for (;;) {
                 const int ret = ::fsync(fd);
                 if (ret == 0 ||
-                    yuan::app::ClassifyNativeError(yuan::app::GetLastSystemError()) != yuan::app::NativeError::interrupted) {
+                    yuan::platform::ClassifyNativeError(yuan::platform::GetLastSystemError()) != yuan::platform::NativeError::interrupted) {
                     return ret;
                 }
             }
@@ -254,7 +254,7 @@ namespace yuan::net::smb
             for (;;) {
                 const int ret = ::ftruncate(fd, len);
                 if (ret == 0 ||
-                    yuan::app::ClassifyNativeError(yuan::app::GetLastSystemError()) != yuan::app::NativeError::interrupted) {
+                    yuan::platform::ClassifyNativeError(yuan::platform::GetLastSystemError()) != yuan::platform::NativeError::interrupted) {
                     return ret;
                 }
             }
@@ -389,7 +389,7 @@ namespace yuan::net::smb
                                     nullptr, creation, attrs, nullptr);
         if (handle == INVALID_HANDLE_VALUE) {
             result.success = false;
-            const int err = yuan::app::GetLastSystemError();
+            const int err = yuan::platform::GetLastSystemError();
             switch (err) {
             case ERROR_FILE_NOT_FOUND:
             case ERROR_PATH_NOT_FOUND:
@@ -447,7 +447,7 @@ namespace yuan::net::smb
 
             int fd = open_with_eintr_retry(full_path.c_str(), O_RDONLY | O_DIRECTORY, 0, false);
             if (fd < 0) {
-                const int err = yuan::app::GetLastSystemError();
+                const int err = yuan::platform::GetLastSystemError();
                 switch (err) {
                 case ENOENT:
                     result.status = NtStatus::OBJECT_NAME_NOT_FOUND;
@@ -518,7 +518,7 @@ namespace yuan::net::smb
         int fd = open_with_eintr_retry(full_path.c_str(), flags, 0644, true);
         if (fd < 0) {
             result.success = false;
-            const int err = yuan::app::GetLastSystemError();
+            const int err = yuan::platform::GetLastSystemError();
             switch (err) {
             case ENOENT:
                 result.status = NtStatus::OBJECT_NAME_NOT_FOUND;
@@ -1026,8 +1026,8 @@ namespace yuan::net::smb
         fl.l_start = static_cast<off_t>(offset);
         fl.l_len = static_cast<off_t>(length);
         if (fcntl(h->fd, F_SETLK, &fl) != 0) {
-            const auto kind = yuan::app::ClassifyNativeError(yuan::app::GetLastSystemError());
-            result.status = (kind == yuan::app::NativeError::would_block || kind == yuan::app::NativeError::permission_denied)
+            const auto kind = yuan::platform::ClassifyNativeError(yuan::platform::GetLastSystemError());
+            result.status = (kind == yuan::platform::NativeError::would_block || kind == yuan::platform::NativeError::permission_denied)
                 ? NtStatus::LOCK_NOT_GRANTED
                 : NtStatus::UNSUCCESSFUL;
             return result;

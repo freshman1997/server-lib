@@ -7,31 +7,26 @@
 #include "content_type.h"
 #include "packet.h"
 #include "content/content_parser.h"
+#include "base/owner_ptr.h"
 
 namespace yuan::net::http
 {
     namespace
     {
         template <typename T>
-        T *ptr_of(const std::shared_ptr<T> &owner)
-        {
-            return owner ? const_cast<T *>(&*owner) : nullptr;
-        }
-
-        template <typename T>
         T *back_ptr_of(const std::vector<std::shared_ptr<T> > &owners)
         {
             if (owners.empty()) {
                 return nullptr;
             }
-            return ptr_of(owners.back());
+            return yuan::base::owner_ptr(owners.back());
         }
     }
 
     ContentParserFactory::ContentParserFactory()
     {
         auto text = std::make_shared<TextContentParser>();
-        text_parser_instance = ptr_of(text);
+        text_parser_instance = yuan::base::owner_ptr(text);
         owned_parsers_.push_back(text);
 
         parsers_[ContentType::text_plain] = text_parser_instance;
@@ -63,13 +58,13 @@ namespace yuan::net::http
             auto *raw_parser = packet->get_pre_content_parser();
             if (!raw_parser) {
                 auto owned = std::make_shared<ChunkedContentParser>();
-                chunked_parser = ptr_of(owned);
+                chunked_parser = yuan::base::owner_ptr(owned);
                 packet->set_pre_content_parser(std::move(owned));
             } else {
                 chunked_parser = dynamic_cast<ChunkedContentParser *>(raw_parser);
                 if (!chunked_parser) {
                     auto owned = std::make_shared<ChunkedContentParser>();
-                    chunked_parser = ptr_of(owned);
+                    chunked_parser = yuan::base::owner_ptr(owned);
                     packet->set_pre_content_parser(std::move(owned));
                 }
             }
