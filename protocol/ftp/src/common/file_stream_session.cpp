@@ -205,6 +205,11 @@ namespace yuan::net::ftp
         quit();
     }
 
+    void FtpFileStreamSession::on_input_shutdown(Connection & conn)
+    {
+        (void)conn;
+    }
+
     void FtpFileStreamSession::on_timer(timer::Timer * timer)
     {
         (void)timer;

@@ -77,7 +77,7 @@ namespace yuan::net::bit_torrent
         }
 
         if (config_.enable_dht) {
-            dht_node_ = std::make_unique<DhtNode>();
+            dht_node_ = std::make_shared<DhtNode>();
             if (dht_node_->start(config, runtime, external_ip_)) {
                 if (!dht_cache_path_.empty()) {
                     dht_node_->load_routing_table(dht_cache_path_);

@@ -56,14 +56,12 @@ namespace yuan::net::http
         }
         if (auto owner = ctx->connection()) {
             conn_owner_ = owner;
-            conn_ = owner.get();
-        } else {
-            conn_ = ctx->get_connection();
         }
-        if (!conn_) {
+        auto conn = conn_owner_.lock();
+        if (!conn) {
             return;
         }
-        conn_id_ = reinterpret_cast<uint64_t>(conn_);
+        conn_id_ = reinterpret_cast<uint64_t>(conn.get());
         active_.store(true);
 
         // Configure SSE response headers.
@@ -72,11 +70,10 @@ namespace yuan::net::http
         resp_->add_header("Content-Type", "text/event-stream");
         resp_->add_header("Cache-Control", "no-cache, no-transform");
         resp_->add_header("Connection", "keep-alive");
-        resp_->add_header("X-Accel-Buffering", "no"); // 禁用Nginx缓冲
+        resp_->add_header("X-Accel-Buffering", "no");
         resp_->add_header("Access-Control-Allow-Origin", "*");
 
-        // 先发送响应头
-        resp_->pack_and_send(conn_);
+        resp_->pack_and_send(conn.get());
     }
 
     SseConnection::~SseConnection()
@@ -123,19 +120,16 @@ namespace yuan::net::http
 
     std::string SseConnection::get_peer_ip() const
     {
-        auto owner = conn_owner_.lock();
-        auto *conn = owner ? owner.get() : conn_;
-        if (conn)
-            return conn->get_remote_address().get_ip();
-        return {};
+        auto conn = conn_owner_.lock();
+        if (!conn)
+            return {};
     }
 
     void SseConnection::do_send(const std::string & payload)
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        auto owner = conn_owner_.lock();
-        auto *conn = owner ? owner.get() : conn_;
+        auto conn = conn_owner_.lock();
         if (!active_.load() || !conn || !conn->is_connected()) {
             active_.store(false);
             return;

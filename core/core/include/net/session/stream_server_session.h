@@ -129,42 +129,42 @@ namespace yuan::net
             }
         }
 
-        void on_connected(const std::shared_ptr<Connection> &conn) override
+        void on_connected(Connection &conn) override
         {
-            if (connected_cb_ && conn) {
-                ConnectionContext ctx(conn);
+            if (connected_cb_) {
+                ConnectionContext ctx(&conn);
                 connected_cb_(ctx);
             }
         }
 
-        void on_read(const std::shared_ptr<Connection> &conn) override
+        void on_read(Connection &conn) override
         {
-            if (read_cb_ && conn) {
-                ConnectionContext ctx(conn);
+            if (read_cb_) {
+                ConnectionContext ctx(&conn);
                 read_cb_(ctx);
             }
         }
 
-        void on_write(const std::shared_ptr<Connection> &conn) override
+        void on_write(Connection &conn) override
         {
-            if (write_cb_ && conn) {
-                ConnectionContext ctx(conn);
+            if (write_cb_) {
+                ConnectionContext ctx(&conn);
                 write_cb_(ctx);
             }
         }
 
-        void on_close(const std::shared_ptr<Connection> &conn) override
+        void on_close(Connection &conn) override
         {
-            if (close_cb_ && conn) {
-                ConnectionContext ctx(conn);
+            if (close_cb_) {
+                ConnectionContext ctx(&conn);
                 close_cb_(ctx);
             }
         }
 
-        void on_error(const std::shared_ptr<Connection> &conn) override
+        void on_error(Connection &conn) override
         {
-            if (error_cb_ && conn) {
-                ConnectionContext ctx(conn);
+            if (error_cb_) {
+                ConnectionContext ctx(&conn);
                 error_cb_(ctx);
             }
         }

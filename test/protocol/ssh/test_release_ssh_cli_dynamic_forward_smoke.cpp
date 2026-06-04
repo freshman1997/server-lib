@@ -389,7 +389,7 @@ int main()
         }
     }
 
-    if (!cli_done.load(std::memory_order_relaxed)) {
+    if (!cli_done.load(std::memory_order_relaxed) && !forwarded_exchange_ok) {
         std::cerr << "release_ssh_cli dynamic-forward command timed out in smoke harness" << std::endl;
     }
 

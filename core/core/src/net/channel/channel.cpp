@@ -60,13 +60,10 @@ namespace yuan::net
     void Channel::on_event()
     {
         SelectHandler *handler = handler_;
-        if (uses_handler_owner_) {
+        if (!handler && uses_handler_owner_) {
             auto locked = handler_owner_.lock();
             handler = yuan::base::owner_ptr(locked);
             handler_ = handler;
-            if (!handler) {
-                return;
-            }
         }
 
         if (!handler) {

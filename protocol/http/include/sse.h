@@ -70,7 +70,6 @@ namespace yuan::net::http
         HttpRequest *req_;
         HttpResponse *resp_;
         std::weak_ptr<Connection> conn_owner_;
-        Connection *conn_ = nullptr;
         uint64_t conn_id_ = 0;
         std::atomic<bool> active_{false};
         mutable std::mutex mutex_;

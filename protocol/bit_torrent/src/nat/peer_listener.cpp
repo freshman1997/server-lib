@@ -105,51 +105,43 @@ namespace yuan::net::bit_torrent
         pieces_have_ = nullptr;
     }
 
-    void PeerListener::on_connected(const std::shared_ptr<net::Connection> &conn)
+    void PeerListener::on_connected(net::Connection &conn)
     {
-        if (!conn) {
-            return;
-        }
-
         if (static_cast<int32_t>(pending_.size()) >= max_pending_) {
-            conn->close();
+            conn.close();
             return;
         }
 
         auto peer = std::make_shared<PeerConnection>();
 
         PendingInbound pending;
-        pending.conn = conn;
+        pending.conn = conn.shared_from_this();
         pending.peer = peer;
         pending_.push_back(pending);
     }
 
-    void PeerListener::on_error(const std::shared_ptr<net::Connection> &conn)
+    void PeerListener::on_error(net::Connection &conn)
     {
-        if (!conn) {
-            return;
-        }
+        auto conn_ptr = conn.shared_from_this();
         for (auto it = pending_.begin(); it != pending_.end(); ++it) {
-            if (it->conn == conn) {
+            if (it->conn == conn_ptr) {
                 pending_.erase(it);
                 break;
             }
         }
-        conn->close();
+        conn.close();
     }
 
-    void PeerListener::on_read(const std::shared_ptr<net::Connection> &conn)
+    void PeerListener::on_read(net::Connection &conn)
     {
-        if (!conn) {
-            return;
-        }
-        auto byte_buffer = conn->take_input_byte_buffer();
+        auto byte_buffer = conn.take_input_byte_buffer();
         if (byte_buffer.readable_bytes() == 0)
             return;
 
+        auto conn_ptr = conn.shared_from_this();
         PendingInbound *entry = nullptr;
         for (auto &p : pending_) {
-            if (p.conn == conn) {
+            if (p.conn == conn_ptr) {
                 entry = &p;
                 break;
             }
@@ -161,22 +153,20 @@ namespace yuan::net::bit_torrent
         entry->inbound_buffer.append(span.data(), span.size());
 
         if (entry->inbound_buffer.readable_bytes() >= HandshakeMessage::HANDSHAKE_SIZE) {
-            handle_inbound_handshake(*conn, entry->peer);
+            handle_inbound_handshake(conn, entry->peer);
         }
     }
 
-    void PeerListener::on_write(const std::shared_ptr<net::Connection> &conn)
+    void PeerListener::on_write(net::Connection &conn)
     {
         (void)conn;
     }
 
-    void PeerListener::on_close(const std::shared_ptr<net::Connection> &conn)
+    void PeerListener::on_close(net::Connection &conn)
     {
-        if (!conn) {
-            return;
-        }
+        auto conn_ptr = conn.shared_from_this();
         for (auto it = pending_.begin(); it != pending_.end(); ++it) {
-            if (it->conn == conn) {
+            if (it->conn == conn_ptr) {
                 pending_.erase(it);
                 break;
             }

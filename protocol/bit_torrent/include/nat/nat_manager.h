@@ -121,7 +121,7 @@ namespace yuan::net::bit_torrent
         std::unique_ptr<PeerListener> peer_listener_;
         std::unique_ptr<UpnpManager> upnp_manager_;
         std::unique_ptr<UtpManager> utp_manager_;
-        std::unique_ptr<DhtNode> dht_node_;
+        std::shared_ptr<DhtNode> dht_node_;
         std::unique_ptr<PexManager> pex_manager_;
         std::unique_ptr<MetadataManager> metadata_manager_;
         std::unordered_map<std::string, std::shared_ptr<PeerConnection> > utp_peers_;

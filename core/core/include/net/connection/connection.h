@@ -9,13 +9,15 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string_view>
 #include <vector>
+
+#include "base/spinlock.h"
 
 namespace yuan::buffer
 {
@@ -62,7 +64,7 @@ namespace yuan::net
     class Connection : public SelectHandler, public std::enable_shared_from_this<Connection>
     {
     public:
-        using EventWaiter = std::function<void(const std::shared_ptr<Connection> &)>;
+        using EventWaiter = std::function<void(Connection &)>;
         struct EventWaiterRegistration
         {
             ConnectionEvent event;
@@ -154,7 +156,7 @@ namespace yuan::net
                 return 0;
             }
 
-            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(waiter_mutex_);
             const auto id = next_waiter_id_++;
             waiter_count_.fetch_add(1, std::memory_order_release);
             waiters_.push_back(WaiterEntry{ id, event, std::move(waiter) });
@@ -166,7 +168,7 @@ namespace yuan::net
             if (waiter_count_.load(std::memory_order_acquire) == 0) {
                 return false;
             }
-            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(waiter_mutex_);
             return std::any_of(waiters_.begin(), waiters_.end(), [event](const auto &entry) {
                 return entry.event == event;
             });
@@ -178,7 +180,7 @@ namespace yuan::net
                 return;
             }
 
-            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(waiter_mutex_);
             const auto old_size = waiters_.size();
             waiters_.erase(std::remove_if(waiters_.begin(), waiters_.end(), [id](const auto &entry) {
                 return entry.id == id;
@@ -196,7 +198,7 @@ namespace yuan::net
                 return;
             }
 
-            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(waiter_mutex_);
             ids.reserve(ids.size() + count);
             std::size_t added = 0;
             for (std::size_t i = 0; i < count; ++i) {
@@ -225,7 +227,7 @@ namespace yuan::net
             }
 
             const std::size_t limit = std::min(count, ids_capacity);
-            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(waiter_mutex_);
             std::size_t added = 0;
             for (std::size_t i = 0; i < limit; ++i) {
                 auto &registration = registrations[i];
@@ -250,7 +252,7 @@ namespace yuan::net
                 return;
             }
 
-            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(waiter_mutex_);
             const auto old_size = waiters_.size();
             waiters_.erase(std::remove_if(waiters_.begin(), waiters_.end(), [&ids](const auto &entry) {
                 return std::find(ids.begin(), ids.end(), entry.id) != ids.end();
@@ -267,7 +269,7 @@ namespace yuan::net
                 return;
             }
 
-            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(waiter_mutex_);
             const auto old_size = waiters_.size();
             waiters_.erase(std::remove_if(waiters_.begin(), waiters_.end(), [ids, count](const auto &entry) {
                 for (std::size_t i = 0; i < count; ++i) {
@@ -285,19 +287,19 @@ namespace yuan::net
 
         ::yuan::buffer::ByteBuffer get_input_byte_buffer() const
         {
-            std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(input_buffer_mutex_);
             return input_buffer_.copy_readable();
         }
 
         size_t input_readable_bytes() const noexcept
         {
-            std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(input_buffer_mutex_);
             return input_buffer_.readable_bytes();
         }
 
         ::yuan::buffer::ByteBuffer take_input_byte_buffer()
         {
-            std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(input_buffer_mutex_);
             auto byte_buffer = input_buffer_.copy_readable();
             input_buffer_.clear();
             shrink_input_buffer_if_idle();
@@ -306,7 +308,7 @@ namespace yuan::net
 
         ::yuan::buffer::ByteBuffer take_and_clear_input_byte_buffer()
         {
-            std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(input_buffer_mutex_);
             auto byte_buffer = std::move(input_buffer_);
             input_buffer_.clear();
             shrink_input_buffer_if_idle();
@@ -315,14 +317,14 @@ namespace yuan::net
 
         void clear_input_buffer()
         {
-            std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(input_buffer_mutex_);
             input_buffer_.clear();
             shrink_input_buffer_if_idle();
         }
 
         std::size_t output_readable_bytes() const noexcept
         {
-            std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
             return output_buffer_.readable_bytes();
         }
 
@@ -349,7 +351,7 @@ namespace yuan::net
         void append_output(std::string_view text)
         {
             if (!text.empty()) {
-                std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+                std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
                 if (!can_append_output_locked(text.size())) {
                     return;
                 }
@@ -360,7 +362,7 @@ namespace yuan::net
         void append_output(const char *data, std::size_t size)
         {
             if (data && size > 0) {
-                std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+                std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
                 if (!can_append_output_locked(size)) {
                     return;
                 }
@@ -372,7 +374,7 @@ namespace yuan::net
         {
             const auto span = buffer.readable_span();
             if (!span.empty()) {
-                std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+                std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
                 if (!can_append_output_locked(span.size())) {
                     return;
                 }
@@ -387,7 +389,7 @@ namespace yuan::net
                 return;
             }
 
-            std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(input_buffer_mutex_);
             max_packet_size_ = size;
             if (input_buffer_.readable_bytes() == 0) {
                 shrink_input_buffer_if_idle();
@@ -489,7 +491,7 @@ namespace yuan::net
 
             std::vector<EventWaiter> callbacks;
             {
-                std::lock_guard<std::mutex> lock(waiter_mutex_);
+                std::lock_guard<yuan::base::Spinlock> lock(waiter_mutex_);
                 std::size_t removed = 0;
                 for (auto it = waiters_.begin(); it != waiters_.end();) {
                     if (it->event == event) {
@@ -509,25 +511,49 @@ namespace yuan::net
                 return;
             }
 
-            auto self = shared_from_this();
             for (auto &callback : callbacks) {
                 if (callback) {
-                    callback(self);
+                    callback(*this);
                 }
             }
         }
 
         void clear_event_waiters()
         {
-            std::lock_guard<std::mutex> lock(waiter_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(waiter_mutex_);
             waiters_.clear();
             waiter_count_.store(0, std::memory_order_release);
         }
 
+    public:
+        std::coroutine_handle<> pending_read_coroutine() const noexcept
+        {
+            return pending_read_coroutine_;
+        }
+
+        void set_pending_read_coroutine(std::coroutine_handle<> handle) noexcept
+        {
+            pending_read_coroutine_ = handle;
+        }
+
+        void clear_pending_read_coroutine() noexcept
+        {
+            pending_read_coroutine_ = nullptr;
+        }
+
+        std::coroutine_handle<> take_pending_read_coroutine() noexcept
+        {
+            auto h = pending_read_coroutine_;
+            pending_read_coroutine_ = nullptr;
+            return h;
+        }
+
+    protected:
+
         size_t max_packet_size_;
-        mutable std::mutex input_buffer_mutex_;
+        mutable yuan::base::Spinlock input_buffer_mutex_;
         ::yuan::buffer::ByteBuffer input_buffer_;
-        mutable std::mutex output_buffer_mutex_;
+        mutable yuan::base::Spinlock output_buffer_mutex_;
         ::yuan::buffer::BufferChain output_buffer_;
         std::atomic_size_t max_output_buffer_size_{0};
         std::atomic_bool output_limit_exceeded_{false};
@@ -540,10 +566,11 @@ namespace yuan::net
             EventWaiter callback;
         };
 
-        mutable std::mutex waiter_mutex_;
+        mutable yuan::base::Spinlock waiter_mutex_;
         std::atomic_uint32_t waiter_count_{0};
         uint64_t next_waiter_id_ = 1;
         std::vector<WaiterEntry> waiters_;
+        std::coroutine_handle<> pending_read_coroutine_;
     };
 
     using ConnectionPtr = std::shared_ptr<Connection>;

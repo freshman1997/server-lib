@@ -22,19 +22,21 @@ namespace yuan::net::ftp
 
     public:
         virtual void on_connected(const std::shared_ptr<Connection> &conn);
-        virtual void on_connected(Connection &conn);
+        virtual void on_connected(Connection &conn) override;
 
         virtual void on_error(const std::shared_ptr<Connection> &conn);
-        virtual void on_error(Connection &conn);
+        virtual void on_error(Connection &conn) override;
 
         virtual void on_read(const std::shared_ptr<Connection> &conn);
-        virtual void on_read(Connection &conn);
+        virtual void on_read(Connection &conn) override;
 
         virtual void on_write(const std::shared_ptr<Connection> &conn);
-        virtual void on_write(Connection &conn);
+        virtual void on_write(Connection &conn) override;
 
         virtual void on_close(const std::shared_ptr<Connection> &conn);
-        virtual void on_close(Connection &conn);
+        virtual void on_close(Connection &conn) override;
+
+        virtual void on_input_shutdown(Connection &conn) override;
 
     public:
         virtual bool start(const InetAddress &addr) = 0;

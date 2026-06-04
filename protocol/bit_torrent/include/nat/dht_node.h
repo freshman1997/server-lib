@@ -73,7 +73,7 @@ namespace yuan::net::bit_torrent
     };
 
     // Main DHT node implementation
-    class DhtNode : public net::ConnectionHandler
+    class DhtNode : public net::ConnectionHandler, public std::enable_shared_from_this<DhtNode>
     {
     public:
         using PeerCallback = std::function<void(const std::vector<PeerAddress> &peers)>;
@@ -139,11 +139,11 @@ namespace yuan::net::bit_torrent
         bool load_routing_table(const std::string &path);
 
         // ConnectionHandler interface (for datagram endpoint events)
-        void on_connected(const std::shared_ptr<net::Connection> &conn) override;
-        void on_error(const std::shared_ptr<net::Connection> &conn) override;
-        void on_read(const std::shared_ptr<net::Connection> &conn) override;
-        void on_write(const std::shared_ptr<net::Connection> &conn) override;
-        void on_close(const std::shared_ptr<net::Connection> &conn) override;
+        void on_connected(net::Connection &conn) override;
+        void on_error(net::Connection &conn) override;
+        void on_read(net::Connection &conn) override;
+        void on_write(net::Connection &conn) override;
+        void on_close(net::Connection &conn) override;
 
     private:
         // Routing table management

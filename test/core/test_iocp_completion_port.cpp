@@ -32,33 +32,37 @@
         std::atomic_bool closed{false};
         std::atomic_bool closed_state{false};
 
-        void on_connected(const std::shared_ptr<yuan::net::Connection> &) override
+        void on_connected(yuan::net::Connection &) override
         {
             connected.store(true, std::memory_order_release);
         }
 
-        void on_error(const std::shared_ptr<yuan::net::Connection> &) override
+        void on_error(yuan::net::Connection &) override
         {
         }
 
-        void on_read(const std::shared_ptr<yuan::net::Connection> &conn) override
+        void on_read(yuan::net::Connection &conn) override
         {
-            if (conn && conn->input_readable_bytes() >= 5) {
-                (void)conn->take_input_byte_buffer();
+            if (conn.input_readable_bytes() >= 5) {
+                (void)conn.take_input_byte_buffer();
                 readable.store(true, std::memory_order_release);
             }
         }
 
-        void on_write(const std::shared_ptr<yuan::net::Connection> &) override
+        void on_write(yuan::net::Connection &) override
         {
             writable.store(true, std::memory_order_release);
         }
 
-        void on_close(const std::shared_ptr<yuan::net::Connection> &conn) override
+        void on_close(yuan::net::Connection &conn) override
         {
-            closed_state.store(conn && conn->get_connection_state() == yuan::net::ConnectionState::closed,
+            closed_state.store(conn.get_connection_state() == yuan::net::ConnectionState::closed,
                                std::memory_order_release);
             closed.store(true, std::memory_order_release);
+        }
+
+        void on_input_shutdown(yuan::net::Connection &) override
+        {
         }
     };
 
@@ -997,29 +1001,29 @@ namespace
             {
             }
 
-            void on_connected(const std::shared_ptr<yuan::net::Connection> &) override
+            void on_connected(yuan::net::Connection &) override
             {
             }
 
-            void on_error(const std::shared_ptr<yuan::net::Connection> &) override
+            void on_error(yuan::net::Connection &) override
             {
             }
 
-            void on_read(const std::shared_ptr<yuan::net::Connection> &) override
+            void on_read(yuan::net::Connection &) override
             {
             }
 
-            void on_write(const std::shared_ptr<yuan::net::Connection> &) override
+            void on_write(yuan::net::Connection &) override
             {
             }
 
-            void on_close(const std::shared_ptr<yuan::net::Connection> &) override
+            void on_close(yuan::net::Connection &) override
             {
             }
 
-            void on_input_shutdown(const std::shared_ptr<yuan::net::Connection> &conn) override
+            void on_input_shutdown(yuan::net::Connection &conn) override
             {
-                if (conn && conn->input_shutdown()) {
+                if (conn.input_shutdown()) {
                     input_shutdown_.store(true, std::memory_order_release);
                     cv_.notify_all();
                 }

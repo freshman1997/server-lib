@@ -1,6 +1,7 @@
 #include "redis_client.h"
 #include "coroutine/sync_wait.h"
 #include "event/event_loop.h"
+#include "internal/cmd_builder.h"
 #include "internal/coroutine.h"
 #include "internal/redis_registry.h"
 #include "net/connection/connection_factory.h"
@@ -346,14 +347,14 @@ namespace yuan::redis
 
     bool RedisClient::wait_in_flight(uint32_t timeout_ms)
     {
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-        while (impl_->in_flight_.load(std::memory_order_acquire) > 0) {
-            if (std::chrono::steady_clock::now() >= deadline) {
-                return false;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::unique_lock<std::mutex> lock(impl_->in_flight_mutex_);
+        if (timeout_ms == 0)
+        {
+            return impl_->in_flight_.load(std::memory_order_acquire) == 0;
         }
-        return true;
+        return impl_->in_flight_cv_.wait_for(lock,
+            std::chrono::milliseconds(timeout_ms),
+            [this]() { return impl_->in_flight_.load(std::memory_order_acquire) == 0; });
     }
 
     RedisClientStats RedisClient::stats() const
@@ -367,6 +368,108 @@ namespace yuan::redis
         out.reconnect_successes = impl_->reconnect_successes_.load(std::memory_order_acquire);
         out.command_timeouts = impl_->command_timeouts_.load(std::memory_order_acquire);
         out.protocol_errors = impl_->protocol_errors_.load(std::memory_order_acquire);
+        out.commands_total = impl_->commands_total_.load(std::memory_order_acquire);
+        out.command_errors = impl_->command_errors_.load(std::memory_order_acquire);
+        out.total_latency_us = impl_->total_latency_us_.load(std::memory_order_acquire);
+        out.health_checks = impl_->health_checks_.load(std::memory_order_acquire);
+        out.health_check_successes = impl_->health_check_successes_.load(std::memory_order_acquire);
+        out.health_check_failures = impl_->health_check_failures_.load(std::memory_order_acquire);
         return out;
+    }
+
+    HealthCheckResult RedisClient::try_ping()
+    {
+        if (!impl_->operation_mutex_.try_lock()) {
+            return HealthCheckResult::busy;
+        }
+        std::lock_guard<std::recursive_mutex> lock(impl_->operation_mutex_, std::adopt_lock);
+
+        if (impl_->in_flight_.load(std::memory_order_acquire) > 0) {
+            return HealthCheckResult::busy;
+        }
+
+        if (!is_connected()) {
+            return HealthCheckResult::disconnected;
+        }
+
+        const int hc_timeout = impl_->option_.health_check_timeout_ms_ > 0
+            ? impl_->option_.health_check_timeout_ms_ : 2000;
+        auto result = impl_->execute_command(make_cmd("ping"), hc_timeout);
+
+        if (!result) {
+            return HealthCheckResult::failed;
+        }
+
+        return HealthCheckResult::ok;
+    }
+
+    void RedisClient::start_health_check()
+    {
+        if (impl_->option_.health_check_interval_ms_ <= 0) {
+            return;
+        }
+
+        impl_->health_check_closing_.store(false, std::memory_order_release);
+        impl_->health_checks_.store(0, std::memory_order_release);
+        impl_->health_check_successes_.store(0, std::memory_order_release);
+        impl_->health_check_failures_.store(0, std::memory_order_release);
+
+        auto client_ptr = shared_from_this();
+        impl_->health_check_thread_ = std::thread([this, client_ptr]() {
+            while (!impl_->health_check_closing_.load(std::memory_order_acquire)) {
+                {
+                    std::unique_lock<std::mutex> lock(impl_->health_check_mutex_);
+                    if (impl_->health_check_cv_.wait_for(lock,
+                        std::chrono::milliseconds(impl_->option_.health_check_interval_ms_),
+                        [this]() { return impl_->health_check_closing_.load(std::memory_order_acquire); })) {
+                        break;
+                    }
+                }
+
+                if (impl_->health_check_closing_.load(std::memory_order_acquire)) {
+                    break;
+                }
+
+                impl_->health_checks_.fetch_add(1, std::memory_order_release);
+
+                if (!is_connected()) {
+                    if (ensure_connected()) {
+                        impl_->health_check_successes_.fetch_add(1, std::memory_order_release);
+                    } else {
+                        impl_->health_check_failures_.fetch_add(1, std::memory_order_release);
+                    }
+                    continue;
+                }
+
+                auto result = try_ping();
+                switch (result) {
+                case HealthCheckResult::ok:
+                    impl_->health_check_successes_.fetch_add(1, std::memory_order_release);
+                    break;
+                case HealthCheckResult::busy:
+                    impl_->health_check_successes_.fetch_add(1, std::memory_order_release);
+                    break;
+                case HealthCheckResult::disconnected:
+                    if (ensure_connected()) {
+                        impl_->health_check_successes_.fetch_add(1, std::memory_order_release);
+                    } else {
+                        impl_->health_check_failures_.fetch_add(1, std::memory_order_release);
+                    }
+                    break;
+                case HealthCheckResult::failed:
+                    impl_->health_check_failures_.fetch_add(1, std::memory_order_release);
+                    break;
+                }
+            }
+        });
+    }
+
+    void RedisClient::stop_health_check()
+    {
+        impl_->health_check_closing_.store(true, std::memory_order_release);
+        impl_->health_check_cv_.notify_all();
+        if (impl_->health_check_thread_.joinable()) {
+            impl_->health_check_thread_.join();
+        }
     }
 }

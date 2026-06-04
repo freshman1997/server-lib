@@ -113,40 +113,32 @@ namespace yuan::net::shadowsocks
     {
     }
 
-    void ShadowsocksServer::UdpRelayHandler::on_connected(const std::shared_ptr<Connection> &conn)
+    void ShadowsocksServer::UdpRelayHandler::on_connected(Connection &conn)
     {
         (void)conn;
     }
 
-    void ShadowsocksServer::UdpRelayHandler::on_read(const std::shared_ptr<Connection> &conn)
+    void ShadowsocksServer::UdpRelayHandler::on_read(Connection &conn)
     {
-        if (conn) {
-            server_.on_udp_datagram(&*conn);
-        }
+        server_.on_udp_datagram(&conn);
     }
 
-    void ShadowsocksServer::UdpRelayHandler::on_write(const std::shared_ptr<Connection> &conn)
+    void ShadowsocksServer::UdpRelayHandler::on_write(Connection &conn)
     {
         (void)conn;
     }
 
-    void ShadowsocksServer::UdpRelayHandler::on_error(const std::shared_ptr<Connection> &conn)
+    void ShadowsocksServer::UdpRelayHandler::on_error(Connection &conn)
     {
-        if (!conn) {
-            return;
-        }
-        auto it = server_.udp_conn_to_client_.find(&*conn);
+        auto it = server_.udp_conn_to_client_.find(&conn);
         if (it != server_.udp_conn_to_client_.end()) {
             server_.close_udp_association(it->second);
         }
     }
 
-    void ShadowsocksServer::UdpRelayHandler::on_close(const std::shared_ptr<Connection> &conn)
+    void ShadowsocksServer::UdpRelayHandler::on_close(Connection &conn)
     {
-        if (!conn) {
-            return;
-        }
-        auto it = server_.udp_conn_to_client_.find(&*conn);
+        auto it = server_.udp_conn_to_client_.find(&conn);
         if (it != server_.udp_conn_to_client_.end()) {
             server_.close_udp_association(it->second);
         }

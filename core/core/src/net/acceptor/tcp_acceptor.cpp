@@ -93,7 +93,6 @@ namespace yuan::net
             channel_->clear_handler();
         }
         if (conn_handler_owner_) {
-            conn_handler_owner_->on_close(std::shared_ptr<Connection>{});
             conn_handler_owner_.reset();
         }
     }
@@ -167,7 +166,7 @@ namespace yuan::net
                 handler_->on_new_connection(conn);
             }
             if (conn_handler_owner_) {
-                conn_handler_owner_->on_connected(conn);
+                conn_handler_owner_->on_connected(*conn);
             }
             notify_accept_waiters(conn);
         }

@@ -671,28 +671,22 @@ namespace
     class YuanRawConnectionHandler final : public yuan::net::ConnectionHandler
     {
     public:
-        void on_connected(const std::shared_ptr<yuan::net::Connection> &) override
+        void on_connected(yuan::net::Connection &) override
         {
         }
 
-        void on_error(const std::shared_ptr<yuan::net::Connection> &conn) override
+        void on_error(yuan::net::Connection &conn) override
         {
-            if (conn) {
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    buffers_.erase(conn.get());
-                }
-                conn->close();
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                buffers_.erase(&conn);
             }
+            conn.close();
         }
 
-        void on_read(const std::shared_ptr<yuan::net::Connection> &conn) override
+        void on_read(yuan::net::Connection &conn) override
         {
-            if (!conn) {
-                return;
-            }
-
-            auto input = conn->take_input_byte_buffer();
+            auto input = conn.take_input_byte_buffer();
             const auto span = input.readable_span();
             if (span.empty()) {
                 return;
@@ -701,7 +695,7 @@ namespace
             std::size_t completed = 0;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                auto &buffer = buffers_[conn.get()];
+                auto &buffer = buffers_[&conn];
                 buffer.append(span.data(), span.size());
                 std::string::size_type pos = std::string::npos;
                 while ((pos = buffer.find("\r\n\r\n")) != std::string::npos) {
@@ -711,24 +705,25 @@ namespace
             }
 
             for (std::size_t i = 0; i < completed; ++i) {
-                conn->append_output(kHttpResponse);
+                conn.append_output(kHttpResponse);
             }
             if (completed > 0) {
-                conn->flush();
+                conn.flush();
             }
         }
 
-        void on_write(const std::shared_ptr<yuan::net::Connection> &) override
+        void on_write(yuan::net::Connection &) override
         {
         }
 
-        void on_close(const std::shared_ptr<yuan::net::Connection> &conn) override
+        void on_close(yuan::net::Connection &conn) override
         {
-            if (!conn) {
-                return;
-            }
             std::lock_guard<std::mutex> lock(mutex_);
-            buffers_.erase(conn.get());
+            buffers_.erase(&conn);
+        }
+
+        void on_input_shutdown(yuan::net::Connection &) override
+        {
         }
 
     private:

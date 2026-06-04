@@ -54,68 +54,74 @@ namespace yuan::net::ssh
             return;
         }
 
-        auto connect_task = [
-            this,
-            channel,
-            rv,
-            state = state_,
-            channel_remote_id = channel->remote_id()
-        ]()->coroutine::Task<void>
-        {
-            auto result = co_await coroutine::async_connect(
-                rv, target_host_, target_port_, 10000);
-
-            if (state->closed.load(std::memory_order_relaxed)) {
-                close_target_connection(result.connection);
-                co_return;
-            }
-
-            if (result.result != coroutine::ConnectResult::success || !result.connection) {
-                channel->set_state(SshChannel::State::closing);
-                co_return;
-            }
-
-            {
-                std::lock_guard<std::mutex> lock(state->conn_mutex);
-                state->target_conn = result.connection;
-            }
-
-            auto target_conn = get_target_connection(state);
-            if (!target_conn) {
-                co_return;
-            }
-
-            rv.register_connection(target_conn, nullptr);
-            if (auto stream = std::dynamic_pointer_cast<StreamTransport>(target_conn)) {
-                if (auto *ch = stream->stream_channel()) {
-                    rv.update_channel(ch);
-                }
-            }
-
-            std::vector<uint8_t> staged_input;
-            bool staged_eof = false;
-            {
-                std::lock_guard<std::mutex> lock(state->pending_input_mutex);
-                staged_input.swap(state->pending_input);
-                staged_eof = state->pending_eof;
-                state->pending_eof = false;
-            }
-
-            if (!staged_input.empty()) {
-                ::yuan::buffer::ByteBuffer pending_buf(staged_input.size());
-                pending_buf.append(staged_input.data(), staged_input.size());
-                target_conn->write_and_flush(pending_buf);
-            }
-            if (staged_eof) {
-                target_conn->shutdown_write();
-            }
-
-            co_await relay_from_target(session_, channel_remote_id, state);
-        };
-
-        auto t = connect_task();
+        auto t = connect_and_relay(rv,
+                                   session_,
+                                   state_,
+                                   target_host_,
+                                   target_port_,
+                                   channel->remote_id());
         t.resume();
         t.detach();
+    }
+
+    coroutine::Task<void> SshDirectTcpipHandler::connect_and_relay(
+        coroutine::RuntimeView rv,
+        SshSession * session,
+        std::shared_ptr<SshDirectTcpipHandler::SharedState> state,
+        std::string target_host,
+        uint16_t target_port,
+        uint32_t channel_remote_id)
+    {
+        auto result = co_await coroutine::async_connect(
+            rv, target_host, target_port, 10000);
+
+        if (state->closed.load(std::memory_order_relaxed)) {
+            close_target_connection(result.connection);
+            co_return;
+        }
+
+        if (result.result != coroutine::ConnectResult::success || !result.connection) {
+            if (session) {
+                if (auto *ch = session->connection_manager().find_channel_by_remote(channel_remote_id)) {
+                    ch->set_state(SshChannel::State::closing);
+                }
+            }
+            co_return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(state->conn_mutex);
+            state->target_conn = result.connection;
+        }
+
+        auto target_conn = get_target_connection(state);
+        if (!target_conn) {
+            co_return;
+        }
+
+        if (rv.event_loop()) {
+            rv.event_loop()->on_new_connection(target_conn);
+        }
+
+        std::vector<uint8_t> staged_input;
+        bool staged_eof = false;
+        {
+            std::lock_guard<std::mutex> lock(state->pending_input_mutex);
+            staged_input.swap(state->pending_input);
+            staged_eof = state->pending_eof;
+            state->pending_eof = false;
+        }
+
+        if (!staged_input.empty()) {
+            ::yuan::buffer::ByteBuffer pending_buf(staged_input.size());
+            pending_buf.append(staged_input.data(), staged_input.size());
+            target_conn->write_and_flush(pending_buf);
+        }
+        if (staged_eof) {
+            target_conn->shutdown_write();
+        }
+
+        co_await relay_from_target(session, channel_remote_id, std::move(state));
     }
 
     void SshDirectTcpipHandler::on_data(SshChannel * channel, const std::vector<uint8_t> & data)

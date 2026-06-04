@@ -27,6 +27,11 @@ if (YUAN_BUILD_TESTS)
     add_test(NAME redis_cli_stress COMMAND redisCliStressTest)
 endif()
 
+option(YREDIS_BUILD_CLI "Build the yredis CLI tool" ON)
+if (YREDIS_BUILD_CLI)
+    add_subdirectory(cli)
+endif()
+
 option(REDIS_CLI_BUILD_MANUAL_TESTS "Build interactive redis_cli smoke programs" OFF)
 if (REDIS_CLI_BUILD_MANUAL_TESTS)
     add_executable(redisCliTest ./test/TestRedis.cpp)

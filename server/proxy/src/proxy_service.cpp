@@ -1882,7 +1882,7 @@ namespace yuan::server
 
         auto accept_loop = [this, publish_state_transition]() -> yuan::coroutine::Task<void> {
             auto *listener_runtime = data_->listener.runtime();
-            auto *acceptor = data_->listener.acceptor();
+            auto acceptor = data_->listener.acceptor();
             if (!listener_runtime || !acceptor) {
                 co_return;
             }
@@ -1890,7 +1890,7 @@ namespace yuan::server
             auto rv = listener_runtime->runtime_view();
             while (!stop_requested_.load(std::memory_order_relaxed)) {
                 reap_finished_sessions();
-                auto conn = co_await yuan::coroutine::async_accept(rv, acceptor);
+                auto conn = co_await yuan::coroutine::async_accept(rv, acceptor.get());
                 if (!conn) {
                     break;
                 }

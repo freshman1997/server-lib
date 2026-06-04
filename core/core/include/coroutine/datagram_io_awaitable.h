@@ -69,17 +69,17 @@ namespace yuan::coroutine
 
             handle_ = handle;
             net::Connection::EventWaiterRegistration registrations[] = {
-                { net::ConnectionEvent::readable, [this](const std::shared_ptr<net::Connection> &) {
+                { net::ConnectionEvent::readable, [this](net::Connection &) {
                     if (!completed_) {
                         complete(IoStatus::success);
                     }
                 } },
-                { net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
+                { net::ConnectionEvent::error, [this](net::Connection &) {
                     if (!completed_) {
                         complete(IoStatus::connection_error);
                     }
                 } },
-                { net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
+                { net::ConnectionEvent::closed, [this](net::Connection &) {
                     if (!completed_) {
                         complete(IoStatus::connection_closed);
                     }

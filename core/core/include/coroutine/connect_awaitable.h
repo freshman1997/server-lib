@@ -86,19 +86,19 @@ namespace yuan::coroutine
             }
 
             net::Connection::EventWaiterRegistration registrations[] = {
-                { net::ConnectionEvent::connected, [this](const std::shared_ptr<net::Connection> &) {
+                { net::ConnectionEvent::connected, [this](net::Connection &) {
                     if (!completed_) {
                         result_.result = ConnectResult::success;
                         resume();
                     }
                 } },
-                { net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
+                { net::ConnectionEvent::error, [this](net::Connection &) {
                     if (!completed_) {
                         result_.result = ConnectResult::connection_error;
                         resume();
                     }
                 } },
-                { net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
+                { net::ConnectionEvent::closed, [this](net::Connection &) {
                     if (!completed_) {
                         result_.result = ConnectResult::connection_error;
                         resume();

@@ -50,6 +50,11 @@ namespace yuan::net
         std::shared_ptr<Connection> connection_;
     };
 
+    // Non-owning view of a Connection. The caller must guarantee that the
+    // underlying Connection remains alive for the entire lifetime of this view.
+    // Do not store a ConnectionView across coroutine suspension points or
+    // thread boundaries where the Connection may be destroyed asynchronously.
+    // Use ConnectionHandle (shared_ptr-backed) for lifetime-safe references.
     class ConnectionView
     {
     public:

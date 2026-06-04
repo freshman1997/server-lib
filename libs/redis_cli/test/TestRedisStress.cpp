@@ -3,6 +3,9 @@
 #include "logger.h"
 #include "value/int_value.h"
 #include "platform/native_platform.h"
+#include "coroutine/runtime_view.h"
+#include "coroutine/sync_wait.h"
+#include "internal/redis_registry.h"
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -49,6 +52,39 @@ namespace
     bool env_exists(const char *name)
     {
         return std::getenv(name) != nullptr;
+    }
+
+    void test_async_commands(
+        std::shared_ptr<yuan::redis::RedisClient> &async_client,
+        yuan::coroutine::RuntimeView runtime)
+    {
+        const std::string ack = "stress:async_cmd";
+        (void)async_client->del({ack});
+
+        auto ping_t = [&]() -> yuan::redis::SimpleTask<std::shared_ptr<yuan::redis::RedisValue>> {
+            co_return co_await async_client->ping_async();
+        };
+        auto ping_r = yuan::coroutine::sync_wait(runtime, ping_t());
+        assert(ping_r && ping_r->get_type() == yuan::redis::resp_status);
+
+        (void)async_client->set(ack, "v1");
+
+        auto get_t = [&]() -> yuan::redis::SimpleTask<std::shared_ptr<yuan::redis::RedisValue>> {
+            co_return co_await async_client->get_async(ack);
+        };
+        auto get_r = yuan::coroutine::sync_wait(runtime, get_t());
+        assert(get_r && get_r->get_type() == yuan::redis::resp_string);
+
+        auto del_r = async_client->del({ack});
+        assert(del_r && del_r->get_type() == yuan::redis::resp_int);
+
+        auto cmd_t = [&]() -> yuan::redis::SimpleTask<std::shared_ptr<yuan::redis::RedisValue>> {
+            co_return co_await async_client->command_async("PING", {});
+        };
+        auto cmd_r = yuan::coroutine::sync_wait(runtime, cmd_t());
+        assert(cmd_r && cmd_r->get_type() == yuan::redis::resp_status);
+
+        std::cout << "STRESS_RESULT async_commands=ok" << std::endl;
     }
 
     std::string env_string(const char *name, const std::string &fallback)
@@ -476,6 +512,8 @@ int main()
     {
         Option hc_option = option;
         hc_option.name_ = "redis-stress-healthcheck";
+        hc_option.health_check_interval_ms_ = 500;
+        hc_option.health_check_timeout_ms_ = 1000;
         RedisClientPool hc_pool;
         if (hc_pool.init(hc_option, 2)) {
             auto hc1 = hc_pool.get_round_robin_client();
@@ -483,29 +521,268 @@ int main()
             assert(hc1 && hc1->is_connected());
             assert(hc2 && hc2->is_connected());
 
+            auto before_stats = hc_pool.stats();
+            assert(before_stats.health_checks == 0);
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(700));
+            auto after_one = hc_pool.stats();
+            assert(after_one.health_checks > 0);
+            assert(after_one.health_check_successes > 0);
+            std::cout << "STRESS_RESULT health_check_thread checks=" << after_one.health_checks
+                      << " successes=" << after_one.health_check_successes
+                      << " failures=" << after_one.health_check_failures
+                      << " skips=" << after_one.health_check_skips
+                      << std::endl;
+
             hc1->disconnect();
             assert(!hc1->is_connected());
-            const auto degraded = hc_pool.stats();
-            assert(degraded.size == 2);
-            assert(degraded.unhealthy >= 1);
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(700));
+            auto after_disconnect = hc_pool.stats();
+            assert(after_disconnect.health_checks > after_one.health_checks);
+            assert(after_disconnect.health_check_successes > after_one.health_check_successes
+                || after_disconnect.health_check_failures > after_one.health_check_failures);
+            std::cout << "STRESS_RESULT health_check_after_disconnect checks=" << after_disconnect.health_checks
+                      << " successes=" << after_disconnect.health_check_successes
+                      << " failures=" << after_disconnect.health_check_failures
+                      << " skips=" << after_disconnect.health_check_skips
+                      << std::endl;
 
             auto hc_again = hc_pool.get_round_robin_client();
             assert(hc_again);
             if (hc_again->is_connected()) {
                 assert_ok(hc_again->ping(), "PING after health check reconnect");
-                const auto recovered = hc_pool.stats();
-                std::cout << "STRESS_RESULT health_check=reconnected_and_ping_ok" << std::endl;
-                std::cout << "STRESS_RESULT health_stats size=" << recovered.size
-                          << " connected=" << recovered.connected
-                          << " unhealthy=" << recovered.unhealthy
-                          << std::endl;
-            } else {
-                std::cout << "STRESS_RESULT health_check=reconnect_failed" << std::endl;
             }
 
             hc_pool.close();
+            std::cout << "STRESS_RESULT health_check_thread=ok" << std::endl;
         } else {
             std::cout << "STRESS_RESULT health_check=skipped_pool_init_failed" << std::endl;
+        }
+    }
+
+    {
+        Option try_ping_option = option;
+        try_ping_option.name_ = "redis-stress-try-ping";
+        auto tp_client = connect_client(try_ping_option);
+        if (tp_client && tp_client->is_connected()) {
+            auto tp_result = tp_client->try_ping();
+            assert(tp_result == HealthCheckResult::ok);
+            std::cout << "STRESS_RESULT try_ping_connected=ok" << std::endl;
+
+            tp_client->disconnect();
+            assert(!tp_client->is_connected());
+            auto tp_disconnected = tp_client->try_ping();
+            assert(tp_disconnected == HealthCheckResult::disconnected);
+            std::cout << "STRESS_RESULT try_ping_disconnected=disconnected" << std::endl;
+
+            tp_client->close();
+        } else {
+            std::cout << "STRESS_RESULT try_ping=skipped_no_connection" << std::endl;
+        }
+    }
+
+    {
+        Option hc_client_option = option;
+        hc_client_option.name_ = "redis-stress-client-hc";
+        hc_client_option.health_check_interval_ms_ = 500;
+        hc_client_option.health_check_timeout_ms_ = 2000;
+        hc_client_option.reconnect_ = true;
+        hc_client_option.max_reconnect_retries_ = 3;
+        hc_client_option.reconnect_delay_ms_ = 50;
+        auto hc_client = connect_client(hc_client_option);
+        if (hc_client && hc_client->is_connected()) {
+            hc_client->start_health_check();
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(700));
+            auto after_one = hc_client->stats();
+            assert(after_one.health_checks > 0);
+            assert(after_one.health_check_successes > 0);
+            std::cout << "STRESS_RESULT client_health_check checks=" << after_one.health_checks
+                      << " successes=" << after_one.health_check_successes
+                      << " failures=" << after_one.health_check_failures
+                      << std::endl;
+
+            hc_client->disconnect();
+            assert(!hc_client->is_connected());
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(700));
+            auto after_disconnect = hc_client->stats();
+            assert(after_disconnect.health_checks > after_one.health_checks);
+            assert(hc_client->is_connected());
+            std::cout << "STRESS_RESULT client_health_check_reconnect checks=" << after_disconnect.health_checks
+                      << " successes=" << after_disconnect.health_check_successes
+                      << " failures=" << after_disconnect.health_check_failures
+                      << " connected=" << (hc_client->is_connected() ? "yes" : "no")
+                      << std::endl;
+
+            hc_client->close();
+            std::cout << "STRESS_RESULT client_health_check=ok" << std::endl;
+        } else {
+            std::cout << "STRESS_RESULT client_health_check=skipped_no_connection" << std::endl;
+        }
+    }
+
+    {
+        Option metrics_option = option;
+        metrics_option.name_ = "redis-stress-metrics";
+        auto m_client = connect_client(metrics_option);
+        if (m_client && m_client->is_connected()) {
+            const std::string m_key = prefix + "metrics:counter";
+            const std::string m_str_key = prefix + "metrics:str";
+            (void)m_client->del({m_key, m_str_key});
+
+            assert_ok(m_client->set(m_str_key, "hello"), "SET metrics str");
+            assert_ok(m_client->incr(m_key), "INCR metrics counter");
+            const auto incr_error = m_client->incr(m_str_key);
+
+            const auto m_stats = m_client->stats();
+            assert(m_stats.commands_total >= 3);
+            assert(m_stats.total_latency_us > 0);
+            assert(m_stats.avg_latency_us() > 0.0);
+            assert(m_stats.command_timeouts == 0);
+            assert(m_stats.command_errors >= 1);
+            std::cout << "STRESS_RESULT metrics"
+                      << " commands_total=" << m_stats.commands_total
+                      << " total_latency_us=" << m_stats.total_latency_us
+                      << " avg_latency_us=" << m_stats.avg_latency_us()
+                      << " command_errors=" << m_stats.command_errors
+                      << " command_timeouts=" << m_stats.command_timeouts
+                      << std::endl;
+
+            m_client->close();
+        } else {
+            std::cout << "STRESS_RESULT metrics=skipped_no_connection" << std::endl;
+        }
+    }
+
+    {
+        auto async_client = connect_client(option);
+        if (async_client && async_client->is_connected()) {
+            const std::string async_key = "stress:async";
+            (void)async_client->del({async_key});
+
+            const auto runtime = yuan::redis::RedisRegistry::get_instance()->get_coroutine_runtime();
+
+            auto async_task = [&async_client, &async_key]() -> yuan::redis::SimpleTask<std::shared_ptr<yuan::redis::RedisValue>> {
+                std::vector<yuan::redis::PipelineCommand> cmds;
+                cmds.push_back(yuan::redis::PipelineCommand::set(async_key, "async_val"));
+                cmds.push_back(yuan::redis::PipelineCommand::get(async_key));
+                cmds.push_back(yuan::redis::PipelineCommand::del({async_key}));
+                co_return co_await async_client->pipeline_async(cmds);
+            };
+
+            auto result = yuan::coroutine::sync_wait(runtime, async_task());
+            assert(result != nullptr);
+            assert(result->get_type() == yuan::redis::resp_array);
+
+            std::vector<std::string> str_cmds;
+            str_cmds.push_back("SET " + async_key + " async_str");
+            str_cmds.push_back("GET " + async_key);
+            str_cmds.push_back("DEL " + async_key);
+
+            auto str_task = [&async_client, &str_cmds]() -> yuan::redis::SimpleTask<std::shared_ptr<yuan::redis::RedisValue>> {
+                co_return co_await async_client->pipeline_async(str_cmds);
+            };
+
+            auto str_result = yuan::coroutine::sync_wait(runtime, str_task());
+            assert(str_result != nullptr);
+            assert(str_result->get_type() == yuan::redis::resp_array);
+
+            std::cout << "STRESS_RESULT async_pipeline=ok" << std::endl;
+
+            test_async_commands(async_client, runtime);
+
+            async_client->close();
+        } else {
+            std::cout << "STRESS_RESULT async_pipeline=skipped_no_connection" << std::endl;
+        }
+    }
+
+    {
+        Option wait_option = option;
+        wait_option.name_ = "redis-stress-wait";
+        wait_option.pool_wait_timeout_ms_ = 5000;
+        RedisClientPool wait_pool;
+        if (wait_pool.init(wait_option, 2)) {
+            auto wait_client = wait_pool.get_client_with_wait(0);
+            assert(wait_client && wait_client->is_connected());
+            assert_ok(wait_client->ping(), "PING with wait timeout=0");
+            std::cout << "STRESS_RESULT pool_wait_timeout0=ok" << std::endl;
+
+            auto wait_client2 = wait_pool.get_client_with_wait(3000);
+            assert(wait_client2 && wait_client2->is_connected());
+            assert_ok(wait_client2->ping(), "PING with wait timeout=3000");
+            const auto wait_stats = wait_pool.stats();
+            assert(wait_stats.wait_attempts == 0);
+            assert(wait_stats.wait_timeouts == 0);
+            std::cout << "STRESS_RESULT pool_wait_immediate=ok"
+                      << " attempts=" << wait_stats.wait_attempts
+                      << " timeouts=" << wait_stats.wait_timeouts
+                      << std::endl;
+
+            wait_pool.close();
+            auto closed_wait = wait_pool.get_client_with_wait(100);
+            assert(!closed_wait);
+            std::cout << "STRESS_RESULT pool_wait_closed=nullptr" << std::endl;
+        } else {
+            std::cout << "STRESS_RESULT pool_wait=skipped_pool_init_failed" << std::endl;
+        }
+    }
+
+    {
+        Option exhaust_option = option;
+        exhaust_option.name_ = "redis-stress-exhaust";
+        exhaust_option.reconnect_ = false;
+        RedisClientPool exhaust_pool;
+        if (exhaust_pool.init(exhaust_option, 2)) {
+            auto c1 = exhaust_pool.get_round_robin_client();
+            auto c2 = exhaust_pool.get_round_robin_client();
+            assert(c1 && c1->is_connected());
+            assert(c2 && c2->is_connected());
+            c1->disconnect();
+            c2->disconnect();
+
+            const auto exhaust_start = Clock::now();
+            auto exhaust_result = exhaust_pool.get_client_with_wait(300);
+            const auto exhaust_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                Clock::now() - exhaust_start).count();
+            assert(!exhaust_result);
+            assert(exhaust_elapsed_ms >= 250);
+            const auto exhaust_stats = exhaust_pool.stats();
+            assert(exhaust_stats.wait_attempts > 0);
+            assert(exhaust_stats.wait_timeouts > 0);
+            std::cout << "STRESS_RESULT pool_exhaust_wait"
+                      << " elapsed_ms=" << exhaust_elapsed_ms
+                      << " attempts=" << exhaust_stats.wait_attempts
+                      << " timeouts=" << exhaust_stats.wait_timeouts
+                      << std::endl;
+
+            exhaust_pool.close();
+        } else {
+            std::cout << "STRESS_RESULT pool_exhaust=skipped_pool_init_failed" << std::endl;
+        }
+    }
+
+    {
+        Option graceful_option = option;
+        graceful_option.name_ = "redis-stress-graceful";
+        graceful_option.pool_wait_timeout_ms_ = 5000;
+        RedisClientPool graceful_pool;
+        if (graceful_pool.init(graceful_option, 2)) {
+            auto gc = graceful_pool.get_round_robin_client();
+            assert(gc && gc->is_connected());
+            assert_ok(gc->ping(), "PING before graceful close");
+
+            auto stats_before = gc->stats();
+            assert(stats_before.commands_total > 0);
+
+            graceful_pool.close(100);
+            auto closed = graceful_pool.get_round_robin_client();
+            assert(!closed);
+            std::cout << "STRESS_RESULT pool_graceful_close=ok" << std::endl;
+        } else {
+            std::cout << "STRESS_RESULT pool_graceful_close=skipped_pool_init_failed" << std::endl;
         }
     }
 
@@ -514,39 +791,101 @@ int main()
         if (soak_seconds > 0) {
             Option soak_option = option;
             soak_option.name_ = "redis-soak";
+            soak_option.health_check_interval_ms_ = env_int("REDIS_SOAK_HC_INTERVAL", 3000);
+            soak_option.health_check_timeout_ms_ = 2000;
+            soak_option.pool_wait_timeout_ms_ = 5000;
+            soak_option.reconnect_ = true;
+            soak_option.max_reconnect_retries_ = 5;
+            soak_option.reconnect_delay_ms_ = 50;
+            const int soak_pool_size = env_int("REDIS_SOAK_POOL_SIZE", 4);
+            const int soak_batch = env_int("REDIS_SOAK_BATCH", 32);
+            const int soak_disconnect_interval = env_int("REDIS_SOAK_DISCONNECT_INTERVAL", 0);
+
             RedisClientPool soak_pool;
-            if (soak_pool.init(soak_option, 2)) {
+            if (soak_pool.init(soak_option, static_cast<std::size_t>(soak_pool_size))) {
                 const std::string soak_key = prefix + "soak";
+                (void)soak_pool.get_round_robin_client()->del({soak_key});
+
                 const auto soak_start = Clock::now();
                 const auto soak_deadline = soak_start + std::chrono::seconds(soak_seconds);
                 int soak_ops = 0;
                 int soak_errors = 0;
+                int soak_disconnects = 0;
                 const auto soak_rss_before = current_rss_kb();
 
                 while (Clock::now() < soak_deadline) {
-                    auto soak_client = soak_pool.get_round_robin_client();
+                    auto soak_client = soak_pool.get_client_with_wait(
+                        static_cast<uint32_t>(soak_option.pool_wait_timeout_ms_));
                     if (!soak_client) {
                         ++soak_errors;
                         std::this_thread::sleep_for(std::chrono::milliseconds(100));
                         continue;
                     }
-                    auto res = soak_client->set(soak_key, "v" + std::to_string(soak_ops));
+
+                    std::vector<PipelineCommand> cmds;
+                    cmds.reserve(static_cast<std::size_t>(soak_batch));
+                    for (int j = 0; j < soak_batch; ++j) {
+                        cmds.emplace_back("incr", std::vector<std::string>{soak_key});
+                    }
+                    auto res = soak_client->pipeline(cmds);
                     if (res) {
-                        ++soak_ops;
+                        soak_ops += soak_batch;
                     } else {
                         ++soak_errors;
+                    }
+
+                    if (soak_disconnect_interval > 0 && soak_ops > 0 &&
+                        (soak_ops / soak_batch) % soak_disconnect_interval == 0) {
+                        auto dc_client = soak_pool.get_round_robin_client();
+                        if (dc_client && dc_client->is_connected()) {
+                            dc_client->disconnect();
+                            ++soak_disconnects;
+                        }
                     }
                 }
 
                 const auto soak_rss_after = current_rss_kb();
                 const double soak_elapsed = elapsed_seconds(soak_start, Clock::now());
+                const auto soak_pool_stats = soak_pool.stats();
+                const auto soak_client_stats = soak_pool.get_round_robin_client()
+                    ? soak_pool.get_round_robin_client()->stats() : RedisClientStats{};
+                const auto rss_delta = soak_rss_after > soak_rss_before
+                    ? soak_rss_after - soak_rss_before : 0;
+
                 std::cout << "STRESS_RESULT soak_ops=" << soak_ops
                           << " soak_errors=" << soak_errors
+                          << " soak_disconnects=" << soak_disconnects
                           << " soak_seconds=" << soak_elapsed
                           << " ops_per_sec=" << (soak_ops / soak_elapsed)
                           << " rss_before_kb=" << soak_rss_before
                           << " rss_after_kb=" << soak_rss_after
+                          << " rss_delta_kb=" << rss_delta
                           << std::endl;
+
+                std::cout << "STRESS_RESULT soak_pool_stats"
+                          << " size=" << soak_pool_stats.size
+                          << " connected=" << soak_pool_stats.connected
+                          << " health_checks=" << soak_pool_stats.health_checks
+                          << " hc_successes=" << soak_pool_stats.health_check_successes
+                          << " hc_failures=" << soak_pool_stats.health_check_failures
+                          << " hc_skips=" << soak_pool_stats.health_check_skips
+                          << " wait_attempts=" << soak_pool_stats.wait_attempts
+                          << " wait_timeouts=" << soak_pool_stats.wait_timeouts
+                          << std::endl;
+
+                std::cout << "STRESS_RESULT soak_client_metrics"
+                          << " commands_total=" << soak_client_stats.commands_total
+                          << " command_errors=" << soak_client_stats.command_errors
+                          << " command_timeouts=" << soak_client_stats.command_timeouts
+                          << " avg_latency_us=" << soak_client_stats.avg_latency_us()
+                          << " reconnect_attempts=" << soak_client_stats.reconnect_attempts
+                          << " reconnect_successes=" << soak_client_stats.reconnect_successes
+                          << std::endl;
+
+                if (soak_seconds >= 30) {
+                    assert(soak_pool_stats.health_checks > 0);
+                    assert(soak_pool_stats.health_check_successes > 0);
+                }
 
                 soak_pool.close();
             }

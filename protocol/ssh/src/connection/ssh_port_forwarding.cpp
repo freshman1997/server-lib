@@ -115,8 +115,8 @@ namespace yuan::net::ssh
                 continue;
             }
 
-            auto task = [this, key = start.key, acceptor = start.acceptor.get()]() -> coroutine::Task<void> {
-                auto conn = co_await coroutine::async_accept(runtime_, acceptor);
+            auto task = [this, key = start.key, acceptor = start.acceptor]() -> coroutine::Task<void> {
+                auto conn = co_await coroutine::async_accept(runtime_, acceptor.get());
 
                 {
                     std::lock_guard<std::mutex> lock(remote_mutex_);

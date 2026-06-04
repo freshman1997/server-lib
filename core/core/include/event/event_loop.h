@@ -50,6 +50,8 @@ namespace yuan::net
 
         void post_coroutine(std::coroutine_handle<> handle) noexcept;
 
+        bool is_in_loop_thread() const noexcept;
+
         bool accepts_poll_event_for_test(const PollEvent &event) const;
 
     public:

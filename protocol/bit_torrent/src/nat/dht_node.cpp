@@ -585,7 +585,8 @@ namespace yuan::net::bit_torrent
 
         auto runtime = runtime_;
         auto alive = bootstrap_alive_;
-        std::thread t([this, nodes = std::move(nodes), runtime, alive]() {
+        auto self = shared_from_this();
+        std::thread t([self, nodes = std::move(nodes), runtime, alive]() {
             std::vector<std::pair<std::string, uint16_t>> resolved;
             for (const auto &node : nodes) {
                 if (!alive || !alive->load()) {
@@ -598,12 +599,12 @@ namespace yuan::net::bit_torrent
             }
 
             if (!resolved.empty() && alive && alive->load()) {
-                runtime->dispatch([this, resolved = std::move(resolved), alive]() {
-                    if (!alive || !alive->load() || !running_) {
+                runtime->dispatch([self, resolved = std::move(resolved), alive]() {
+                    if (!alive || !alive->load() || !self->running_) {
                         return;
                     }
                     for (const auto &node : resolved) {
-                        send_ping(node.first, node.second);
+                        self->send_ping(node.first, node.second);
                     }
                 });
             }
@@ -1192,23 +1193,23 @@ namespace yuan::net::bit_torrent
     }
 
     // ConnectionHandler stubs (DHT uses UDP)
-    void DhtNode::on_connected(const std::shared_ptr<net::Connection> &conn)
+    void DhtNode::on_connected(net::Connection &conn)
     {
         (void)conn;
     }
-    void DhtNode::on_error(const std::shared_ptr<net::Connection> &conn)
+    void DhtNode::on_error(net::Connection &conn)
     {
         (void)conn;
     }
-    void DhtNode::on_read(const std::shared_ptr<net::Connection> &conn)
+    void DhtNode::on_read(net::Connection &conn)
     {
         (void)conn;
     }
-    void DhtNode::on_write(const std::shared_ptr<net::Connection> &conn)
+    void DhtNode::on_write(net::Connection &conn)
     {
         (void)conn;
     }
-    void DhtNode::on_close(const std::shared_ptr<net::Connection> &conn)
+    void DhtNode::on_close(net::Connection &conn)
     {
         (void)conn;
     }

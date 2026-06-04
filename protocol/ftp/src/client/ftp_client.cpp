@@ -381,7 +381,7 @@ namespace yuan::net::ftp
             co_return false;
         }
 
-        auto *acceptor = active_listener_->acceptor();
+        auto acceptor = active_listener_->acceptor();
         auto *listener_channel = acceptor ? acceptor->listener_channel() : nullptr;
         if (!listener_channel) {
             active_listener_->close();

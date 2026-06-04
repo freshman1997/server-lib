@@ -1591,50 +1591,51 @@ namespace yuan::app
                 schedule_cleanup_tick();
             }
 
-            void on_connected(const std::shared_ptr<net::Connection> &conn) override
+            void on_connected(net::Connection &conn) override
             {
                 (void)conn;
             }
 
-            void on_error(const std::shared_ptr<net::Connection> &conn) override
+            void on_error(net::Connection &conn) override
             {
-                if (conn) {
-                    remove_peer_state(conn->get_remote_address().to_address_key());
-                }
+                remove_peer_state(conn.get_remote_address().to_address_key());
             }
 
-            void on_write(const std::shared_ptr<net::Connection> &conn) override
+            void on_write(net::Connection &conn) override
             {
                 (void)conn;
             }
 
-            void on_close(const std::shared_ptr<net::Connection> &conn) override
+            void on_close(net::Connection &conn) override
             {
-                if (conn) {
-                    remove_peer_state(conn->get_remote_address().to_address_key());
-                }
+                remove_peer_state(conn.get_remote_address().to_address_key());
             }
 
-            void on_read(const std::shared_ptr<net::Connection> &conn) override
+            void on_input_shutdown(net::Connection &conn) override
             {
-                if (!conn || !acceptor_) {
+                (void)conn;
+            }
+
+            void on_read(net::Connection &conn) override
+            {
+                if (!acceptor_) {
                     return;
                 }
 
                 ensure_handler();
                 if (!handler_) {
-                    conn->abort();
+                    conn.abort();
                     return;
                 }
 
-                auto packet = conn->take_input_byte_buffer();
+                auto packet = conn.take_input_byte_buffer();
                 if (packet.readable_bytes() == 0) {
                     return;
                 }
                 record_bytes_received(runtime_stats_, packet.readable_bytes());
 
-                const auto peer = conn->get_remote_address().to_address_key();
-                touch_peer_state(conn, peer);
+                const auto peer = conn.get_remote_address().to_address_key();
+                touch_peer_state(conn.shared_from_this(), peer);
                 cleanup_idle_peers();
 
                 const auto framing = effective_framing(protocol_service_);
@@ -1650,7 +1651,7 @@ namespace yuan::app
                         local_endpoint_,
                         "unsupported udp framing",
                         "udp_unsupported_framing");
-                    conn->abort();
+                    conn.abort();
                     return;
                 }
 
@@ -1667,7 +1668,7 @@ namespace yuan::app
                         local_endpoint_,
                         "udp frame too large",
                         "udp_frame_too_large");
-                    conn->abort();
+                    conn.abort();
                     return;
                 }
 
@@ -1697,7 +1698,7 @@ namespace yuan::app
                         local_endpoint_,
                         result.error_message,
                         "udp_handler_exception");
-                    conn->abort();
+                    conn.abort();
                     return;
                 }
 
@@ -1714,7 +1715,7 @@ namespace yuan::app
                             "handler returned false",
                             "udp_handler_rejected");
                     }
-                    conn->abort();
+                    conn.abort();
                 }
             }
 

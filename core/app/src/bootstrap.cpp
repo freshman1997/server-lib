@@ -659,35 +659,34 @@ bool Bootstrap::run_local_worker_process(const WorkerPlan &worker)
 
 bool Bootstrap::start_in_process_worker(const WorkerPlan &worker)
 {
-    auto worker_state = std::make_unique<InProcessWorker>();
+    auto worker_state = std::make_shared<InProcessWorker>();
     worker_state->plan = worker;
     worker_state->restart_window_started_at_ms = now_ms();
-    auto *state = worker_state.get();
     const auto base_context = application_.context();
     const auto endpoint_plan = endpoint_plan_;
 
-    state->thread = std::thread([state, worker, base_context, endpoint_plan]() {
-        auto mark_ready = [state]() {
-            state->ready.store(true, std::memory_order_release);
-            state->ready_cv.notify_all();
+    worker_state->thread = std::thread([worker_state, worker, base_context, endpoint_plan]() {
+        auto mark_ready = [worker_state]() {
+            worker_state->ready.store(true, std::memory_order_release);
+            worker_state->ready_cv.notify_all();
         };
-        auto fail = [state, &mark_ready](std::string error) {
+        auto fail = [worker_state, &mark_ready](std::string error) {
             {
-                std::lock_guard<std::mutex> lock(state->mutex);
-                state->error = std::move(error);
+                std::lock_guard<std::mutex> lock(worker_state->mutex);
+                worker_state->error = std::move(error);
             }
-            state->failed.store(true, std::memory_order_release);
-            state->running.store(false, std::memory_order_release);
+            worker_state->failed.store(true, std::memory_order_release);
+            worker_state->running.store(false, std::memory_order_release);
             mark_ready();
         };
 
         try
         {
-            state->runtime = std::make_unique<net::NetworkRuntime>();
+            worker_state->runtime = std::make_unique<net::NetworkRuntime>();
 
-            auto context = make_worker_context(base_context, worker, false, state->runtime.get(), true);
+            auto context = make_worker_context(base_context, worker, false, worker_state->runtime.get(), true);
 
-            state->application = std::make_unique<Application>(context);
+            worker_state->application = std::make_unique<Application>(context);
 
             for (const auto &instance : worker.service_instances) {
                 if (!instance.definition || !instance.definition->factory) {
@@ -703,30 +702,30 @@ bool Bootstrap::start_in_process_worker(const WorkerPlan &worker)
 
                 const auto runtime = make_service_instance_runtime(instance, endpoint_plan);
 
-                if (!state->application->add_service_instance(instance.definition->descriptor, std::move(service), runtime)) {
+                if (!worker_state->application->add_service_instance(instance.definition->descriptor, std::move(service), runtime)) {
                     fail("failed to register service '" + instance.definition->descriptor.name + "'");
                     return;
                 }
             }
 
-            if (!state->application->start()) {
+            if (!worker_state->application->start()) {
                 fail("worker-local application failed to start");
                 return;
             }
 
-            state->started.store(true, std::memory_order_release);
-            state->running.store(true, std::memory_order_release);
+            worker_state->started.store(true, std::memory_order_release);
+            worker_state->running.store(true, std::memory_order_release);
             mark_ready();
             LOG_INFO("in-process runtime worker {} started service plan '{}'",
                      worker.worker_index,
                      worker_service_summary(worker));
 
-            (void)state->runtime->run();
+            (void)worker_state->runtime->run();
 
-            state->running.store(false, std::memory_order_release);
-            if (!state->stopping.load(std::memory_order_acquire)) {
-                if (state->application) {
-                    state->application->stop();
+            worker_state->running.store(false, std::memory_order_release);
+            if (!worker_state->stopping.load(std::memory_order_acquire)) {
+                if (worker_state->application) {
+                    worker_state->application->stop();
                 }
                 fail("runtime worker exited unexpectedly");
             }
@@ -741,23 +740,23 @@ bool Bootstrap::start_in_process_worker(const WorkerPlan &worker)
         }
     });
 
-    in_process_workers_.push_back(std::move(worker_state));
+    in_process_workers_.push_back(worker_state);
 
-    std::unique_lock<std::mutex> lock(state->mutex);
-    const bool ready = state->ready_cv.wait_for(lock, std::chrono::seconds(10), [state]() {
-        return state->ready.load(std::memory_order_acquire);
+    std::unique_lock<std::mutex> lock(worker_state->mutex);
+    const bool ready = worker_state->ready_cv.wait_for(lock, std::chrono::seconds(10), [worker_state]() {
+        return worker_state->ready.load(std::memory_order_acquire);
     });
     if (!ready) {
-        state->stopping.store(true, std::memory_order_release);
-        if (state->runtime) {
-            state->runtime->stop();
+        worker_state->stopping.store(true, std::memory_order_release);
+        if (worker_state->runtime) {
+            worker_state->runtime->stop();
         }
-        state->error = "runtime worker start timed out";
+        worker_state->error = "runtime worker start timed out";
         return false;
     }
 
-    return state->started.load(std::memory_order_acquire) ||
-           !state->failed.load(std::memory_order_acquire);
+    return worker_state->started.load(std::memory_order_acquire) ||
+           !worker_state->failed.load(std::memory_order_acquire);
 }
 
 bool Bootstrap::run_in_process_worker_plan()
@@ -1001,7 +1000,7 @@ void Bootstrap::update_in_process_worker_failures()
         in_process_workers_.erase(in_process_workers_.begin() + static_cast<std::ptrdiff_t>(index));
 
         const bool restarted = start_in_process_worker(plan);
-        auto *new_worker = in_process_workers_.empty() ? nullptr : in_process_workers_.back().get();
+        auto &new_worker = in_process_workers_.back();
         if (new_worker) {
             new_worker->restart_count = restart_count;
             new_worker->restart_attempts_in_window = restart_attempts_in_window;

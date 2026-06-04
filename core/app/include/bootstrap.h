@@ -143,7 +143,7 @@ private:
     SupervisorState supervisor_state_ = SupervisorState::idle;
     SupervisorReason supervisor_reason_ = SupervisorReason::none;
     std::unique_ptr<Application> local_worker_application_;
-    std::vector<std::unique_ptr<InProcessWorker>> in_process_workers_;
+    std::vector<std::shared_ptr<InProcessWorker>> in_process_workers_;
     std::vector<WorkerPlan> worker_plans_;
     EndpointPlan endpoint_plan_;
 #ifndef _WIN32

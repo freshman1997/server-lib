@@ -63,11 +63,11 @@ namespace yuan::net::bit_torrent
         }
 
         // ConnectionHandler interface
-        void on_connected(const std::shared_ptr<net::Connection> &conn) override;
-        void on_error(const std::shared_ptr<net::Connection> &conn) override;
-        void on_read(const std::shared_ptr<net::Connection> &conn) override;
-        void on_write(const std::shared_ptr<net::Connection> &conn) override;
-        void on_close(const std::shared_ptr<net::Connection> &conn) override;
+        void on_connected(net::Connection &conn) override;
+        void on_error(net::Connection &conn) override;
+        void on_read(net::Connection &conn) override;
+        void on_write(net::Connection &conn) override;
+        void on_close(net::Connection &conn) override;
 
     private:
         bool try_bind_and_listen(int32_t port);

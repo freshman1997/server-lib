@@ -175,17 +175,19 @@ namespace
     class CountingConnectionHandler : public yuan::net::ConnectionHandler
     {
     public:
-        void on_connected(const std::shared_ptr<yuan::net::Connection> &conn) override { (void)conn; ++connected; }
-        void on_error(const std::shared_ptr<yuan::net::Connection> &conn) override { (void)conn; ++errors; }
-        void on_read(const std::shared_ptr<yuan::net::Connection> &conn) override { (void)conn; ++reads; }
-        void on_write(const std::shared_ptr<yuan::net::Connection> &conn) override { (void)conn; ++writes; }
-        void on_close(const std::shared_ptr<yuan::net::Connection> &conn) override { (void)conn; ++closes; }
+        void on_connected(yuan::net::Connection &conn) override { (void)conn; ++connected; }
+        void on_error(yuan::net::Connection &conn) override { (void)conn; ++errors; }
+        void on_read(yuan::net::Connection &conn) override { (void)conn; ++reads; }
+        void on_write(yuan::net::Connection &conn) override { (void)conn; ++writes; }
+        void on_close(yuan::net::Connection &conn) override { (void)conn; ++closes; }
+        void on_input_shutdown(yuan::net::Connection &conn) override { (void)conn; ++input_shutdowns; }
 
         int connected = 0;
         int errors = 0;
         int reads = 0;
         int writes = 0;
         int closes = 0;
+        int input_shutdowns = 0;
     };
 
     class FakeDatagramEndpoint : public yuan::net::DatagramEndpoint

@@ -45,13 +45,13 @@ namespace yuan::net
     private:
         struct Shard
         {
-            std::unique_ptr<NetworkRuntime> runtime;
+            std::shared_ptr<NetworkRuntime> runtime;
             std::thread thread;
         };
 
         bool start_shards(std::size_t count);
         void stop_shards();
-        NetworkRuntime *next_runtime();
+        std::shared_ptr<NetworkRuntime> next_runtime();
 
         IocpTcpEngine engine_;
         std::vector<Shard> shards_;

@@ -155,7 +155,7 @@ namespace yuan::net
                     res.second->set_event_handler(handler_);
                     handler_->on_new_connection(res.second);
                     if (conn_handler_owner_) {
-                        conn_handler_owner_->on_connected(res.second);
+                        conn_handler_owner_->on_connected(*res.second);
                     }
                     datagram->set_datagram_state(ConnectionState::connected);
                 }

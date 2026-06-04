@@ -106,6 +106,11 @@ namespace yuan::net::ftp
         LOG_DEBUG("file stream on_close ip={}", conn.get_remote_address().get_ip());
     }
 
+    void FtpFileStream::on_input_shutdown(Connection & conn)
+    {
+        (void)conn;
+    }
+
     void FtpFileStream::quit(const InetAddress & addr)
     {
         auto it = file_stream_sessions_.find(addr.to_address_key());

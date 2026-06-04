@@ -219,11 +219,11 @@ namespace yuan::net::http
         HttpProxy(const HttpProxy &) = delete;
         HttpProxy &operator=(const HttpProxy &) = delete;
 
-        void on_connected(const std::shared_ptr<Connection> &conn) override;
-        void on_error(const std::shared_ptr<Connection> &conn) override;
-        void on_read(const std::shared_ptr<Connection> &conn) override;
-        void on_write(const std::shared_ptr<Connection> &conn) override;
-        void on_close(const std::shared_ptr<Connection> &conn) override;
+        void on_connected(Connection &conn) override;
+        void on_error(Connection &conn) override;
+        void on_read(Connection &conn) override;
+        void on_write(Connection &conn) override;
+        void on_close(Connection &conn) override;
 
         bool load_proxy_config_and_init() override;
         void add_route(const ProxyRoute &route) override;

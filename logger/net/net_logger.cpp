@@ -105,11 +105,11 @@ public:
 
     void on_connect_result(const yuan::net::ConnectResult& result) override;
 
-    void on_connected(const std::shared_ptr<yuan::net::Connection>& conn) override;
-    void on_error(const std::shared_ptr<yuan::net::Connection>& conn) override;
-    void on_read(const std::shared_ptr<yuan::net::Connection>& conn) override;
-    void on_write(const std::shared_ptr<yuan::net::Connection>& conn) override;
-    void on_close(const std::shared_ptr<yuan::net::Connection>& conn) override;
+    void on_connected(yuan::net::Connection &conn) override;
+    void on_error(yuan::net::Connection &conn) override;
+    void on_read(yuan::net::Connection &conn) override;
+    void on_write(yuan::net::Connection &conn) override;
+    void on_close(yuan::net::Connection &conn) override;
 
 private:
     void start_runtime();
@@ -459,46 +459,48 @@ void NetLogger::Impl::on_connect_result(const yuan::net::ConnectResult& result)
     state_cv_.notify_all();
 }
 
-void NetLogger::Impl::on_connected(const std::shared_ptr<yuan::net::Connection>& conn)
+void NetLogger::Impl::on_connected(yuan::net::Connection &conn)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     cancel_reconnect_timer_locked();
     reconnect_attempts_ = 0;
-    connection_ = conn;
+    connection_ = conn.shared_from_this();
     connected_ = true;
     connecting_ = false;
     flush_pending_locked();
     state_cv_.notify_all();
 }
 
-void NetLogger::Impl::on_error(const std::shared_ptr<yuan::net::Connection>& conn)
+void NetLogger::Impl::on_error(yuan::net::Connection &conn)
 {
+    auto conn_ptr = conn.shared_from_this();
     std::lock_guard<std::mutex> lock(mutex_);
     connected_ = false;
     connecting_ = false;
-    if (connection_ == conn) {
+    if (connection_ == conn_ptr) {
         connection_ = nullptr;
     }
     schedule_reconnect_locked();
     state_cv_.notify_all();
 }
 
-void NetLogger::Impl::on_read(const std::shared_ptr<yuan::net::Connection>& conn)
+void NetLogger::Impl::on_read(yuan::net::Connection &conn)
 {
     (void)conn;
 }
 
-void NetLogger::Impl::on_write(const std::shared_ptr<yuan::net::Connection>& conn)
+void NetLogger::Impl::on_write(yuan::net::Connection &conn)
 {
     (void)conn;
 }
 
-void NetLogger::Impl::on_close(const std::shared_ptr<yuan::net::Connection>& conn)
+void NetLogger::Impl::on_close(yuan::net::Connection &conn)
 {
+    auto conn_ptr = conn.shared_from_this();
     std::lock_guard<std::mutex> lock(mutex_);
     connected_ = false;
     connecting_ = false;
-    if (connection_ == conn) {
+    if (connection_ == conn_ptr) {
         connection_ = nullptr;
     }
     schedule_reconnect_locked();

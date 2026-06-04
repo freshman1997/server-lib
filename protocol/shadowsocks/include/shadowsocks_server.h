@@ -74,11 +74,11 @@ namespace yuan::net::shadowsocks
         {
         public:
             explicit UdpRelayHandler(ShadowsocksServer &server);
-            void on_connected(const std::shared_ptr<Connection> &conn) override;
-            void on_read(const std::shared_ptr<Connection> &conn) override;
-            void on_write(const std::shared_ptr<Connection> &conn) override;
-            void on_error(const std::shared_ptr<Connection> &conn) override;
-            void on_close(const std::shared_ptr<Connection> &conn) override;
+            void on_connected(Connection &conn) override;
+            void on_read(Connection &conn) override;
+            void on_write(Connection &conn) override;
+            void on_error(Connection &conn) override;
+            void on_close(Connection &conn) override;
 
         private:
             ShadowsocksServer &server_;

@@ -13,6 +13,7 @@
 
 #include "option.h"
 #include "redis_value.h"
+#include "internal/coroutine.h"
 
 namespace yuan::redis
 {
@@ -27,6 +28,14 @@ namespace yuan::redis
         std::shared_ptr<RedisValue> pattern;
         std::shared_ptr<RedisValue> channel;
         std::shared_ptr<RedisValue> message;
+    };
+
+    enum class HealthCheckResult
+    {
+        ok,
+        busy,
+        disconnected,
+        failed,
     };
 
     struct PipelineCommand
@@ -59,6 +68,16 @@ namespace yuan::redis
         std::uint64_t reconnect_successes = 0;
         std::uint64_t command_timeouts = 0;
         std::uint64_t protocol_errors = 0;
+        std::uint64_t commands_total = 0;
+        std::uint64_t command_errors = 0;
+        std::uint64_t total_latency_us = 0;
+        std::uint64_t health_checks = 0;
+        std::uint64_t health_check_successes = 0;
+        std::uint64_t health_check_failures = 0;
+        double avg_latency_us() const
+        {
+            return commands_total > 0 ? static_cast<double>(total_latency_us) / commands_total : 0.0;
+        }
     };
 
     class RedisClient : public std::enable_shared_from_this<RedisClient>
@@ -92,10 +111,24 @@ namespace yuan::redis
         void unsubscribe_channel(const std::string &channel);
 
         std::shared_ptr<RedisValue> pipeline(const std::vector<PipelineCommand> &commands);
+        SimpleTask<std::shared_ptr<RedisValue>> pipeline_async(const std::vector<PipelineCommand> &commands);
+        SimpleTask<std::shared_ptr<RedisValue>> pipeline_async(const std::vector<std::string> &commands);
+
+        std::shared_ptr<RedisValue> command(const std::string &name, const std::vector<std::string> &args);
+
+        SimpleTask<std::shared_ptr<RedisValue>> command_async(const std::string &name, const std::vector<std::string> &args);
+        SimpleTask<std::shared_ptr<RedisValue>> ping_async();
+        SimpleTask<std::shared_ptr<RedisValue>> get_async(std::string key);
+        SimpleTask<std::shared_ptr<RedisValue>> set_async(std::string key, std::string value);
+        SimpleTask<std::shared_ptr<RedisValue>> del_async(const std::vector<std::string> &keys);
+        SimpleTask<std::shared_ptr<RedisValue>> incr_async(std::string key);
 
         bool ensure_connected();
         bool wait_in_flight(uint32_t timeout_ms);
         RedisClientStats stats() const;
+        HealthCheckResult try_ping();
+        void start_health_check();
+        void stop_health_check();
 
     public: // key commands
 #include "api/redis_client_key_commands.inc"

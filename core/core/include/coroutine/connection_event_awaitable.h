@@ -47,16 +47,16 @@ namespace yuan::coroutine
             handle_ = handle;
             net::Connection::EventWaiterRegistration registrations[3];
             std::size_t count = 0;
-            registrations[count++] = { to_connection_event(event_kind_), [this](const std::shared_ptr<net::Connection> &) {
+            registrations[count++] = { to_connection_event(event_kind_), [this](net::Connection &) {
                 complete(false);
             } };
             if (event_kind_ != ConnectionEventKind::closed) {
-                registrations[count++] = { net::ConnectionEvent::closed, [this](const std::shared_ptr<net::Connection> &) {
+                registrations[count++] = { net::ConnectionEvent::closed, [this](net::Connection &) {
                     complete(true);
                 } };
             }
             if (event_kind_ != ConnectionEventKind::error) {
-                registrations[count++] = { net::ConnectionEvent::error, [this](const std::shared_ptr<net::Connection> &) {
+                registrations[count++] = { net::ConnectionEvent::error, [this](net::Connection &) {
                     complete(true);
                 } };
             }

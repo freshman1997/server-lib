@@ -90,32 +90,30 @@ namespace yuan::net
             }
         }
 
-        void on_connected(const std::shared_ptr<Connection> &conn) override
+        void on_connected(Connection &conn) override
         {
-            if (conn) {
-                conn->set_connection_handler(self_handler_holder_);
-            }
+            conn.set_connection_handler(self_handler_holder_);
         }
 
-        void on_read(const std::shared_ptr<Connection> &conn) override
+        void on_read(Connection &conn) override
         {
-            if (read_callback_ && conn) {
-                ConnectionContext ctx(conn);
+            if (read_callback_) {
+                ConnectionContext ctx(&conn);
                 read_callback_(ctx);
             }
         }
 
-        void on_error(const std::shared_ptr<Connection> &conn) override
+        void on_error(Connection &conn) override
         {
             (void)conn;
         }
 
-        void on_write(const std::shared_ptr<Connection> &conn) override
+        void on_write(Connection &conn) override
         {
             (void)conn;
         }
 
-        void on_close(const std::shared_ptr<Connection> &conn) override
+        void on_close(Connection &conn) override
         {
             (void)conn;
         }

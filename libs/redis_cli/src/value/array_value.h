@@ -57,6 +57,11 @@ namespace yuan::redis
             values_ = values;
         }
 
+        void reserve(std::size_t count)
+        {
+            values_.reserve(count);
+        }
+
         void add_value(const std::shared_ptr<RedisValue> &value)
         {
             values_.push_back(value);

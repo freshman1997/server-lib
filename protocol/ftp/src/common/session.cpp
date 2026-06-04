@@ -186,6 +186,11 @@ namespace yuan::net::ftp
         }
     }
 
+    void FtpSession::on_input_shutdown(Connection & conn)
+    {
+        (void)conn;
+    }
+
     void FtpSession::on_timer(timer::Timer * timer)
     {
         (void)timer;

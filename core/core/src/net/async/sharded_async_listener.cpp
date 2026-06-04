@@ -22,55 +22,51 @@ namespace yuan::net
         {
         }
 
-        void on_connected(const std::shared_ptr<Connection> &conn) override
+        void on_connected(Connection &conn) override
         {
-            if (!conn || !owner_.running_.load(std::memory_order_acquire) || !owner_.handler_) {
-                if (conn) {
-                    conn->close();
-                }
+            if (!owner_.running_.load(std::memory_order_acquire) || !owner_.handler_) {
+                conn.close();
                 return;
             }
 
             auto *loop = runtime_.event_loop();
             if (!loop) {
-                conn->close();
+                conn.close();
                 return;
             }
 
             bool uses_readiness_channel = false;
-            if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn)) {
+            if (auto stream = std::dynamic_pointer_cast<StreamTransport>(conn.shared_from_this())) {
                 uses_readiness_channel = stream->stream_channel() != nullptr;
             }
 
-            conn->set_connection_handler(uses_readiness_channel ? default_handler_holder_ : nullptr);
+            conn.set_connection_handler(uses_readiness_channel ? default_handler_holder_ : nullptr);
 
-            auto ctx = AsyncConnectionContext(conn,
+            auto ctx = AsyncConnectionContext(conn.shared_from_this(),
                 static_cast<coroutine::RuntimeView>(runtime_.runtime_view()));
             auto task = owner_.handler_(std::move(ctx));
             task.resume();
             task.detach();
         }
 
-        void on_error(const std::shared_ptr<Connection> &conn) override
+        void on_error(Connection &conn) override
         {
-            if (conn) {
-                conn->close();
-            }
+            conn.close();
         }
 
-        void on_read(const std::shared_ptr<Connection> &) override
+        void on_read(Connection &) override
         {
         }
 
-        void on_write(const std::shared_ptr<Connection> &) override
+        void on_write(Connection &) override
         {
         }
 
-        void on_close(const std::shared_ptr<Connection> &) override
+        void on_close(Connection &) override
         {
         }
 
-        void on_input_shutdown(const std::shared_ptr<Connection> &conn) override
+        void on_input_shutdown(Connection &conn) override
         {
             (void)conn;
         }
@@ -79,30 +75,28 @@ namespace yuan::net
         class DefaultHandler final : public ConnectionHandler
         {
         public:
-            void on_connected(const std::shared_ptr<Connection> &) override
+            void on_connected(Connection &) override
             {
             }
 
-            void on_error(const std::shared_ptr<Connection> &conn) override
+            void on_error(Connection &conn) override
             {
-                if (conn) {
-                    conn->close();
-                }
+                conn.close();
             }
 
-            void on_read(const std::shared_ptr<Connection> &) override
+            void on_read(Connection &) override
             {
             }
 
-            void on_write(const std::shared_ptr<Connection> &) override
+            void on_write(Connection &) override
             {
             }
 
-            void on_close(const std::shared_ptr<Connection> &) override
+            void on_close(Connection &) override
             {
             }
 
-            void on_input_shutdown(const std::shared_ptr<Connection> &conn) override
+            void on_input_shutdown(Connection &conn) override
             {
                 (void)conn;
             }
@@ -190,7 +184,7 @@ namespace yuan::net
 #endif
 
         Shard shard;
-        shard.runtime = std::make_unique<NetworkRuntime>();
+        shard.runtime = std::make_shared<NetworkRuntime>();
         auto socket = std::make_unique<Socket>(host.c_str(), port);
         if (!socket->valid()) {
             return false;
@@ -222,9 +216,9 @@ namespace yuan::net
             shard.runtime->event_loop()->update_channel(channel);
         }
 
-        auto *runtime = shard.runtime.get();
-        shard.thread = std::thread([runtime]() {
-            runtime->run();
+        auto shard_runtime = shard.runtime;
+        shard.thread = std::thread([shard_runtime]() {
+            shard_runtime->run();
         });
         shards_.push_back(std::move(shard));
         return true;

@@ -51,6 +51,34 @@ namespace
             session->enqueue_outgoing(session->connection_manager().build_channel_close(channel->remote_id()));
             return true;
         }
+
+        bool on_pty_request(SshSession *session,
+                            SshChannel *channel,
+                            const std::string &term,
+                            uint32_t width,
+                            uint32_t height,
+                            uint32_t pixel_width,
+                            uint32_t pixel_height,
+                            const std::vector<uint8_t> &modes) override
+        {
+            (void)session;
+            (void)channel;
+            (void)term;
+            (void)width;
+            (void)height;
+            (void)pixel_width;
+            (void)pixel_height;
+            (void)modes;
+            return true;
+        }
+
+        bool on_shell_request(SshSession *session,
+                              SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return true;
+        }
     };
 
     int run_command(const std::string & command)
@@ -112,13 +140,16 @@ namespace
     {
         std::vector<std::string> args = {
             "sftp",
-            "-vvv",
             "-b", shell_quote(batch_file.string()),
             "-oStrictHostKeyChecking=no",
             "-oUserKnownHostsFile=" + shell_quote(known_hosts.string()),
             "-oPreferredAuthentications=publickey",
             "-oPubkeyAuthentication=yes",
             "-oBatchMode=yes",
+            "-oConnectTimeout=5",
+            "-oConnectionAttempts=1",
+            "-oServerAliveInterval=1",
+            "-oServerAliveCountMax=2",
             "-i", shell_quote(user_key.string()),
             "-P", std::to_string(port),
             "demo@127.0.0.1"
@@ -143,6 +174,10 @@ namespace
             "-oPreferredAuthentications=publickey",
             "-oPubkeyAuthentication=yes",
             "-oBatchMode=yes",
+            "-oConnectTimeout=5",
+            "-oConnectionAttempts=1",
+            "-oServerAliveInterval=1",
+            "-oServerAliveCountMax=2",
             "-i", shell_quote(user_key.string()),
             "-p", std::to_string(port),
             "demo@127.0.0.1",
@@ -204,6 +239,8 @@ int main()
     const auto downloaded = smoke_dir / "downloaded.txt";
     const auto exec_output = smoke_dir / "exec_output.txt";
     const auto shell_output = smoke_dir / "shell_output.txt";
+    const auto ssh_probe_log = smoke_dir / "ssh_probe.log";
+    const auto ssh_vscode_probe_log = smoke_dir / "ssh_vscode_probe.log";
     const auto sftp_root = smoke_dir / "root";
     const auto user_pub_key = std::filesystem::path(user_key.string() + ".pub");
     const auto auth_keys = smoke_dir / "authorized_keys";
@@ -236,8 +273,6 @@ int main()
         std::cerr << "generated host key could not be loaded back" << std::endl;
         return 1;
     }
-    std::cout << "host key ready" << std::endl;
-
     const std::string keygen_cmd = build_keygen_cmd(user_key);
     if (run_command(keygen_cmd) != 0) {
         std::cerr << "failed to generate client key via ssh-keygen" << std::endl;
@@ -283,8 +318,6 @@ int main()
         }
     } scoped_auth_env_reset{auth_env_name, auth_env_old != nullptr, auth_env_old_value};
 
-    std::cout << "client key ready" << std::endl;
-
     SshServerConfig config;
     config.host_key_paths = { host_key.string() };
     config.host_key_algorithms = { "rsa-sha2-512", "rsa-sha2-256" };
@@ -311,7 +344,6 @@ int main()
         server->set_handler(&smoke_handler);
         if (server->init(candidate)) {
             port = candidate;
-            std::cout << "server started on port " << port << std::endl;
             std::thread server_thread([&server]() {
                 server->serve();
             });
@@ -319,15 +351,10 @@ int main()
             std::this_thread::sleep_for(std::chrono::milliseconds(750));
 
             const std::string sftp_cmd = build_sftp_cmd(batch_file, known_hosts, user_key, port);
-
-            std::cout << "launching sftp" << std::endl;
             const int sftp_status = run_command(sftp_cmd);
-            std::cout << "sftp exited with " << sftp_status << std::endl;
 
             const std::string ssh_exec_cmd = build_ssh_exec_cmd(known_hosts, user_key, port, exec_output);
-            std::cout << "launching ssh exec" << std::endl;
             const int ssh_exec_status = run_command(ssh_exec_cmd);
-            std::cout << "ssh exec exited with " << ssh_exec_status << std::endl;
 
             int ssh_probe_status = 0;
             if (run_interactive) {
@@ -342,13 +369,12 @@ int main()
                 const std::string ssh_probe_cmd =
                     "ssh -T -oStrictHostKeyChecking=no -oUserKnownHostsFile=" + shell_quote(known_hosts.string()) +
                     " -oPreferredAuthentications=publickey -oPubkeyAuthentication=yes -oBatchMode=yes" +
+                    " -oConnectTimeout=5 -oConnectionAttempts=1 -oServerAliveInterval=1 -oServerAliveCountMax=2" +
                     " -i " + shell_quote(user_key.string()) +
                     " -p " + std::to_string(port) +
-                    " demo@127.0.0.1 exit 0 >/dev/null 2>/dev/null";
+                    " demo@127.0.0.1 exit 0 >" + shell_quote(ssh_probe_log.string()) + " 2>&1";
 #endif
-                std::cout << "launching ssh probe (-T)" << std::endl;
                 ssh_probe_status = run_command(ssh_probe_cmd);
-                std::cout << "ssh probe exited with " << ssh_probe_status << std::endl;
 
 #ifdef _WIN32
                 const std::string ssh_vscode_probe_cmd =
@@ -361,15 +387,24 @@ int main()
                 const std::string ssh_vscode_probe_cmd =
                     "ssh -T -oStrictHostKeyChecking=no -oUserKnownHostsFile=" + shell_quote(known_hosts.string()) +
                     " -oPreferredAuthentications=publickey -oPubkeyAuthentication=yes -oBatchMode=yes" +
+                    " -oConnectTimeout=5 -oConnectionAttempts=1 -oServerAliveInterval=1 -oServerAliveCountMax=2" +
                     " -i " + shell_quote(user_key.string()) +
                     " -p " + std::to_string(port) +
-                    " demo@127.0.0.1 \"echo VSCODE_PROBE_OK && uname -s\" >/dev/null 2>/dev/null";
+                    " demo@127.0.0.1 \"echo VSCODE_PROBE_OK && uname -s\" >" + shell_quote(ssh_vscode_probe_log.string()) + " 2>&1";
 #endif
-                std::cout << "launching ssh vscode-like probe" << std::endl;
                 const int ssh_vscode_probe_status = run_command(ssh_vscode_probe_cmd);
-                std::cout << "ssh vscode-like probe exited with " << ssh_vscode_probe_status << std::endl;
                 if (ssh_vscode_probe_status != 0) {
+                    std::ifstream probe_err_file(ssh_vscode_probe_log, std::ios::binary);
+                    std::string probe_err_text((std::istreambuf_iterator<char>(probe_err_file)),
+                                               std::istreambuf_iterator<char>());
+                    if (!probe_err_text.empty()) {
+                        std::cerr << "ssh vscode-like probe log:\n" << probe_err_text << std::endl;
+                    }
                     std::cerr << "ssh vscode-like probe command failed with exit code " << ssh_vscode_probe_status << std::endl;
+                    server->stop();
+                    if (server_thread.joinable()) {
+                        server_thread.join();
+                    }
                     return 1;
                 }
             }
@@ -387,13 +422,12 @@ int main()
                 const std::string ssh_interactive_cmd =
                     "ssh -tt -oStrictHostKeyChecking=no -oUserKnownHostsFile=" + shell_quote(known_hosts.string()) +
                     " -oPreferredAuthentications=publickey -oPubkeyAuthentication=yes -oBatchMode=yes" +
+                    " -oConnectTimeout=5 -oConnectionAttempts=1 -oServerAliveInterval=1 -oServerAliveCountMax=2" +
                     " -i " + shell_quote(user_key.string()) +
                     " -p " + std::to_string(port) +
                     " demo@127.0.0.1 exit > " + shell_quote(shell_output.string()) + " 2>/dev/null";
 #endif
-                std::cout << "launching ssh interactive" << std::endl;
                 ssh_interactive_status = run_command(ssh_interactive_cmd);
-                std::cout << "ssh interactive exited with " << ssh_interactive_status << std::endl;
             }
 
             server->stop();
@@ -417,6 +451,12 @@ int main()
             }
 
             if (run_interactive && ssh_probe_status != 0) {
+                std::ifstream probe_err_file(ssh_probe_log, std::ios::binary);
+                std::string probe_err_text((std::istreambuf_iterator<char>(probe_err_file)),
+                                           std::istreambuf_iterator<char>());
+                if (!probe_err_text.empty()) {
+                    std::cerr << "ssh probe log:\n" << probe_err_text << std::endl;
+                }
                 std::cerr << "ssh probe smoke command failed with exit code " << ssh_probe_status << std::endl;
                 return 1;
             }

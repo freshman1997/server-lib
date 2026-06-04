@@ -212,47 +212,47 @@ namespace yuan::net
             co_return exit_reason == EventLoopExitReason::coroutine_resume_requested;
         }
 
-        void on_connected(const std::shared_ptr<Connection> &conn) override
+        void on_connected(Connection &conn) override
         {
-            if (!conn || !connected_cb_) {
+            if (!connected_cb_) {
                 return;
             }
-            ConnectionContext ctx(conn);
+            ConnectionContext ctx(&conn);
             connected_cb_(ctx);
         }
 
-        void on_error(const std::shared_ptr<Connection> &conn) override
+        void on_error(Connection &conn) override
         {
             if (!completion_event_.completed()) {
                 completion_event_.notify();
             }
-            if (error_cb_ && conn) {
-                ConnectionContext ctx(conn);
+            if (error_cb_) {
+                ConnectionContext ctx(&conn);
                 error_cb_(ctx);
             }
         }
 
-        void on_read(const std::shared_ptr<Connection> &conn) override
+        void on_read(Connection &conn) override
         {
-            if (read_cb_ && conn) {
-                ConnectionContext ctx(conn);
+            if (read_cb_) {
+                ConnectionContext ctx(&conn);
                 read_cb_(ctx);
             }
         }
 
-        void on_write(const std::shared_ptr<Connection> &conn) override
+        void on_write(Connection &conn) override
         {
             (void)conn;
         }
 
-        void on_close(const std::shared_ptr<Connection> &conn) override
+        void on_close(Connection &conn) override
         {
             connection_.reset();
             if (!completion_event_.completed()) {
                 completion_event_.notify();
             }
-            if (close_cb_ && conn) {
-                ConnectionContext ctx(conn);
+            if (close_cb_) {
+                ConnectionContext ctx(&conn);
                 close_cb_(ctx);
             }
         }

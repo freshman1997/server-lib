@@ -12,9 +12,11 @@
 #include "net/handler/connection_handler.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 namespace yuan::redis
 {
@@ -45,16 +47,18 @@ namespace yuan::redis
         ~Impl() override;
 
     public:
-        void on_connected(const std::shared_ptr<net::Connection> &conn) override;
+        void on_connected(net::Connection &conn) override;
 
-        void on_error(const std::shared_ptr<net::Connection> &conn) override;
+        void on_error(net::Connection &conn) override;
 
     public:
-        void on_read(const std::shared_ptr<net::Connection> &conn) override;
+        void on_read(net::Connection &conn) override;
 
-        void on_write(const std::shared_ptr<net::Connection> &conn) override;
+        void on_write(net::Connection &conn) override;
 
-        void on_close(const std::shared_ptr<net::Connection> &conn) override;
+        void on_close(net::Connection &conn) override;
+
+        void on_input_shutdown(net::Connection &conn) override;
 
     public:
         void on_do_connect(std::shared_ptr<net::Connection> conn);
@@ -65,8 +69,9 @@ namespace yuan::redis
         void set_mask(RedisState state, const bool only = false)
         {
             if (only)
-                clear_mask();
-            mask_.fetch_or(1 << static_cast<uint8_t>(state), std::memory_order_release);
+                mask_.store(1 << static_cast<uint8_t>(state), std::memory_order_release);
+            else
+                mask_.fetch_or(1 << static_cast<uint8_t>(state), std::memory_order_release);
         }
 
         void clear_mask(RedisState state)
@@ -104,9 +109,9 @@ namespace yuan::redis
             return mask_.load(std::memory_order_acquire) & 1 << static_cast<uint8_t>(RedisState::timeout);
         }
 
-        std::shared_ptr<RedisValue> execute_command(std::shared_ptr<Command> cmd);
+        std::shared_ptr<RedisValue> execute_command(std::shared_ptr<Command> cmd, int override_timeout_ms = -1);
 
-        RedisRegistry *registry() const;
+        std::shared_ptr<RedisRegistry> registry() const;
 
         buffer::ByteBufferReader *get_reader()
         {
@@ -134,6 +139,18 @@ namespace yuan::redis
         std::atomic<std::uint64_t> reconnect_successes_{0};
         std::atomic<std::uint64_t> command_timeouts_{0};
         std::atomic<std::uint64_t> protocol_errors_{0};
+        std::atomic<std::uint64_t> commands_total_{0};
+        std::atomic<std::uint64_t> command_errors_{0};
+        std::atomic<std::uint64_t> total_latency_us_{0};
+        std::atomic<std::uint64_t> health_checks_{0};
+        std::atomic<std::uint64_t> health_check_successes_{0};
+        std::atomic<std::uint64_t> health_check_failures_{0};
+        std::atomic<bool> health_check_closing_{false};
+        std::mutex health_check_mutex_;
+        std::condition_variable health_check_cv_;
+        std::thread health_check_thread_;
+        std::mutex in_flight_mutex_;
+        std::condition_variable in_flight_cv_;
     };
 }
 

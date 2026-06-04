@@ -21,7 +21,9 @@ namespace yuan::redis
         bool reconnect_ = true;
         int max_reconnect_retries_ = 3;
         int reconnect_delay_ms_ = 100;
+        int health_check_interval_ms_ = 0;
+        int health_check_timeout_ms_ = 2000;
+        int pool_wait_timeout_ms_ = 0;
     };
 }
-
 #endif // __YUAN_REDIS_OPTION_H__

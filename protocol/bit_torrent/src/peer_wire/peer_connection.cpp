@@ -252,12 +252,12 @@ namespace yuan::net::bit_torrent
         }
     }
 
-    void PeerConnection::on_connected(const std::shared_ptr<net::Connection> &conn)
+    void PeerConnection::on_connected(net::Connection &conn)
     {
         (void)conn;
     }
 
-    void PeerConnection::on_error(const std::shared_ptr<net::Connection> &conn)
+    void PeerConnection::on_error(net::Connection &conn)
     {
         (void)conn;
         state_ = State::error;
@@ -270,7 +270,7 @@ namespace yuan::net::bit_torrent
             on_state_change_(this);
     }
 
-    void PeerConnection::on_close(const std::shared_ptr<net::Connection> &conn)
+    void PeerConnection::on_close(net::Connection &conn)
     {
         (void)conn;
         state_ = State::closed;
@@ -283,7 +283,7 @@ namespace yuan::net::bit_torrent
             on_state_change_(this);
     }
 
-    void PeerConnection::on_write(const std::shared_ptr<net::Connection> &conn)
+    void PeerConnection::on_write(net::Connection &conn)
     {
         (void)conn;
     }
@@ -294,12 +294,9 @@ namespace yuan::net::bit_torrent
         send_keepalive();
     }
 
-    void PeerConnection::on_read(const std::shared_ptr<net::Connection> &conn)
+    void PeerConnection::on_read(net::Connection &conn)
     {
-        if (!conn) {
-            return;
-        }
-        auto byte_buffer = conn->take_input_byte_buffer();
+        auto byte_buffer = conn.take_input_byte_buffer();
         if (byte_buffer.readable_bytes() == 0)
             return;
 

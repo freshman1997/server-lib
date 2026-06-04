@@ -31,25 +31,14 @@ namespace yuan::net
     public:
         virtual ~ConnectionHandler() = default;
 
-        virtual void on_connected(const std::shared_ptr<Connection> &conn) = 0;
+        virtual void on_connected(Connection &conn) = 0;
+        virtual void on_error(Connection &conn) = 0;
+        virtual void on_read(Connection &conn) = 0;
+        virtual void on_write(Connection &conn) = 0;
+        virtual void on_close(Connection &conn) = 0;
+        virtual void on_input_shutdown(Connection &conn) { (void)conn; }
 
-        virtual void on_error(const std::shared_ptr<Connection> &conn) = 0;
-
-        virtual void on_read(const std::shared_ptr<Connection> &conn) = 0;
-
-        virtual void on_write(const std::shared_ptr<Connection> &conn) = 0;
-
-        virtual void on_close(const std::shared_ptr<Connection> &conn) = 0;
-
-        virtual void on_input_shutdown(const std::shared_ptr<Connection> &conn)
-        {
-            (void)conn;
-        }
-
-        virtual bool is_input_shutdown() const
-        {
-            return false;
-        }
+        virtual bool is_input_shutdown() const { return false; }
     };
 
     template<typename BaseHandler>

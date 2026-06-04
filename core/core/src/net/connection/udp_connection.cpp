@@ -100,7 +100,7 @@ namespace yuan::net
             if (!proc_one_buffer(buffer)) {
                 if (connectionHandlerOwner_) {
                     notify_event_waiters(ConnectionEvent::error);
-                    connectionHandlerOwner_->on_error(shared_from_this());
+                    connectionHandlerOwner_->on_error(*this);
                 }
                 abort();
                 return;
@@ -125,7 +125,7 @@ namespace yuan::net
             if (!proc_one_buffer(buffer)) {
                 if (connectionHandlerOwner_) {
                     notify_event_waiters(ConnectionEvent::error);
-                    connectionHandlerOwner_->on_error(shared_from_this());
+                    connectionHandlerOwner_->on_error(*this);
                 }
                 abort();
                 return;
@@ -266,7 +266,7 @@ namespace yuan::net
         if (ok) {
             active_ = true;
             notify_event_waiters(ConnectionEvent::readable);
-            handler->on_read(shared_from_this());
+            handler->on_read(*this);
         } else {
             notify_event_waiters(ConnectionEvent::error);
             abort();
@@ -278,7 +278,7 @@ namespace yuan::net
         [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
         auto *handler = yuan::base::owner_ptr(handler_owner);
         if (handler) {
-            handler->on_write(shared_from_this());
+            handler->on_write(*this);
         }
         process_pending_output_buffer();
         auto *front = output_buffer_.front();
@@ -313,7 +313,7 @@ namespace yuan::net
         if (handler && !close_notified_) {
             close_notified_ = true;
             notify_event_waiters(ConnectionEvent::closed);
-            handler->on_close(self);
+            handler->on_close(*this);
         }
         if (instance_ && !instance_->is_closing()) {
             instance_->on_connection_close(self);
@@ -342,7 +342,7 @@ namespace yuan::net
             auto *handler = yuan::base::owner_ptr(handler_owner);
             if (handler) {
                 notify_event_waiters(ConnectionEvent::connected);
-                handler->on_connected(shared_from_this());
+                handler->on_connected(*this);
             }
             if (instance_ && instance_->get_timer_manager()) {
                 alive_timer_ = instance_->get_timer_manager()->every(0, 10 * 1000, this);
@@ -411,7 +411,7 @@ namespace yuan::net
                 auto *handler = yuan::base::owner_ptr(handler_owner);
                 if (handler) {
                     notify_event_waiters(ConnectionEvent::error);
-                    handler->on_error(shared_from_this());
+                    handler->on_error(*this);
                 }
                 abort();
                 return;

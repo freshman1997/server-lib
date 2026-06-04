@@ -47,12 +47,12 @@ namespace
         {
         }
 
-        void on_connected(const std::shared_ptr<::yuan::net::Connection> &conn) override
+        void on_connected(::yuan::net::Connection &conn) override
         {
             (void)conn;
         }
 
-        void on_error(const std::shared_ptr<::yuan::net::Connection> &conn) override
+        void on_error(::yuan::net::Connection &conn) override
         {
             (void)conn;
             if (alive_) {
@@ -60,17 +60,17 @@ namespace
             }
         }
 
-        void on_read(const std::shared_ptr<::yuan::net::Connection> &conn) override
+        void on_read(::yuan::net::Connection &conn) override
         {
             (void)conn;
         }
 
-        void on_write(const std::shared_ptr<::yuan::net::Connection> &conn) override
+        void on_write(::yuan::net::Connection &conn) override
         {
             (void)conn;
         }
 
-        void on_close(const std::shared_ptr<::yuan::net::Connection> &conn) override
+        void on_close(::yuan::net::Connection &conn) override
         {
             (void)conn;
             if (alive_) {
@@ -463,14 +463,14 @@ namespace yuan::net::socks5
 
         auto accept_loop = [this]() -> coroutine::Task<void> {
             auto *acceptor_runtime = listener_.runtime();
-            auto *acceptor = listener_.acceptor();
+            auto acceptor = listener_.acceptor();
             if (!acceptor_runtime || !acceptor) {
                 co_return;
             }
 
             auto rv = acceptor_runtime->runtime_view();
             while (!stop_requested_.load(std::memory_order_relaxed)) {
-                auto conn = co_await coroutine::async_accept(rv, acceptor);
+                auto conn = co_await coroutine::async_accept(rv, acceptor.get());
                 if (!conn) {
                     break;
                 }
@@ -1435,14 +1435,12 @@ namespace yuan::net::socks5
     {
     }
 
-    void Socks5Server::UdpRelayHandler::on_read(const std::shared_ptr<Connection> &conn)
+    void Socks5Server::UdpRelayHandler::on_read(Connection &conn)
     {
-        if (conn) {
-            server_.on_udp_datagram(*conn);
-        }
+        server_.on_udp_datagram(conn);
     }
 
-    void Socks5Server::UdpRelayHandler::on_error(const std::shared_ptr<Connection> &conn)
+    void Socks5Server::UdpRelayHandler::on_error(Connection &conn)
     {
         (void)conn;
     }

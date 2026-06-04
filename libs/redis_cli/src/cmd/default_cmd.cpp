@@ -142,20 +142,20 @@ namespace yuan::redis
             }
 
             const auto arr = std::make_shared<ArrayValue>();
+            arr->reserve(8);
             arr->add_value(result_);
             while (reader.get_remain_bytes() > 0) {
                 const auto checkpoint = reader.position();
-                std::shared_ptr<RedisValue> result;
-                ret = unpack_result(result, reader, unpack_to_map_);
+                std::shared_ptr<RedisValue> extra;
+                ret = unpack_result(extra, reader, unpack_to_map_);
                 if (ret == UnpackCode::need_more_bytes) {
                     reader.restore(checkpoint);
                     break;
                 }
-                if (ret < 0) {
-                    return ret;
-                }
-
-                arr->add_value(result);
+if (ret < 0) {
+                break;
+            }
+            arr->add_value(extra);
             }
 
             if (arr->size() > 1) {
@@ -187,13 +187,16 @@ namespace yuan::redis
                 return ret;
             }
 
-            auto status = std::make_shared<StatusValue>(false);
-            if (str_value == "OK" || str_value == "QUEUED" || str_value == "SUCCESS" || str_value == "PONG") {
-                status->set_status(true);
+            if (str_value == "OK") {
+                result = StatusValue::ok();
+            } else {
+                auto status = std::make_shared<StatusValue>(false);
+                if (str_value == "QUEUED" || str_value == "SUCCESS" || str_value == "PONG") {
+                    status->set_status(true);
+                }
+                status->set_raw_str(str_value);
+                result = status;
             }
-
-            status->set_raw_str(str_value);
-            result = status;
 
             return 0;
         }
@@ -218,7 +221,7 @@ namespace yuan::redis
                 return UnpackCode::format_error;
             }
             if (len < 0) {
-                result = std::make_shared<NullValue>();
+                result = NullValue::null();
                 return 0;
             }
             if (static_cast<uint64_t>(len) > std::numeric_limits<std::size_t>::max()) {
@@ -262,7 +265,7 @@ namespace yuan::redis
             return 0;
         }
         case resp_null: {
-            result = std::make_shared<NullValue>();
+            result = NullValue::null();
             std::string str_value;
             return reader.read_line(str_value);
         }
@@ -312,7 +315,7 @@ namespace yuan::redis
                 return UnpackCode::format_error;
             }
             if (len < 0) {
-                result = std::make_shared<NullValue>();
+                result = NullValue::null();
                 return 0;
             }
             if (static_cast<uint64_t>(len) > std::numeric_limits<std::size_t>::max()) {
@@ -350,7 +353,7 @@ namespace yuan::redis
                 return UnpackCode::format_error;
             }
             if (len < 0) {
-                result = std::make_shared<NullValue>();
+                result = NullValue::null();
                 return 0;
             }
             if (static_cast<uint64_t>(len) > std::numeric_limits<std::size_t>::max()) {
@@ -418,7 +421,7 @@ namespace yuan::redis
                 return UnpackCode::format_error;
             }
             if (len < 0) {
-                result = std::make_shared<NullValue>();
+                result = NullValue::null();
                 return 0;
             }
             if (len > std::numeric_limits<int>::max()) {
@@ -426,6 +429,7 @@ namespace yuan::redis
             }
 
             auto arrResult = std::make_shared<ArrayValue>();
+            arrResult->reserve(static_cast<std::size_t>(len));
             for (int64_t i = 0; i < len; ++i) {
                 std::shared_ptr<RedisValue> res = nullptr;
                 int ret = DefaultCmd::unpack_result(res, reader, toMap);
@@ -451,7 +455,7 @@ namespace yuan::redis
                 return UnpackCode::format_error;
             }
             if (len < 0) {
-                result = std::make_shared<NullValue>();
+                result = NullValue::null();
                 return 0;
             }
             if (len > std::numeric_limits<int>::max()) {
@@ -459,6 +463,7 @@ namespace yuan::redis
             }
 
             auto arrResult = std::make_shared<ArrayValue>();
+            arrResult->reserve(static_cast<std::size_t>(len));
             for (int64_t i = 0; i < len; ++i) {
                 std::shared_ptr<RedisValue> res = nullptr;
                 int ret = DefaultCmd::unpack_result(res, reader, toMap);

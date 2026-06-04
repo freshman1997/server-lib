@@ -264,24 +264,28 @@ namespace
     class TrackingHandler final : public yuan::net::ConnectionHandler
     {
     public:
-        void on_connected(const std::shared_ptr<yuan::net::Connection> &) override
+        void on_connected(yuan::net::Connection &) override
         {
             ++connected_count;
         }
 
-        void on_error(const std::shared_ptr<yuan::net::Connection> &) override
+        void on_error(yuan::net::Connection &) override
         {
         }
 
-        void on_read(const std::shared_ptr<yuan::net::Connection> &) override
+        void on_read(yuan::net::Connection &) override
         {
         }
 
-        void on_write(const std::shared_ptr<yuan::net::Connection> &) override
+        void on_write(yuan::net::Connection &) override
         {
         }
 
-        void on_close(const std::shared_ptr<yuan::net::Connection> &) override
+        void on_close(yuan::net::Connection &) override
+        {
+        }
+
+        void on_input_shutdown(yuan::net::Connection &) override
         {
         }
 
@@ -567,7 +571,7 @@ namespace
         auto test_fn = [&](yuan::coroutine::RuntimeView view)->yuan::coroutine::Task<int>
         {
             co_await view.schedule();
-            auto conn = co_await yuan::coroutine::async_accept(view, host.acceptor());
+            auto conn = co_await yuan::coroutine::async_accept(view, host.acceptor().get());
             check(conn != nullptr, "async_accept should return accepted connection");
             check(host.acceptor()->connection_handler() == handler.get(),
                   "async_accept should not replace acceptor handler");

@@ -4,10 +4,12 @@
 #include <condition_variable>
 #include <mutex>
 #include <queue>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+#include "base/spinlock.h"
 #include "logger.h"
 #include "net/channel/channel.h"
 #include "event/event_loop.h"
@@ -45,9 +47,12 @@ namespace yuan::net
         std::atomic_bool resume_coroutine_requested_{false};
         std::atomic_bool is_waiting_{false};
         std::atomic_size_t channel_count_{0};
+        std::atomic_bool has_pending_callbacks_{false};
+        std::atomic_bool has_pending_coroutines_{false};
         Poller *poller_ = nullptr;
         timer::TimerManager *timer_manager_ = nullptr;
-        std::mutex m;
+        yuan::base::Spinlock spinlock_;
+        std::mutex cond_mutex_;
         std::condition_variable cond;
         std::unordered_map<int, Channel *> channels_;
         std::unordered_set<int> tombstoned_fds_;
@@ -55,6 +60,7 @@ namespace yuan::net
         std::queue<std::coroutine_handle<>> pending_coroutines_;
         std::unordered_map<int, std::shared_ptr<Connection>> connections_;
         uint64_t next_generation_ = 1;
+        std::atomic<std::thread::id> loop_thread_id_;
 
         uint64_t next_generation() noexcept
         {
@@ -113,13 +119,15 @@ namespace yuan::net
     {
         std::unordered_map<int, std::shared_ptr<Connection>> connections;
         {
-            std::lock_guard<std::mutex> lock(data_->m);
+            std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
             connections.swap(data_->connections_);
             data_->channels_.clear();
             data_->channel_count_.store(0, std::memory_order_release);
             data_->tombstoned_fds_.clear();
             data_->pending_callbacks_ = {};
             data_->pending_coroutines_ = {};
+            data_->has_pending_callbacks_.store(false, std::memory_order_release);
+            data_->has_pending_coroutines_.store(false, std::memory_order_release);
         }
 
         for (auto &entry : connections) {
@@ -135,12 +143,18 @@ namespace yuan::net
 
         data_->quit_.store(false, std::memory_order_relaxed);
         data_->resume_coroutine_requested_.store(false, std::memory_order_relaxed);
+        data_->loop_thread_id_.store(std::this_thread::get_id(), std::memory_order_relaxed);
 
         auto drain_callbacks = [this]() {
+            if (!data_->has_pending_callbacks_.load(std::memory_order_acquire)) {
+                return false;
+            }
+
             std::queue<std::function<void()>> callbacks;
             {
-                std::lock_guard<std::mutex> lock(data_->m);
+                std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
                 callbacks.swap(data_->pending_callbacks_);
+                data_->has_pending_callbacks_.store(false, std::memory_order_release);
             }
 
             bool processed = false;
@@ -163,10 +177,15 @@ namespace yuan::net
         };
 
         auto drain_coroutines = [this]() {
+            if (!data_->has_pending_coroutines_.load(std::memory_order_acquire)) {
+                return false;
+            }
+
             std::queue<std::coroutine_handle<>> coroutines;
             {
-                std::lock_guard<std::mutex> lock(data_->m);
+                std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
                 coroutines.swap(data_->pending_coroutines_);
+                data_->has_pending_coroutines_.store(false, std::memory_order_release);
             }
 
             bool processed = false;
@@ -190,6 +209,10 @@ namespace yuan::net
         
         std::vector<PollEvent> events;
         events.reserve(4096);
+
+        std::vector<std::pair<Channel *, int>> active_channels;
+        active_channels.reserve(256);
+
         auto has_channels = [this]() {
             return data_->channel_count_.load(std::memory_order_acquire) > 0;
         };
@@ -219,7 +242,7 @@ namespace yuan::net
             const uint32_t timeout_ms = poll_timeout(processed_work);
             if (!has_registered_channels) {
                 if (timeout_ms > 0) {
-                    std::unique_lock<std::mutex> lock(data_->m);
+                    std::unique_lock<std::mutex> lock(data_->cond_mutex_);
                     data_->is_waiting_.store(true, std::memory_order_release);
                     data_->cond.wait_for(lock, std::chrono::milliseconds(timeout_ms));
                     data_->is_waiting_.store(false, std::memory_order_release);
@@ -229,10 +252,10 @@ namespace yuan::net
 
             data_->poller_->poll(timeout_ms, events);
             if (!events.empty()) {
-                for (const auto &event : events) {
-                    Channel *channel = nullptr;
-                    {
-                        std::lock_guard<std::mutex> lock(data_->m);
+                active_channels.clear();
+                {
+                    std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
+                    for (const auto &event : events) {
                         auto it = data_->channels_.find(event.fd);
                         if (it == data_->channels_.end()) {
                             continue;
@@ -245,19 +268,19 @@ namespace yuan::net
                             (it->second->get_events() & event.revents) == Channel::NONE_EVENT) {
                             continue;
                         }
-                        channel = it->second;
+                        active_channels.emplace_back(it->second, event.revents);
                     }
+                }
 
-                    if (channel) {
-                        processed_work = true;
-                        try {
-                            channel->set_revent(event.revents);
-                            channel->on_event();
-                        } catch (const std::exception& e) {
-                            LOG_ERROR("Exception in event loop (fd={}): {}", event.fd, e.what());
-                        } catch (...) {
-                            LOG_ERROR("Unknown exception in event loop (fd={})", event.fd);
-                        }
+                for (auto &[channel, revents] : active_channels) {
+                    processed_work = true;
+                    try {
+                        channel->set_revent(revents);
+                        channel->on_event();
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("Exception in event loop (fd={}): {}", channel->get_fd(), e.what());
+                    } catch (...) {
+                        LOG_ERROR("Unknown exception in event loop (fd={})", channel->get_fd());
                     }
                 }
             }
@@ -295,7 +318,7 @@ namespace yuan::net
         }
 
         if (channel) {
-            std::lock_guard<std::mutex> lock(data_->m);
+            std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
             data_->connections_[channel->get_fd()] = conn;
             data_->register_channel_locked(channel);
         }
@@ -313,7 +336,7 @@ namespace yuan::net
             return;
         }
 
-        std::lock_guard<std::mutex> lock(data_->m);
+        std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
         const int fd = channel->get_fd();
         auto it = data_->channels_.find(fd);
         if (it != data_->channels_.end()) {
@@ -323,7 +346,12 @@ namespace yuan::net
                 return;
             }
             LOG_INFO("channel closed, fd: {}", fd);
-            data_->remove_registered_channel_locked(channel, true);
+            data_->poller_->remove_channel(channel);
+            data_->channels_.erase(it);
+            data_->channel_count_.fetch_sub(1, std::memory_order_release);
+            data_->tombstoned_fds_.insert(fd);
+            channel->bump_generation();
+            data_->connections_.erase(fd);
         } else if (data_->tombstoned_fds_.find(fd) != data_->tombstoned_fds_.end()) {
             channel->bump_generation();
         } else {
@@ -337,11 +365,17 @@ namespace yuan::net
             return;
         }
 
-        std::lock_guard<std::mutex> lock(data_->m);
+        std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
         const int fd = channel->get_fd();
         if (!channel->has_events()) {
-            if (!data_->remove_registered_channel_locked(channel, false) &&
-                data_->tombstoned_fds_.find(fd) != data_->tombstoned_fds_.end()) {
+            auto it = data_->channels_.find(fd);
+            if (it != data_->channels_.end() && it->second == channel) {
+                data_->poller_->remove_channel(channel);
+                data_->channels_.erase(it);
+                data_->channel_count_.fetch_sub(1, std::memory_order_release);
+                data_->tombstoned_fds_.insert(fd);
+                channel->bump_generation();
+            } else if (data_->tombstoned_fds_.find(fd) != data_->tombstoned_fds_.end()) {
                 channel->bump_generation();
             }
             return;
@@ -364,10 +398,13 @@ namespace yuan::net
     void EventLoop::queue_in_loop(std::function<void()> cb)
     {
         {
-            std::lock_guard<std::mutex> lock(data_->m);
+            std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
             data_->pending_callbacks_.push(std::move(cb));
+            data_->has_pending_callbacks_.store(true, std::memory_order_release);
         }
-        wakeup();
+        if (!is_in_loop_thread()) {
+            wakeup();
+        }
     }
 
     void EventLoop::post_coroutine(std::coroutine_handle<> handle) noexcept
@@ -377,15 +414,23 @@ namespace yuan::net
         }
 
         {
-            std::lock_guard<std::mutex> lock(data_->m);
+            std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
             data_->pending_coroutines_.push(handle);
+            data_->has_pending_coroutines_.store(true, std::memory_order_release);
         }
-        wakeup();
+        if (!is_in_loop_thread()) {
+            wakeup();
+        }
+    }
+
+    bool EventLoop::is_in_loop_thread() const noexcept
+    {
+        return data_->loop_thread_id_.load(std::memory_order_acquire) == std::this_thread::get_id();
     }
 
     bool EventLoop::accepts_poll_event_for_test(const PollEvent &event) const
     {
-        std::lock_guard<std::mutex> lock(data_->m);
+        std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
         auto it = data_->channels_.find(event.fd);
         return it != data_->channels_.end() && event.generation != 0 &&
                it->second && it->second->has_events() &&

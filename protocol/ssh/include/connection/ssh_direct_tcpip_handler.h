@@ -47,6 +47,12 @@ namespace yuan::net::ssh
         static coroutine::Task<void> relay_from_target(SshSession *session,
                                                        uint32_t channel_remote_id,
                                                        std::shared_ptr<SharedState> state);
+        static coroutine::Task<void> connect_and_relay(coroutine::RuntimeView rv,
+                                                       SshSession *session,
+                                                       std::shared_ptr<SharedState> state,
+                                                       std::string target_host,
+                                                       uint16_t target_port,
+                                                       uint32_t channel_remote_id);
 
         SshSession *session_;
         std::string target_host_;

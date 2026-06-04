@@ -311,7 +311,6 @@ int main()
     std::string cli_cmd = shell_quote(cli_bin.string()) +
                           " --host 127.0.0.1 --port " + std::to_string(server_port) +
                           " --user cli --password cli-pass" +
-                          " -v" +
                           " --strict-host-key-checking accept-new" +
                           " --known-hosts " + shell_quote(known_hosts.string()) +
                           " -L 127.0.0.1:" + std::to_string(forward_port) + ":127.0.0.1:" + std::to_string(target_port) +
@@ -356,7 +355,7 @@ int main()
         }
     }
 
-    if (!cli_done.load(std::memory_order_relaxed)) {
+    if (!cli_done.load(std::memory_order_relaxed) && !forwarded_exchange_ok) {
         std::cerr << "release_ssh_cli local-forward command timed out in smoke harness" << std::endl;
     }
 

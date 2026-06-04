@@ -752,34 +752,31 @@ namespace yuan::net::bit_torrent
     }
 
     // ConnectionHandler stubs (uTP uses UDP, not TCP connections)
-    void UtpManager::on_connected(const std::shared_ptr<net::Connection> &conn)
+    void UtpManager::on_connected(net::Connection &conn)
     {
         (void)conn;
     }
-    void UtpManager::on_error(const std::shared_ptr<net::Connection> &conn)
+    void UtpManager::on_error(net::Connection &conn)
     {
         (void)conn;
     }
-    void UtpManager::on_read(const std::shared_ptr<net::Connection> &conn)
+    void UtpManager::on_read(net::Connection &conn)
     {
-        if (!conn)
-            return;
-
-        auto packet = conn->take_input_byte_buffer();
+        auto packet = conn.take_input_byte_buffer();
         if (packet.readable_bytes() == 0)
             return;
 
-        const auto &addr = conn->get_remote_address();
+        const auto &addr = conn.get_remote_address();
         on_udp_data(reinterpret_cast<const uint8_t *>(packet.read_ptr()),
                     packet.readable_bytes(),
                     addr.get_ip(),
                     static_cast<uint16_t>(addr.get_port()));
     }
-    void UtpManager::on_write(const std::shared_ptr<net::Connection> &conn)
+    void UtpManager::on_write(net::Connection &conn)
     {
         (void)conn;
     }
-    void UtpManager::on_close(const std::shared_ptr<net::Connection> &conn)
+    void UtpManager::on_close(net::Connection &conn)
     {
         (void)conn;
     }

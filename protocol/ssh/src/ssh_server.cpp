@@ -331,6 +331,7 @@ namespace yuan::net::ssh
                     if (session->pump_all_pty_once(effective_handler)) {
                         co_await flush_outgoing();
                     }
+                    co_await flush_outgoing();
                     continue;
                 } else {
                     break;
@@ -366,6 +367,7 @@ namespace yuan::net::ssh
                         if (session->pump_all_pty_once(effective_handler)) {
                             co_await flush_outgoing();
                         }
+                        co_await flush_outgoing();
                     } else {
                         goto session_end;
                     }

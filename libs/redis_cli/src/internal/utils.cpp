@@ -21,7 +21,9 @@ namespace yuan::redis
         std::ostringstream oss;
         
         // 检查是否为整数
-        if (value == static_cast<int64_t>(value)) {
+        if (value >= static_cast<double>(std::numeric_limits<int64_t>::min()) &&
+            value <= static_cast<double>(std::numeric_limits<int64_t>::max()) &&
+            value == static_cast<int64_t>(value)) {
             oss << static_cast<int64_t>(value);
         } else {
             // 对于浮点数，使用足够精度

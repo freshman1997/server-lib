@@ -38,7 +38,7 @@ namespace yuan::net
                 return;
             }
 
-            auto *runtime = next_runtime();
+            auto runtime = next_runtime();
             if (!runtime || !handler_) {
                 connection->close();
                 return;
@@ -113,10 +113,10 @@ namespace yuan::net
         shards_.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
             Shard shard;
-            shard.runtime = std::make_unique<NetworkRuntime>();
-            auto *runtime = shard.runtime.get();
-            shard.thread = std::thread([runtime]() {
-                runtime->run();
+            shard.runtime = std::make_shared<NetworkRuntime>();
+            auto shard_runtime = shard.runtime;
+            shard.thread = std::thread([shard_runtime]() {
+                shard_runtime->run();
             });
             shards_.push_back(std::move(shard));
         }
@@ -139,13 +139,13 @@ namespace yuan::net
         shards_.clear();
     }
 
-    NetworkRuntime *IocpShardedAsyncListener::next_runtime()
+    std::shared_ptr<NetworkRuntime> IocpShardedAsyncListener::next_runtime()
     {
         if (shards_.empty()) {
             return nullptr;
         }
 
         const auto index = next_shard_.fetch_add(1, std::memory_order_relaxed) % shards_.size();
-        return shards_[index].runtime.get();
+        return shards_[index].runtime;
     }
 }

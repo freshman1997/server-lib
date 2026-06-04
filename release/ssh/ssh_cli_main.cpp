@@ -148,6 +148,25 @@ namespace
         return value;
     }
 
+    bool parse_host_key_policy_value(const std::string & value,
+                                     CliArgs::HostKeyPolicy & policy_out)
+    {
+        const auto value_lc = to_lower_ascii(value);
+        if (value_lc == "yes" || value_lc == "true" || value_lc == "on") {
+            policy_out = CliArgs::HostKeyPolicy::yes;
+            return true;
+        }
+        if (value_lc == "accept-new") {
+            policy_out = CliArgs::HostKeyPolicy::accept_new;
+            return true;
+        }
+        if (value_lc == "no" || value_lc == "false" || value_lc == "off") {
+            policy_out = CliArgs::HostKeyPolicy::no;
+            return true;
+        }
+        return false;
+    }
+
     std::string trim_copy(const std::string & value)
     {
         size_t begin = 0;
@@ -198,6 +217,17 @@ namespace
         if (!home.empty()) {
             return (std::filesystem::path(home) / ".ssh" / "known_hosts").string();
         }
+#ifdef _WIN32
+        const std::string user_profile = read_env_string("USERPROFILE");
+        if (!user_profile.empty()) {
+            return (std::filesystem::path(user_profile) / ".ssh" / "known_hosts").string();
+        }
+        const std::string home_drive = read_env_string("HOMEDRIVE");
+        const std::string home_path = read_env_string("HOMEPATH");
+        if (!home_drive.empty() && !home_path.empty()) {
+            return (std::filesystem::path(home_drive + home_path) / ".ssh" / "known_hosts").string();
+        }
+#endif
         return "known_hosts";
     }
 
@@ -275,30 +305,23 @@ namespace
         args.options[key] = value;
 
         const std::string key_lc = to_lower_ascii(key);
-        const std::string value_lc = to_lower_ascii(value);
 
-        if (key == "Port") {
+        if (key_lc == "port") {
             int port = 0;
             if (parse_int_value(value, port)) {
                 args.port = port;
             }
-        } else if (key == "User") {
+        } else if (key_lc == "user") {
             args.user = value;
-        } else if (key == "BatchMode") {
+        } else if (key_lc == "batchmode") {
             args.batch_mode = (value == "yes" || value == "true" || value == "1");
-        } else if (key == "ConnectTimeout") {
+        } else if (key_lc == "connecttimeout") {
             int seconds = 0;
             if (parse_int_value(value, seconds) && seconds > 0) {
                 args.timeout_ms = seconds * 1000;
             }
         } else if (key_lc == "stricthostkeychecking") {
-            if (value_lc == "yes" || value_lc == "true" || value_lc == "on") {
-                args.host_key_policy = CliArgs::HostKeyPolicy::yes;
-            } else if (value_lc == "accept-new") {
-                args.host_key_policy = CliArgs::HostKeyPolicy::accept_new;
-            } else {
-                args.host_key_policy = CliArgs::HostKeyPolicy::no;
-            }
+            (void)parse_host_key_policy_value(value, args.host_key_policy);
         } else if (key_lc == "userknownhostsfile") {
             args.known_hosts_file = value;
         }
@@ -395,14 +418,7 @@ namespace
             } else if (opt == "--known-hosts") {
                 args.known_hosts_file = value;
             } else if (opt == "--strict-host-key-checking") {
-                const auto value_lc = to_lower_ascii(value);
-                if (value_lc == "yes" || value_lc == "true" || value_lc == "on") {
-                    args.host_key_policy = CliArgs::HostKeyPolicy::yes;
-                } else if (value_lc == "accept-new") {
-                    args.host_key_policy = CliArgs::HostKeyPolicy::accept_new;
-                } else if (value_lc == "no" || value_lc == "false" || value_lc == "off") {
-                    args.host_key_policy = CliArgs::HostKeyPolicy::no;
-                } else {
+                if (!parse_host_key_policy_value(value, args.host_key_policy)) {
                     std::cerr << "invalid strict host key checking mode: " << value << '\n';
                     return false;
                 }
@@ -760,7 +776,25 @@ namespace
     bool stdin_has_data_nonblocking()
     {
 #ifdef _WIN32
-        return false;
+        HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+        if (h == INVALID_HANDLE_VALUE || h == nullptr) {
+            return false;
+        }
+
+        DWORD mode = 0;
+        if (GetConsoleMode(h, &mode)) {
+            return WaitForSingleObject(h, 0) == WAIT_OBJECT_0;
+        }
+
+        if (GetFileType(h) != FILE_TYPE_PIPE) {
+            return false;
+        }
+
+        DWORD available = 0;
+        if (!PeekNamedPipe(h, nullptr, 0, nullptr, &available, nullptr)) {
+            return false;
+        }
+        return available > 0;
 #else
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -786,7 +820,45 @@ namespace
     {
         out.clear();
 #ifdef _WIN32
-        return StdinPollResult::no_data;
+        if (!stdin_has_data_nonblocking()) {
+            return StdinPollResult::no_data;
+        }
+
+        std::array<char, 4096> buf{};
+        HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+        if (h == INVALID_HANDLE_VALUE || h == nullptr) {
+            return StdinPollResult::error;
+        }
+
+        DWORD mode = 0;
+        if (GetConsoleMode(h, &mode)) {
+            DWORD n_chars = 0;
+            if (!ReadConsoleA(h, buf.data(), static_cast<DWORD>(buf.size()), &n_chars, nullptr)) {
+                return StdinPollResult::error;
+            }
+            if (n_chars == 0) {
+                return StdinPollResult::eof;
+            }
+            out.assign(buf.data(), static_cast<size_t>(n_chars));
+            return StdinPollResult::data;
+        }
+
+        DWORD n = 0;
+        if (!ReadFile(h, buf.data(), static_cast<DWORD>(buf.size()), &n, nullptr)) {
+            const DWORD err = GetLastError();
+            if (err == ERROR_BROKEN_PIPE) {
+                return StdinPollResult::eof;
+            }
+            if (err == ERROR_NO_DATA) {
+                return StdinPollResult::no_data;
+            }
+            return StdinPollResult::error;
+        }
+        if (n == 0) {
+            return StdinPollResult::eof;
+        }
+        out.assign(buf.data(), static_cast<size_t>(n));
+        return StdinPollResult::data;
 #else
         if (!stdin_has_data_nonblocking()) {
             return StdinPollResult::no_data;
@@ -1742,6 +1814,7 @@ namespace
             std::string origin_host;
             uint16_t origin_port = 0;
             std::vector<uint8_t> recv_buf;
+            bool method_negotiated = false;
         };
         std::unordered_map<SocketHandle, PendingSocksClient> pending_socks_clients;
         for (const auto &raw : args.local_forwards) {
@@ -1813,6 +1886,24 @@ namespace
             if (remote_it != forward_local_to_remote.end()) {
                 forward_remote_to_local.erase(remote_it->second);
                 forward_local_to_remote.erase(remote_it);
+            }
+        };
+
+        auto cleanup_forward_resources = [&]() {
+            for (auto &it : local_forward_listeners) {
+                close_socket_handle(it.second);
+            }
+            for (auto &it : dynamic_forward_listeners) {
+                close_socket_handle(it.second);
+            }
+            for (auto &it : pending_local_open_socket) {
+                close_socket_handle(it.second);
+            }
+            for (auto &it : pending_dynamic_open_socket) {
+                close_socket_handle(it.second);
+            }
+            for (auto &it : pending_socks_clients) {
+                close_socket_handle(it.second.socket);
             }
         };
 
@@ -1948,6 +2039,8 @@ namespace
                 client.origin_host = origin_host;
                 client.origin_port = origin_port;
                 pending_socks_clients[accepted_fd] = std::move(client);
+                debug("dynamic-forward accepted client fd=" + std::to_string(static_cast<int>(accepted_fd)) +
+                      " origin=" + origin_host + ":" + std::to_string(origin_port));
 
                 if (pending_local_open_socket.size() + pending_dynamic_open_socket.size() >= kMaxPendingForwards) {
                     break;
@@ -1999,7 +2092,9 @@ namespace
                 client.recv_buf.insert(client.recv_buf.end(), chunk.begin(), chunk.begin() + n);
 
                 while (!client.recv_buf.empty()) {
-                    if (client.recv_buf.size() >= 2 && client.recv_buf[0] == 0x05) {
+                    if (!client.method_negotiated &&
+                        client.recv_buf.size() >= 2 &&
+                        client.recv_buf[0] == 0x05) {
                         const size_t nmethods = client.recv_buf[1];
                         const size_t method_len = 2 + nmethods;
                         if (client.recv_buf.size() >= method_len) {
@@ -2024,6 +2119,9 @@ namespace
                                 close_socks_client(sock);
                                 break;
                             }
+                            client.method_negotiated = true;
+                            debug("dynamic-forward socks method negotiation ok fd=" +
+                                  std::to_string(static_cast<int>(client.socket)));
                             continue;
                         }
                     }
@@ -2114,6 +2212,8 @@ namespace
                         close_socks_client(sock);
                         return false;
                     }
+                    debug("dynamic-forward open sent local=" + std::to_string(local_forward_id) +
+                          " target=" + target_host + ":" + std::to_string(target_port));
 
                     pending_dynamic_open_socket[local_forward_id] = client.socket;
                     pending_socks_clients.erase(client_it);
@@ -2236,21 +2336,7 @@ namespace
                 continue;
             }
             if (read_status != PacketReadStatus::ok) {
-                for (auto &it : local_forward_listeners) {
-                    close_socket_handle(it.second);
-                }
-                for (auto &it : dynamic_forward_listeners) {
-                    close_socket_handle(it.second);
-                }
-                for (auto &it : pending_local_open_socket) {
-                    close_socket_handle(it.second);
-                }
-                for (auto &it : pending_dynamic_open_socket) {
-                    close_socket_handle(it.second);
-                }
-                for (auto &it : pending_socks_clients) {
-                    close_socket_handle(it.second.socket);
-                }
+                cleanup_forward_resources();
                 std::cerr << "connection closed\n";
                 return false;
             }
@@ -2430,6 +2516,8 @@ namespace
                     forward_local_to_socket[conf->recipient_channel] = pending_dynamic_it->second;
                     forward_local_to_remote[conf->recipient_channel] = conf->sender_channel;
                     forward_remote_to_local[conf->sender_channel] = conf->recipient_channel;
+                    debug("dynamic-forward open confirmed local=" + std::to_string(conf->recipient_channel) +
+                          " remote=" + std::to_string(conf->sender_channel));
                     (void)send_socks_reply(pending_dynamic_it->second, 0x00);
                     pending_dynamic_open_socket.erase(pending_dynamic_it);
                     continue;
@@ -2482,6 +2570,8 @@ namespace
 
                 auto pending_dynamic_it = pending_dynamic_open_socket.find(open_failure->recipient_channel);
                 if (pending_dynamic_it != pending_dynamic_open_socket.end()) {
+                    debug("dynamic-forward open failed local=" + std::to_string(open_failure->recipient_channel) +
+                          " reason=" + std::to_string(open_failure->reason_code));
                     (void)send_socks_reply(pending_dynamic_it->second, 0x05);
                     close_socket_handle(pending_dynamic_it->second);
                     pending_dynamic_open_socket.erase(pending_dynamic_it);
@@ -2684,21 +2774,7 @@ namespace
                         reinterpret_cast<const uint8_t *>(data.read_ptr()) + data.readable_bytes());
                     (void)send_packet(fd, transport, SshMessageCodec::encode_global_request(req));
                 }
-                for (auto &it : local_forward_listeners) {
-                    close_socket_handle(it.second);
-                }
-                for (auto &it : dynamic_forward_listeners) {
-                    close_socket_handle(it.second);
-                }
-                for (auto &it : pending_local_open_socket) {
-                    close_socket_handle(it.second);
-                }
-                for (auto &it : pending_dynamic_open_socket) {
-                    close_socket_handle(it.second);
-                }
-                for (auto &it : pending_socks_clients) {
-                    close_socket_handle(it.second.socket);
-                }
+                cleanup_forward_resources();
                 if (got_exit_status) {
                     return exit_code == 0;
                 }
@@ -2767,13 +2843,11 @@ namespace
 
 int main(int argc, char **argv)
 {
-#ifdef _WIN32
-    WSADATA wsa{};
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        std::cerr << "WSAStartup failed\n";
+    yuan::platform::NativePlatformGuard native_guard;
+    if (!native_guard.ok()) {
+        std::cerr << "native platform init failed\n";
         return 1;
     }
-#endif
 
 #ifndef _WIN32
     signal(SIGINT, cli_sigint_handler);
@@ -2782,40 +2856,24 @@ int main(int argc, char **argv)
     CliArgs args;
     if (!parse_args(argc, argv, args)) {
         print_usage(argv[0]);
-#ifdef _WIN32
-        WSACleanup();
-#endif
         return 2;
     }
     if (args.help) {
         print_usage(argv[0]);
-#ifdef _WIN32
-        WSACleanup();
-#endif
         return 0;
     }
     if (args.version) {
         std::cout << "release_ssh_cli 1.0\n";
-#ifdef _WIN32
-        WSACleanup();
-#endif
         return 0;
     }
 
     SocketGuard sock;
     if (!connect_tcp(args.host, static_cast<uint16_t>(args.port), sock)) {
         std::cerr << "connect failed: " << args.host << ':' << args.port << '\n';
-#ifdef _WIN32
-        WSACleanup();
-#endif
         return 1;
     }
     (void)set_recv_timeout(sock.fd, args.timeout_ms);
 
     const bool ok = args.probe ? run_version_probe(sock.fd, args) : run_exec_phase1(sock.fd, args);
-
-#ifdef _WIN32
-    WSACleanup();
-#endif
     return ok ? 0 : 1;
 }

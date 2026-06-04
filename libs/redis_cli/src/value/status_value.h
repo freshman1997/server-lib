@@ -1,6 +1,7 @@
 #ifndef __YUAN_REDIS_STATUS_VALUE_H__
 #define __YUAN_REDIS_STATUS_VALUE_H__
 #include <string>
+#include <memory>
 
 #include "../redis_value.h"
 #include "../internal/def.h"
@@ -27,6 +28,12 @@ namespace yuan::redis
         bool get_status() const { return status_; }
 
         void set_status(const bool status) { status_ = status; }
+
+        static std::shared_ptr<StatusValue> ok()
+        {
+            static auto instance = std::make_shared<StatusValue>(true);
+            return instance;
+        }
 
     private:
         bool status_;

@@ -47,7 +47,7 @@ namespace yuan::net
 
         struct Shard
         {
-            std::unique_ptr<NetworkRuntime> runtime;
+            std::shared_ptr<NetworkRuntime> runtime;
             std::unique_ptr<StreamAcceptor> acceptor;
             std::shared_ptr<DispatchHandler> dispatch_handler;
             std::thread thread;

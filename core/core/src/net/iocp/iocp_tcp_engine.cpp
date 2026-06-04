@@ -4,6 +4,7 @@
 #include "net/handler/connection_handler.h"
 #include "net/socket/inet_address.h"
 #include "net/socket/socket_ops.h"
+#include "base/spinlock.h"
 
 #include <algorithm>
 #include <array>
@@ -207,7 +208,7 @@ namespace yuan::net
         if (!buffer.empty()) {
             bool overflow = false;
             {
-                std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+                std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
                 const auto bytes = buffer.readable_bytes();
                 const auto limit = max_output_buffer_size();
                 if (limit != 0 && (bytes > limit || output_buffer_.readable_bytes() > limit - bytes)) {
@@ -255,7 +256,7 @@ namespace yuan::net
         bool should_flush = false;
         bool overflow = false;
         {
-            std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
             if (output_flush_pending_ || output_buffer_.readable_bytes() != 0) {
                 const auto limit = max_output_buffer_size();
                 if (limit != 0 &&
@@ -314,7 +315,7 @@ namespace yuan::net
 
         auto *operation = new IocpTcpEngine::Operation{};
         {
-            std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
             if (output_flush_pending_) {
                 delete operation;
                 return;
@@ -366,7 +367,7 @@ namespace yuan::net
 
         bool should_flush = false;
         {
-            std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
             if (state_.load(std::memory_order_acquire) == ConnectionState::closed) {
                 return;
             }
@@ -407,7 +408,7 @@ namespace yuan::net
         input_shutdown_.store(true, std::memory_order_release);
         output_shutdown_.store(true, std::memory_order_release);
         {
-            std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
             output_flush_pending_ = false;
             close_after_output_ = false;
             output_buffer_.clear();
@@ -527,7 +528,7 @@ namespace yuan::net
 
     bool IocpTcpConnection::complete_output_send(std::size_t bytes, bool &close_after_output)
     {
-        std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+        std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
         std::size_t remaining = bytes;
         while (remaining > 0) {
             auto *front = output_buffer_.front();
@@ -553,7 +554,7 @@ namespace yuan::net
                                                         std::size_t bytes,
                                                         bool &close_after_output)
     {
-        std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+        std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
         output_flush_pending_ = false;
         if (data && bytes < size) {
             auto remaining = std::make_unique<::yuan::buffer::ByteBuffer>(size - bytes);
@@ -566,19 +567,19 @@ namespace yuan::net
 
     void IocpTcpConnection::fail_output_send()
     {
-        std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+        std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
         output_flush_pending_ = false;
     }
 
     bool IocpTcpConnection::has_pending_output() const
     {
-        std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+        std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
         return output_flush_pending_ || output_buffer_.readable_bytes() > 0;
     }
 
     bool IocpTcpConnection::mark_close_after_pending_output()
     {
-        std::lock_guard<std::mutex> lock(output_buffer_mutex_);
+        std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
         if (!output_flush_pending_ && output_buffer_.readable_bytes() == 0) {
             return false;
         }
@@ -595,14 +596,14 @@ namespace yuan::net
         }
         notify_event_waiters(ConnectionEvent::connected);
         if (handler) {
-            handler->on_connected(self());
+            handler->on_connected(*this);
         }
     }
 
     void IocpTcpConnection::notify_read(const char *data, std::size_t size)
     {
         if (data && size > 0) {
-            std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+            std::lock_guard<yuan::base::Spinlock> lock(input_buffer_mutex_);
             input_buffer_.append(data, size);
         }
 
@@ -612,7 +613,7 @@ namespace yuan::net
         }
         auto handler = get_connection_handler_owner();
         if (handler) {
-            handler->on_read(self());
+            handler->on_read(*this);
         }
     }
 
@@ -624,7 +625,7 @@ namespace yuan::net
         }
         notify_event_waiters(ConnectionEvent::writable);
         if (handler) {
-            handler->on_write(self());
+            handler->on_write(*this);
         }
     }
 
@@ -636,7 +637,7 @@ namespace yuan::net
         }
         notify_event_waiters(ConnectionEvent::error);
         if (handler) {
-            handler->on_error(self());
+            handler->on_error(*this);
         }
     }
 
@@ -652,7 +653,7 @@ namespace yuan::net
         }
         notify_event_waiters(ConnectionEvent::closed);
         if (handler) {
-            handler->on_close(self());
+            handler->on_close(*this);
         }
         clear_event_waiters();
     }
@@ -1036,7 +1037,7 @@ namespace yuan::net
             connection->notify_event_waiters(ConnectionEvent::input_shutdown);
             auto handler = connection->get_connection_handler_owner();
             if (handler) {
-                handler->on_input_shutdown(connection);
+                handler->on_input_shutdown(*connection);
             }
             if (connection->read_dispatch_pending_.load(std::memory_order_acquire)) {
                 return;

@@ -186,33 +186,36 @@ namespace yuan::net
             co_return true;
         }
 
-        void on_connected(const std::shared_ptr<Connection> &conn) override
+        void on_connected(Connection &conn) override
         {
             (void)conn;
         }
 
-        void on_error(const std::shared_ptr<Connection> &conn) override
+        void on_error(Connection &conn) override
         {
+            (void)conn;
             if (completion_event_.completed()) {
                 return;
             }
             completion_event_.notify();
         }
 
-        void on_read(const std::shared_ptr<Connection> &conn) override
+        void on_read(Connection &conn) override
         {
+            (void)conn;
             if (!completion_event_.completed()) {
                 completion_event_.notify();
             }
         }
 
-        void on_write(const std::shared_ptr<Connection> &conn) override
+        void on_write(Connection &conn) override
         {
             (void)conn;
         }
 
-        void on_close(const std::shared_ptr<Connection> &conn) override
+        void on_close(Connection &conn) override
         {
+            (void)conn;
             connection_.reset();
             if (completion_event_.completed()) {
                 return;

@@ -446,32 +446,19 @@ namespace yuan::net::http
         }
     }
 
-    void HttpProxy::on_connected(const std::shared_ptr<Connection> &conn)
+    void HttpProxy::on_connected(Connection &conn)
     {
-        if (!conn) {
-            return;
-        }
-
         (void)conn;
     }
 
-    void HttpProxy::on_error(const std::shared_ptr<Connection> &conn)
+    void HttpProxy::on_error(Connection &conn)
     {
-        if (!conn) {
-            return;
-        }
-
-        (void)unmap_and_close_peer(&*conn, false);
+        (void)unmap_and_close_peer(&conn, false);
     }
 
-    void HttpProxy::on_read(const std::shared_ptr<Connection> &conn)
+    void HttpProxy::on_read(Connection &conn)
     {
-        if (!conn) {
-            return;
-        }
-
-        auto &conn_ref = *conn;
-        auto *conn_ptr = &conn_ref;
+        auto *conn_ptr = &conn;
         ServerMapping mapping;
         bool is_server = false;
 
@@ -545,19 +532,14 @@ namespace yuan::net::http
         }
     }
 
-    void HttpProxy::on_write(const std::shared_ptr<Connection> &conn)
+    void HttpProxy::on_write(Connection &conn)
     {
         (void)conn;
     }
 
-    void HttpProxy::on_close(const std::shared_ptr<Connection> &conn)
+    void HttpProxy::on_close(Connection &conn)
     {
-        if (!conn) {
-            return;
-        }
-
-        auto &conn_ref = *conn;
-        auto *conn_ptr = &conn_ref;
+        auto *conn_ptr = &conn;
 
         bool is_server = false;
         {

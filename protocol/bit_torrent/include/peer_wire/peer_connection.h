@@ -96,11 +96,11 @@ namespace yuan::net::bit_torrent
 
     public:
         // ConnectionHandler interface
-        void on_connected(const std::shared_ptr<net::Connection> &conn) override;
-        void on_error(const std::shared_ptr<net::Connection> &conn) override;
-        void on_read(const std::shared_ptr<net::Connection> &conn) override;
-        void on_write(const std::shared_ptr<net::Connection> &conn) override;
-        void on_close(const std::shared_ptr<net::Connection> &conn) override;
+        void on_connected(net::Connection &conn) override;
+        void on_error(net::Connection &conn) override;
+        void on_read(net::Connection &conn) override;
+        void on_write(net::Connection &conn) override;
+        void on_close(net::Connection &conn) override;
 
     public:
         // Initiate outbound connection to a peer

@@ -23,23 +23,26 @@ namespace yuan::net
         {
         }
 
-        void on_connected(const std::shared_ptr<Connection> &conn) override
+        void on_connected(Connection &conn) override
         {
-            dispatch([conn](ConnectionHandler &handler) {
-                handler.on_connected(conn);
+            auto conn_ptr = conn.shared_from_this();
+            dispatch([conn_ptr](ConnectionHandler &handler) {
+                handler.on_connected(*conn_ptr);
             });
         }
 
-        void on_error(const std::shared_ptr<Connection> &conn) override
+        void on_error(Connection &conn) override
         {
-            dispatch([conn](ConnectionHandler &handler) {
-                handler.on_error(conn);
+            auto conn_ptr = conn.shared_from_this();
+            dispatch([conn_ptr](ConnectionHandler &handler) {
+                handler.on_error(*conn_ptr);
             });
         }
 
-        void on_read(const std::shared_ptr<Connection> &conn) override
+        void on_read(Connection &conn) override
         {
-            auto iocp_conn = std::dynamic_pointer_cast<IocpTcpConnection>(conn);
+            auto conn_ptr = conn.shared_from_this();
+            auto iocp_conn = std::dynamic_pointer_cast<IocpTcpConnection>(conn_ptr);
             if (iocp_conn && !iocp_conn->try_mark_read_dispatch_pending()) {
                 return;
             }
@@ -47,7 +50,7 @@ namespace yuan::net
                 iocp_conn->mark_defer_close_on_unconsumed_input();
             }
 
-            const bool queued = dispatch([conn, iocp_conn](ConnectionHandler &handler) {
+            const bool queued = dispatch([conn_ptr, iocp_conn](ConnectionHandler &handler) {
                 struct PendingReadGuard
                 {
                     std::shared_ptr<IocpTcpConnection> connection;
@@ -58,31 +61,34 @@ namespace yuan::net
                         }
                     }
                 } guard{ iocp_conn };
-                handler.on_read(conn);
+                handler.on_read(*conn_ptr);
             });
             if (!queued && iocp_conn) {
                 iocp_conn->clear_read_dispatch_pending();
             }
         }
 
-        void on_write(const std::shared_ptr<Connection> &conn) override
+        void on_write(Connection &conn) override
         {
-            dispatch([conn](ConnectionHandler &handler) {
-                handler.on_write(conn);
+            auto conn_ptr = conn.shared_from_this();
+            dispatch([conn_ptr](ConnectionHandler &handler) {
+                handler.on_write(*conn_ptr);
             });
         }
 
-        void on_close(const std::shared_ptr<Connection> &conn) override
+        void on_close(Connection &conn) override
         {
-            dispatch([conn](ConnectionHandler &handler) {
-                handler.on_close(conn);
+            auto conn_ptr = conn.shared_from_this();
+            dispatch([conn_ptr](ConnectionHandler &handler) {
+                handler.on_close(*conn_ptr);
             });
         }
 
-        void on_input_shutdown(const std::shared_ptr<Connection> &conn) override
+        void on_input_shutdown(Connection &conn) override
         {
-            dispatch([conn](ConnectionHandler &handler) {
-                handler.on_input_shutdown(conn);
+            auto conn_ptr = conn.shared_from_this();
+            dispatch([conn_ptr](ConnectionHandler &handler) {
+                handler.on_input_shutdown(*conn_ptr);
             });
         }
 
@@ -201,16 +207,6 @@ namespace yuan::net
         notify_accept_waiters(std::shared_ptr<Connection>{});
         engine_.stop();
         runtime_ = nullptr;
-
-        if (handler) {
-            if (runtime) {
-                runtime->dispatch([handler = std::move(handler)]() {
-                    handler->on_close(std::shared_ptr<Connection>{});
-                });
-            } else {
-                handler->on_close(std::shared_ptr<Connection>{});
-            }
-        }
     }
 
     void IocpStreamAcceptor::update_channel()

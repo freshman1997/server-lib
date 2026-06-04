@@ -105,12 +105,13 @@ namespace yuan::net
 
         coroutine::Task<std::shared_ptr<Connection>> accept_async()
         {
-            if (!acceptor_ || !runtime_) {
+            auto acceptor = acceptor_;
+            if (!acceptor || !runtime_) {
                 co_return std::shared_ptr<Connection>{};
             }
 
             auto rv = runtime_->runtime_view();
-            auto conn = co_await coroutine::async_accept(rv, acceptor_.get());
+            auto conn = co_await coroutine::async_accept(rv, acceptor.get());
             co_return conn;
         }
 
@@ -139,9 +140,9 @@ namespace yuan::net
             return state_ ? state_->runtime : nullptr;
         }
 
-        StreamAcceptor *acceptor() const noexcept
+        std::shared_ptr<StreamAcceptor> acceptor() const noexcept
         {
-            return acceptor_.get();
+            return acceptor_;
         }
 
         Metrics metrics() const
@@ -495,25 +496,23 @@ namespace yuan::net
         class DefaultHandler final : public yuan::net::ConnectionHandler
         {
         public:
-            void on_connected(const std::shared_ptr<Connection> &) override
+            void on_connected(Connection &) override
             {
             }
-            void on_error(const std::shared_ptr<Connection> &conn) override
+            void on_error(Connection &conn) override
             {
-                if (conn) {
-                    conn->close();
-                }
+                conn.close();
             }
-            void on_read(const std::shared_ptr<Connection> &) override
+            void on_read(Connection &) override
             {
             }
-            void on_write(const std::shared_ptr<Connection> &) override
+            void on_write(Connection &) override
             {
             }
-            void on_close(const std::shared_ptr<Connection> &) override
+            void on_close(Connection &) override
             {
             }
-            void on_input_shutdown(const std::shared_ptr<Connection> &conn) override
+            void on_input_shutdown(Connection &conn) override
             {
                 (void)conn;
             }
@@ -527,23 +526,24 @@ namespace yuan::net
             {
             }
 
-            void on_connected(const std::shared_ptr<Connection> &conn) override
+            void on_connected(Connection &conn) override
             {
-                AsyncListenerHost::on_connection_accepted(state_.lock(), conn);
+                AsyncListenerHost::on_connection_accepted(state_.lock(), conn.shared_from_this());
             }
-            void on_error(const std::shared_ptr<Connection> &conn) override
+            void on_error(Connection &conn) override
             {
-                if (conn) {
-                    conn->close();
-                }
+                conn.close();
             }
-            void on_read(const std::shared_ptr<Connection> &) override
+            void on_read(Connection &) override
             {
             }
-            void on_write(const std::shared_ptr<Connection> &) override
+            void on_write(Connection &) override
             {
             }
-            void on_close(const std::shared_ptr<Connection> &) override
+            void on_close(Connection &) override
+            {
+            }
+            void on_input_shutdown(Connection &) override
             {
             }
 
@@ -553,7 +553,7 @@ namespace yuan::net
 
         NetworkRuntime *runtime_ = nullptr;
         std::shared_ptr<State> state_ = std::make_shared<State>();
-        std::unique_ptr<StreamAcceptor> acceptor_;
+        std::shared_ptr<StreamAcceptor> acceptor_;
         std::unique_ptr<IocpShardedAsyncListener> sharded_listener_;
         std::unique_ptr<ShardedAsyncListener> generic_sharded_listener_;
         std::shared_ptr<SSLModule> ssl_module_;

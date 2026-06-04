@@ -168,6 +168,20 @@ namespace yuan::net::ssh
             }
             return false;
         }
+
+        SshChannel *resolve_recipient_channel(SshConnectionManager *manager, uint32_t recipient_channel)
+        {
+            if (!manager) {
+                return nullptr;
+            }
+
+            auto *channel = manager->find_channel(recipient_channel);
+            if (channel) {
+                return channel;
+            }
+
+            return manager->find_channel_by_remote(recipient_channel);
+        }
     }
 
     SshConnectionManager::SshConnectionManager(SshSession * session, uint32_t max_channels)
@@ -375,7 +389,7 @@ namespace yuan::net::ssh
     ByteBuffer SshConnectionManager::handle_channel_data(const SshChannelDataMessage & msg, SshHandler * handler)
     {
         auto *effective_handler = handler ? handler : &SshHandler::default_handler();
-        auto *channel = find_channel_by_remote(msg.recipient_channel);
+        auto *channel = resolve_recipient_channel(this, msg.recipient_channel);
         if (!channel) {
             return ByteBuffer();
         }
@@ -405,7 +419,7 @@ namespace yuan::net::ssh
 
     ByteBuffer SshConnectionManager::handle_channel_extended_data(const SshChannelExtendedDataMessage & msg)
     {
-        auto *channel = find_channel_by_remote(msg.recipient_channel);
+        auto *channel = resolve_recipient_channel(this, msg.recipient_channel);
         if (!channel) {
             return ByteBuffer();
         }
@@ -425,7 +439,7 @@ namespace yuan::net::ssh
 
     ByteBuffer SshConnectionManager::handle_channel_window_adjust(const SshChannelWindowAdjustMessage & msg)
     {
-        auto *channel = find_channel_by_remote(msg.recipient_channel);
+        auto *channel = resolve_recipient_channel(this, msg.recipient_channel);
         if (!channel) {
             return ByteBuffer();
         }
@@ -441,7 +455,7 @@ namespace yuan::net::ssh
 
     ByteBuffer SshConnectionManager::handle_channel_eof(const SshChannelEofMessage & msg)
     {
-        auto *channel = find_channel_by_remote(msg.recipient_channel);
+        auto *channel = resolve_recipient_channel(this, msg.recipient_channel);
         if (!channel) {
             return ByteBuffer();
         }
@@ -467,7 +481,7 @@ namespace yuan::net::ssh
     ByteBuffer SshConnectionManager::handle_channel_close(const SshChannelCloseMessage & msg, SshHandler * handler)
     {
         auto *effective_handler = handler ? handler : &SshHandler::default_handler();
-        auto *channel = find_channel_by_remote(msg.recipient_channel);
+        auto *channel = resolve_recipient_channel(this, msg.recipient_channel);
         if (!channel) {
             return ByteBuffer();
         }
@@ -501,7 +515,7 @@ namespace yuan::net::ssh
     ByteBuffer SshConnectionManager::handle_channel_request(const SshChannelRequestMessage & msg, SshHandler * handler)
     {
         auto *effective_handler = handler ? handler : &SshHandler::default_handler();
-        auto *channel = find_channel_by_remote(msg.recipient_channel);
+        auto *channel = resolve_recipient_channel(this, msg.recipient_channel);
         if (!channel) {
             if (msg.want_reply) {
                 return build_channel_failure(msg.recipient_channel);

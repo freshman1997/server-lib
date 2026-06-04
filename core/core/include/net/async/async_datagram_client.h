@@ -206,19 +206,22 @@ namespace yuan::net
         class DefaultHandler final : public ConnectionHandler
         {
         public:
-            void on_connected(const std::shared_ptr<Connection> &) override
+            void on_connected(Connection &) override
             {
             }
-            void on_error(const std::shared_ptr<Connection> &) override
+            void on_error(Connection &) override
             {
             }
-            void on_read(const std::shared_ptr<Connection> &) override
+            void on_read(Connection &) override
             {
             }
-            void on_write(const std::shared_ptr<Connection> &) override
+            void on_write(Connection &) override
             {
             }
-            void on_close(const std::shared_ptr<Connection> &) override
+            void on_close(Connection &) override
+            {
+            }
+            void on_input_shutdown(Connection &) override
             {
             }
         };

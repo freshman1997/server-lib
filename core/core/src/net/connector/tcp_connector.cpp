@@ -64,43 +64,43 @@ namespace yuan::net
         {
         }
 
-        void on_connected(const std::shared_ptr<Connection> &conn) override
+        void on_connected(Connection &conn) override
         {
             auto data = data_.lock();
-            if (!data || !conn || !data->connector_handler_owner_) {
+            if (!data || !data->connector_handler_owner_) {
                 return;
             }
 
             if (data->ssl_module) {
-                auto stream = std::dynamic_pointer_cast<StreamTransport>(conn);
+                auto stream = std::dynamic_pointer_cast<StreamTransport>(conn.shared_from_this());
                 auto *channel = stream ? stream->stream_channel() : nullptr;
                 if (!channel) {
                     data->reset_connection_state();
-                    data->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::failed, conn, data->last_error_, data->attempt_id_});
+                    data->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::failed, conn.shared_from_this(), data->last_error_, data->attempt_id_});
                     return;
                 }
 
                 const auto sslHandler = data->ssl_module->create_handler(channel->get_fd(), SSLHandler::SSLMode::connector_);
                 if (!sslHandler) {
                     data->reset_connection_state();
-                    data->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::failed, conn, data->last_error_, data->attempt_id_});
+                    data->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::failed, conn.shared_from_this(), data->last_error_, data->attempt_id_});
                     return;
                 }
 
-                conn->set_ssl_handler(sslHandler);
-                conn->set_ssl_handshaking(true);
+                conn.set_ssl_handler(sslHandler);
+                conn.set_ssl_handshaking(true);
 
                 int ret = sslHandler->ssl_init_action();
                 if (ret > 0) {
-                    conn->set_ssl_handshaking(false);
+                    conn.set_ssl_handshaking(false);
                 } else if (sslHandler->ssl_want_read() || sslHandler->ssl_want_write()) {
                     if (sslHandler->ssl_want_write()) {
                         channel->enable_write();
-                        if (conn->get_connection_handler() && data->event_handler_) {
+                        if (conn.get_connection_handler() && data->event_handler_) {
                             data->event_handler_->update_channel(channel);
                         }
                     }
-                    conn->set_ssl_handshake_callback([weak_data = data_, conn](bool success) {
+                    conn.set_ssl_handshake_callback([weak_data = data_, conn_ptr = conn.shared_from_this()](bool success) {
                         auto locked = weak_data.lock();
                         if (!locked || !locked->connector_handler_owner_) {
                             return;
@@ -108,27 +108,27 @@ namespace yuan::net
                         if (success) {
                             locked->cancel_timer();
                             locked->connected_ = true;
-                            locked->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::success, conn, 0, locked->attempt_id_});
+                            locked->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::success, conn_ptr, 0, locked->attempt_id_});
                         } else {
                             locked->reset_connection_state();
-                            locked->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::failed, conn, locked->last_error_, locked->attempt_id_});
+                            locked->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::failed, conn_ptr, locked->last_error_, locked->attempt_id_});
                         }
                     });
                     return;
                 } else {
-                    conn->set_ssl_handshaking(false);
+                    conn.set_ssl_handshaking(false);
                     data->reset_connection_state();
-                    data->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::failed, conn, data->last_error_, data->attempt_id_});
+                    data->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::failed, conn.shared_from_this(), data->last_error_, data->attempt_id_});
                     return;
                 }
             }
 
             data->cancel_timer();
             data->connected_ = true;
-            data->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::success, conn, 0, data->attempt_id_});
+            data->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::success, conn.shared_from_this(), 0, data->attempt_id_});
         }
 
-        void on_error(const std::shared_ptr<Connection> &conn) override
+        void on_error(Connection &conn) override
         {
             (void)conn;
             if (auto data = data_.lock()) {
@@ -136,17 +136,17 @@ namespace yuan::net
             }
         }
 
-        void on_read(const std::shared_ptr<Connection> &conn) override
+        void on_read(Connection &conn) override
         {
             (void)conn;
         }
 
-        void on_write(const std::shared_ptr<Connection> &conn) override
+        void on_write(Connection &conn) override
         {
             (void)conn;
         }
 
-        void on_close(const std::shared_ptr<Connection> &conn) override
+        void on_close(Connection &conn) override
         {
             auto data = data_.lock();
             if (!data || !data->connector_handler_owner_) {
@@ -164,7 +164,7 @@ namespace yuan::net
                 return;
             }
 
-            data->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::failed, conn, data->last_error_, data->attempt_id_});
+            data->connector_handler_owner_->on_connect_result(ConnectResult{ConnectResultCode::failed, conn.shared_from_this(), data->last_error_, data->attempt_id_});
         }
 
     private:
