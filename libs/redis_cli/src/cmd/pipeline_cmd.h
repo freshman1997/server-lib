@@ -3,6 +3,7 @@
 
 #include "command.h"
 
+#include <string>
 #include <vector>
 
 namespace yuan::redis
@@ -15,6 +16,12 @@ namespace yuan::redis
             if (cmd) {
                 cmds_.push_back(cmd);
             }
+        }
+
+        void set_packed_payload(std::string payload, std::size_t command_count)
+        {
+            packed_payload_ = std::move(payload);
+            packed_command_count_ = command_count;
         }
 
         const std::vector<std::shared_ptr<Command> > &get_commands() const
@@ -46,6 +53,8 @@ namespace yuan::redis
 
     private:
         std::vector<std::shared_ptr<Command> > cmds_;
+        std::string packed_payload_;
+        std::size_t packed_command_count_ = 0;
         std::shared_ptr<RedisValue> result_;
     };
 }

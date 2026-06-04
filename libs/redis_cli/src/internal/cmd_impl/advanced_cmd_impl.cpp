@@ -9,6 +9,8 @@
 #include "internal/redis_registry.h"
 
 #include <cctype>
+#include <charconv>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -29,6 +31,61 @@ namespace yuan::redis
         std::shared_ptr<StringValue> float_arg(const double value)
         {
             return std::make_shared<StringValue>(serializeDouble(value));
+        }
+
+        std::size_t decimal_digits(std::size_t value)
+        {
+            std::size_t digits = 1;
+            while (value >= 10) {
+                value /= 10;
+                ++digits;
+            }
+            return digits;
+        }
+
+        void append_decimal(std::string &out, std::size_t value)
+        {
+            char buf[32];
+            auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), value);
+            if (ec == std::errc()) {
+                out.append(buf, static_cast<std::size_t>(ptr - buf));
+            }
+        }
+
+        std::size_t estimate_resp_bulk_size(std::string_view value)
+        {
+            return 1 + decimal_digits(value.size()) + 2 + value.size() + 2;
+        }
+
+        void append_resp_bulk(std::string &out, std::string_view value)
+        {
+            out.push_back('$');
+            append_decimal(out, value.size());
+            out.append("\r\n");
+            out.append(value.data(), value.size());
+            out.append("\r\n");
+        }
+
+        std::size_t estimate_resp_command_size(const PipelineCommand &command)
+        {
+            const std::size_t argc = command.args.size() + 1;
+            std::size_t size = 1 + decimal_digits(argc) + 2;
+            size += estimate_resp_bulk_size(command.name);
+            for (const auto &arg : command.args) {
+                size += estimate_resp_bulk_size(arg);
+            }
+            return size;
+        }
+
+        void append_resp_command(std::string &out, const PipelineCommand &command)
+        {
+            out.push_back('*');
+            append_decimal(out, command.args.size() + 1);
+            out.append("\r\n");
+            append_resp_bulk(out, command.name);
+            for (const auto &arg : command.args) {
+                append_resp_bulk(out, arg);
+            }
         }
 
         std::vector<std::string> split_command_line(const std::string &command)
@@ -213,19 +270,22 @@ namespace yuan::redis
             return arr;
         }
 
-        auto pipeline_cmd = std::make_shared<PipelineCmd>();
+        std::size_t payload_size = 0;
         for (const auto &command : commands) {
             if (command.name.empty()) {
                 return ErrorValue::from_string("ERR: invalid command in PIPELINE");
             }
-
-            auto cmd = make_cmd(command.name);
-            for (const auto &arg : command.args) {
-                cmd->add_arg(str_arg(arg));
-            }
-            pipeline_cmd->add_command(cmd);
+            payload_size += estimate_resp_command_size(command);
         }
 
+        std::string payload;
+        payload.reserve(payload_size);
+        for (const auto &command : commands) {
+            append_resp_command(payload, command);
+        }
+
+        auto pipeline_cmd = std::make_shared<PipelineCmd>();
+        pipeline_cmd->set_packed_payload(std::move(payload), commands.size());
         return impl_->execute_command(pipeline_cmd);
     }
 

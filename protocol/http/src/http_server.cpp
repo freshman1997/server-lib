@@ -1425,9 +1425,7 @@ namespace yuan::net::http
             }
         }
 
-        if (config::close_idle_connection && session) {
-            session->reset_timer();
-        }
+        (void)session;
     }
 
     void HttpServer::store_session(uint64_t session_id, std::unique_ptr<HttpSession> session)
@@ -1590,35 +1588,58 @@ namespace yuan::net::http
         return h2_dispatch_paths_.contains(std::string(path));
     }
 
-    bool HttpServer::allow_new_connection(const net::Connection &conn)
+    bool HttpServer::allow_new_connection(const net::Connection &conn, bool *tracked_per_ip)
     {
+        if (tracked_per_ip) {
+            *tracked_per_ip = false;
+        }
+
         const int max_connections = max_connections_limit_.load(std::memory_order_relaxed);
         const int max_connections_per_ip = max_connections_per_ip_limit_.load(std::memory_order_relaxed);
+
+        if (max_connections_per_ip <= 0) {
+            int current = active_http_connections_.load(std::memory_order_relaxed);
+            for (;;) {
+                if (max_connections > 0 && current >= max_connections) {
+                    return false;
+                }
+                if (active_http_connections_.compare_exchange_weak(
+                    current,
+                    current + 1,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed)) {
+                    return true;
+                }
+            }
+        }
+
         std::lock_guard<std::mutex> lock(conn_limit_mutex_);
-        if (max_connections > 0) {
-            int total = 0;
-            for (const auto &kv : active_conn_per_ip_) {
-                total += kv.second;
-            }
-            if (total >= max_connections) {
-                return false;
-            }
+        const int total = active_http_connections_.load(std::memory_order_relaxed);
+        if (max_connections > 0 && total >= max_connections) {
+            return false;
         }
 
         const uint32_t ip = conn.get_remote_address().get_net_ip();
-        if (max_connections_per_ip > 0) {
-            const int cur = active_conn_per_ip_[ip];
-            if (cur >= max_connections_per_ip) {
-                return false;
-            }
+        const int cur = active_conn_per_ip_[ip];
+        if (cur >= max_connections_per_ip) {
+            return false;
         }
 
         ++active_conn_per_ip_[ip];
+        active_http_connections_.fetch_add(1, std::memory_order_relaxed);
+        if (tracked_per_ip) {
+            *tracked_per_ip = true;
+        }
         return true;
     }
 
-    void HttpServer::on_connection_closed(const net::Connection &conn)
+    void HttpServer::on_connection_closed(const net::Connection &conn, bool tracked_per_ip)
     {
+        active_http_connections_.fetch_sub(1, std::memory_order_relaxed);
+        if (!tracked_per_ip) {
+            return;
+        }
+
         const uint32_t ip = conn.get_remote_address().get_net_ip();
 
         std::lock_guard<std::mutex> lock(conn_limit_mutex_);
@@ -1677,12 +1698,7 @@ namespace yuan::net::http
         HttpServerStats st;
         st.connection_rejected_total = connection_rejected_total_.load(std::memory_order_relaxed);
         st.inflight_rejected_total = inflight_rejected_total_.load(std::memory_order_relaxed);
-        {
-            std::lock_guard<std::mutex> lock(conn_limit_mutex_);
-            for (const auto &kv : active_conn_per_ip_) {
-                st.active_http_connections += kv.second;
-            }
-        }
+        st.active_http_connections = active_http_connections_.load(std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> lock(inflight_mutex_);
             for (const auto &kv : inflight_req_per_ip_) {
@@ -1808,7 +1824,8 @@ namespace yuan::net::http
             co_return;
         }
 
-        if (!allow_new_connection(*conn)) {
+        bool connection_per_ip_counted = false;
+        if (!allow_new_connection(*conn, &connection_per_ip_counted)) {
             ++connection_rejected_total_;
             increment_reject_counter("connection_limit", RejectReason::conn_reject);
             conn->append_output("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
@@ -1819,7 +1836,7 @@ namespace yuan::net::http
         bool connection_counted = true;
         auto release_connection_count = [&]() {
             if (connection_counted && conn) {
-                on_connection_closed(*conn);
+                on_connection_closed(*conn, connection_per_ip_counted);
                 connection_counted = false;
             }
         };

@@ -190,8 +190,8 @@ namespace yuan::net::http
         bool parse_request(HttpSessionContext *context, ::yuan::buffer::ByteBuffer &&data);
         bool validate_request_version(HttpSessionContext *context);
         bool is_h2_dispatch_path(std::string_view path) const;
-        bool allow_new_connection(const net::Connection &conn);
-        void on_connection_closed(const net::Connection &conn);
+        bool allow_new_connection(const net::Connection &conn, bool *tracked_per_ip = nullptr);
+        void on_connection_closed(const net::Connection &conn, bool tracked_per_ip);
         bool try_acquire_inflight_request(const HttpRequest *request, bool *tracked = nullptr);
         void release_inflight_request(const HttpRequest *request, bool tracked = true);
         std::string reject_route_key(const HttpRequest *request) const;
@@ -301,6 +301,7 @@ namespace yuan::net::http
         std::unordered_map<uint32_t, int> inflight_req_per_ip_;
         std::atomic<uint64_t> connection_rejected_total_{ 0 };
         std::atomic<uint64_t> inflight_rejected_total_{ 0 };
+        std::atomic<int> active_http_connections_{ 0 };
         std::atomic<int> max_connections_limit_{ 0 };
         std::atomic<int> max_connections_per_ip_limit_{ 0 };
         std::atomic<int> max_inflight_requests_per_ip_limit_{ 0 };

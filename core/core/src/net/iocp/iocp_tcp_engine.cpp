@@ -607,7 +607,14 @@ namespace yuan::net
             input_buffer_.append(data, size);
         }
 
-        notify_event_waiters(ConnectionEvent::readable);
+        auto pending = take_pending_read();
+        if (pending.handle) {
+            if (pending.resumer) {
+                pending.resumer(pending.handle);
+            }
+        } else {
+            notify_event_waiters(ConnectionEvent::readable);
+        }
         if (!has_connection_handler_.load(std::memory_order_acquire)) {
             return;
         }
@@ -1055,7 +1062,7 @@ namespace yuan::net
             return;
         }
 
-        if (connection->has_event_waiter(ConnectionEvent::readable)) {
+        if (connection->has_event_waiter(ConnectionEvent::readable) || connection->pending_read_coroutine()) {
             connection->mark_defer_close_on_unconsumed_input();
         }
         connection->notify_read(operation.buffer.data(), completion.bytes);

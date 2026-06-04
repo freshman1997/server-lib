@@ -15,6 +15,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <conio.h>
 
 #ifndef _WIN32
 #include <sys/select.h>

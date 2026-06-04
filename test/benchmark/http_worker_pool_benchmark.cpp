@@ -1,4 +1,5 @@
 #include "eventbus/event_bus.h"
+#include "event/event_loop.h"
 #include "http/http_service.h"
 #include "log.h"
 #include "registry.h"
@@ -12,12 +13,14 @@
 #include "net/iocp/iocp_tcp_io.h"
 #include "net/async/async_listener_host.h"
 #include "net/async/iocp_sharded_async_listener.h"
+#include "net/poller/select_poller.h"
 #include "net/runtime/network_runtime.h"
 #include "net/socket/listen_options.h"
 #include "response.h"
 #include "net/socket/socket_ops.h"
 #include "runtime_context.h"
 #include "platform/native_platform.h"
+#include "timer/timer_manager_factory.h"
 
 #include <algorithm>
 #include <atomic>
@@ -199,27 +202,31 @@ namespace
 #endif
     }
 
-    int create_reuse_port_listener(uint16_t port, bool reuse_port)
+    socket_t create_reuse_port_listener(uint16_t port, bool reuse_port)
     {
-        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) {
-            return -1;
+        const socket_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd == kInvalidSocket) {
+            std::cerr << "socket failed error=" << yuan::platform::GetLastNativeError() << '\n';
+            return kInvalidSocket;
         }
 
         int flag = 1;
         if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&flag), sizeof(flag)) != 0) {
+            std::cerr << "setsockopt(SO_REUSEADDR) failed error=" << yuan::platform::GetLastNativeError() << '\n';
             close_socket(fd);
-            return -1;
+            return kInvalidSocket;
         }
 #ifdef SO_REUSEPORT
         if (reuse_port && ::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &flag, sizeof(flag)) != 0) {
+            std::cerr << "setsockopt(SO_REUSEPORT) failed error=" << yuan::platform::GetLastNativeError() << '\n';
             close_socket(fd);
-            return -1;
+            return kInvalidSocket;
         }
 #else
         if (reuse_port) {
+            std::cerr << "SO_REUSEPORT requested but unavailable\n";
             close_socket(fd);
-            return -1;
+            return kInvalidSocket;
         }
 #endif
 
@@ -228,12 +235,16 @@ namespace
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         addr.sin_port = htons(port);
         if (::bind(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) != 0) {
+            std::cerr << "bind failed port=" << port
+                      << " error=" << yuan::platform::GetLastNativeError() << '\n';
             close_socket(fd);
-            return -1;
+            return kInvalidSocket;
         }
         if (::listen(fd, 4096) != 0) {
+            std::cerr << "listen failed port=" << port
+                      << " error=" << yuan::platform::GetLastNativeError() << '\n';
             close_socket(fd);
-            return -1;
+            return kInvalidSocket;
         }
 
         set_nonblocking(fd);
@@ -252,7 +263,7 @@ namespace
         struct ev_loop *loop = nullptr;
         ev_io accept_watcher{};
         ev_async stop_watcher{};
-        int listen_fd = -1;
+        socket_t listen_fd = kInvalidSocket;
         std::thread thread;
     };
 
@@ -348,12 +359,12 @@ namespace
                 }
 
                 worker->listen_fd = create_reuse_port_listener(port, count > 1);
-                if (worker->listen_fd < 0) {
+                if (worker->listen_fd == kInvalidSocket) {
                     stop();
                     return false;
                 }
 
-                ev_io_init(&worker->accept_watcher, libev_accept_cb, worker->listen_fd, EV_READ);
+                ev_io_init(&worker->accept_watcher, libev_accept_cb, static_cast<int>(worker->listen_fd), EV_READ);
                 ev_io_start(worker->loop, &worker->accept_watcher);
 
                 ev_async_init(&worker->stop_watcher, libev_stop_cb);
@@ -395,7 +406,7 @@ namespace
                     worker->loop = nullptr;
                 }
                 close_socket(worker->listen_fd);
-                worker->listen_fd = -1;
+                worker->listen_fd = kInvalidSocket;
             }
             workers.clear();
         }
@@ -668,6 +679,125 @@ namespace
         }
     };
 
+    struct YuanSelectMinimalServer
+    {
+        struct RuntimeBundle
+        {
+            std::unique_ptr<yuan::net::SelectPoller> poller;
+            std::unique_ptr<yuan::timer::TimerManager> timer_manager;
+            std::unique_ptr<yuan::net::EventLoop> loop;
+            std::unique_ptr<yuan::net::NetworkRuntime> runtime;
+        };
+
+        std::vector<std::unique_ptr<RuntimeBundle>> runtimes;
+        std::vector<std::unique_ptr<yuan::net::AsyncListenerHost>> listeners;
+        std::vector<std::thread> threads;
+
+        static std::unique_ptr<RuntimeBundle> make_runtime()
+        {
+            auto bundle = std::make_unique<RuntimeBundle>();
+            bundle->poller = std::make_unique<yuan::net::SelectPoller>();
+            if (!bundle->poller->init()) {
+                return nullptr;
+            }
+            bundle->timer_manager = yuan::timer::create_timer_manager(yuan::timer::TimerBackend::heap);
+            bundle->loop = std::make_unique<yuan::net::EventLoop>(bundle->poller.get(), bundle->timer_manager.get());
+            bundle->runtime = std::make_unique<yuan::net::NetworkRuntime>(bundle->loop.get(), bundle->timer_manager.get());
+            return bundle;
+        }
+
+        bool start(uint16_t port, std::size_t worker_count)
+        {
+            auto log_registry = yuan::log::LogRegistry::get_instance();
+            log_registry->disable_file_log();
+            log_registry->set_global_level(yuan::log::Level::fatal);
+            log_registry->set_default(nullptr);
+
+            const std::size_t count = (std::max)(worker_count, std::size_t{1});
+            runtimes.reserve(count);
+            listeners.reserve(count);
+            threads.reserve(count);
+
+            for (std::size_t i = 0; i < count; ++i) {
+                auto runtime = make_runtime();
+                if (!runtime) {
+                    stop();
+                    return false;
+                }
+                auto listener = std::make_unique<yuan::net::AsyncListenerHost>();
+
+                listener->set_connection_handler([](yuan::net::AsyncConnectionContext ctx) -> yuan::coroutine::Task<void> {
+                    std::string input;
+                    while (ctx.is_connected()) {
+                        auto read = co_await ctx.read_async();
+                        if (read.status != yuan::coroutine::IoStatus::success) {
+                            break;
+                        }
+
+                        const auto span = read.data.readable_span();
+                        input.append(span.data(), span.size());
+                        for (;;) {
+                            const auto request_end = input.find("\r\n\r\n");
+                            if (request_end == std::string::npos) {
+                                break;
+                            }
+                            input.erase(0, request_end + 4);
+                            ctx.append_output(kHttpResponse);
+                            ctx.flush();
+                        }
+                    }
+                    ctx.close();
+                    co_return;
+                });
+
+                yuan::net::ListenOptions options;
+                options.reuse_port = count > 1;
+                options.backlog = 4096;
+                if (!listener->bind("127.0.0.1", port, *runtime->runtime, options)) {
+                    stop();
+                    return false;
+                }
+
+                auto task = listener->run_async();
+                task.resume();
+                task.detach();
+
+                listeners.push_back(std::move(listener));
+                runtimes.push_back(std::move(runtime));
+            }
+
+            for (auto &runtime : runtimes) {
+                threads.emplace_back([runtime = runtime.get()]() {
+                    runtime->runtime->run();
+                });
+            }
+
+            return true;
+        }
+
+        void stop()
+        {
+            for (auto &listener : listeners) {
+                if (listener) {
+                    listener->close();
+                }
+            }
+            for (auto &runtime : runtimes) {
+                if (runtime && runtime->runtime) {
+                    runtime->runtime->stop();
+                }
+            }
+            for (auto &thread : threads) {
+                if (thread.joinable()) {
+                    thread.join();
+                }
+            }
+            threads.clear();
+            listeners.clear();
+            runtimes.clear();
+        }
+    };
+
     class YuanRawConnectionHandler final : public yuan::net::ConnectionHandler
     {
     public:
@@ -845,6 +975,7 @@ namespace
                 cfg.listen_options.iocp_worker_count = worker_count;
             }
             auto service = std::make_unique<yuan::server::HttpService>(port, cfg);
+            service->set_admin_dashboard_enabled(false);
 
             yuan::app::RuntimeContext context;
             context.app_name = "http-worker-pool-benchmark";
@@ -885,6 +1016,124 @@ namespace
         }
         return true;
     }
+
+    struct YuanSelectServer
+    {
+        struct RuntimeBundle
+        {
+            std::unique_ptr<yuan::net::SelectPoller> poller;
+            std::unique_ptr<yuan::timer::TimerManager> timer_manager;
+            std::unique_ptr<yuan::net::EventLoop> loop;
+            std::unique_ptr<yuan::net::NetworkRuntime> runtime;
+        };
+
+        std::vector<std::unique_ptr<RuntimeBundle>> runtimes;
+        std::vector<std::unique_ptr<yuan::server::HttpService>> services;
+        std::vector<std::thread> threads;
+
+        static std::unique_ptr<RuntimeBundle> make_runtime()
+        {
+            auto bundle = std::make_unique<RuntimeBundle>();
+            bundle->poller = std::make_unique<yuan::net::SelectPoller>();
+            if (!bundle->poller->init()) {
+                return nullptr;
+            }
+            bundle->timer_manager = yuan::timer::create_timer_manager(yuan::timer::TimerBackend::heap);
+            bundle->loop = std::make_unique<yuan::net::EventLoop>(bundle->poller.get(), bundle->timer_manager.get());
+            bundle->runtime = std::make_unique<yuan::net::NetworkRuntime>(bundle->loop.get(), bundle->timer_manager.get());
+            return bundle;
+        }
+
+        bool start(uint16_t port, std::size_t worker_count)
+        {
+            auto log_registry = yuan::log::LogRegistry::get_instance();
+            log_registry->disable_file_log();
+            log_registry->set_global_level(yuan::log::Level::fatal);
+            log_registry->set_default(nullptr);
+
+            auto bus = std::make_shared<yuan::eventbus::EventBus>();
+            const std::size_t count = (std::max)(worker_count, std::size_t{1});
+            runtimes.reserve(count);
+            services.reserve(count);
+            threads.reserve(count);
+
+            for (std::size_t i = 0; i < count; ++i) {
+                auto runtime = make_runtime();
+                if (!runtime) {
+                    stop();
+                    return false;
+                }
+
+                yuan::net::http::HttpServerConfig cfg;
+                cfg.enable_ssl = false;
+                cfg.enable_cors = false;
+                cfg.enable_keep_alive = true;
+                auto service = std::make_unique<yuan::server::HttpService>(port, cfg);
+                service->set_admin_dashboard_enabled(false);
+
+                yuan::app::RuntimeContext context;
+                context.app_name = "http-worker-pool-benchmark";
+                context.run_mode = yuan::app::RunMode::multi_process;
+                context.worker_threads = worker_count;
+                context.runtime_worker_count = worker_count;
+                context.worker_index = i;
+                context.is_worker_process = true;
+                context.active_service_name = "http";
+                context.service_index = 0;
+                context.service_instance_index = i;
+                context.service_instance_count = count;
+                context.listener_reuse_port = count > 1;
+                context.shared_runtime = runtime->runtime.get();
+                context.event_bus = bus;
+                service->set_runtime_context(context);
+
+                service->server().on("/bench", [](yuan::net::http::HttpRequest *,
+                                                   yuan::net::http::HttpResponse *resp) {
+                    resp->send_body(kBenchmarkBody, "text/plain");
+                });
+
+                if (!service->init()) {
+                    stop();
+                    return false;
+                }
+
+                runtimes.push_back(std::move(runtime));
+                services.push_back(std::move(service));
+            }
+
+            for (auto &service : services) {
+                service->start();
+            }
+            for (auto &runtime : runtimes) {
+                threads.emplace_back([runtime = runtime.get()]() {
+                    runtime->runtime->run();
+                });
+            }
+            return true;
+        }
+
+        void stop()
+        {
+            for (auto &service : services) {
+                if (service) {
+                    service->stop();
+                }
+            }
+            for (auto &runtime : runtimes) {
+                if (runtime && runtime->runtime) {
+                    runtime->runtime->stop();
+                }
+            }
+            for (auto &thread : threads) {
+                if (thread.joinable()) {
+                    thread.join();
+                }
+            }
+            threads.clear();
+            services.clear();
+            runtimes.clear();
+        }
+    };
 
 #ifdef YUAN_BENCH_WITH_LIBEVENT
     void libevent_http_cb(evhttp_request *request, void *)
@@ -1105,12 +1354,31 @@ namespace
                     bool ok = true;
                     sockaddr_in addr{};
                     uv_ip4_addr("127.0.0.1", port, &addr);
-                    ok = ok && uv_tcp_init(state->loop, &state->server) == 0;
+                    int rc = uv_tcp_init(state->loop, &state->server);
+                    if (rc != 0) {
+                        std::cerr << "uv_tcp_init failed error=" << uv_strerror(rc) << '\n';
+                        ok = false;
+                    }
                     state->server.data = state;
                     const unsigned int flags = worker_count > 1 ? UV_TCP_REUSEPORT : 0;
-                    ok = ok && uv_tcp_bind(&state->server, reinterpret_cast<const sockaddr *>(&addr), flags) == 0;
-                    ok = ok && uv_listen(reinterpret_cast<uv_stream_t *>(&state->server), 4096, uv_connection_cb) == 0;
-                    ok = ok && uv_async_init(state->loop, &state->stop_async, uv_stop_async_cb) == 0;
+                    rc = ok ? uv_tcp_bind(&state->server, reinterpret_cast<const sockaddr *>(&addr), flags) : 0;
+                    if (rc != 0) {
+                        std::cerr << "uv_tcp_bind failed port=" << port
+                                  << " flags=" << flags
+                                  << " error=" << uv_strerror(rc) << '\n';
+                        ok = false;
+                    }
+                    rc = ok ? uv_listen(reinterpret_cast<uv_stream_t *>(&state->server), 4096, uv_connection_cb) : 0;
+                    if (rc != 0) {
+                        std::cerr << "uv_listen failed port=" << port
+                                  << " error=" << uv_strerror(rc) << '\n';
+                        ok = false;
+                    }
+                    rc = ok ? uv_async_init(state->loop, &state->stop_async, uv_stop_async_cb) : 0;
+                    if (rc != 0) {
+                        std::cerr << "uv_async_init failed error=" << uv_strerror(rc) << '\n';
+                        ok = false;
+                    }
                     state->stop_async.data = state;
 
                     signal->set_value(ok);
@@ -1334,7 +1602,9 @@ namespace
     {
         std::string implementation;
         YuanServer yuan;
+        YuanSelectServer yuan_select;
         YuanMinimalServer yuan_min;
+        YuanSelectMinimalServer yuan_select_min;
         YuanRawServer yuan_raw;
 #ifdef YUAN_BENCH_WITH_LIBEVENT
         LibeventServer libevent;
@@ -1363,8 +1633,14 @@ namespace
             if (name == "yuan") {
                 return start_yuan_server(yuan, port, worker_count);
             }
+            if (name == "yuan_select") {
+                return yuan_select.start(port, worker_count);
+            }
             if (name == "yuan_min") {
                 return yuan_min.start(port, worker_count);
+            }
+            if (name == "yuan_select_min") {
+                return yuan_select_min.start(port, worker_count);
             }
             if (name == "yuan_raw") {
                 return yuan_raw.start(port, worker_count);
@@ -1416,8 +1692,14 @@ namespace
             if (implementation == "yuan" || implementation == "yuan_iocp") {
                 yuan.stop();
             }
+            else if (implementation == "yuan_select") {
+                yuan_select.stop();
+            }
             else if (implementation == "yuan_min") {
                 yuan_min.stop();
+            }
+            else if (implementation == "yuan_select_min") {
+                yuan_select_min.stop();
             }
             else if (implementation == "yuan_raw") {
                 yuan_raw.stop();

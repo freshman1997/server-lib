@@ -31,6 +31,7 @@ namespace yuan::server
         void stop() override;
         void set_runtime_context(const yuan::app::RuntimeContext &context) override;
         void set_server_configurator(ServerConfigurator configurator);
+        void set_admin_dashboard_enabled(bool enabled);
 
         yuan::net::http::HttpServer &server();
         const yuan::net::http::HttpServer &server() const;
@@ -72,6 +73,7 @@ namespace yuan::server
         ServerRuntimeHost host_;
         yuan::app::RuntimeContext runtime_context_{};
         yuan::net::NetworkRuntime *shared_runtime_ = nullptr;
+        bool admin_dashboard_enabled_ = true;
 
         mutable std::mutex dashboard_mutex_;
         DashboardSnapshot dashboard_snapshot_{};

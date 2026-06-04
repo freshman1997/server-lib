@@ -65,6 +65,13 @@ namespace yuan::net
     {
     public:
         using EventWaiter = std::function<void(Connection &)>;
+        using PendingReadResumer = std::function<void(std::coroutine_handle<>)>;
+        struct PendingRead
+        {
+            std::coroutine_handle<> handle{};
+            PendingReadResumer resumer{};
+        };
+
         struct EventWaiterRegistration
         {
             ConnectionEvent event;
@@ -528,24 +535,37 @@ namespace yuan::net
     public:
         std::coroutine_handle<> pending_read_coroutine() const noexcept
         {
+            std::lock_guard<yuan::base::Spinlock> lock(pending_read_mutex_);
             return pending_read_coroutine_;
         }
 
-        void set_pending_read_coroutine(std::coroutine_handle<> handle) noexcept
+        void set_pending_read_coroutine(std::coroutine_handle<> handle, PendingReadResumer resumer = {}) noexcept
         {
+            std::lock_guard<yuan::base::Spinlock> lock(pending_read_mutex_);
             pending_read_coroutine_ = handle;
+            pending_read_resumer_ = std::move(resumer);
         }
 
         void clear_pending_read_coroutine() noexcept
         {
+            std::lock_guard<yuan::base::Spinlock> lock(pending_read_mutex_);
             pending_read_coroutine_ = nullptr;
+            pending_read_resumer_ = {};
         }
 
         std::coroutine_handle<> take_pending_read_coroutine() noexcept
         {
+            return take_pending_read().handle;
+        }
+
+        PendingRead take_pending_read() noexcept
+        {
+            std::lock_guard<yuan::base::Spinlock> lock(pending_read_mutex_);
             auto h = pending_read_coroutine_;
+            auto resumer = std::move(pending_read_resumer_);
             pending_read_coroutine_ = nullptr;
-            return h;
+            pending_read_resumer_ = {};
+            return PendingRead{ h, std::move(resumer) };
         }
 
     protected:
@@ -570,7 +590,9 @@ namespace yuan::net
         std::atomic_uint32_t waiter_count_{0};
         uint64_t next_waiter_id_ = 1;
         std::vector<WaiterEntry> waiters_;
+        mutable yuan::base::Spinlock pending_read_mutex_;
         std::coroutine_handle<> pending_read_coroutine_;
+        PendingReadResumer pending_read_resumer_;
     };
 
     using ConnectionPtr = std::shared_ptr<Connection>;

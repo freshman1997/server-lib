@@ -315,9 +315,11 @@ namespace yuan::server
                 server_->stop();
                 return false;
             }
-            install_admin_dashboard_routes();
-            subscribe_dashboard_events();
-            start_dashboard_push_timer();
+            if (admin_dashboard_enabled_) {
+                install_admin_dashboard_routes();
+                subscribe_dashboard_events();
+                start_dashboard_push_timer();
+            }
         }
 
         return ok;
@@ -339,6 +341,11 @@ namespace yuan::server
     void HttpService::set_server_configurator(ServerConfigurator configurator)
     {
         server_configurator_ = std::move(configurator);
+    }
+
+    void HttpService::set_admin_dashboard_enabled(bool enabled)
+    {
+        admin_dashboard_enabled_ = enabled;
     }
 
     void HttpService::start()

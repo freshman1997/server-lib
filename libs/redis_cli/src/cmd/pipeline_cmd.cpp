@@ -9,6 +9,10 @@ namespace yuan::redis
 {
     std::string PipelineCmd::pack() const
     {
+        if (!packed_payload_.empty()) {
+            return packed_payload_;
+        }
+
         std::string out;
         for (const auto &cmd : cmds_) {
             out.append(cmd->pack());
@@ -19,9 +23,10 @@ namespace yuan::redis
     int PipelineCmd::unpack(buffer::ByteBufferReader &reader)
     {
         const auto checkpoint = reader.position();
+        const std::size_t command_count = packed_command_count_ > 0 ? packed_command_count_ : cmds_.size();
         auto values = std::vector<std::shared_ptr<RedisValue> >();
-        values.reserve(cmds_.size());
-        for (std::size_t i = 0; i < cmds_.size(); ++i) {
+        values.reserve(command_count);
+        for (std::size_t i = 0; i < command_count; ++i) {
             std::shared_ptr<RedisValue> value;
             const int ret = DefaultCmd::unpack_result(value, reader);
             if (ret < 0) {

@@ -43,7 +43,7 @@ namespace yuan::coroutine
             return connection->input_readable_bytes() > 0 || connection->input_shutdown();
         }
 
-bool await_suspend(std::coroutine_handle<> handle)
+        bool await_suspend(std::coroutine_handle<> handle)
         {
             auto *connection = connection_handle_.get();
             if (!connection || !runtime_.event_loop()) {
@@ -76,7 +76,9 @@ bool await_suspend(std::coroutine_handle<> handle)
             }
 
             handle_ = handle;
-            connection->set_pending_read_coroutine(handle);
+            connection->set_pending_read_coroutine(handle, [this](std::coroutine_handle<>) noexcept {
+                complete(IoStatus::success);
+            });
 
             auto terminal = [this](net::Connection &conn) {
                 if (!completed_) {
