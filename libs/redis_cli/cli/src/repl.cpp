@@ -15,11 +15,12 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include <conio.h>
 
 #ifndef _WIN32
 #include <sys/select.h>
 #include <unistd.h>
+#else
+#include <conio.h>
 #endif
 
 #include "option.h"

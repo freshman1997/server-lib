@@ -347,8 +347,10 @@ namespace yuan::net::http
             if (!keep_alive_enabled) {
                 return true;
             }
-            if (header_has_token(resp->get_header(http_header_key::connection), "close") ||
-                req->connection_close_requested()) {
+            if (req->connection_close_requested()) {
+                return true;
+            }
+            if (!resp->headers_empty() && header_has_token(resp->get_header(http_header_key::connection), "close")) {
                 return true;
             }
             if (req->get_version() == HttpVersion::v_1_0 &&
@@ -1259,7 +1261,7 @@ namespace yuan::net::http
             return false;
         }
 
-        return context->is_completed();
+        return true;
     }
 
     bool HttpServer::parse_request(HttpSessionContext * context, const ::yuan::buffer::ByteBuffer & data)
@@ -1289,7 +1291,7 @@ namespace yuan::net::http
             return false;
         }
 
-        return context->is_completed();
+        return true;
     }
 
     bool HttpServer::parse_request(HttpSessionContext *context, ::yuan::buffer::ByteBuffer &&data)
@@ -1319,7 +1321,7 @@ namespace yuan::net::http
             return false;
         }
 
-        return context->is_completed();
+        return true;
     }
 
     bool HttpServer::validate_request_version(HttpSessionContext * context)
@@ -2058,7 +2060,9 @@ namespace yuan::net::http
                 }
 
                 finalize_request(sessionId, session_ptr, context);
-                release_inflight_request(context->get_request(), inflight_tracked);
+                if (inflight_tracked) {
+                    release_inflight_request(context->get_request(), true);
+                }
 
                 const bool close_after_response = should_close_http1_connection(
                     context->get_request(), context->get_response(), config_.enable_keep_alive) ||

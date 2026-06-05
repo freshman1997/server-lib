@@ -555,7 +555,11 @@ namespace yuan::net
 
         std::coroutine_handle<> take_pending_read_coroutine() noexcept
         {
-            return take_pending_read().handle;
+            std::lock_guard<yuan::base::Spinlock> lock(pending_read_mutex_);
+            auto h = pending_read_coroutine_;
+            pending_read_coroutine_ = nullptr;
+            pending_read_resumer_ = {};
+            return h;
         }
 
         PendingRead take_pending_read() noexcept

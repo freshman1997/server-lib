@@ -134,6 +134,15 @@ namespace yuan::net::http
 
     void HttpRequest::note_connection_header(std::string_view value)
     {
+        if (value == "keep-alive") {
+            connection_keep_alive_requested_ = true;
+            return;
+        }
+        if (value == "close") {
+            connection_close_requested_ = true;
+            return;
+        }
+
         std::size_t pos = 0;
         while (pos <= value.size()) {
             const auto comma = value.find(',', pos);

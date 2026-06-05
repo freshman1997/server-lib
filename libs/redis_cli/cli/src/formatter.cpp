@@ -13,7 +13,11 @@
 #include <iomanip>
 #include <cstdio>
 #include <cstdlib>
+
+#ifdef _WIN32
 #include <io.h>
+#endif
+
 namespace yredis
 {
     static bool is_terminal()

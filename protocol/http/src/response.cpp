@@ -265,7 +265,6 @@ namespace yuan::net::http
     {
         HttpPacket::reset();
         respCode_ = ResponseCode::bad_request;
-        buffer_.clear();
         is_sse_ = false;
         headers_sent_ = false;
         sse_event_count_ = 0;

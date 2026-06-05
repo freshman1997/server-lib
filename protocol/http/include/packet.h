@@ -90,6 +90,11 @@ namespace yuan::net::http
             return body_related_header_present_;
         }
 
+        bool headers_empty() const noexcept
+        {
+            return headers_.empty() && parsed_header_present_.none();
+        }
+
         void set_body_length(uint32_t len);
 
         uint32_t get_body_length() const

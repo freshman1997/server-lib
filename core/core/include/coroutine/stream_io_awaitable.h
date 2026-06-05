@@ -76,9 +76,13 @@ namespace yuan::coroutine
             }
 
             handle_ = handle;
+#ifdef _WIN32
             connection->set_pending_read_coroutine(handle, [this](std::coroutine_handle<>) noexcept {
                 complete(IoStatus::success);
             });
+#else
+            connection->set_pending_read_coroutine(handle);
+#endif
 
             auto terminal = [this](net::Connection &conn) {
                 if (!completed_) {
