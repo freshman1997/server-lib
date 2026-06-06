@@ -2,12 +2,19 @@
   "server": {
     "listen": 8080,
     "server_name": "mini-nginx",
+    "server_tokens": true,
+    "server_header": "mini_nginx",
     "thread_pool_size": 2,
     "worker_processes": 1,
     "enable_ssl": false,
+    "ssl_protocols": ["TLSv1.2", "TLSv1.3"],
+    "ssl_ciphers": "HIGH:!aNULL:!MD5",
+    "ssl_ciphersuites": "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256",
+    "ssl_prefer_server_ciphers": true,
     "enable_keep_alive": true,
     "enable_cors": true,
     "enable_http2": true,
+    "http2_tls_only": false,
     "use_iocp": true,
     "scheduling_mode": "throughput",
     "shard_count": 4,
@@ -15,6 +22,7 @@
     "iocp_completion_batch_size": 1,
     "backlog": 1024,
     "allowed_methods": ["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    "satisfy": "all",
     "max_connections": 0,
     "max_connections_per_ip": 0,
     "max_inflight_requests_per_ip": 0,
@@ -25,8 +33,9 @@
   },
   "access_log": {
     "enabled": true,
-    "json": true,
-    "path": "release/mini_nginx/access.log"
+    "json": false,
+    "path": "release/mini_nginx/access.log",
+    "format": "$remote_addr - \"$request\" $status $body_bytes_sent $request_time"
   },
   "reload_check_interval_ms": 1000,
   "rate_limit": {
@@ -55,9 +64,30 @@
       "preserve_path": true
     }
   ],
+  "returns": [
+    {
+      "path": "/gone",
+      "match": "exact",
+      "code": 410,
+      "body": "gone\n"
+    }
+  ],
+  "rewrites": [
+    {
+      "pattern": "^/docs/(.*)$",
+      "to": "/static/$1"
+    },
+    {
+      "from": "/download",
+      "to": "/static",
+      "code": 302,
+      "prefix": true
+    }
+  ],
   "static": [
     {
       "location": "/static",
+      "match": "prefix",
       "root": "release/mini_nginx/www",
       "auto_index": true,
       "enable_range": true,
@@ -65,7 +95,14 @@
       "gzip": true,
       "gzip_static": true,
       "gzip_min_length": "1k",
+      "gzip_comp_level": 3,
+      "brotli_comp_level": 5,
+      "gzip_vary": true,
+      "gzip_http_version": "1.1",
+      "gzip_disable": ["MSIE [1-6]\\."],
+      "gzip_proxied": ["expired", "no-cache", "no-store", "private", "auth"],
       "gzip_types": ["text/*", "application/json", "application/javascript", "application/wasm", "image/svg+xml"],
+      "limit_except": ["GET", "HEAD"],
       "default_type": "application/octet-stream",
       "types": {
         "text/css": ["css"],
@@ -80,7 +117,21 @@
       "index": ["index.html", "index.htm"],
       "try_files": ["$uri", "$uri/index.html", "/index.html", "=404"],
       "error_page": {
-        "404": "/404.html"
+        "404": "/404.html",
+        "403 500": {
+          "uri": "/index.html",
+          "code": 200
+        }
+      }
+    },
+    {
+      "location": "/protected",
+      "root": "release/mini_nginx/www",
+      "auth_basic": {
+        "realm": "Protected",
+        "users": {
+          "demo": "secret"
+        }
       }
     }
   ],
@@ -115,6 +166,7 @@
     {
       "path": "/api/",
       "proxy_pass": "api_backend",
+      "match": "prefix",
       "strip_prefix": false,
       "preserve_host": true,
       "proxy_set_header": {
@@ -124,7 +176,11 @@
       "proxy_hide_header": ["X-Upstream-Internal"],
       "proxy_set_response_header": {
         "X-Proxied-By": "mini_nginx"
-      }
+      },
+      "proxy_redirect": {
+        "http://127.0.0.1:9010/internal": "/api"
+      },
+      "allowed_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
     },
     {
       "path": "/ws/",

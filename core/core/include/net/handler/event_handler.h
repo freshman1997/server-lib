@@ -25,6 +25,11 @@ namespace yuan::net
         virtual void queue_in_loop(std::function<void()> cb) = 0;
 
         virtual void post_coroutine(std::coroutine_handle<> handle) noexcept = 0;
+
+        virtual bool is_in_loop_thread() const noexcept
+        {
+            return false;
+        }
     };
 }
 

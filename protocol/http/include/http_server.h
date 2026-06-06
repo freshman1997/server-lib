@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <regex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -18,6 +19,7 @@
 #include "common.h"
 #include "define/upload.h"
 #include "middleware.h"
+#include "packet.h"
 #include "coroutine/task.h"
 #include "net/async/async_listener_host.h"
 #include "net/async/async_connection_context.h"
@@ -45,6 +47,7 @@ namespace yuan::net::http
         bool enable_cors = true;
         bool enable_keep_alive = true;
         bool enable_http2 = false;
+        bool http2_tls_only = false;
         bool enable_http3 = false;
         bool track_request_time = false;
         size_t max_body_size = 0;
@@ -56,6 +59,11 @@ namespace yuan::net::http
         ::yuan::net::ListenOptions listen_options;
         std::string ssl_certificate;
         std::string ssl_certificate_key;
+        std::string ssl_min_version;
+        std::string ssl_max_version;
+        std::string ssl_ciphers;
+        std::string ssl_ciphersuites;
+        bool ssl_prefer_server_ciphers = false;
         std::string server_name = "YuanServer/1.0";
     };
 
@@ -77,21 +85,46 @@ namespace yuan::net::http
 
     struct StaticMountOptions
     {
+        struct ErrorPage
+        {
+            std::string uri;
+            int response_code = 0;
+        };
+
         bool auto_index = true;
         bool enable_range = true;
         bool enable_gzip = true;
         bool enable_gzip_static = true;
+        bool gzip_vary = true;
         bool enable_sendfile = true;
+        bool exact_match = false;
+        enum class MatchType : uint8_t
+        {
+            prefix,
+            exact,
+            prefix_strong,
+            regex
+        } match_type = MatchType::prefix;
+        bool regex_case_sensitive = true;
+        std::regex compiled_location;
         std::size_t gzip_min_length = 256;
+        int gzip_comp_level = 1;
+        int brotli_comp_level = 5;
+        HttpVersion gzip_http_version = HttpVersion::v_1_1;
         std::string cache_control;
         std::string default_type = "application/octet-stream";
         int expires_seconds = -1;
         std::vector<std::pair<std::string, std::string>> headers;
         std::unordered_map<std::string, std::string> mime_types;
         std::vector<std::string> gzip_types;
+        std::vector<std::string> gzip_disable;
+        std::vector<std::regex> compiled_gzip_disable;
+        std::unordered_set<std::string> gzip_proxied;
+        std::unordered_set<std::string> allowed_methods;
+        std::vector<AccessRule> access_rules;
         std::vector<std::string> index_files{ "index.html", "index.htm" };
         std::vector<std::string> try_files;
-        std::unordered_map<int, std::string> error_pages;
+        std::unordered_map<int, ErrorPage> error_pages;
     };
 
     struct StaticMount
@@ -207,6 +240,7 @@ namespace yuan::net::http
         void load_static_paths();
         static void icon(HttpRequest *req, HttpResponse *resp);
         void serve_static(HttpRequest *req, HttpResponse *resp);
+        bool has_static_regex_match(const std::string &request_path) const;
         bool resolve_static_request(
             const std::string &request_path,
             const StaticMount *&mount,
@@ -223,6 +257,11 @@ namespace yuan::net::http
                                                    const std::string &source_path,
                                                    std::size_t source_length);
         bool serve_embedded_static_page(const std::string &file_relative_path, HttpResponse *resp, const StaticMountOptions &options);
+        bool serve_static_error_page(
+            HttpRequest *req,
+            HttpResponse *resp,
+            const StaticMount &mount,
+            ResponseCode status);
         void serve_static_file(
             HttpRequest *req,
             HttpResponse *resp,
@@ -281,6 +320,9 @@ namespace yuan::net::http
         HttpRequestDispatcher dispatcher_;
         base::CompressTrie static_mount_trie_;
         std::unordered_map<std::string, StaticMount> static_mounts_;
+        std::unordered_set<std::string> static_exact_mounts_;
+        std::vector<std::string> static_strong_prefix_mounts_;
+        std::vector<std::string> static_regex_mounts_;
         std::set<std::string> play_types_;
         std::unique_ptr<HttpProxyHandler> proxy_;
         ProxyFactory proxy_factory_;

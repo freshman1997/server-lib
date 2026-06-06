@@ -135,6 +135,28 @@ namespace yuan::coroutine
             {
             }
 
+            awaiter(const awaiter &) = delete;
+            awaiter &operator=(const awaiter &) = delete;
+
+            awaiter(awaiter &&other) noexcept
+                : handle_(std::exchange(other.handle_, {}))
+            {
+            }
+
+            awaiter &operator=(awaiter &&other) noexcept
+            {
+                if (this != &other) {
+                    destroy_if_needed();
+                    handle_ = std::exchange(other.handle_, {});
+                }
+                return *this;
+            }
+
+            ~awaiter()
+            {
+                destroy_if_needed();
+            }
+
             bool await_ready() const noexcept
             {
                 return !handle_ || handle_.done();
@@ -155,12 +177,20 @@ namespace yuan::coroutine
             }
 
         private:
+            void destroy_if_needed() noexcept
+            {
+                if (handle_) {
+                    handle_.destroy();
+                    handle_ = {};
+                }
+            }
+
             std::coroutine_handle<promise_type> handle_{};
         };
 
         awaiter operator co_await() noexcept
         {
-            return awaiter(handle_);
+            return awaiter(std::exchange(handle_, {}));
         }
 
     private:
@@ -335,6 +365,28 @@ namespace yuan::coroutine
             {
             }
 
+            awaiter(const awaiter &) = delete;
+            awaiter &operator=(const awaiter &) = delete;
+
+            awaiter(awaiter &&other) noexcept
+                : handle_(std::exchange(other.handle_, {}))
+            {
+            }
+
+            awaiter &operator=(awaiter &&other) noexcept
+            {
+                if (this != &other) {
+                    destroy_if_needed();
+                    handle_ = std::exchange(other.handle_, {});
+                }
+                return *this;
+            }
+
+            ~awaiter()
+            {
+                destroy_if_needed();
+            }
+
             bool await_ready() const noexcept
             {
                 return !handle_ || handle_.done();
@@ -354,12 +406,20 @@ namespace yuan::coroutine
             }
 
         private:
+            void destroy_if_needed() noexcept
+            {
+                if (handle_) {
+                    handle_.destroy();
+                    handle_ = {};
+                }
+            }
+
             std::coroutine_handle<promise_type> handle_{};
         };
 
         awaiter operator co_await() noexcept
         {
-            return awaiter(handle_);
+            return awaiter(std::exchange(handle_, {}));
         }
 
     private:

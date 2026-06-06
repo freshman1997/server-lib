@@ -1,6 +1,7 @@
 #include "net/iocp/iocp_tcp_engine.h"
 
 #include "net/iocp/iocp_tcp_io.h"
+#include "net/handler/event_handler.h"
 #include "net/handler/connection_handler.h"
 #include "net/socket/inet_address.h"
 #include "net/socket/socket_ops.h"
@@ -467,6 +468,11 @@ namespace yuan::net
         return connection_handler_;
     }
 
+    bool IocpTcpConnection::has_connection_handler() const
+    {
+        return has_connection_handler_.load(std::memory_order_acquire);
+    }
+
     void IocpTcpConnection::set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler)
     {
         ssl_handler_ = std::move(sslHandler);
@@ -487,7 +493,7 @@ namespace yuan::net
 
     void IocpTcpConnection::set_event_handler(EventHandler *eventHandler)
     {
-        (void)eventHandler;
+        set_owner_event_handler(eventHandler);
     }
 
     void IocpTcpConnection::set_user_data(UserData data)
@@ -590,14 +596,7 @@ namespace yuan::net
 
     void IocpTcpConnection::notify_connected()
     {
-        auto handler = get_connection_handler_owner();
-        if (!handler && !has_event_waiter(ConnectionEvent::connected)) {
-            return;
-        }
-        notify_event_waiters(ConnectionEvent::connected);
-        if (handler) {
-            handler->on_connected(*this);
-        }
+        notify_connected_event();
     }
 
     void IocpTcpConnection::notify_read(const char *data, std::size_t size)
@@ -607,45 +606,17 @@ namespace yuan::net
             input_buffer_.append(data, size);
         }
 
-        auto pending = take_pending_read();
-        if (pending.handle) {
-            if (pending.resumer) {
-                pending.resumer(pending.handle);
-            }
-        } else {
-            notify_event_waiters(ConnectionEvent::readable);
-        }
-        if (!has_connection_handler_.load(std::memory_order_acquire)) {
-            return;
-        }
-        auto handler = get_connection_handler_owner();
-        if (handler) {
-            handler->on_read(*this);
-        }
+        notify_readable_event();
     }
 
     void IocpTcpConnection::notify_write()
     {
-        auto handler = get_connection_handler_owner();
-        if (!handler && !has_event_waiter(ConnectionEvent::writable)) {
-            return;
-        }
-        notify_event_waiters(ConnectionEvent::writable);
-        if (handler) {
-            handler->on_write(*this);
-        }
+        notify_writable_event();
     }
 
     void IocpTcpConnection::notify_error()
     {
-        auto handler = get_connection_handler_owner();
-        if (!handler && !has_event_waiter(ConnectionEvent::error)) {
-            return;
-        }
-        notify_event_waiters(ConnectionEvent::error);
-        if (handler) {
-            handler->on_error(*this);
-        }
+        notify_error_event();
     }
 
     void IocpTcpConnection::notify_closed()
@@ -653,16 +624,7 @@ namespace yuan::net
         if (close_notified_.exchange(true, std::memory_order_acq_rel)) {
             return;
         }
-        auto handler = get_connection_handler_owner();
-        if (!handler && !has_event_waiter(ConnectionEvent::closed)) {
-            clear_event_waiters();
-            return;
-        }
-        notify_event_waiters(ConnectionEvent::closed);
-        if (handler) {
-            handler->on_close(*this);
-        }
-        clear_event_waiters();
+        notify_closed_event();
     }
 
     IocpTcpEngine::~IocpTcpEngine()
@@ -842,7 +804,7 @@ namespace yuan::net
         }
         for (auto &connection : connections) {
             if (connection) {
-                connection->close();
+                close_connection(connection, true, false);
             }
         }
 
@@ -964,7 +926,11 @@ namespace yuan::net
         if (callbacks_.on_accept) {
             callbacks_.on_accept(connection);
         }
-        connection->notify_connected();
+        if (connection->has_event_observer(ConnectionEvent::connected)) {
+            connection->dispatch_in_owner_loop([connection]() {
+                connection->notify_connected();
+            });
+        }
         if (!connection->post_recv()) {
             close_connection(connection, true);
         }
@@ -992,25 +958,31 @@ namespace yuan::net
 
         if (!completion.ok || !connect_ex_.update_connect_context(connection->fd())) {
             const auto error = completion.error;
+            auto on_error = callbacks_.on_error;
             delete &operation;
-            connection->notify_error();
-            if (callbacks_.on_error) {
-                callbacks_.on_error(connection, error);
-            }
-            close_connection(connection, true);
+            connection->dispatch_in_owner_loop([this, connection, error, on_error = std::move(on_error)]() {
+                connection->notify_error();
+                if (on_error) {
+                    on_error(connection, error);
+                }
+                close_connection(connection, true);
+            });
             return;
         }
 
         connection->local_address_ = socket::get_local_address(connection->fd());
         connection->state_.store(ConnectionState::connected, std::memory_order_release);
+        auto on_connect = callbacks_.on_connect;
         delete &operation;
-        if (callbacks_.on_connect) {
-            callbacks_.on_connect(connection);
-        }
-        connection->notify_connected();
-        if (!connection->post_recv()) {
-            close_connection(connection, true);
-        }
+        connection->dispatch_in_owner_loop([this, connection, on_connect = std::move(on_connect)]() {
+            if (on_connect) {
+                on_connect(connection);
+            }
+            connection->notify_connected();
+            if (!connection->post_recv()) {
+                close_connection(connection, true);
+            }
+        });
     }
 
     void IocpTcpEngine::handle_recv(Operation &operation, const IocpCompletion &completion)
@@ -1029,52 +1001,64 @@ namespace yuan::net
 
         if (!completion.ok) {
             const auto error = completion.error;
+            auto on_error = callbacks_.on_error;
             delete &operation;
-            connection->notify_error();
-            if (callbacks_.on_error) {
-                callbacks_.on_error(connection, error);
-            }
-            close_connection(connection, true);
+            connection->dispatch_in_owner_loop([this, connection, error, on_error = std::move(on_error)]() {
+                connection->notify_error();
+                if (on_error) {
+                    on_error(connection, error);
+                }
+                close_connection(connection, true);
+            });
             return;
         }
 
         if (completion.bytes == 0) {
             delete &operation;
-            connection->input_shutdown_.store(true, std::memory_order_release);
-            connection->notify_event_waiters(ConnectionEvent::input_shutdown);
-            auto handler = connection->get_connection_handler_owner();
-            if (handler) {
-                handler->on_input_shutdown(*connection);
-            }
-            if (connection->read_dispatch_pending_.load(std::memory_order_acquire)) {
-                return;
-            }
-            if (connection->mark_close_after_pending_output()) {
-                connection->flush();
-                return;
-            }
-            if (!connection->has_pending_output()) {
-                if (connection->defer_close_on_unconsumed_input_.load(std::memory_order_acquire)) {
+            connection->dispatch_in_owner_loop([this, connection]() {
+                connection->input_shutdown_.store(true, std::memory_order_release);
+                connection->notify_input_shutdown_event();
+                if (connection->read_dispatch_pending_.load(std::memory_order_acquire)) {
                     return;
                 }
-                close_connection(connection, true, true);
-            }
+                if (connection->mark_close_after_pending_output()) {
+                    connection->flush();
+                    return;
+                }
+                if (!connection->has_pending_output()) {
+                    if (connection->defer_close_on_unconsumed_input_.load(std::memory_order_acquire)) {
+                        return;
+                    }
+                    close_connection(connection, true, true);
+                }
+            });
             return;
         }
 
-        if (connection->has_event_waiter(ConnectionEvent::readable) || connection->pending_read_coroutine()) {
-            connection->mark_defer_close_on_unconsumed_input();
-        }
-        connection->notify_read(operation.buffer.data(), completion.bytes);
-        if (callbacks_.on_read) {
-            callbacks_.on_read(connection, operation.buffer.data(), completion.bytes);
-        }
+        operation.buffer.resize(completion.bytes);
+        auto data = std::make_shared<std::vector<char>>(std::move(operation.buffer));
+        auto on_read = callbacks_.on_read;
         delete &operation;
-        if (!connection->closing() && running_.load(std::memory_order_acquire)) {
-            if (!connection->post_recv()) {
-                close_connection(connection, true, true);
+
+        auto deliver = [this, connection, data = std::move(data), on_read = std::move(on_read)]() {
+            if (connection->get_connection_state() == ConnectionState::closed) {
+                return;
             }
-        }
+            if (connection->has_event_waiter(ConnectionEvent::readable) || connection->pending_read_coroutine()) {
+                connection->mark_defer_close_on_unconsumed_input();
+            }
+            connection->notify_read(data->data(), data->size());
+            if (on_read) {
+                on_read(connection, data->data(), data->size());
+            }
+            if (!connection->closing() && running_.load(std::memory_order_acquire)) {
+                if (!connection->post_recv()) {
+                    close_connection(connection, true, true);
+                }
+            }
+        };
+
+        connection->dispatch_in_owner_loop(std::move(deliver));
     }
 
     void IocpTcpEngine::handle_send(Operation &operation, const IocpCompletion &completion)
@@ -1099,12 +1083,15 @@ namespace yuan::net
             if (drains_output) {
                 connection->fail_output_send();
             }
+            auto on_error = callbacks_.on_error;
             delete &operation;
-            connection->notify_error();
-            if (callbacks_.on_error) {
-                callbacks_.on_error(connection, error);
-            }
-            close_connection(connection, true);
+            connection->dispatch_in_owner_loop([this, connection, error, on_error = std::move(on_error)]() {
+                connection->notify_error();
+                if (on_error) {
+                    on_error(connection, error);
+                }
+                close_connection(connection, true);
+            });
             return;
         }
 
@@ -1118,26 +1105,56 @@ namespace yuan::net
                 connection->flush();
                 return;
             }
-            connection->notify_write();
-            if (callbacks_.on_write) {
-                callbacks_.on_write(connection, bytes);
-            }
-            if (connection->input_shutdown_.load(std::memory_order_acquire) &&
+            auto on_write = callbacks_.on_write;
+            const bool notify_write = on_write ||
+                connection->has_connection_handler() ||
+                connection->has_event_waiter(ConnectionEvent::writable);
+            const bool close_after_unconsumed_input =
+                connection->input_shutdown_.load(std::memory_order_acquire) &&
                 connection->defer_close_on_unconsumed_input_.load(std::memory_order_acquire) &&
-                !connection->has_pending_output()) {
-                close_connection(connection, true, true);
+                !connection->has_pending_output();
+            if (!notify_write && !close_after_output && !close_after_unconsumed_input) {
                 return;
             }
-            if (close_after_output) {
-                close_connection(connection, true, true);
-            }
+            connection->dispatch_in_owner_loop([this,
+                                                connection,
+                                                bytes,
+                                                close_after_output,
+                                                close_after_unconsumed_input,
+                                                notify_write,
+                                                on_write = std::move(on_write)]() {
+                if (notify_write) {
+                    connection->notify_write();
+                }
+                if (on_write) {
+                    on_write(connection, bytes);
+                }
+                if (close_after_unconsumed_input) {
+                    close_connection(connection, true, true);
+                    return;
+                }
+                if (close_after_output) {
+                    close_connection(connection, true, true);
+                }
+            });
             return;
         }
         delete &operation;
-        connection->notify_write();
-        if (callbacks_.on_write) {
-            callbacks_.on_write(connection, bytes);
+        auto on_write = callbacks_.on_write;
+        if (!on_write &&
+            !connection->has_connection_handler() &&
+            !connection->has_event_waiter(ConnectionEvent::writable)) {
+            return;
         }
+        connection->dispatch_in_owner_loop([connection, bytes, on_write = std::move(on_write)]() {
+            if (connection->has_connection_handler() ||
+                connection->has_event_waiter(ConnectionEvent::writable)) {
+                connection->notify_write();
+            }
+            if (on_write) {
+                on_write(connection, bytes);
+            }
+        });
     }
 
     void IocpTcpEngine::add_connection(const std::shared_ptr<IocpTcpConnection> &connection)
@@ -1165,11 +1182,20 @@ namespace yuan::net
         connection->state_.store(ConnectionState::closed, std::memory_order_release);
         connection->input_shutdown_.store(true, std::memory_order_release);
         connection->output_shutdown_.store(true, std::memory_order_release);
-        if (notify && callbacks_.on_close) {
-            callbacks_.on_close(connection);
-        }
         if (notify) {
-            connection->notify_closed();
+            auto on_close = callbacks_.on_close;
+            if (!on_close &&
+                !connection->has_connection_handler() &&
+                !connection->has_event_waiter(ConnectionEvent::closed)) {
+                connection->close_now(graceful_shutdown);
+                return;
+            }
+            connection->dispatch_in_owner_loop([connection, on_close = std::move(on_close)]() {
+                if (on_close) {
+                    on_close(connection);
+                }
+                connection->notify_closed();
+            });
         }
         connection->close_now(graceful_shutdown);
     }

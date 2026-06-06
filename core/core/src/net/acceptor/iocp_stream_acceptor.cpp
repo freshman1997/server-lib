@@ -1,5 +1,6 @@
 #include "net/acceptor/iocp_stream_acceptor.h"
 
+#include "event/event_loop.h"
 #include "net/handler/connection_handler.h"
 
 #include <algorithm>
@@ -112,7 +113,7 @@ namespace yuan::net
                 handler = state->handler;
             }
 
-            if (runtime) {
+            if (runtime && runtime->event_loop() && !runtime->event_loop()->is_in_loop_thread()) {
                 runtime->dispatch([handler = std::move(handler), fn = std::move(fn)]() mutable {
                     if (handler) {
                         fn(*handler);
@@ -164,6 +165,9 @@ namespace yuan::net
         callbacks.on_accept = [this](const std::shared_ptr<IocpTcpConnection> &connection) {
             if (!connection) {
                 return;
+            }
+            if (runtime_) {
+                connection->set_event_handler(runtime_->event_loop());
             }
             connection->set_connection_handler(dispatch_handler_);
             notify_accept_waiters(connection);

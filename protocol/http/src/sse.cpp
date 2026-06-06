@@ -121,8 +121,10 @@ namespace yuan::net::http
     std::string SseConnection::get_peer_ip() const
     {
         auto conn = conn_owner_.lock();
-        if (!conn)
+        if (!conn) {
             return {};
+        }
+        return conn->get_remote_address().get_ip();
     }
 
     void SseConnection::do_send(const std::string & payload)

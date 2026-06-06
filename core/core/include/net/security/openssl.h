@@ -20,6 +20,11 @@ namespace yuan::net
         virtual std::shared_ptr<SSLHandler> create_handler(int fd, SSLHandler::SSLMode mode);
 
         virtual void set_alpn_protocols(const std::vector<std::string> &protocols) override;
+        bool set_min_protocol_version(const std::string &version) override;
+        bool set_max_protocol_version(const std::string &version) override;
+        bool set_cipher_list(const std::string &ciphers) override;
+        bool set_ciphersuites(const std::string &ciphersuites) override;
+        void set_prefer_server_ciphers(bool enabled) override;
 
     public:
         void set_error_msg(const char *msg, size_t len);

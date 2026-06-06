@@ -1,3 +1,5 @@
+#include "base/owner_ptr.h"
+#include "base/time.h"
 #include "content/types.h"
 #include "context.h"
 #include "coroutine/io_result.h"
@@ -8,34 +10,33 @@
 #include "task/save_upload_tmp_chunk_task.h"
 #include "task/upload_file_task.h"
 #include "url.h"
-#include "base/owner_ptr.h"
-#include "base/time.h"
 
+#include "logger.h"
+#include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
-#include "logger.h"
+#include <functional>
+#include <iomanip>
 #include <memory>
 #include <optional>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <algorithm>
-#include <cctype>
-#include <ctime>
-#include <iomanip>
-#include <functional>
-#include <chrono>
 #include <unordered_map>
 #include <unordered_set>
 
 #ifdef _WIN32
-#include <winsock2.h>
 #include <windows.h>
 #include <winnls.h>
 #include <winnt.h>
+#include <winsock2.h>
 #else
 #include <unistd.h>
 #endif
@@ -48,19 +49,19 @@
 #include <brotli/encode.h>
 #endif
 
-#include "http_server.h"
-#include "middleware.h"
-#include "net/socket/socket.h"
-#include "request.h"
-#include "response.h"
-#include "session.h"
-#include "response_code.h"
-#include "ops/config_manager.h"
-#include "ops/option.h"
-#include "proxy_api.h"
 #include "header_key.h"
 #include "header_util.h"
 #include "http2/session.h"
+#include "http_server.h"
+#include "middleware.h"
+#include "net/socket/socket.h"
+#include "ops/config_manager.h"
+#include "ops/option.h"
+#include "proxy_api.h"
+#include "request.h"
+#include "response.h"
+#include "response_code.h"
+#include "session.h"
 
 namespace yuan::net::http
 {
@@ -109,7 +110,7 @@ namespace yuan::net::http
             }
 
             const auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::filesystem::file_time_type::clock::now() - write_time)
+                                    std::filesystem::file_time_type::clock::now() - write_time)
                                     .count();
             if (age_ms <= 0) {
                 return 0;
@@ -214,6 +215,313 @@ namespace yuan::net::http
                 }
             }
             return false;
+        }
+
+        int http_version_rank(HttpVersion version)
+        {
+            switch (version) {
+            case HttpVersion::v_1_0:
+                return 10;
+            case HttpVersion::v_1_1:
+                return 11;
+            case HttpVersion::v_2_0:
+                return 20;
+            case HttpVersion::v_3_0:
+                return 30;
+            default:
+                return -1;
+            }
+        }
+
+        bool request_version_allows_compression(HttpRequest *req, const StaticMountOptions &options)
+        {
+            if (!req) {
+                return false;
+            }
+            return http_version_rank(req->get_version()) >= http_version_rank(options.gzip_http_version);
+        }
+
+        bool user_agent_disabled_for_compression(HttpRequest *req, const StaticMountOptions &options)
+        {
+            if (!req || options.compiled_gzip_disable.empty()) {
+                return false;
+            }
+            const auto *user_agent = req->get_header(http_header_key::user_agent);
+            if (!user_agent || user_agent->empty()) {
+                return false;
+            }
+            for (const auto &pattern : options.compiled_gzip_disable) {
+                if (std::regex_search(*user_agent, pattern)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool contains_ci(std::string_view haystack, std::string_view needle)
+        {
+            if (needle.empty()) {
+                return true;
+            }
+            if (haystack.size() < needle.size()) {
+                return false;
+            }
+            auto lower = [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            };
+            for (std::size_t i = 0; i + needle.size() <= haystack.size(); ++i) {
+                bool match = true;
+                for (std::size_t j = 0; j < needle.size(); ++j) {
+                    if (lower(static_cast<unsigned char>(haystack[i + j])) !=
+                        lower(static_cast<unsigned char>(needle[j]))) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool header_contains_token(HttpRequest *req, const char *name, std::string_view token)
+        {
+            if (!req || !name || token.empty()) {
+                return false;
+            }
+            const auto *value = req->get_header(name);
+            return value && contains_ci(*value, token);
+        }
+
+        bool gzip_proxied_allows_compression(HttpRequest *req, const StaticMountOptions &options)
+        {
+            if (!req || !req->get_header(http_header_key::via)) {
+                return true;
+            }
+            if (options.gzip_proxied.empty() || options.gzip_proxied.find("off") != options.gzip_proxied.end()) {
+                return false;
+            }
+            if (options.gzip_proxied.find("any") != options.gzip_proxied.end()) {
+                return true;
+            }
+            if (options.gzip_proxied.find("auth") != options.gzip_proxied.end() &&
+                req->get_header(http_header_key::authorization)) {
+                return true;
+            }
+            if (options.gzip_proxied.find("no-cache") != options.gzip_proxied.end() &&
+                (header_contains_token(req, "cache-control", "no-cache") ||
+                 contains_ci(options.cache_control, "no-cache"))) {
+                return true;
+            }
+            if (options.gzip_proxied.find("no-store") != options.gzip_proxied.end() &&
+                (header_contains_token(req, "cache-control", "no-store") ||
+                 contains_ci(options.cache_control, "no-store"))) {
+                return true;
+            }
+            if (options.gzip_proxied.find("private") != options.gzip_proxied.end() &&
+                (header_contains_token(req, "cache-control", "private") ||
+                 contains_ci(options.cache_control, "private"))) {
+                return true;
+            }
+            if (options.gzip_proxied.find("expired") != options.gzip_proxied.end() &&
+                options.expires_seconds == 0) {
+                return true;
+            }
+            return false;
+        }
+
+        bool static_prefix_matches(const std::string &request_path, const std::string &prefix)
+        {
+            if (prefix == "/") {
+                return true;
+            }
+            if (request_path.rfind(prefix, 0) != 0) {
+                return false;
+            }
+            return request_path.size() == prefix.size() || request_path[prefix.size()] == '/';
+        }
+
+        bool static_relative_path_for_prefix(const std::string &request_path,
+                                             const std::string &prefix,
+                                             std::string &file_relative_path)
+        {
+            if (prefix == "/") {
+                file_relative_path = request_path.size() > 1 ? request_path.substr(1) : "";
+            } else if (request_path.size() <= prefix.size()) {
+                file_relative_path.clear();
+            } else if (request_path[prefix.size()] != '/') {
+                return false;
+            } else if (request_path.size() <= prefix.size() + 1) {
+                file_relative_path.clear();
+            } else {
+                file_relative_path = request_path.substr(prefix.size() + 1);
+            }
+            return file_relative_path.find("..") == std::string::npos &&
+                   file_relative_path.find('\\') == std::string::npos &&
+                   (file_relative_path.empty() || file_relative_path.front() != '/');
+        }
+
+        std::string upper_ascii(std::string value)
+        {
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::toupper(ch));
+            });
+            return value;
+        }
+
+        std::string join_method_set(const std::unordered_set<std::string> &methods)
+        {
+            std::string out;
+            for (const auto &method : methods) {
+                if (!out.empty()) {
+                    out += ", ";
+                }
+                out += method;
+            }
+            return out;
+        }
+
+        bool reject_method_if_not_allowed(HttpRequest *req,
+                                          HttpResponse *resp,
+                                          const std::unordered_set<std::string> &allowed_methods)
+        {
+            if (!req || !resp || allowed_methods.empty()) {
+                return false;
+            }
+            const std::string method = upper_ascii(req->get_raw_method());
+            if (allowed_methods.find(method) != allowed_methods.end()) {
+                return false;
+            }
+
+            const std::string body = "405 Method Not Allowed\n";
+            resp->set_response_code(ResponseCode::method_not_allowed);
+            resp->add_header("Allow", join_method_set(allowed_methods));
+            resp->add_header("Content-Type", "text/plain; charset=utf-8");
+            resp->append_body(body);
+            resp->add_header("Content-Length", std::to_string(resp->body_buffer_size()));
+            resp->send();
+            return true;
+        }
+
+        std::string trim_ascii(std::string value)
+        {
+            std::size_t begin = 0;
+            while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+                ++begin;
+            }
+            std::size_t end = value.size();
+            while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+                --end;
+            }
+            return value.substr(begin, end - begin);
+        }
+
+        std::string remote_ip_from_request(HttpRequest *req)
+        {
+            auto *ctx = req ? req->get_context() : nullptr;
+            auto *conn = ctx ? ctx->get_connection() : nullptr;
+            if (!conn) {
+                return {};
+            }
+            std::string remote = conn->get_remote_address().to_address_key();
+            if (!remote.empty() && remote.front() == '[') {
+                const auto close = remote.find(']');
+                return close == std::string::npos ? remote : remote.substr(1, close - 1);
+            }
+            const auto first_colon = remote.find(':');
+            if (first_colon != std::string::npos && remote.find(':', first_colon + 1) == std::string::npos) {
+                remote.resize(first_colon);
+            }
+            return remote;
+        }
+
+        std::optional<uint32_t> parse_ipv4(std::string_view value)
+        {
+            uint32_t out = 0;
+            std::size_t pos = 0;
+            for (int part = 0; part < 4; ++part) {
+                if (pos >= value.size()) {
+                    return std::nullopt;
+                }
+                uint32_t octet = 0;
+                std::size_t digits = 0;
+                while (pos < value.size() && std::isdigit(static_cast<unsigned char>(value[pos])) != 0) {
+                    octet = octet * 10 + static_cast<uint32_t>(value[pos] - '0');
+                    if (octet > 255) {
+                        return std::nullopt;
+                    }
+                    ++pos;
+                    ++digits;
+                }
+                if (digits == 0) {
+                    return std::nullopt;
+                }
+                out = (out << 8) | octet;
+                if (part < 3) {
+                    if (pos >= value.size() || value[pos] != '.') {
+                        return std::nullopt;
+                    }
+                    ++pos;
+                }
+            }
+            return pos == value.size() ? std::optional<uint32_t>(out) : std::nullopt;
+        }
+
+        bool access_rule_matches(const std::string &remote_ip, const AccessRule &rule)
+        {
+            std::string value = trim_ascii(rule.value);
+            if (value.empty()) {
+                return false;
+            }
+            if (iequals_ascii(value, "all")) {
+                return true;
+            }
+
+            const auto slash = value.find('/');
+            if (slash != std::string::npos) {
+                const auto network = parse_ipv4(std::string_view(value).substr(0, slash));
+                const auto remote = parse_ipv4(remote_ip);
+                if (!network || !remote) {
+                    return false;
+                }
+                int prefix = -1;
+                try {
+                    prefix = std::stoi(value.substr(slash + 1));
+                } catch (...) {
+                    return false;
+                }
+                if (prefix < 0 || prefix > 32) {
+                    return false;
+                }
+                const uint32_t mask = prefix == 0 ? 0 : (0xFFFFFFFFu << (32 - prefix));
+                return ((*remote & mask) == (*network & mask));
+            }
+
+            return remote_ip == value;
+        }
+
+        bool access_allowed(HttpRequest *req, const std::vector<AccessRule> &rules)
+        {
+            if (rules.empty()) {
+                return true;
+            }
+            const std::string remote_ip = remote_ip_from_request(req);
+            for (const auto &rule : rules) {
+                if (access_rule_matches(remote_ip, rule)) {
+                    return rule.allow;
+                }
+            }
+            return true;
+        }
+
+        bool reject_if_access_denied(HttpRequest *req, HttpResponse *resp, const std::vector<AccessRule> &rules)
+        {
+            if (!req || !resp || access_allowed(req, rules)) {
+                return false;
+            }
+            resp->process_error(ResponseCode::forbidden);
+            return true;
         }
 
         std::optional<std::string> parse_accept_encoding_preferred(std::string_view value)
@@ -324,15 +632,15 @@ namespace yuan::net::http
                 return static_cast<uint32_t>(config.keep_alive_timeout_ms);
             }
             return config::connection_idle_timeout > 0
-                ? static_cast<uint32_t>(config::connection_idle_timeout)
-                : uint32_t{30000};
+                       ? static_cast<uint32_t>(config::connection_idle_timeout)
+                       : uint32_t{30000};
         }
 
         uint32_t response_write_timeout_ms(const HttpServerConfig &config)
         {
             return config.write_timeout_ms > 0
-                ? static_cast<uint32_t>(config.write_timeout_ms)
-                : keep_alive_idle_timeout_ms(config);
+                       ? static_cast<uint32_t>(config.write_timeout_ms)
+                       : keep_alive_idle_timeout_ms(config);
         }
 
         bool should_close_http1_connection(HttpRequest *req, HttpResponse *resp, bool keep_alive_enabled)
@@ -383,8 +691,7 @@ namespace yuan::net::http
 
         constexpr std::string_view kHttp2ConnectionPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
-        enum class Http2PrefaceProbe
-        {
+        enum class Http2PrefaceProbe {
             need_more,
             is_preface,
             not_preface
@@ -410,8 +717,7 @@ namespace yuan::net::http
             return Http2PrefaceProbe::is_preface;
         }
 
-        struct Http2AssembledStream
-        {
+        struct Http2AssembledStream {
             std::unordered_map<std::string, std::string> pseudo_headers;
             std::unordered_map<std::string, std::string> regular_headers;
             std::string body;
@@ -760,7 +1066,6 @@ namespace yuan::net::http
             return hdr.size() >= 9 && ((static_cast<unsigned char>(hdr[4]) & 0x01) != 0);
         }
 
-
         bool load_precompressed_asset(const std::string &source_path,
                                       std::string_view encoding,
                                       std::string &out_body)
@@ -781,6 +1086,19 @@ namespace yuan::net::http
             }
             return true;
         }
+
+        void add_static_compression_headers(HttpResponse *resp,
+                                            const StaticMountOptions &options,
+                                            std::string_view encoding)
+        {
+            if (!resp || encoding.empty()) {
+                return;
+            }
+            resp->add_header(http_header_key::content_encoding, std::string(encoding));
+            if (options.gzip_vary) {
+                resp->add_header(http_header_key::vary, "accept-encoding");
+            }
+        }
     }
 
     HttpServer::HttpServer()
@@ -788,7 +1106,7 @@ namespace yuan::net::http
     {
     }
 
-    HttpServer::HttpServer(const HttpServerConfig & config)
+    HttpServer::HttpServer(const HttpServerConfig &config)
         : config_(config)
     {
         if (config_.enable_cors) {
@@ -848,6 +1166,7 @@ namespace yuan::net::http
             j["server"]["max_connections_per_ip"] = config_.max_connections_per_ip;
             j["server"]["max_inflight_requests_per_ip"] = config_.max_inflight_requests_per_ip;
             j["server"]["enable_http2"] = config_.enable_http2;
+            j["server"]["http2_tls_only"] = config_.http2_tls_only;
             j["server"]["enable_http3"] = config_.enable_http3;
             j["server"]["enable_keep_alive"] = config_.enable_keep_alive;
 
@@ -942,11 +1261,11 @@ namespace yuan::net::http
         };
 
         const auto cert_path = config_.ssl_certificate.empty()
-            ? resolve_asset(std::filesystem::path("ca") / "ca.crt")
-            : std::filesystem::path(config_.ssl_certificate);
+                                   ? resolve_asset(std::filesystem::path("ca") / "ca.crt")
+                                   : std::filesystem::path(config_.ssl_certificate);
         const auto key_path = config_.ssl_certificate_key.empty()
-            ? resolve_asset(std::filesystem::path("ca") / "ca.key")
-            : std::filesystem::path(config_.ssl_certificate_key);
+                                  ? resolve_asset(std::filesystem::path("ca") / "ca.key")
+                                  : std::filesystem::path(config_.ssl_certificate_key);
 
         ssl_module_ = std::make_shared<OpenSSLModule>();
         if (!ssl_module_->init(cert_path.string(), key_path.string(), SSLHandler::SSLMode::acceptor_)) {
@@ -955,6 +1274,16 @@ namespace yuan::net::http
             }
             return false;
         }
+        if (!ssl_module_->set_min_protocol_version(config_.ssl_min_version) ||
+            !ssl_module_->set_max_protocol_version(config_.ssl_max_version) ||
+            !ssl_module_->set_cipher_list(config_.ssl_ciphers) ||
+            !ssl_module_->set_ciphersuites(config_.ssl_ciphersuites)) {
+            if (auto msg = ssl_module_->get_error_message()) {
+                LOG_ERROR("{}", msg->c_str());
+            }
+            return false;
+        }
+        ssl_module_->set_prefer_server_ciphers(config_.ssl_prefer_server_ciphers);
 
         if (config_.enable_http2) {
             ssl_module_->set_alpn_protocols({"h2", "http/1.1"});
@@ -974,8 +1303,7 @@ namespace yuan::net::http
 
     bool HttpServer::init_http_features()
     {
-        try
-        {
+        try {
             config::load_config();
             config_.enable_http2 = config_.enable_http2 || config::enable_http2;
             config_.enable_http3 = config_.enable_http3 || config::enable_http3;
@@ -989,14 +1317,10 @@ namespace yuan::net::http
             }
 
             thread_pool_ = std::make_unique<thread::ThreadPool>(config_.thread_pool_size);
-        }
-        catch (const std::exception &e)
-        {
+        } catch (const std::exception &e) {
             LOG_ERROR("Exception during server init: {}", e.what());
             thread_pool_ = std::make_unique<thread::ThreadPool>(config_.thread_pool_size);
-        }
-        catch (...)
-        {
+        } catch (...) {
             LOG_ERROR("Unknown exception during server init");
             thread_pool_ = std::make_unique<thread::ThreadPool>(config_.thread_pool_size);
         }
@@ -1016,15 +1340,17 @@ namespace yuan::net::http
             serve_upload(req, resp);
         });
 
-        on("/__http_caps", [](HttpRequest *req, HttpResponse *resp) {
+        on("/__http_caps", [this](HttpRequest *req, HttpResponse *resp) {
             (void)req;
             nlohmann::json j;
             j["http1"] = true;
             j["http2"] = config::enable_http2;
+            j["h2c"] = config::enable_http2 && !config_.http2_tls_only;
+            j["http2_tls_only"] = config_.http2_tls_only;
             j["http3"] = config::enable_http3;
             j["notes"] = (config::enable_http2 || config::enable_http3)
-                ? "HTTP/2 and HTTP/3 capability flags enabled (server stack integration pending)"
-                : "HTTP/2 and HTTP/3 are not enabled in this build yet";
+                             ? "HTTP/2 and HTTP/3 capability flags enabled (server stack integration pending)"
+                             : "HTTP/2 and HTTP/3 are not enabled in this build yet";
             resp->json(j.dump(), ResponseCode::ok_);
             if (req->get_version() != HttpVersion::v_2_0) {
                 resp->send();
@@ -1198,7 +1524,6 @@ namespace yuan::net::http
                 removed_session_tmp_files,
                 orphan_removed);
         }
-
     }
 
     HttpProxyHandler *HttpServer::ensure_proxy()
@@ -1234,7 +1559,7 @@ namespace yuan::net::http
         config_.listen_options = options;
     }
 
-    bool HttpServer::parse_request(HttpSessionContext * context)
+    bool HttpServer::parse_request(HttpSessionContext *context)
     {
         if (!context->parse()) {
             if (context->has_error()) {
@@ -1264,7 +1589,7 @@ namespace yuan::net::http
         return true;
     }
 
-    bool HttpServer::parse_request(HttpSessionContext * context, const ::yuan::buffer::ByteBuffer & data)
+    bool HttpServer::parse_request(HttpSessionContext *context, const ::yuan::buffer::ByteBuffer &data)
     {
         if (!context->parse_from(data)) {
             if (context->has_error()) {
@@ -1324,7 +1649,7 @@ namespace yuan::net::http
         return true;
     }
 
-    bool HttpServer::validate_request_version(HttpSessionContext * context)
+    bool HttpServer::validate_request_version(HttpSessionContext *context)
     {
         if (!context) {
             return false;
@@ -1357,7 +1682,7 @@ namespace yuan::net::http
         }
     }
 
-    bool HttpServer::dispatch_request(HttpSessionContext * context)
+    bool HttpServer::dispatch_request(HttpSessionContext *context)
     {
         auto *request = context->get_request();
         auto *response = context->get_response();
@@ -1410,6 +1735,8 @@ namespace yuan::net::http
         const std::string_view dispatch_path = request->get_path();
         if (const auto *handler = dispatcher_.get_handler_ptr(dispatch_path)) {
             (*handler)(request, response);
+        } else if (has_static_regex_match(std::string(dispatch_path))) {
+            serve_static(request, response);
         } else {
             context->process_error(ResponseCode::not_found);
         }
@@ -1417,12 +1744,19 @@ namespace yuan::net::http
         return true;
     }
 
-    void HttpServer::finalize_request(uint64_t sessionId, HttpSession * session, HttpSessionContext * context)
+    void HttpServer::finalize_request(uint64_t sessionId, HttpSession *session, HttpSessionContext *context)
     {
-        if (context && access_log_hook_) {
+        if (context) {
             auto *request = context->get_request();
             auto *response = context->get_response();
-            if (request && response) {
+            if (request && response &&
+                request->get_version() != HttpVersion::v_2_0 &&
+                !response->has_sent() &&
+                !response->is_sse()) {
+                response->finish();
+            }
+
+            if (request && response && access_log_hook_) {
                 access_log_hook_(request, response, sessionId);
             }
         }
@@ -1487,7 +1821,7 @@ namespace yuan::net::http
         return init(port, *owned_runtime_);
     }
 
-    bool HttpServer::init(int port, NetworkRuntime & runtime)
+    bool HttpServer::init(int port, NetworkRuntime &runtime)
     {
         clear_sessions();
         uploaded_chunks_.clear();
@@ -1535,7 +1869,7 @@ namespace yuan::net::http
         }
 
         listener_.set_connection_handler(
-            [this](net::AsyncConnectionContext ctx)->coroutine::Task<void> {
+            [this](net::AsyncConnectionContext ctx) -> coroutine::Task<void> {
                 co_await handle_connection(std::move(ctx));
             });
 
@@ -1564,14 +1898,14 @@ namespace yuan::net::http
         clear_sessions();
     }
 
-    void HttpServer::on(const std::string & url, request_function func, bool is_prefix)
+    void HttpServer::on(const std::string &url, request_function func, bool is_prefix)
     {
         if (url.empty() || !func)
             return;
         dispatcher_.register_handler(url, func, is_prefix);
     }
 
-    void HttpServer::on(const std::string & url, request_function func,
+    void HttpServer::on(const std::string &url, request_function func,
                         std::shared_ptr<MiddlewarePipeline> pipeline, bool is_prefix)
     {
         if (url.empty() || !func || !pipeline)
@@ -1606,10 +1940,10 @@ namespace yuan::net::http
                     return false;
                 }
                 if (active_http_connections_.compare_exchange_weak(
-                    current,
-                    current + 1,
-                    std::memory_order_relaxed,
-                    std::memory_order_relaxed)) {
+                        current,
+                        current + 1,
+                        std::memory_order_relaxed,
+                        std::memory_order_relaxed)) {
                     return true;
                 }
             }
@@ -1800,6 +2134,8 @@ namespace yuan::net::http
         const std::string_view dispatch_path = request->get_path();
         if (const auto *handler = dispatcher_.get_handler_ptr(dispatch_path)) {
             (*handler)(request, response);
+        } else if (has_static_regex_match(std::string(dispatch_path))) {
+            serve_static(request, response);
         } else {
             response->set_response_code(ResponseCode::not_found);
             response->add_header(http_header_key::content_type, "text/plain");
@@ -1814,7 +2150,7 @@ namespace yuan::net::http
             global_pipeline_.add(std::move(middleware));
     }
 
-    void HttpServer::use(middleware_function fn, const char * name)
+    void HttpServer::use(middleware_function fn, const char *name)
     {
         global_pipeline_.add(std::move(fn), name);
     }
@@ -1921,8 +2257,8 @@ namespace yuan::net::http
 
         while (ctx.is_connected()) {
             const uint32_t read_timeout_ms = (!http2_mode && !http1_long_lived_response)
-                ? (use_session_idle_timer ? uint32_t{0} : keep_alive_idle_timeout_ms(config_))
-                : uint32_t{0};
+                                                 ? (use_session_idle_timer ? uint32_t{0} : keep_alive_idle_timeout_ms(config_))
+                                                 : uint32_t{0};
             auto read_result = co_await ctx.read_awaiter(read_timeout_ms);
             if (read_result.status == coroutine::IoStatus::timed_out) {
                 LOG_DEBUG("HTTP/1 idle read timeout from {}", conn->get_remote_address().to_address_key());
@@ -1985,7 +2321,7 @@ namespace yuan::net::http
                     continue;
                 }
                 if (probe == Http2PrefaceProbe::is_preface) {
-                    if (config::enable_http2) {
+                    if (config::enable_http2 && !config_.http2_tls_only) {
                         LOG_INFO("HTTP/2 preface accepted from {}", conn->get_remote_address().to_address_key());
                         if (!enter_h2_mode(false)) {
                             break;
@@ -2000,7 +2336,9 @@ namespace yuan::net::http
                         protocol_probe_data.clear();
                         continue;
                     } else {
-                        LOG_WARN("HTTP/2 preface rejected from {} (enable_http2=false)", conn->get_remote_address().to_address_key());
+                        LOG_WARN("HTTP/2 preface rejected from {} ({})",
+                                 conn->get_remote_address().to_address_key(),
+                                 config::enable_http2 ? "http2_tls_only=true" : "enable_http2=false");
                         session_ptr->get_context()->process_error(ResponseCode::http_version_not_supported);
                     }
                     break;
@@ -2015,8 +2353,7 @@ namespace yuan::net::http
             auto *context = session_ptr->get_context();
 
             bool inflight_tracked = false;
-            try
-            {
+            try {
                 if (!parse_request(context, std::move(parse_data))) {
                     if (context->has_error()) {
                         break;
@@ -2065,8 +2402,8 @@ namespace yuan::net::http
                 }
 
                 const bool close_after_response = should_close_http1_connection(
-                    context->get_request(), context->get_response(), config_.enable_keep_alive) ||
-                    conn->input_shutdown();
+                                                      context->get_request(), context->get_response(), config_.enable_keep_alive) ||
+                                                  conn->input_shutdown();
                 http1_long_lived_response = context->get_response()->is_sse();
 
                 bool response_stream_failed = false;
@@ -2095,25 +2432,19 @@ namespace yuan::net::http
                     ctx.close();
                     break;
                 }
-            }
-            catch (const fmt::format_error &e)
-            {
+            } catch (const fmt::format_error &e) {
                 LOG_ERROR("Invalid UTF-8 or format error while processing HTTP request: {}", e.what());
                 if (has_session(sessionId)) {
                     release_inflight_request(context->get_request(), inflight_tracked);
                     context->process_error(ResponseCode::bad_request);
                 }
-            }
-            catch (const std::exception &e)
-            {
+            } catch (const std::exception &e) {
                 LOG_ERROR("Exception while processing HTTP request: {}", e.what());
                 if (has_session(sessionId)) {
                     release_inflight_request(context->get_request(), inflight_tracked);
                     context->process_error(ResponseCode::internal_server_error);
                 }
-            }
-            catch (...)
-            {
+            } catch (...) {
                 LOG_ERROR("Unknown exception while processing HTTP request");
                 if (has_session(sessionId)) {
                     release_inflight_request(context->get_request(), inflight_tracked);
@@ -2143,6 +2474,9 @@ namespace yuan::net::http
     {
         static_mount_trie_.clear();
         static_mounts_.clear();
+        static_exact_mounts_.clear();
+        static_strong_prefix_mounts_.clear();
+        static_regex_mounts_.clear();
 
         auto cfgManager = HttpConfigManager::get_instance();
         const std::vector<nlohmann::json> &paths = cfgManager->get_type_array_properties<nlohmann::json>(config::static_file_paths);
@@ -2165,7 +2499,7 @@ namespace yuan::net::http
             play_types_.insert(type);
 
         if (play_types_.empty()) {
-            play_types_.insert({ ".mp4", ".mp3", ".mov", ".flac", ".wav", ".avi", ".ogg" });
+            play_types_.insert({".mp4", ".mp3", ".mov", ".flac", ".wav", ".avi", ".ogg"});
         }
     }
 
@@ -2175,11 +2509,19 @@ namespace yuan::net::http
             return;
         }
 
+        const bool regex_match = options.match_type == StaticMountOptions::MatchType::regex;
+        if (options.exact_match && options.match_type == StaticMountOptions::MatchType::prefix) {
+            options.match_type = StaticMountOptions::MatchType::exact;
+        }
+        if (options.match_type == StaticMountOptions::MatchType::exact) {
+            options.exact_match = true;
+        }
+
         std::string normalized_prefix = url_prefix;
-        if (normalized_prefix.front() != '/') {
+        if (!regex_match && normalized_prefix.front() != '/') {
             normalized_prefix.insert(normalized_prefix.begin(), '/');
         }
-        if (normalized_prefix.size() > 1 && normalized_prefix.back() == '/') {
+        if (!regex_match && normalized_prefix.size() > 1 && normalized_prefix.back() == '/') {
             normalized_prefix.pop_back();
         }
 
@@ -2194,15 +2536,71 @@ namespace yuan::net::http
         mount.root = normalized_root;
         mount.options = std::move(options);
 
-        static_mounts_[normalized_prefix] = mount;
-        static_mount_trie_.insert(normalized_prefix, true);
+        std::unordered_set<std::string> normalized_gzip_proxied;
+        for (const auto &token : mount.options.gzip_proxied) {
+            std::string normalized = token;
+            std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            normalized_gzip_proxied.insert(std::move(normalized));
+        }
+        mount.options.gzip_proxied = std::move(normalized_gzip_proxied);
 
-        on(normalized_prefix, [this](HttpRequest *req, HttpResponse *resp) {
-            this->serve_static(req, resp);
-        }, true);
+        mount.options.compiled_gzip_disable.clear();
+        for (const auto &pattern : mount.options.gzip_disable) {
+            try {
+                mount.options.compiled_gzip_disable.emplace_back(pattern, std::regex::ECMAScript | std::regex::icase);
+            } catch (const std::regex_error &ex) {
+                LOG_ERROR_TAG("mount_static",
+                              "[Static] skip mount: invalid gzip_disable regex='{}', error='{}'",
+                              pattern,
+                              ex.what());
+                return;
+            }
+        }
+
+        if (mount.options.match_type == StaticMountOptions::MatchType::regex) {
+            try {
+                auto flags = std::regex::ECMAScript;
+                if (!mount.options.regex_case_sensitive) {
+                    flags |= std::regex::icase;
+                }
+                mount.options.compiled_location = std::regex(mount.prefix, flags);
+            } catch (const std::regex_error &ex) {
+                LOG_ERROR_TAG("mount_static",
+                              "[Static] skip mount: invalid regex location='{}', error='{}'",
+                              mount.prefix,
+                              ex.what());
+                return;
+            }
+        }
+
+        static_mounts_[normalized_prefix] = mount;
+        static_exact_mounts_.erase(normalized_prefix);
+        static_strong_prefix_mounts_.erase(
+            std::remove(static_strong_prefix_mounts_.begin(), static_strong_prefix_mounts_.end(), normalized_prefix),
+            static_strong_prefix_mounts_.end());
+        static_regex_mounts_.erase(
+            std::remove(static_regex_mounts_.begin(), static_regex_mounts_.end(), normalized_prefix),
+            static_regex_mounts_.end());
+
+        if (mount.options.match_type == StaticMountOptions::MatchType::exact) {
+            static_exact_mounts_.insert(normalized_prefix);
+        } else if (mount.options.match_type == StaticMountOptions::MatchType::regex) {
+            static_regex_mounts_.push_back(normalized_prefix);
+        } else {
+            if (mount.options.match_type == StaticMountOptions::MatchType::prefix_strong) {
+                static_strong_prefix_mounts_.push_back(normalized_prefix);
+            }
+            static_mount_trie_.insert(normalized_prefix, true);
+        }
+
+        if (mount.options.match_type != StaticMountOptions::MatchType::regex) {
+            on(normalized_prefix, [this](HttpRequest *req, HttpResponse *resp) { this->serve_static(req, resp); }, true);
+        }
     }
 
-    void HttpServer::icon(HttpRequest * req, HttpResponse * resp)
+    void HttpServer::icon(HttpRequest *req, HttpResponse *resp)
     {
         (void)req;
         resp->add_header("Connection", "close");
@@ -2233,11 +2631,68 @@ namespace yuan::net::http
     }
 
     bool HttpServer::resolve_static_request(
-        const std::string & request_path,
-        const StaticMount *& mount,
-        std::string & file_relative_path,
-        HttpResponse * resp)
+        const std::string &request_path,
+        const StaticMount *&mount,
+        std::string &file_relative_path,
+        HttpResponse *resp)
     {
+        if (static_exact_mounts_.find(request_path) != static_exact_mounts_.end()) {
+            const auto static_path_it = static_mounts_.find(request_path);
+            if (static_path_it == static_mounts_.end() || static_path_it->second.root.empty()) {
+                resp->process_error(ResponseCode::not_found);
+                return false;
+            }
+            mount = &static_path_it->second;
+            file_relative_path.clear();
+            return true;
+        }
+
+        std::string best_strong_prefix;
+        for (const auto &key : static_strong_prefix_mounts_) {
+            const auto static_path_it = static_mounts_.find(key);
+            if (static_path_it == static_mounts_.end() ||
+                static_path_it->second.options.match_type != StaticMountOptions::MatchType::prefix_strong) {
+                continue;
+            }
+            if (static_prefix_matches(request_path, key) && key.size() > best_strong_prefix.size()) {
+                best_strong_prefix = key;
+            }
+        }
+        if (!best_strong_prefix.empty()) {
+            const auto static_path_it = static_mounts_.find(best_strong_prefix);
+            if (static_path_it == static_mounts_.end() || static_path_it->second.root.empty()) {
+                resp->process_error(ResponseCode::not_found);
+                return false;
+            }
+            if (!static_relative_path_for_prefix(request_path, best_strong_prefix, file_relative_path)) {
+                resp->process_error(ResponseCode::forbidden);
+                return false;
+            }
+            mount = &static_path_it->second;
+            return true;
+        }
+
+        for (const auto &key : static_regex_mounts_) {
+            const auto static_path_it = static_mounts_.find(key);
+            if (static_path_it == static_mounts_.end() ||
+                static_path_it->second.root.empty() ||
+                static_path_it->second.options.match_type != StaticMountOptions::MatchType::regex) {
+                continue;
+            }
+            if (!std::regex_search(request_path, static_path_it->second.options.compiled_location)) {
+                continue;
+            }
+            file_relative_path = request_path.size() > 1 ? request_path.substr(1) : "";
+            if (file_relative_path.find("..") != std::string::npos ||
+                file_relative_path.find('\\') != std::string::npos ||
+                (!file_relative_path.empty() && file_relative_path.front() == '/')) {
+                resp->process_error(ResponseCode::forbidden);
+                return false;
+            }
+            mount = &static_path_it->second;
+            return true;
+        }
+
         const auto result = static_mount_trie_.find_prefix(request_path);
         const auto prefix_idx = static_cast<size_t>(result.match_length);
 
@@ -2248,47 +2703,34 @@ namespace yuan::net::http
 
         const std::string prefix = request_path.substr(0, prefix_idx);
         const auto static_path_it = static_mounts_.find(prefix);
-        if (static_path_it == static_mounts_.end() || static_path_it->second.root.empty()) {
+        if (static_path_it == static_mounts_.end() ||
+            static_path_it->second.root.empty() ||
+            static_path_it->second.options.match_type == StaticMountOptions::MatchType::exact ||
+            static_path_it->second.options.match_type == StaticMountOptions::MatchType::regex) {
             resp->process_error(ResponseCode::not_found);
             return false;
         }
-        mount = &static_path_it->second;
-
-        if (prefix == "/") {
-            file_relative_path = request_path.size() > 1 ? request_path.substr(1) : "";
-            if (file_relative_path.find("..") != std::string::npos ||
-                file_relative_path.find('\\') != std::string::npos ||
-                (!file_relative_path.empty() && file_relative_path.front() == '/')) {
-                resp->process_error(ResponseCode::forbidden);
-                return false;
-            }
-            return true;
-        }
-
-        if (request_path.size() <= prefix_idx) {
-            file_relative_path.clear();
-            return true;
-        }
-
-        if (request_path[prefix_idx] != '/') {
-            resp->process_error(ResponseCode::not_found);
-            return false;
-        }
-
-        if (request_path.size() <= prefix_idx + 1) {
-            file_relative_path.clear();
-            return true;
-        }
-
-        file_relative_path = request_path.substr(prefix_idx + 1);
-        if (file_relative_path.find("..") != std::string::npos ||
-            file_relative_path.find('\\') != std::string::npos ||
-            (!file_relative_path.empty() && file_relative_path.front() == '/')) {
+        if (!static_relative_path_for_prefix(request_path, prefix, file_relative_path)) {
             resp->process_error(ResponseCode::forbidden);
             return false;
         }
-
+        mount = &static_path_it->second;
         return true;
+    }
+
+    bool HttpServer::has_static_regex_match(const std::string &request_path) const
+    {
+        for (const auto &key : static_regex_mounts_) {
+            const auto static_path_it = static_mounts_.find(key);
+            if (static_path_it == static_mounts_.end() ||
+                static_path_it->second.options.match_type != StaticMountOptions::MatchType::regex) {
+                continue;
+            }
+            if (std::regex_search(request_path, static_path_it->second.options.compiled_location)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     std::string HttpServer::make_weak_etag(const std::filesystem::path &path, std::size_t size, std::time_t modified_at)
@@ -2314,7 +2756,7 @@ namespace yuan::net::http
     bool HttpServer::parse_http_date(std::string_view text, std::time_t &out)
     {
         std::tm tm{};
-        std::istringstream iss{ std::string(text) };
+        std::istringstream iss{std::string(text)};
         iss >> std::get_time(&tm, "%a, %d %b %Y %H:%M:%S GMT");
         if (iss.fail()) {
             return false;
@@ -2372,6 +2814,11 @@ namespace yuan::net::http
         if (!options.enable_gzip && !options.enable_gzip_static) {
             return false;
         }
+        if (!request_version_allows_compression(req, options) ||
+            user_agent_disabled_for_compression(req, options) ||
+            !gzip_proxied_allows_compression(req, options)) {
+            return false;
+        }
 
         const auto *accept_encoding = req->get_header(http_header_key::accept_encoding);
         if (!accept_encoding || accept_encoding->empty()) {
@@ -2396,8 +2843,7 @@ namespace yuan::net::http
             iequals_ascii(*preferred, "br") &&
             load_precompressed_asset(source_path, "br", precompressed_body)) {
             resp->append_body(std::move(precompressed_body));
-            resp->add_header(http_header_key::content_encoding, "br");
-            resp->add_header(http_header_key::vary, "accept-encoding");
+            add_static_compression_headers(resp, options, "br");
             return true;
         }
 
@@ -2405,8 +2851,7 @@ namespace yuan::net::http
             iequals_ascii(*preferred, "gzip") &&
             load_precompressed_asset(source_path, "gz", precompressed_body)) {
             resp->append_body(std::move(precompressed_body));
-            resp->add_header(http_header_key::content_encoding, "gzip");
-            resp->add_header(http_header_key::vary, "accept-encoding");
+            add_static_compression_headers(resp, options, "gzip");
             return true;
         }
 
@@ -2433,8 +2878,9 @@ namespace yuan::net::http
             std::string compressed;
             compressed.resize(max_size);
             size_t encoded_size = max_size;
+            const int brotli_quality = std::clamp(options.brotli_comp_level, 0, 11);
             const BROTLI_BOOL ok = BrotliEncoderCompress(
-                5,
+                brotli_quality,
                 BROTLI_DEFAULT_WINDOW,
                 BROTLI_MODE_TEXT,
                 plain.size(),
@@ -2444,8 +2890,7 @@ namespace yuan::net::http
             if (ok == BROTLI_TRUE && encoded_size > 0 && encoded_size < plain.size()) {
                 compressed.resize(encoded_size);
                 resp->append_body(std::move(compressed));
-                resp->add_header(http_header_key::content_encoding, "br");
-                resp->add_header(http_header_key::vary, "accept-encoding");
+                add_static_compression_headers(resp, options, "br");
                 return true;
             }
         }
@@ -2459,7 +2904,8 @@ namespace yuan::net::http
         }
 
         z_stream zs{};
-        if (deflateInit2(&zs, Z_BEST_SPEED, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        const int gzip_level = std::clamp(options.gzip_comp_level, 1, 9);
+        if (deflateInit2(&zs, gzip_level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
             return false;
         }
 
@@ -2483,13 +2929,12 @@ namespace yuan::net::http
         }
 
         resp->append_body(std::move(compressed));
-        resp->add_header(http_header_key::content_encoding, "gzip");
-        resp->add_header(http_header_key::vary, "accept-encoding");
+        add_static_compression_headers(resp, options, "gzip");
         return true;
 #endif
     }
 
-    bool HttpServer::serve_embedded_static_page(const std::string & file_relative_path, HttpResponse * resp, const StaticMountOptions &options)
+    bool HttpServer::serve_embedded_static_page(const std::string &file_relative_path, HttpResponse *resp, const StaticMountOptions &options)
     {
         if (file_relative_path == "upload") {
             resp->append_body(config::upload_html_text);
@@ -2506,31 +2951,84 @@ namespace yuan::net::http
         return true;
     }
 
+    bool HttpServer::serve_static_error_page(
+        HttpRequest *req,
+        HttpResponse *resp,
+        const StaticMount &mount,
+        ResponseCode status)
+    {
+        const int code = static_cast<int>(status);
+        const auto it = mount.options.error_pages.find(code);
+        if (it == mount.options.error_pages.end() || it->second.uri.empty()) {
+            return false;
+        }
+
+        std::string rel = it->second.uri;
+        if (!rel.empty() && rel.front() == '/') {
+            rel.erase(rel.begin());
+        }
+        if (rel.empty() || rel.find("..") != std::string::npos || rel.find('\\') != std::string::npos) {
+            return false;
+        }
+
+        std::string full_path = mount.root;
+        if (!full_path.empty() && full_path.back() != '/' && full_path.back() != '\\') {
+            full_path += '/';
+        }
+        full_path += rel;
+
+        try {
+            std::filesystem::path canonical_root = std::filesystem::weakly_canonical(
+                std::filesystem::path(std::u8string(mount.root.begin(), mount.root.end())));
+            std::filesystem::path canonical_target = std::filesystem::weakly_canonical(
+                std::filesystem::path(std::u8string(full_path.begin(), full_path.end())));
+            const auto root_str = canonical_root.string();
+            const auto target_str = canonical_target.string();
+            if (target_str.compare(0, root_str.size(), root_str) != 0 ||
+                !std::filesystem::exists(canonical_target)) {
+                return false;
+            }
+            full_path = canonical_target.string();
+        } catch (...) {
+            return false;
+        }
+
+        ResponseCode response_status = status;
+        if (it->second.response_code > 0) {
+            response_status = static_cast<ResponseCode>(it->second.response_code);
+        }
+        serve_static_file(req, resp, mount, rel, full_path, response_status);
+        return true;
+    }
+
     void HttpServer::serve_static_file(
-        HttpRequest * req,
-        HttpResponse * resp,
-        const StaticMount & mount,
-        const std::string & file_relative_path,
-        const std::string & full_path,
+        HttpRequest *req,
+        HttpResponse *resp,
+        const StaticMount &mount,
+        const std::string &file_relative_path,
+        const std::string &full_path,
         std::optional<ResponseCode> status_override)
     {
         const std::string &path = full_path;
 
-        try
-        {
+        try {
             if (std::filesystem::is_directory(std::filesystem::path(std::u8string(path.begin(), path.end())))) {
                 if (mount.options.auto_index) {
                     const std::string request_path = req ? std::string(req->get_path()) : mount.prefix;
                     const bool as_json = req && req->get_request_params().contains("json");
                     serve_list_files(mount.root, path, request_path, resp, as_json);
                 } else {
+                    if (serve_static_error_page(req, resp, mount, ResponseCode::forbidden)) {
+                        return;
+                    }
                     resp->process_error(ResponseCode::forbidden);
                 }
                 return;
             }
-        }
-        catch (...)
-        {
+        } catch (...) {
+            if (serve_static_error_page(req, resp, mount, ResponseCode::forbidden)) {
+                return;
+            }
             resp->process_error(ResponseCode::forbidden);
             return;
         }
@@ -2545,6 +3043,9 @@ namespace yuan::net::http
         std::ifstream stream(path.c_str(), std::ios::in | std::ios::binary);
 #endif
         if (!stream.good()) {
+            if (serve_static_error_page(req, resp, mount, ResponseCode::not_found)) {
+                return;
+            }
             resp->process_error(ResponseCode::not_found);
             return;
         }
@@ -2569,29 +3070,29 @@ namespace yuan::net::http
         bool has_range = false;
         if (!status_override && mount.options.enable_range) {
             if (const std::string *range = req->get_header(http_header_key::range)) {
-            int ret = 0;
-            const auto &ranges = helper::parse_range(*range, ret);
-            if (ret == 0 && !ranges.empty()) {
-                offset = ranges[0].first;
-                if (ranges[0].second >= offset) {
-                    range_end = ranges[0].second;
-                    has_explicit_range_end = true;
+                int ret = 0;
+                const auto &ranges = helper::parse_range(*range, ret);
+                if (ret == 0 && !ranges.empty()) {
+                    offset = ranges[0].first;
+                    if (ranges[0].second >= offset) {
+                        range_end = ranges[0].second;
+                        has_explicit_range_end = true;
+                    }
+                    if (offset >= length) {
+                        resp->add_header("Content-Range", "bytes */" + std::to_string(length));
+                        resp->set_response_code(ResponseCode::range_not_satisfiable);
+                        resp->add_header("Content-Length", "0");
+                        resp->send();
+                        return;
+                    }
+                    has_range = true;
                 }
-                if (offset >= length) {
-                    resp->add_header("Content-Range", "bytes */" + std::to_string(length));
-                    resp->set_response_code(ResponseCode::range_not_satisfiable);
-                    resp->add_header("Content-Length", "0");
-                    resp->send();
-                    return;
-                }
-                has_range = true;
-            }
             }
         }
 
         const uint64_t effective_end = has_explicit_range_end
-            ? (std::min)(range_end, static_cast<uint64_t>(length - 1))
-            : static_cast<uint64_t>(length == 0 ? 0 : length - 1);
+                                           ? (std::min)(range_end, static_cast<uint64_t>(length - 1))
+                                           : static_cast<uint64_t>(length == 0 ? 0 : length - 1);
         const auto sz = length == 0 ? std::size_t{0} : static_cast<std::size_t>(effective_end - offset + 1);
 
         std::error_code stat_ec;
@@ -2623,7 +3124,7 @@ namespace yuan::net::http
         if (has_range) {
             resp->add_header("Content-Range",
                              "bytes " + std::to_string(offset) + "-" +
-                                  std::to_string(effective_end) + "/" + std::to_string(length));
+                                 std::to_string(effective_end) + "/" + std::to_string(length));
             resp->set_response_code(ResponseCode::partial_content);
         } else if (status_override) {
             resp->set_response_code(*status_override);
@@ -2633,7 +3134,7 @@ namespace yuan::net::http
 
         resp->add_header("Content-Type", content_type);
         const bool force_download = req &&
-            (req->get_request_params().contains("download") || req->get_request_params().contains("justDownload"));
+                                    (req->get_request_params().contains("download") || req->get_request_params().contains("justDownload"));
         resp->add_header("Content-Disposition", (force_download ? "attachment" : "inline") + std::string("; filename=\"") + url::url_encode(file_relative_path) + "\"");
         resp->add_header(http_header_key::etag, etag);
         resp->add_header(http_header_key::last_modified, format_http_date(modified_at));
@@ -2679,6 +3180,9 @@ namespace yuan::net::http
         task->set_attachment_info(attachment_info);
 
         if (!task->init()) {
+            if (serve_static_error_page(req, resp, mount, ResponseCode::internal_server_error)) {
+                return;
+            }
             resp->process_error(ResponseCode::internal_server_error);
             return;
         }
@@ -2691,12 +3195,18 @@ namespace yuan::net::http
         resp->send();
     }
 
-    void HttpServer::serve_static(HttpRequest * req, HttpResponse * resp)
+    void HttpServer::serve_static(HttpRequest *req, HttpResponse *resp)
     {
         const std::string request_path = std::string(req->get_path());
         const StaticMount *mount = nullptr;
         std::string file_relative_path;
         if (!resolve_static_request(request_path, mount, file_relative_path, resp) || !mount) {
+            return;
+        }
+        if (reject_method_if_not_allowed(req, resp, mount->options.allowed_methods)) {
+            return;
+        }
+        if (reject_if_access_denied(req, resp, mount->options.access_rules)) {
             return;
         }
 
@@ -2752,23 +3262,8 @@ namespace yuan::net::http
 
             if (forced_status > 0 &&
                 !std::filesystem::exists(std::filesystem::path(std::u8string(full_path.begin(), full_path.end())))) {
-                auto ep_it = mount->options.error_pages.find(forced_status);
-                if (ep_it != mount->options.error_pages.end()) {
-                    std::string ep = ep_it->second;
-                    if (!ep.empty() && ep.front() == '/') {
-                        ep.erase(ep.begin());
-                    }
-                    std::string ep_path = mount->root;
-                    if (!ep.empty()) {
-                        if (!ep_path.empty() && ep_path.back() != '/' && ep_path.back() != '\\') {
-                            ep_path += '/';
-                        }
-                        ep_path += ep;
-                    }
-                    if (std::filesystem::exists(std::filesystem::path(std::u8string(ep_path.begin(), ep_path.end())))) {
-                        serve_static_file(req, resp, *mount, ep, ep_path, static_cast<ResponseCode>(forced_status));
-                        return;
-                    }
+                if (serve_static_error_page(req, resp, *mount, static_cast<ResponseCode>(forced_status))) {
+                    return;
                 }
 
                 resp->process_error(static_cast<ResponseCode>(forced_status));
@@ -2782,11 +3277,17 @@ namespace yuan::net::http
             const auto root_str = canonical_root.string();
             const auto target_str = canonical_target.string();
             if (target_str.compare(0, root_str.size(), root_str) != 0) {
+                if (serve_static_error_page(req, resp, *mount, ResponseCode::forbidden)) {
+                    return;
+                }
                 resp->process_error(ResponseCode::forbidden);
                 return;
             }
             full_path = canonical_target.string();
         } catch (...) {
+            if (serve_static_error_page(req, resp, *mount, ResponseCode::forbidden)) {
+                return;
+            }
             resp->process_error(ResponseCode::forbidden);
             return;
         }
@@ -2811,6 +3312,9 @@ namespace yuan::net::http
                 const bool as_json = req->get_request_params().contains("json");
                 serve_list_files(mount->root, mount->root, request_path, resp, as_json);
             } else {
+                if (serve_static_error_page(req, resp, *mount, ResponseCode::forbidden)) {
+                    return;
+                }
                 resp->process_error(ResponseCode::forbidden);
             }
             return;
@@ -2821,23 +3325,8 @@ namespace yuan::net::http
         }
 
         if (!std::filesystem::exists(std::filesystem::path(std::u8string(full_path.begin(), full_path.end())))) {
-            auto ep_it = mount->options.error_pages.find(404);
-            if (ep_it != mount->options.error_pages.end()) {
-                std::string ep = ep_it->second;
-                if (!ep.empty() && ep.front() == '/') {
-                    ep.erase(ep.begin());
-                }
-                std::string ep_path = mount->root;
-                if (!ep.empty()) {
-                    if (!ep_path.empty() && ep_path.back() != '/' && ep_path.back() != '\\') {
-                        ep_path += '/';
-                    }
-                    ep_path += ep;
-                }
-                if (std::filesystem::exists(std::filesystem::path(std::u8string(ep_path.begin(), ep_path.end())))) {
-                    serve_static_file(req, resp, *mount, ep, ep_path, ResponseCode::not_found);
-                    return;
-                }
+            if (serve_static_error_page(req, resp, *mount, ResponseCode::not_found)) {
+                return;
             }
             resp->process_error(ResponseCode::not_found);
             return;
@@ -2846,10 +3335,9 @@ namespace yuan::net::http
         serve_static_file(req, resp, *mount, file_relative_path, full_path);
     }
 
-    void HttpServer::serve_list_files(const std::string & prefix, const std::string & filePath, const std::string & request_path, HttpResponse * resp, bool as_json)
+    void HttpServer::serve_list_files(const std::string &prefix, const std::string &filePath, const std::string &request_path, HttpResponse *resp, bool as_json)
     {
-        try
-        {
+        try {
             std::filesystem::path absPrefix = std::filesystem::canonical(std::u8string(prefix.begin(), prefix.end()));
             std::filesystem::path absFile = std::filesystem::canonical(std::u8string(filePath.begin(), filePath.end()));
 
@@ -2859,9 +3347,7 @@ namespace yuan::net::http
                 resp->process_error(ResponseCode::forbidden);
                 return;
             }
-        }
-        catch (...)
-        {
+        } catch (...) {
             resp->process_error(ResponseCode::internal_server_error);
             return;
         }
@@ -2869,8 +3355,7 @@ namespace yuan::net::http
         nlohmann::json jsonResponse;
         std::vector<nlohmann::json> entries;
 
-        try
-        {
+        try {
             for (const auto &entry : std::filesystem::directory_iterator(
                      std::filesystem::path(std::u8string(filePath.begin(), filePath.end())))) {
 
@@ -2899,9 +3384,7 @@ namespace yuan::net::http
 
                 entries.push_back(std::move(item));
             }
-        }
-        catch (const std::filesystem::filesystem_error &e)
-        {
+        } catch (const std::filesystem::filesystem_error &e) {
             resp->process_error();
             return;
         }
@@ -2949,7 +3432,7 @@ namespace yuan::net::http
         resp->send();
     }
 
-    void HttpServer::reload_config(HttpRequest * req, HttpResponse * resp)
+    void HttpServer::reload_config(HttpRequest *req, HttpResponse *resp)
     {
         (void)req;
         if (HttpConfigManager::get_instance()->reload_config()) {
@@ -2970,7 +3453,7 @@ namespace yuan::net::http
         resp->send();
     }
 
-    void HttpServer::handle_options_preflight(HttpRequest * req, HttpResponse * resp)
+    void HttpServer::handle_options_preflight(HttpRequest *req, HttpResponse *resp)
     {
         (void)req;
         resp->set_response_code(ResponseCode::no_content);
@@ -2987,16 +3470,16 @@ namespace yuan::net::http
     }
 
     bool HttpServer::parse_upload_request(
-        HttpRequest * req,
-        HttpResponse * resp,
-        FormDataContent * &form,
-        std::string & upload_id,
-        int & chunk_index,
-        std::string & filename,
-        FormDataFileItem * &file_item,
-        uint64_t & chunk_size,
-        int & total_chunks,
-        uint64_t & file_size)
+        HttpRequest *req,
+        HttpResponse *resp,
+        FormDataContent *&form,
+        std::string &upload_id,
+        int &chunk_index,
+        std::string &filename,
+        FormDataFileItem *&file_item,
+        uint64_t &chunk_size,
+        int &total_chunks,
+        uint64_t &file_size)
     {
         if (req->get_method() != HttpMethod::post_) {
             resp->process_error(ResponseCode::method_not_allowed);
@@ -3037,12 +3520,9 @@ namespace yuan::net::http
             return false;
         }
 
-        try
-        {
+        try {
             chunk_index = std::stoi(form->get_string("chunkindex"));
-        }
-        catch (...)
-        {
+        } catch (...) {
             chunk_index = -1;
         }
         if (chunk_index < 0) {
@@ -3108,13 +3588,13 @@ namespace yuan::net::http
     }
 
     bool HttpServer::find_or_create_upload_session(
-        const std::string & upload_id,
+        const std::string &upload_id,
         int chunk_index,
-        const std::string & filename,
+        const std::string &filename,
         int total_chunks,
         uint64_t file_size,
-        HttpResponse * resp,
-        std::unordered_map<std::string, UploadFileMapping>::iterator & session_it)
+        HttpResponse *resp,
+        std::unordered_map<std::string, UploadFileMapping>::iterator &session_it)
     {
         session_it = uploaded_chunks_.find(upload_id);
         if (session_it == uploaded_chunks_.end()) {
@@ -3154,15 +3634,15 @@ namespace yuan::net::http
     }
 
     bool HttpServer::store_upload_chunk(
-        HttpRequest * req,
-        HttpResponse * resp,
-        const std::string & upload_id,
+        HttpRequest *req,
+        HttpResponse *resp,
+        const std::string &upload_id,
         int chunk_index,
-        FormDataFileItem * file_item,
+        FormDataFileItem *file_item,
         uint64_t chunk_size,
-        UploadSession & session,
-        UploadSession & session_snapshot,
-        int & received_count)
+        UploadSession &session,
+        UploadSession &session_snapshot,
+        int &received_count)
     {
         (void)req;
         if (session.total_chunks > 0 && chunk_index >= session.total_chunks) {
@@ -3228,8 +3708,8 @@ namespace yuan::net::http
         } else {
             const char *data = file_item->data_begin;
             const auto data_size = file_item->data_end > file_item->data_begin
-                ? static_cast<std::size_t>(file_item->data_end - file_item->data_begin)
-                : 0;
+                                       ? static_cast<std::size_t>(file_item->data_end - file_item->data_begin)
+                                       : 0;
             if (!data || data_size == 0) {
                 session.received.erase(chunk_index);
                 nlohmann::json err;
@@ -3265,10 +3745,10 @@ namespace yuan::net::http
     }
 
     void HttpServer::finalize_upload_chunk(
-        HttpRequest * req,
+        HttpRequest *req,
         int chunk_index,
-        FormDataFileItem * file_item,
-        const UploadSession & session_snapshot,
+        FormDataFileItem *file_item,
+        const UploadSession &session_snapshot,
         int received_count)
     {
         (void)req;
@@ -3286,7 +3766,7 @@ namespace yuan::net::http
         }
     }
 
-    void HttpServer::serve_upload(HttpRequest * req, HttpResponse * resp)
+    void HttpServer::serve_upload(HttpRequest *req, HttpResponse *resp)
     {
         if (upload_session_count_.load(std::memory_order_relaxed) != 0) {
             cleanup_stale_upload_sessions();
@@ -3302,16 +3782,16 @@ namespace yuan::net::http
         uint64_t file_size = 0;
 
         if (!parse_upload_request(
-                 req,
-                 resp,
-                 form,
-                 upload_id,
-                 chunk_index,
-                 filename,
-                 file_item,
-                 chunk_size,
-                 total_chunks,
-                 file_size)) {
+                req,
+                resp,
+                form,
+                upload_id,
+                chunk_index,
+                filename,
+                file_item,
+                chunk_size,
+                total_chunks,
+                file_size)) {
             return;
         }
 
@@ -3321,26 +3801,26 @@ namespace yuan::net::http
         {
             std::lock_guard<std::mutex> upload_lock(upload_mutex_);
             if (!find_or_create_upload_session(
-                     upload_id,
-                     chunk_index,
-                     filename,
-                     total_chunks,
-                     file_size,
-                     resp,
-                     session_it)) {
+                    upload_id,
+                    chunk_index,
+                    filename,
+                    total_chunks,
+                    file_size,
+                    resp,
+                    session_it)) {
                 return;
             }
 
             if (!store_upload_chunk(
-                     req,
-                     resp,
-                     upload_id,
-                     chunk_index,
-                     file_item,
-                     chunk_size,
-                     session_it->second,
-                     session_snapshot,
-                     received_count)) {
+                    req,
+                    resp,
+                    upload_id,
+                    chunk_index,
+                    file_item,
+                    chunk_size,
+                    session_it->second,
+                    session_snapshot,
+                    received_count)) {
                 return;
             }
 

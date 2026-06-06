@@ -1,15 +1,15 @@
-#include "http_server.h"
-#include "http2/hpack_decoder.h"
-#include "http2/hpack_encoder.h"
-#include "request.h"
-#include "response.h"
-#include "http/http_service.h"
 #include "bootstrap.h"
 #include "eventbus/event_bus.h"
+#include "http/http_service.h"
+#include "http2/hpack_decoder.h"
+#include "http2/hpack_encoder.h"
+#include "http_server.h"
 #include "net/runtime/network_runtime.h"
+#include "platform/native_platform.h"
+#include "request.h"
+#include "response.h"
 #include "runtime_context.h"
 #include "server_service_events.h"
-#include "platform/native_platform.h"
 
 #include <any>
 #include <atomic>
@@ -26,14 +26,14 @@
 #include <thread>
 #include <vector>
 
+#include "nlohmann/json.hpp"
 #include "ops/config_manager.h"
 #include "ops/option.h"
-#include "nlohmann/json.hpp"
 
 #ifdef _WIN32
+#include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <windows.h>
 #pragma comment(lib, "ws2_32.lib")
 using socket_t = SOCKET;
 constexpr socket_t kInvalidSocket = INVALID_SOCKET;
@@ -306,10 +306,76 @@ namespace
 
         const std::string req =
             "GET " + path + " HTTP/1.1\r\n"
-            "Host: 127.0.0.1:" + std::to_string(port) + "\r\n"
-            "Connection: close\r\n" +
+                            "Host: 127.0.0.1:" +
+            std::to_string(port) + "\r\n"
+                                   "Connection: close\r\n" +
             extra_headers +
             "\r\n";
+        if (!send_all(s, req)) {
+            close_socket(s);
+            return {};
+        }
+        std::string resp = recv_all(s);
+        close_socket(s);
+        return resp;
+    }
+
+    std::string raw_http_request(uint16_t port, const std::string &raw)
+    {
+        socket_t s = connect_loopback(port);
+        if (s == kInvalidSocket) {
+            return {};
+        }
+#ifdef _WIN32
+        const DWORD recv_timeout_ms = 2500;
+        (void)::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&recv_timeout_ms), sizeof(recv_timeout_ms));
+#else
+        timeval tv{};
+        tv.tv_sec = 2;
+        tv.tv_usec = 500000;
+        (void)::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+        if (!send_all(s, raw)) {
+            close_socket(s);
+            return {};
+        }
+        std::string resp = recv_all(s);
+        close_socket(s);
+        return resp;
+    }
+
+    std::string http_request(uint16_t port,
+                             const std::string &method,
+                             const std::string &path,
+                             const std::string &extra_headers = {},
+                             const std::string &body = {})
+    {
+        socket_t s = connect_loopback(port);
+        if (s == kInvalidSocket) {
+            return {};
+        }
+#ifdef _WIN32
+        const DWORD recv_timeout_ms = 2500;
+        (void)::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&recv_timeout_ms), sizeof(recv_timeout_ms));
+#else
+        timeval tv{};
+        tv.tv_sec = 2;
+        tv.tv_usec = 500000;
+        (void)::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+
+        std::string req =
+            method + " " + path + " HTTP/1.1\r\n"
+                                  "Host: 127.0.0.1:" +
+            std::to_string(port) + "\r\n"
+                                   "Connection: close\r\n";
+        if (!body.empty()) {
+            req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+        }
+        req += extra_headers;
+        req += "\r\n";
+        req += body;
+
         if (!send_all(s, req)) {
             close_socket(s);
             return {};
@@ -533,9 +599,28 @@ namespace
         using yuan::net::http::http2::HpackHeaderField;
 
         const std::vector<std::uint8_t> python_hpack_sample = {
-            0x82, 0x44, 0x86, 0x60, 0x75, 0x99, 0x84, 0x95,
-            0x09, 0x87, 0x41, 0x8a, 0xa0, 0xe4, 0x1d, 0x13,
-            0x9d, 0x09, 0xb8, 0xf0, 0x1e, 0x07,
+            0x82,
+            0x44,
+            0x86,
+            0x60,
+            0x75,
+            0x99,
+            0x84,
+            0x95,
+            0x09,
+            0x87,
+            0x41,
+            0x8a,
+            0xa0,
+            0xe4,
+            0x1d,
+            0x13,
+            0x9d,
+            0x09,
+            0xb8,
+            0xf0,
+            0x1e,
+            0x07,
         };
 
         HpackDecoder decoder;
@@ -593,34 +678,26 @@ namespace
 
     void test_http1_split_header_and_invalid_content_length(uint16_t port)
     {
-        const std::string split_resp = http_raw_exchange(port, {
-            "GET /__http_caps HTTP/1.1\r\nHost: 127.0.0.1\r\n",
-            "Connection: close\r\n\r\n"
-        }, 10);
+        const std::string split_resp = http_raw_exchange(port, {"GET /__http_caps HTTP/1.1\r\nHost: 127.0.0.1\r\n", "Connection: close\r\n\r\n"}, 10);
         check(split_resp.find("200") != std::string::npos, "split HTTP/1.1 header should parse after more bytes");
 
-        const std::string bad_len_resp = http_raw_exchange(port, {
-            "POST /__echo_body HTTP/1.1\r\n"
-            "Host: 127.0.0.1\r\n"
-            "Content-Type: text/plain\r\n"
-            "Content-Length: nope\r\n"
-            "Connection: close\r\n\r\n"
-        });
+        const std::string bad_len_resp = http_raw_exchange(port, {"POST /__echo_body HTTP/1.1\r\n"
+                                                                  "Host: 127.0.0.1\r\n"
+                                                                  "Content-Type: text/plain\r\n"
+                                                                  "Content-Length: nope\r\n"
+                                                                  "Connection: close\r\n\r\n"});
         check(bad_len_resp.find("400") != std::string::npos, "invalid Content-Length should return 400");
     }
 
     void test_http1_chunked_request(uint16_t port)
     {
-        const std::string resp = http_raw_exchange(port, {
-            "POST /__echo_body HTTP/1.1\r\n"
-            "Host: 127.0.0.1\r\n"
-            "Content-Type: text/plain\r\n"
-            "Transfer-Encoding: Chunked\r\n"
-            "Connection: close\r\n\r\n",
-            "4\r\nWiki\r\n",
-            "5\r\npedia\r\n",
-            "0\r\n\r\n"
-        }, 10);
+        const std::string resp = http_raw_exchange(port, {"POST /__echo_body HTTP/1.1\r\n"
+                                                          "Host: 127.0.0.1\r\n"
+                                                          "Content-Type: text/plain\r\n"
+                                                          "Transfer-Encoding: Chunked\r\n"
+                                                          "Connection: close\r\n\r\n",
+                                                          "4\r\nWiki\r\n", "5\r\npedia\r\n", "0\r\n\r\n"},
+                                                   10);
 
         check(resp.find("200") != std::string::npos, "chunked HTTP/1.1 request should return 200");
         check(resp.find("Wikipedia") != std::string::npos, "chunked HTTP/1.1 body should be reassembled");
@@ -639,7 +716,8 @@ namespace
         const auto begin = std::chrono::steady_clock::now();
         const std::string resp = http_get(port, "/proxy-fail/connect");
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - begin).count();
+                                    std::chrono::steady_clock::now() - begin)
+                                    .count();
 
         check(!resp.empty(), "proxy connect-failure response should not be empty");
         check(resp.find("502") != std::string::npos || resp.find("504") != std::string::npos,
@@ -702,6 +780,139 @@ namespace
               "proxy_set_response_header should add configured response headers");
     }
 
+    void test_proxy_redirect(uint16_t port)
+    {
+        const std::string resp = http_get(port, "/proxy-redirect/demo");
+        check(resp.find("200") != std::string::npos,
+              "proxy_redirect route should return 200");
+        check(resp.find("Location: /public/login") != std::string::npos,
+              "proxy_redirect should rewrite upstream Location header");
+        check(resp.find("Location: http://upstream.local/internal/login") == std::string::npos,
+              "proxy_redirect should remove original upstream Location value");
+    }
+
+    void test_proxy_method_limit(uint16_t port)
+    {
+        const std::string resp = http_request(port, "POST", "/proxy-headers/demo", {}, "blocked");
+        check(resp.find("405") != std::string::npos,
+              "proxy location method limit should return 405");
+        check(resp.find("Allow: GET") != std::string::npos,
+              "proxy location method limit should include Allow header");
+    }
+
+    void test_proxy_access_limit(uint16_t port)
+    {
+        const std::string resp = http_get(port, "/proxy-deny/demo");
+        check(resp.find("403") != std::string::npos,
+              "proxy location deny rule should return 403");
+    }
+
+    void test_proxy_exact_match(uint16_t port)
+    {
+        const std::string exact = http_get(port, "/proxy-exact?x=1");
+        check(exact.find("200") != std::string::npos,
+              "proxy exact route should match exact path with query string");
+
+        const std::string child = http_get(port, "/proxy-exact/child");
+        check(child.find("404") != std::string::npos,
+              "proxy exact route should not match child paths");
+    }
+
+    void test_proxy_location_priority(uint16_t port)
+    {
+        const std::string normal = http_get(port, "/proxy-priority/plain.txt");
+        check(normal.find("200") != std::string::npos,
+              "normal proxy prefix priority route should return 200");
+        check(normal.find("X-Priority-Route: normal") != std::string::npos,
+              "normal prefix should be selected after exact, strong prefix, and regex checks");
+
+        const std::string regex = http_get(port, "/proxy-priority/data.json");
+        check(regex.find("200") != std::string::npos,
+              "regex proxy priority route should return 200");
+        check(regex.find("X-Priority-Route: regex") != std::string::npos,
+              "regex route should beat a normal prefix route");
+
+        const std::string strong = http_get(port, "/proxy-priority/strong/data.json");
+        check(strong.find("200") != std::string::npos,
+              "strong-prefix proxy priority route should return 200");
+        check(strong.find("X-Priority-Route: strong") != std::string::npos,
+              "strong prefix route should beat a matching regex route");
+    }
+
+    void test_proxy_cache(uint16_t port, const std::filesystem::path &upstream_log_path)
+    {
+        {
+            std::ofstream clear(upstream_log_path, std::ios::binary | std::ios::trunc);
+        }
+
+        const std::string first = http_get(port, "/proxy-cache/item?id=1");
+        check(first.find("200") != std::string::npos,
+              "proxy cache first response should return 200");
+        check(first.find("X-Cache: MISS") != std::string::npos,
+              "proxy cache first response should be marked MISS");
+
+        const std::string second = http_get(port, "/proxy-cache/item?id=1");
+        check(second.find("200") != std::string::npos,
+              "proxy cache second response should return 200");
+        check(second.find("X-Cache: HIT") != std::string::npos,
+              "proxy cache second response should be marked HIT");
+
+        const std::string bypass = http_request(port,
+                                                "GET",
+                                                "/proxy-cache/item?id=1",
+                                                "X-Bypass-Cache: 1\r\n");
+        check(bypass.find("200") != std::string::npos,
+              "proxy cache bypass response should return 200");
+        check(bypass.find("X-Cache: BYPASS") != std::string::npos,
+              "proxy cache bypass response should be marked BYPASS");
+
+        const std::string still_cached = http_get(port, "/proxy-cache/item?id=1");
+        check(still_cached.find("X-Cache: HIT") != std::string::npos,
+              "proxy cache bypass should not replace an existing cached response");
+
+        const std::string no_store = http_request(port,
+                                                  "GET",
+                                                  "/proxy-cache/no-store?id=2",
+                                                  "X-No-Cache-Store: 1\r\n");
+        check(no_store.find("200") != std::string::npos,
+              "proxy no-cache-store response should return 200");
+        check(no_store.find("X-Cache: MISS") != std::string::npos,
+              "proxy no-cache-store response should still be marked MISS");
+
+        const std::string after_no_store = http_get(port, "/proxy-cache/no-store?id=2");
+        check(after_no_store.find("X-Cache: MISS") != std::string::npos,
+              "proxy no-cache-store response should not populate cache");
+
+        const std::string private_first = http_get(port, "/proxy-cache/private?id=3");
+        check(private_first.find("X-Cache: MISS") != std::string::npos,
+              "proxy cache should mark private upstream response as MISS");
+        const std::string private_second = http_get(port, "/proxy-cache/private?id=3");
+        check(private_second.find("X-Cache: MISS") != std::string::npos,
+              "proxy cache should not store private upstream responses");
+
+        std::ifstream in(upstream_log_path, std::ios::binary);
+        std::stringstream buffer;
+        buffer << in.rdbuf();
+        const std::string upstream_log = buffer.str();
+        auto count_occurrences = [&](const std::string &needle) {
+            std::size_t hits = 0;
+            std::size_t pos = 0;
+            while ((pos = upstream_log.find(needle, pos)) != std::string::npos) {
+                ++hits;
+                pos += needle.size();
+            }
+            return hits;
+        };
+        std::size_t hits = count_occurrences("GET /proxy-cache/item?id=1 HTTP/1.1");
+        check(hits == 2, "proxy cache should use upstream once plus one explicit bypass for the same URI");
+
+        hits = count_occurrences("GET /proxy-cache/no-store?id=2 HTTP/1.1");
+        check(hits == 2, "proxy no-cache-store should avoid storing the first response");
+
+        hits = count_occurrences("GET /proxy-cache/private?id=3 HTTP/1.1");
+        check(hits == 2, "proxy cache should respect upstream Cache-Control private");
+    }
+
     void test_http_caps_with_config_flags(uint16_t port)
     {
         nlohmann::json cfg;
@@ -728,8 +939,9 @@ namespace
     {
         const std::string req_h2 =
             "GET /__http_caps HTTP/2.0\r\n"
-            "Host: 127.0.0.1:" + std::to_string(port) + "\r\n"
-            "Connection: close\r\n\r\n";
+            "Host: 127.0.0.1:" +
+            std::to_string(port) + "\r\n"
+                                   "Connection: close\r\n\r\n";
 
         socket_t s = connect_loopback(port);
         check(s != kInvalidSocket, "http/2.0 gate test should connect");
@@ -744,15 +956,17 @@ namespace
         const std::string resp_h2 = recv_all(s);
         close_socket(s);
         if (resp_h2.find("505") == std::string::npos) {
-            std::cerr << "[DEBUG] http/2.0 gate response:\n" << resp_h2 << "\n";
+            std::cerr << "[DEBUG] http/2.0 gate response:\n"
+                      << resp_h2 << "\n";
         }
         check(resp_h2.find("505") != std::string::npos,
               "HTTP/2.0 request should be rejected with 505 when protocol stack disabled");
 
         const std::string req_h3 =
             "GET /__http_caps HTTP/3.0\r\n"
-            "Host: 127.0.0.1:" + std::to_string(port) + "\r\n"
-            "Connection: close\r\n\r\n";
+            "Host: 127.0.0.1:" +
+            std::to_string(port) + "\r\n"
+                                   "Connection: close\r\n\r\n";
 
         s = connect_loopback(port);
         check(s != kInvalidSocket, "http/3.0 gate test should connect");
@@ -767,7 +981,8 @@ namespace
         const std::string resp_h3 = recv_all(s);
         close_socket(s);
         if (resp_h3.find("505") == std::string::npos) {
-            std::cerr << "[DEBUG] http/3.0 gate response:\n" << resp_h3 << "\n";
+            std::cerr << "[DEBUG] http/3.0 gate response:\n"
+                      << resp_h3 << "\n";
         }
         check(resp_h3.find("505") != std::string::npos,
               "HTTP/3.0 request should be rejected with 505 when protocol stack disabled");
@@ -792,6 +1007,39 @@ namespace
         close_socket(s);
         check(resp.find("505") != std::string::npos,
               "HTTP/2 connection preface should be rejected with 505 when protocol stack disabled");
+    }
+
+    void test_http2_tls_only_rejects_h2c()
+    {
+        const uint16_t port = reserve_tcp_port();
+        check(port != 0, "http/2 tls-only test should reserve a port");
+        if (port == 0) {
+            return;
+        }
+
+        yuan::net::http::HttpServerConfig cfg;
+        cfg.enable_http2 = true;
+        cfg.http2_tls_only = true;
+        yuan::server::HttpService service(port, cfg);
+        if (!service.init()) {
+            check(false, "http/2 tls-only service should init");
+            return;
+        }
+        service.start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+        socket_t s = connect_loopback(port);
+        check(s != kInvalidSocket, "http/2 tls-only test should connect");
+        if (s != kInvalidSocket) {
+            const std::string preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+            check(send_all(s, preface), "http/2 tls-only test should send preface");
+            const std::string resp = recv_all(s);
+            close_socket(s);
+            check(resp.find("505") != std::string::npos,
+                  "http2_tls_only should reject cleartext h2c preface with 505");
+        }
+
+        service.stop();
     }
 
     void test_http2_preface_settings_ack(uint16_t port)
@@ -1410,10 +1658,10 @@ namespace
         settings[8] = 0x00;
 
         const std::string headers = h2_frame(0x01, 0x04, 1, hpack_headers({
-            {":method", "POST"},
-            {":path", "/__h2_echo"},
-            {":authority", "local.test"},
-        }));
+                                                                {":method", "POST"},
+                                                                {":path", "/__h2_echo"},
+                                                                {":authority", "local.test"},
+                                                            }));
 
         const std::string body = "echo-body-xyz";
         std::string data;
@@ -1527,10 +1775,10 @@ namespace
         settings[8] = 0x00;
 
         const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
-            {":method", "GET"},
-            {":path", "/__http_caps"},
-            {":authority", "local.test"},
-        }));
+                                                                {":method", "GET"},
+                                                                {":path", "/__http_caps"},
+                                                                {":authority", "local.test"},
+                                                            }));
 
         if (!send_all(s, preface + settings + headers)) {
             close_socket(s);
@@ -1620,10 +1868,10 @@ namespace
         settings[8] = 0x00;
 
         const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
-            {":method", "GET"},
-            {":path", "/__h2_large"},
-            {":authority", "local.test"},
-        }));
+                                                                {":method", "GET"},
+                                                                {":path", "/__h2_large"},
+                                                                {":authority", "local.test"},
+                                                            }));
 
         if (!send_all(s, preface + settings + headers)) {
             close_socket(s);
@@ -1702,10 +1950,10 @@ namespace
         settings[8] = 0x00;
 
         const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
-            {":method", "GET"},
-            {":path", "/__h2_window"},
-            {":authority", "local.test"},
-        }));
+                                                                {":method", "GET"},
+                                                                {":path", "/__h2_window"},
+                                                                {":authority", "local.test"},
+                                                            }));
 
         if (!send_all(s, preface + settings + headers)) {
             close_socket(s);
@@ -1791,10 +2039,10 @@ namespace
         settings[8] = 0x00;
 
         const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
-            {":method", "GET"},
-            {":path", "/__h2_unknown_path"},
-            {":authority", "local.test"},
-        }));
+                                                                {":method", "GET"},
+                                                                {":path", "/__h2_unknown_path"},
+                                                                {":authority", "local.test"},
+                                                            }));
 
         if (!send_all(s, preface + settings + headers)) {
             close_socket(s);
@@ -1875,10 +2123,10 @@ namespace
         settings[8] = 0x00;
 
         const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
-            {":method", "GET"},
-            {":path", "/__h2_extra"},
-            {":authority", "local.test"},
-        }));
+                                                                {":method", "GET"},
+                                                                {":path", "/__h2_extra"},
+                                                                {":authority", "local.test"},
+                                                            }));
 
         if (!send_all(s, preface + settings + headers)) {
             close_socket(s);
@@ -1954,9 +2202,9 @@ namespace
         settings[8] = 0x00;
 
         const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
-            {":method", "GET"},
-            {":authority", "local.test"},
-        }));
+                                                                {":method", "GET"},
+                                                                {":authority", "local.test"},
+                                                            }));
 
         if (!send_all(s, preface + settings + headers)) {
             close_socket(s);
@@ -2024,10 +2272,10 @@ namespace
         settings[8] = 0x00;
 
         const std::string headers = h2_frame(0x01, 0x05, 1, hpack_headers({
-            {"x-test", "1"},
-            {":method", "GET"},
-            {":path", "/__http_caps"},
-        }));
+                                                                {"x-test", "1"},
+                                                                {":method", "GET"},
+                                                                {":path", "/__http_caps"},
+                                                            }));
 
         if (!send_all(s, preface + settings + headers)) {
             close_socket(s);
@@ -2095,8 +2343,8 @@ namespace
         settings[8] = 0x00;
 
         std::string hpack;
-        hpack_append_indexed(hpack, 2);   // :method: GET
-        hpack_append_indexed(hpack, 4);   // :path: /
+        hpack_append_indexed(hpack, 2);                                // :method: GET
+        hpack_append_indexed(hpack, 4);                                // :path: /
         hpack_append_literal_without_indexing(hpack, 1, "local.test"); // :authority
 
         std::string headers;
@@ -2176,9 +2424,10 @@ namespace
         const std::string second = http_get(port,
                                             "/static/etag.txt",
                                             "If-None-Match: " + etag + "\r\n"
-                                            "If-Modified-Since: Thu, 31 Dec 2099 23:59:59 GMT\r\n");
+                                                                       "If-Modified-Since: Thu, 31 Dec 2099 23:59:59 GMT\r\n");
         if (second.find("304") == std::string::npos) {
-            std::cerr << "[DEBUG] conditional response:\n" << second << "\n";
+            std::cerr << "[DEBUG] conditional response:\n"
+                      << second << "\n";
         }
         check(second.find("304") != std::string::npos,
               "conditional fetch with validators should be 304");
@@ -2198,7 +2447,8 @@ namespace
         check(resp.find("200") != std::string::npos, "gzip static fetch should be 200");
 #if YUAN_HTTP_HAS_ZLIB
         if (resp.find("content-encoding: gzip") == std::string::npos) {
-            std::cerr << "[DEBUG] gzip response:\n" << resp << "\n";
+            std::cerr << "[DEBUG] gzip response:\n"
+                      << resp << "\n";
         }
         check(resp.find("content-encoding: gzip") != std::string::npos, "gzip response should include content-encoding");
         check(resp.find("vary: accept-encoding") != std::string::npos, "gzip response should include vary header");
@@ -2224,7 +2474,8 @@ namespace
         const std::string resp = http_get(port, "/static/precompressed.txt", "Accept-Encoding: br\r\n");
         check(resp.find("200") != std::string::npos, "precompressed br fetch should be 200");
         if (resp.find("content-encoding: br") == std::string::npos) {
-            std::cerr << "[DEBUG] precompressed br response:\n" << resp << "\n";
+            std::cerr << "[DEBUG] precompressed br response:\n"
+                      << resp << "\n";
         }
         check(resp.find("content-encoding: br") != std::string::npos, "precompressed br should set br encoding");
         check(resp.find("fake-br-payload") != std::string::npos, "precompressed br should serve .br payload");
@@ -2279,13 +2530,138 @@ namespace
         const std::string compressed = http_get(port, "/typed/data.foo", "Accept-Encoding: gzip\r\n");
 #if YUAN_HTTP_HAS_ZLIB
         if (compressed.find("content-encoding: gzip") == std::string::npos) {
-            std::cerr << "[DEBUG] custom gzip_types response:\n" << compressed << "\n";
+            std::cerr << "[DEBUG] custom gzip_types response:\n"
+                      << compressed << "\n";
         }
         check(compressed.find("content-encoding: gzip") != std::string::npos,
               "gzip_types should allow compression for custom MIME types");
+        check(compressed.find("vary: accept-encoding") == std::string::npos,
+              "gzip_vary=false should suppress Vary header");
 #else
         (void)compressed;
 #endif
+    }
+
+    void test_static_gzip_policy(uint16_t port, const std::filesystem::path &root)
+    {
+        {
+            std::ofstream out(root / "policy.txt", std::ios::binary);
+            for (int i = 0; i < 2048; ++i) {
+                out << "policy-compressible-line-" << (i % 11) << '\n';
+            }
+        }
+
+        const std::string normal = http_get(port, "/gzip-policy/policy.txt", "Accept-Encoding: gzip\r\n");
+        check(normal.find("200") != std::string::npos, "gzip policy normal fetch should be 200");
+#if YUAN_HTTP_HAS_ZLIB
+        check(normal.find("content-encoding: gzip") != std::string::npos,
+              "gzip policy normal request should compress");
+
+        const std::string disabled_ua = http_get(port,
+                                                 "/gzip-policy/policy.txt",
+                                                 "Accept-Encoding: gzip\r\n"
+                                                 "User-Agent: BadBot/1.0\r\n");
+        check(disabled_ua.find("content-encoding:") == std::string::npos,
+              "gzip_disable should suppress compression for matching user-agent");
+
+        const std::string http10 = raw_http_request(
+            port,
+            "GET /gzip-policy/policy.txt HTTP/1.0\r\n"
+            "Host: 127.0.0.1:" +
+                std::to_string(port) + "\r\n"
+                                       "Accept-Encoding: gzip\r\n"
+                                       "Connection: close\r\n\r\n");
+        check(http10.find("200") != std::string::npos, "gzip policy HTTP/1.0 fetch should be 200");
+        check(http10.find("content-encoding:") == std::string::npos,
+              "gzip_http_version should suppress compression below configured version");
+
+        const std::string proxied_no_auth = http_get(port,
+                                                     "/gzip-policy/policy.txt",
+                                                     "Accept-Encoding: gzip\r\n"
+                                                     "Via: 1.1 proxy\r\n");
+        check(proxied_no_auth.find("content-encoding:") == std::string::npos,
+              "gzip_proxied should suppress proxied requests that do not match a condition");
+
+        const std::string proxied_auth = http_get(port,
+                                                  "/gzip-policy/policy.txt",
+                                                  "Accept-Encoding: gzip\r\n"
+                                                  "Via: 1.1 proxy\r\n"
+                                                  "Authorization: Basic dGVzdDpzZWNyZXQ=\r\n");
+        check(proxied_auth.find("content-encoding: gzip") != std::string::npos,
+              "gzip_proxied auth should allow proxied requests with Authorization");
+#else
+        (void)normal;
+#endif
+    }
+
+    void test_static_method_limit(uint16_t port, const std::filesystem::path &root)
+    {
+        {
+            std::ofstream out(root / "readonly.txt", std::ios::binary);
+            out << "readonly-ok";
+        }
+
+        const std::string get_resp = http_get(port, "/readonly/readonly.txt");
+        check(get_resp.find("200") != std::string::npos,
+              "static method-limited mount should allow GET");
+
+        const std::string post_resp = http_request(port, "POST", "/readonly/readonly.txt", {}, "blocked");
+        check(post_resp.find("405") != std::string::npos,
+              "static method-limited mount should reject POST");
+        check(post_resp.find("Allow:") != std::string::npos &&
+                  post_resp.find("GET") != std::string::npos &&
+                  post_resp.find("HEAD") != std::string::npos,
+              "static method-limited mount should include Allow header");
+    }
+
+    void test_static_access_limit(uint16_t port, const std::filesystem::path &root)
+    {
+        {
+            std::ofstream out(root / "blocked.txt", std::ios::binary);
+            out << "blocked";
+        }
+
+        const std::string resp = http_get(port, "/blocked/blocked.txt");
+        check(resp.find("403") != std::string::npos,
+              "static deny rule should return 403");
+    }
+
+    void test_static_exact_match(uint16_t port)
+    {
+        const std::string exact = http_get(port, "/exact-static");
+        check(exact.find("200") != std::string::npos,
+              "static exact mount should match exact path");
+
+        const std::string child = http_get(port, "/exact-static/child");
+        check(child.find("404") != std::string::npos,
+              "static exact mount should not match child paths");
+    }
+
+    void test_static_regex_location_priority(uint16_t port)
+    {
+        const std::string normal = http_get(port, "/static-priority/plain.txt");
+        check(normal.find("200") != std::string::npos,
+              "static normal prefix priority route should return 200");
+        check(normal.find("X-Static-Route: normal") != std::string::npos,
+              "static normal prefix should handle non-regex paths");
+
+        const std::string regex = http_get(port, "/static-priority/data.json");
+        check(regex.find("200") != std::string::npos,
+              "static regex priority route should return 200");
+        check(regex.find("X-Static-Route: regex") != std::string::npos,
+              "static regex route should beat a normal prefix route");
+
+        const std::string strong = http_get(port, "/static-priority/strong/data.json");
+        check(strong.find("200") != std::string::npos,
+              "static strong-prefix priority route should return 200");
+        check(strong.find("X-Static-Route: strong") != std::string::npos,
+              "static strong prefix route should beat a matching regex route");
+
+        const std::string fallback = http_get(port, "/regex-only/file.txt");
+        check(fallback.find("200") != std::string::npos,
+              "static regex-only route should dispatch without a prefix mount");
+        check(fallback.find("X-Static-Route: regex-only") != std::string::npos,
+              "static regex-only route should use the regex mount");
     }
 
     void test_keep_alive_client_close_releases_connection()
@@ -2320,8 +2696,9 @@ namespace
         if (s != kInvalidSocket) {
             const std::string req =
                 "GET /static/ok.txt HTTP/1.1\r\n"
-                "Host: 127.0.0.1:" + std::to_string(port) + "\r\n"
-                "Connection: keep-alive\r\n\r\n";
+                "Host: 127.0.0.1:" +
+                std::to_string(port) + "\r\n"
+                                       "Connection: keep-alive\r\n\r\n";
             check(send_all(s, req), "keep-alive close test should send request");
             const std::string resp = recv_all(s);
             check(resp.find("200") != std::string::npos,
@@ -2376,8 +2753,9 @@ namespace
         if (s != kInvalidSocket) {
             const std::string req =
                 "GET /static/stall-video.mp4 HTTP/1.1\r\n"
-                "Host: 127.0.0.1:" + std::to_string(port) + "\r\n"
-                "Connection: keep-alive\r\n\r\n";
+                "Host: 127.0.0.1:" +
+                std::to_string(port) + "\r\n"
+                                       "Connection: keep-alive\r\n\r\n";
             check(send_all(s, req), "stalled static stream test should send request");
 
             std::string resp;
@@ -2424,8 +2802,9 @@ namespace
 
         const std::string req =
             "GET /static/large-video.mp4 HTTP/1.1\r\n"
-            "Host: 127.0.0.1:" + std::to_string(port) + "\r\n"
-            "Connection: keep-alive\r\n\r\n";
+            "Host: 127.0.0.1:" +
+            std::to_string(port) + "\r\n"
+                                   "Connection: keep-alive\r\n\r\n";
         check(send_all(s, req), "static stream abort test should send request");
 
         std::string resp;
@@ -2433,8 +2812,8 @@ namespace
         check(resp.find("200") != std::string::npos, "large static response should be 200");
         const auto header_end = resp.find("\r\n\r\n");
         const std::size_t content_length = header_end == std::string::npos
-            ? static_cast<std::size_t>(-1)
-            : parse_content_length(resp.substr(0, header_end + 4));
+                                               ? static_cast<std::size_t>(-1)
+                                               : parse_content_length(resp.substr(0, header_end + 4));
         check(content_length == 67108864,
               "large static response should advertise full content length");
 
@@ -2465,17 +2844,17 @@ namespace
         std::optional<yuan::server::ServiceRuntimeEvent> stopped;
 
         bus->subscribe(yuan::server::events::service_activated,
-            [&](const yuan::eventbus::Event &event) {
-                if (const auto *payload = std::any_cast<yuan::server::ServiceRuntimeEvent>(&event.payload)) {
-                    activated = *payload;
-                }
-            });
+                       [&](const yuan::eventbus::Event &event) {
+                           if (const auto *payload = std::any_cast<yuan::server::ServiceRuntimeEvent>(&event.payload)) {
+                               activated = *payload;
+                           }
+                       });
         bus->subscribe(yuan::server::events::service_stopped,
-            [&](const yuan::eventbus::Event &event) {
-                if (const auto *payload = std::any_cast<yuan::server::ServiceRuntimeEvent>(&event.payload)) {
-                    stopped = *payload;
-                }
-            });
+                       [&](const yuan::eventbus::Event &event) {
+                           if (const auto *payload = std::any_cast<yuan::server::ServiceRuntimeEvent>(&event.payload)) {
+                               stopped = *payload;
+                           }
+                       });
 
         yuan::app::RuntimeContext context;
         context.app_name = "http-shared-runtime-test";
@@ -2519,7 +2898,7 @@ namespace
                   "shared-runtime HTTP service event should carry worker/service identity");
         }
 
-        std::atomic_bool runtime_entered{ false };
+        std::atomic_bool runtime_entered{false};
         std::thread runtime_thread([&]() {
             runtime_entered.store(true, std::memory_order_release);
             runtime.run();
@@ -2579,8 +2958,7 @@ namespace
             "http",
             "127.0.0.1",
             port,
-            "tcp"
-        });
+            "tcp"});
 
         yuan::net::http::HttpServerConfig cfg;
         cfg.enable_keep_alive = false;
@@ -2588,15 +2966,15 @@ namespace
                 auto service = std::make_shared<yuan::server::HttpService>(port, cfg);
                 service->set_server_configurator([](yuan::server::HttpService &http_service) {
                     http_service.server().on("/__bootstrap_worker_ping",
-                        [](yuan::net::http::HttpRequest *,
-                           yuan::net::http::HttpResponse *resp) {
-                            const std::string body = "bootstrap-worker-ok";
-                            resp->set_response_code(yuan::net::http::ResponseCode::ok_);
-                            resp->add_header("Content-Type", "text/plain");
-                            resp->add_header("Content-Length", std::to_string(body.size()));
-                            resp->append_body(body);
-                            resp->send();
-                        });
+                                             [](yuan::net::http::HttpRequest *,
+                                                yuan::net::http::HttpResponse *resp) {
+                                                 const std::string body = "bootstrap-worker-ok";
+                                                 resp->set_response_code(yuan::net::http::ResponseCode::ok_);
+                                                 resp->add_header("Content-Type", "text/plain");
+                                                 resp->add_header("Content-Length", std::to_string(body.size()));
+                                                 resp->append_body(body);
+                                                 resp->send();
+                                             });
                     return true;
                 });
                 return service;
@@ -2623,7 +3001,8 @@ namespace
         }
 
         if (resp.find("bootstrap-worker-ok") == std::string::npos) {
-            std::cerr << "[DEBUG] bootstrap worker HTTP response:\n" << resp << "\n";
+            std::cerr << "[DEBUG] bootstrap worker HTTP response:\n"
+                      << resp << "\n";
         }
         check(resp.find("200") != std::string::npos,
               "bootstrap in-process HTTP worker should return 200");
@@ -2667,6 +3046,39 @@ int main()
     const auto static_root = std::filesystem::current_path() / "test_http_static";
     std::error_code ec;
     std::filesystem::create_directories(static_root, ec);
+    {
+        std::ofstream out(static_root / "index.html", std::ios::binary | std::ios::trunc);
+        out << "static-index";
+    }
+    std::filesystem::create_directories(static_root / "normal-root", ec);
+    std::filesystem::create_directories(static_root / "strong-root", ec);
+    std::filesystem::create_directories(static_root / "static-priority", ec);
+    std::filesystem::create_directories(static_root / "static-priority" / "strong", ec);
+    std::filesystem::create_directories(static_root / "regex-only", ec);
+    {
+        std::ofstream out(static_root / "normal-root" / "plain.txt", std::ios::binary | std::ios::trunc);
+        out << "normal-static";
+    }
+    {
+        std::ofstream out(static_root / "normal-root" / "data.json", std::ios::binary | std::ios::trunc);
+        out << "normal-json";
+    }
+    {
+        std::ofstream out(static_root / "strong-root" / "data.json", std::ios::binary | std::ios::trunc);
+        out << "strong-json";
+    }
+    {
+        std::ofstream out(static_root / "static-priority" / "data.json", std::ios::binary | std::ios::trunc);
+        out << "regex-json";
+    }
+    {
+        std::ofstream out(static_root / "static-priority" / "strong" / "data.json", std::ios::binary | std::ios::trunc);
+        out << "regex-strong-json";
+    }
+    {
+        std::ofstream out(static_root / "regex-only" / "file.txt", std::ios::binary | std::ios::trunc);
+        out << "regex-only";
+    }
 
     yuan::net::http::HttpServerConfig cfg;
     cfg.enable_keep_alive = false;
@@ -2688,8 +3100,8 @@ int main()
         std::ofstream clear_log(upstream_log_path, std::ios::binary | std::ios::trunc);
     }
 
-    std::atomic_bool upstream_ready{ false };
-    std::atomic_bool upstream_stop{ false };
+    std::atomic_bool upstream_ready{false};
+    std::atomic_bool upstream_stop{false};
     std::thread upstream_thread([upstream_port, &upstream_ready, &upstream_stop, upstream_log_path]() {
         socket_t listener = ::socket(AF_INET, SOCK_STREAM, 0);
         if (listener == kInvalidSocket) {
@@ -2781,13 +3193,20 @@ int main()
             }
 
             const std::string body = req_line;
+            std::string extra_response_headers;
+            if (req_line.find("/proxy-cache/private") != std::string::npos) {
+                extra_response_headers += "Cache-Control: private\r\n";
+            }
             const std::string response =
                 "HTTP/1.1 200 OK\r\n"
                 "Content-Type: text/plain\r\n"
                 "X-Upstream-Secret: hidden\r\n"
                 "X-Replace-Me: upstream\r\n"
+                "Location: http://upstream.local/internal/login\r\n" +
+                extra_response_headers +
                 "Connection: close\r\n"
-                "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+                "Content-Length: " +
+                std::to_string(body.size()) + "\r\n\r\n" + body;
             (void)send_all(client, response);
             close_socket(client);
         }
@@ -2802,67 +3221,97 @@ int main()
 
     nlohmann::json proxy_cfg;
     proxy_cfg["proxies"] = {
-        {
-            {"root", "/proxy-ok/"},
-            {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
-            {"strip_prefix", false},
-            {"connect_timeout", 300},
-            {"read_timeout", 1200},
-            {"write_timeout", 800},
-            {"max_retries", 1}
-        },
-        {
-            {"root", "/proxy-fail/"},
-            {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", closed_proxy_port})})},
-            {"strip_prefix", false},
-            {"connect_timeout", 200},
-            {"read_timeout", 1000},
-            {"write_timeout", 500},
-            {"max_retries", 0},
-            {"failure_threshold", 1},
-            {"unhealthy_cooldown_ms", 500}
-        },
-        {
-            {"root", "/proxy-rewrite/"},
-            {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
-            {"strip_prefix", true},
-            {"rewrite", "/rewritten"},
-            {"connect_timeout", 300},
-            {"read_timeout", 1200},
-            {"write_timeout", 800},
-            {"max_retries", 0}
-        },
-        {
-            {"root", "/proxy-root/"},
-            {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
-            {"strip_prefix", true},
-            {"connect_timeout", 300},
-            {"read_timeout", 1200},
-            {"write_timeout", 800},
-            {"max_retries", 0}
-        },
-        {
-            {"root", "/proxy-headers/"},
-            {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
-            {"strip_prefix", false},
-            {"preserve_host", true},
-            {"proxy_set_header", {
-                {"X-Forwarded-Host", "$host"},
-                {"X-Request-Uri", "$request_uri"},
-                {"X-Proxy-Added", "$remote_addr"}
-            }},
-            {"hide_request_headers", nlohmann::json::array({"X-Remove-Me"})},
-            {"proxy_hide_header", nlohmann::json::array({"X-Upstream-Secret"})},
-            {"proxy_set_response_header", {
-                {"X-Replace-Me", "edge"},
-                {"X-Proxy-Response", "yes"}
-            }},
-            {"connect_timeout", 300},
-            {"read_timeout", 1200},
-            {"write_timeout", 800},
-            {"max_retries", 0}
-        }
-    };
+        {{"root", "/proxy-ok/"},
+         {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+         {"strip_prefix", false},
+         {"connect_timeout", 300},
+         {"read_timeout", 1200},
+         {"write_timeout", 800},
+         {"max_retries", 1}},
+        {{"root", "/proxy-fail/"},
+         {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", closed_proxy_port})})},
+         {"strip_prefix", false},
+         {"connect_timeout", 200},
+         {"read_timeout", 1000},
+         {"write_timeout", 500},
+         {"max_retries", 0},
+         {"failure_threshold", 1},
+         {"unhealthy_cooldown_ms", 500}},
+        {{"root", "/proxy-rewrite/"},
+         {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+         {"strip_prefix", true},
+         {"rewrite", "/rewritten"},
+         {"connect_timeout", 300},
+         {"read_timeout", 1200},
+         {"write_timeout", 800},
+         {"max_retries", 0}},
+        {{"root", "/proxy-root/"},
+         {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+         {"strip_prefix", true},
+         {"connect_timeout", 300},
+         {"read_timeout", 1200},
+         {"write_timeout", 800},
+         {"max_retries", 0}},
+        {{"root", "/proxy-headers/"},
+         {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+         {"strip_prefix", false},
+         {"preserve_host", true},
+         {"proxy_set_header", {{"X-Forwarded-Host", "$host"}, {"X-Request-Uri", "$request_uri"}, {"X-Proxy-Added", "$remote_addr"}}},
+         {"hide_request_headers", nlohmann::json::array({"X-Remove-Me"})},
+         {"proxy_hide_header", nlohmann::json::array({"X-Upstream-Secret"})},
+         {"proxy_set_response_header", {{"X-Replace-Me", "edge"}, {"X-Proxy-Response", "yes"}}},
+         {"allowed_methods", nlohmann::json::array({"GET"})},
+         {"connect_timeout", 300},
+         {"read_timeout", 1200},
+         {"write_timeout", 800},
+         {"max_retries", 0}},
+        {{"root", "/proxy-redirect/"},
+         {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+         {"strip_prefix", false},
+         {"proxy_redirect", {{"http://upstream.local/internal", "/public"}}},
+         {"connect_timeout", 300},
+         {"read_timeout", 1200},
+         {"write_timeout", 800},
+         {"max_retries", 0}},
+        {{"root", "/proxy-deny/"},
+         {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+         {"deny", nlohmann::json::array({"127.0.0.1"})},
+         {"max_retries", 0}},
+        {{"root", "/proxy-exact"},
+         {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+         {"match", "exact"},
+         {"strip_prefix", false},
+         {"connect_timeout", 300},
+         {"read_timeout", 1200},
+         {"write_timeout", 800},
+         {"max_retries", 0}},
+        {{"root", "/proxy-priority/"},
+         {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+         {"strip_prefix", false},
+         {"proxy_set_response_header", {{"X-Priority-Route", "normal"}}},
+         {"max_retries", 0}},
+        {{"root", "^/proxy-priority/.*\\.json$"},
+         {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+         {"match", "~"},
+         {"strip_prefix", false},
+         {"proxy_set_response_header", {{"X-Priority-Route", "regex"}}},
+         {"max_retries", 0}},
+        {{"root", "/proxy-priority/strong/"},
+         {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+         {"match", "^~"},
+         {"strip_prefix", false},
+         {"proxy_set_response_header", {{"X-Priority-Route", "strong"}}},
+         {"max_retries", 0}},
+        {{"root", "/proxy-cache/"},
+         {"target", nlohmann::json::array({nlohmann::json::array({"127.0.0.1", upstream_port})})},
+         {"strip_prefix", false},
+         {"proxy_cache", true},
+         {"proxy_cache_valid", 60000},
+         {"proxy_cache_max_size", 4096},
+         {"proxy_cache_key", "$host$request_uri"},
+         {"proxy_cache_bypass_headers", nlohmann::json::array({"X-Bypass-Cache"})},
+         {"proxy_no_cache_headers", nlohmann::json::array({"X-No-Cache-Store"})},
+         {"max_retries", 0}}};
     {
         std::ofstream out("http.json", std::ios::binary | std::ios::trunc);
         out << proxy_cfg.dump(2);
@@ -2888,7 +3337,7 @@ int main()
         }
     });
     service->server().on("/__h2_window", [](yuan::net::http::HttpRequest *req,
-                                             yuan::net::http::HttpResponse *resp) {
+                                            yuan::net::http::HttpResponse *resp) {
         const std::string body(70000, 'w');
         resp->set_response_code(yuan::net::http::ResponseCode::ok_);
         resp->add_header("Content-Type", "text/plain");
@@ -2921,6 +3370,14 @@ int main()
         resp->append_body(body);
         resp->send();
     });
+    service->server().on("/__auto_finish", [](yuan::net::http::HttpRequest *,
+                                              yuan::net::http::HttpResponse *resp) {
+        const std::string body = "auto-finish-ok";
+        resp->set_response_code(yuan::net::http::ResponseCode::ok_);
+        resp->add_header("Content-Type", "text/plain");
+        resp->add_header("Content-Length", std::to_string(body.size()));
+        resp->append_body(body);
+    });
     service->start();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
@@ -2929,11 +3386,17 @@ int main()
           "registered route should match request path without query string");
     check(query_route_resp.find("task_id=42") != std::string::npos,
           "query parameters should remain available to route handlers");
+    const std::string auto_finish_resp = http_get(port, "/__auto_finish");
+    check(auto_finish_resp.find("200 OK") != std::string::npos,
+          "handler without explicit send should auto-finish HTTP/1 response");
+    check(auto_finish_resp.find("auto-finish-ok") != std::string::npos,
+          "auto-finished HTTP/1 response should include handler body");
 
     test_http_caps_and_proxy_stats(port);
     test_http1_split_header_and_invalid_content_length(port);
     test_http1_chunked_request(port);
     test_http2_preface_gate(port);
+    test_http2_tls_only_rejects_h2c();
     test_http2_preface_settings_ack(port);
     test_http2_fragmented_preface_settings_ack(port);
     test_http2_ping_ack(port);
@@ -2958,12 +3421,17 @@ int main()
     test_proxy_strip_prefix_rewrite(port);
     test_proxy_strip_prefix_empty_path(port);
     test_proxy_header_controls(port, upstream_log_path);
+    test_proxy_redirect(port);
+    test_proxy_method_limit(port);
+    test_proxy_access_limit(port);
+    test_proxy_exact_match(port);
+    test_proxy_location_priority(port);
+    test_proxy_cache(port, upstream_log_path);
 
     std::filesystem::remove("http.json", cleanup_ec);
     const nlohmann::json reset_cfg = {
         {"enable_http2", false},
-        {"enable_http3", false}
-    };
+        {"enable_http3", false}};
     {
         std::ofstream out("http.json", std::ios::binary);
         out << reset_cfg.dump(2);
@@ -2977,11 +3445,49 @@ int main()
     typed_options.default_type = "application/x-default";
     typed_options.mime_types[".foo"] = "application/x-test";
     typed_options.gzip_min_length = 1;
-    typed_options.gzip_types = { "application/x-test" };
+    typed_options.gzip_comp_level = 6;
+    typed_options.brotli_comp_level = 4;
+    typed_options.gzip_vary = false;
+    typed_options.gzip_types = {"application/x-test"};
     service->server().mount_static("/typed", static_root.string(), typed_options);
+    yuan::net::http::StaticMountOptions gzip_policy_options;
+    gzip_policy_options.gzip_min_length = 1;
+    gzip_policy_options.gzip_types = {"text/plain"};
+    gzip_policy_options.gzip_disable = {"BadBot"};
+    gzip_policy_options.gzip_proxied = {"auth"};
+    service->server().mount_static("/gzip-policy", static_root.string(), gzip_policy_options);
+    yuan::net::http::StaticMountOptions readonly_options;
+    readonly_options.allowed_methods = {"GET", "HEAD"};
+    service->server().mount_static("/readonly", static_root.string(), readonly_options);
+    yuan::net::http::StaticMountOptions blocked_options;
+    blocked_options.access_rules.push_back(yuan::net::http::AccessRule{false, "all"});
+    service->server().mount_static("/blocked", static_root.string(), blocked_options);
+    yuan::net::http::StaticMountOptions exact_static_options;
+    exact_static_options.exact_match = true;
+    service->server().mount_static("/exact-static", static_root.string(), exact_static_options);
+    yuan::net::http::StaticMountOptions normal_static_priority;
+    normal_static_priority.headers.push_back({"X-Static-Route", "normal"});
+    service->server().mount_static("/static-priority", (static_root / "normal-root").string(), normal_static_priority);
+    yuan::net::http::StaticMountOptions regex_static_priority;
+    regex_static_priority.match_type = yuan::net::http::StaticMountOptions::MatchType::regex;
+    regex_static_priority.headers.push_back({"X-Static-Route", "regex"});
+    service->server().mount_static("^/static-priority/.*\\.json$", static_root.string(), regex_static_priority);
+    yuan::net::http::StaticMountOptions strong_static_priority;
+    strong_static_priority.match_type = yuan::net::http::StaticMountOptions::MatchType::prefix_strong;
+    strong_static_priority.headers.push_back({"X-Static-Route", "strong"});
+    service->server().mount_static("/static-priority/strong", (static_root / "strong-root").string(), strong_static_priority);
+    yuan::net::http::StaticMountOptions regex_only_static;
+    regex_only_static.match_type = yuan::net::http::StaticMountOptions::MatchType::regex;
+    regex_only_static.headers.push_back({"X-Static-Route", "regex-only"});
+    service->server().mount_static("^/regex-only/.*\\.txt$", static_root.string(), regex_only_static);
 
     test_static_etag_and_304(port, static_root);
     test_static_mime_and_gzip_types(port, static_root);
+    test_static_gzip_policy(port, static_root);
+    test_static_method_limit(port, static_root);
+    test_static_access_limit(port, static_root);
+    test_static_exact_match(port);
+    test_static_regex_location_priority(port);
     test_static_gzip(port, static_root);
     test_static_precompressed_br(port, static_root);
     test_static_stream_client_abort_releases_connection(port, static_root, *service);

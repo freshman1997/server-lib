@@ -65,6 +65,7 @@ namespace yuan::net
         void set_connection_handler(std::shared_ptr<ConnectionHandler> handler) override;
         ConnectionHandler *get_connection_handler() const override;
         std::shared_ptr<ConnectionHandler> get_connection_handler_owner() const override;
+        bool has_connection_handler() const override;
         void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler) override;
         std::shared_ptr<SSLHandler> get_ssl_handler() const override;
         void on_read_event() override;
@@ -164,7 +165,6 @@ namespace yuan::net
         void add_connection(const std::shared_ptr<IocpTcpConnection> &connection);
         void remove_connection(int fd);
         void close_connection(const std::shared_ptr<IocpTcpConnection> &connection, bool notify, bool graceful_shutdown = false);
-
         IocpCompletionPort port_;
         IocpDispatcher dispatcher_;
         IocpAcceptEx accept_ex_;

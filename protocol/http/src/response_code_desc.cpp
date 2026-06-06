@@ -19,6 +19,7 @@ namespace yuan::net::http
         {ResponseCode::unauthorized, "401 Unauthorized"},
         {ResponseCode::method_not_allowed, "405 Method Not Allowed"},
         {ResponseCode::conflict, "409 Conflict"},
+        {ResponseCode::gone, "410 Gone"},
         {ResponseCode::precondition_failed, "412 Precondition Failed"},
         {ResponseCode::payload_too_large, "413 Payload Too Large"},
         {ResponseCode::too_many_requests, "429 Too Many Requests"},

@@ -31,7 +31,7 @@ option(YUAN_ENABLE_PLUGIN_SYSTEM "Build and integrate the plugin system" ${YUAN_
 option(YUAN_ENABLE_SSH "Enable SSH protocol support" ON)
 option(YUAN_ENABLE_SSH_SFTP "Enable SSH SFTP subsystem support" ${YUAN_ENABLE_SSH})
 option(YUAN_GLOBAL_STATIC_LINK "Enable global static link preference" OFF)
-option(YUAN_BUILD_SHARED_LIBS "Build Yuan project libraries as shared libraries" ON)
+option(YUAN_BUILD_SHARED_LIBS "Build Yuan project libraries as shared libraries" OFF)
 option(KCP_BUILD_TESTING "Build kcp tests" OFF)
 
 function(yuan_apply_shared_build_mode)

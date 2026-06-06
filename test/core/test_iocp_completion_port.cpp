@@ -7,6 +7,7 @@
 #include "net/iocp/iocp_tcp_engine.h"
 #include "net/iocp/iocp_tcp_io.h"
 #include "net/async/async_listener_host.h"
+#include "net/async/iocp_sharded_async_listener.h"
 #include "net/handler/connection_handler.h"
 #include "net/runtime/network_runtime.h"
 #include "net/socket/listen_options.h"
@@ -21,6 +22,7 @@
 #include <iostream>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #ifdef _WIN32
     class RecordingConnectionHandler : public yuan::net::ConnectionHandler
@@ -1408,6 +1410,84 @@ namespace
         return require(handled.load(std::memory_order_acquire),
                        "iocp async half-close coroutine should write response");
     }
+
+    bool test_iocp_sharded_async_listener_loopback_stress()
+    {
+        const auto port = reserve_tcp_port();
+        if (!require(port != 0, "iocp sharded listener should reserve a port")) {
+            return false;
+        }
+
+        yuan::net::IocpShardedAsyncListener listener;
+        std::atomic_int handled{0};
+
+        auto handler = [&](yuan::net::AsyncConnectionContext ctx)->yuan::coroutine::Task<void> {
+            auto read = co_await ctx.read_async(1000);
+            if (read.status == yuan::coroutine::IoStatus::success &&
+                read.data.readable_bytes() == 4 &&
+                std::memcmp(read.data.read_ptr(), "ping", 4) == 0) {
+                ctx.append_output("pong");
+                ctx.flush();
+                handled.fetch_add(1, std::memory_order_acq_rel);
+            }
+            ctx.close();
+            co_return;
+        };
+
+        if (!require(listener.listen("127.0.0.1", port, 2, 2, 1, std::move(handler)),
+                     "iocp sharded listener should listen")) {
+            return false;
+        }
+
+        constexpr int kThreadCount = 8;
+        constexpr int kRequestsPerThread = 12;
+        std::atomic_int failures{0};
+        std::vector<std::thread> clients;
+        clients.reserve(kThreadCount);
+
+        for (int thread_index = 0; thread_index < kThreadCount; ++thread_index) {
+            clients.emplace_back([&]() {
+                for (int i = 0; i < kRequestsPerThread; ++i) {
+                    const int client = yuan::net::socket::create_ipv4_tcp_socket(false);
+                    if (client < 0) {
+                        failures.fetch_add(1, std::memory_order_acq_rel);
+                        continue;
+                    }
+                    set_recv_timeout(client, 2000);
+                    if (yuan::net::socket::connect(client, yuan::net::InetAddress("127.0.0.1", port)) != 0) {
+                        failures.fetch_add(1, std::memory_order_acq_rel);
+                        yuan::net::socket::close_fd(client);
+                        continue;
+                    }
+                    if (::send(static_cast<SOCKET>(client), "ping", 4, 0) != 4) {
+                        failures.fetch_add(1, std::memory_order_acq_rel);
+                        yuan::net::socket::close_fd(client);
+                        continue;
+                    }
+                    std::array<char, 4> reply{};
+                    if (::recv(static_cast<SOCKET>(client), reply.data(), static_cast<int>(reply.size()), 0) !=
+                            static_cast<int>(reply.size()) ||
+                        std::memcmp(reply.data(), "pong", 4) != 0) {
+                        failures.fetch_add(1, std::memory_order_acq_rel);
+                    }
+                    yuan::net::socket::close_fd(client);
+                }
+            });
+        }
+
+        for (auto &client_thread : clients) {
+            if (client_thread.joinable()) {
+                client_thread.join();
+            }
+        }
+
+        listener.close();
+        const int expected = kThreadCount * kRequestsPerThread;
+        return require(failures.load(std::memory_order_acquire) == 0,
+                       "iocp sharded listener clients should all round-trip") &&
+               require(handled.load(std::memory_order_acquire) == expected,
+                       "iocp sharded listener coroutine should handle every request");
+    }
 #endif
 }
 
@@ -1485,6 +1565,9 @@ int main()
         return 1;
     }
     if (!test_iocp_async_listener_half_close_response()) {
+        return 1;
+    }
+    if (!test_iocp_sharded_async_listener_loopback_stress()) {
         return 1;
     }
 #else

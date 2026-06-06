@@ -7,9 +7,11 @@
 #include <memory>
 #include <mutex>
 #include <random>
+#include <regex>
 #include <string>
 #include <utility>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "base/utils/compressed_trie.h"
@@ -46,6 +48,12 @@ namespace yuan::net::http
         }
     };
 
+    struct ProxyRedirectRule
+    {
+        std::string from;
+        std::string to;
+    };
+
     struct ProxyRoute
     {
         std::string match_pattern;
@@ -58,6 +66,15 @@ namespace yuan::net::http
             weighted_round_robin
         } balance = BalanceStrategy::round_robin;
 
+        enum class MatchType : uint8_t {
+            prefix,
+            exact,
+            prefix_strong,
+            regex
+        } match_type = MatchType::prefix;
+
+        bool regex_case_sensitive = true;
+        std::regex compiled_match;
         bool strip_prefix = true;
         std::string rewrite_prefix;
         int connect_timeout_ms = 5000;
@@ -68,11 +85,23 @@ namespace yuan::net::http
         int unhealthy_cooldown_ms = 5000;
         size_t max_pool_size_per_target = 8;
         size_t idle_timeout_seconds = 60;
+        bool cache_enabled = false;
+        int cache_ttl_ms = 60000;
+        size_t cache_max_response_bytes = 256 * 1024;
+        std::unordered_set<std::string> cache_methods{ "GET", "HEAD" };
+        std::string cache_key_template;
+        std::vector<std::string> cache_bypass_headers;
+        std::vector<std::string> cache_no_cache_headers;
+        bool cache_ignore_cache_control = false;
+        bool cache_ignore_set_cookie = false;
         bool preserve_host = false;
         std::vector<std::pair<std::string, std::string>> request_headers;
         std::vector<std::string> hide_request_headers;
         std::vector<std::pair<std::string, std::string>> response_headers;
         std::vector<std::string> hide_response_headers;
+        std::vector<ProxyRedirectRule> proxy_redirects;
+        std::unordered_set<std::string> allowed_methods;
+        std::vector<AccessRule> access_rules;
     };
 
     struct HttpProxyStats
@@ -287,7 +316,16 @@ namespace yuan::net::http
                                                                    const ProxyTarget &target,
                                                                    Connection *clientConn);
         void map_connections(Connection *clientConn, Connection *serverConn, const std::string &routeKey);
-        void map_connections(const std::shared_ptr<Connection> &clientConn, const std::shared_ptr<Connection> &serverConn, const std::string &routeKey);
+        void map_connections(Connection *clientConn,
+                             Connection *serverConn,
+                             const std::string &routeKey,
+                             std::string cacheKey,
+                             std::string cacheStatus);
+        void map_connections(const std::shared_ptr<Connection> &clientConn,
+                             const std::shared_ptr<Connection> &serverConn,
+                             const std::string &routeKey,
+                             std::string cacheKey = {},
+                             std::string cacheStatus = {});
         bool unmap_and_close_peer(Connection *conn, bool is_client);
         void forward_data(Connection *src, Connection *dst);
         std::string target_key(const ProxyTarget &target) const;
@@ -301,6 +339,9 @@ namespace yuan::net::http
     private:
         HttpServer *server_ = nullptr;
         std::unordered_map<std::string, ProxyRoute> routes_;
+        std::unordered_set<std::string> exact_route_keys_;
+        std::vector<std::string> strong_prefix_route_keys_;
+        std::vector<std::string> regex_route_keys_;
         base::CompressTrie url_trie_;
         mutable std::mutex route_mutex_;
 
@@ -310,6 +351,10 @@ namespace yuan::net::http
             std::string route_key;
             bool response_header_done = false;
             std::string response_header_buffer;
+            std::string cache_key;
+            std::string cache_status;
+            std::string cache_buffer;
+            bool cache_candidate = false;
         };
 
         std::unordered_map<Connection *, ServerMapping> sc_mapping_;
@@ -326,6 +371,14 @@ namespace yuan::net::http
         };
         std::unordered_map<std::string, TargetHealthState> target_health_;
         mutable std::mutex health_mutex_;
+
+        struct CachedProxyResponse
+        {
+            std::string payload;
+            uint64_t expires_at_ms = 0;
+        };
+        std::unordered_map<std::string, CachedProxyResponse> response_cache_;
+        mutable std::mutex cache_mutex_;
 
         std::unordered_map<Connection *, int> pending_requests_;
         mutable std::mt19937 rng_{ std::random_device{}() };

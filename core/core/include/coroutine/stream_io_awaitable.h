@@ -3,6 +3,7 @@
 
 #include <coroutine>
 #include <array>
+#include <atomic>
 #include <memory>
 
 #include "coroutine/awaiter_timeout_state.h"
@@ -16,6 +17,20 @@
 
 namespace yuan::coroutine
 {
+    namespace detail
+    {
+        inline void resume_on_loop(net::EventLoop *loop, std::coroutine_handle<> handle) noexcept
+        {
+            if (!loop || !handle) {
+                return;
+            }
+            if (loop->is_in_loop_thread()) {
+                handle.resume();
+            } else {
+                loop->post_coroutine(handle);
+            }
+        }
+    }
 
     class AsyncReadAwaiter
     {
@@ -75,66 +90,97 @@ namespace yuan::coroutine
                 return false;
             }
 
-            handle_ = handle;
-#ifdef _WIN32
-            connection->set_pending_read_coroutine(handle, [this](std::coroutine_handle<>) noexcept {
-                complete(IoStatus::success);
-            });
-#else
-            connection->set_pending_read_coroutine(handle);
-#endif
-
-            auto terminal = [this](net::Connection &conn) {
-                if (!completed_) {
-                    auto h = conn.take_pending_read_coroutine();
-                    if (!h) {
+            state_ = std::make_shared<SharedState>();
+            state_->runtime = runtime_;
+            state_->connection_handle = connection_handle_;
+            state_->handle = handle;
+            state_->complete_with_buffered_data_on_terminal_event = complete_with_buffered_data_on_terminal_event_;
+            auto weak_state = std::weak_ptr<SharedState>(state_);
+            connection->set_pending_read_coroutine(
+                handle,
+                [weak_state](std::coroutine_handle<>) noexcept {
+                    complete_shared(weak_state, IoStatus::success);
+                },
+                [weak_state](net::ConnectionEvent event) noexcept {
+                    auto state = weak_state.lock();
+                    if (!state || state->completed.load(std::memory_order_acquire)) {
                         return;
                     }
-                    if (complete_with_buffered_data_on_terminal_event_ && conn.input_readable_bytes() > 0) {
-                        complete(IoStatus::success);
+                    auto *connection = state->connection_handle.get();
+                    if (event == net::ConnectionEvent::input_shutdown &&
+                        state->complete_with_buffered_data_on_terminal_event &&
+                        connection && connection->input_readable_bytes() > 0) {
+                        complete_shared(state, IoStatus::success);
+                    } else if (event == net::ConnectionEvent::error) {
+                        complete_shared(state, IoStatus::connection_error);
                     } else {
-                        complete(IoStatus::connection_closed);
+                        complete_shared(state, IoStatus::connection_closed);
                     }
-                    return;
-                }
+                });
 
-            };
-            net::Connection::EventWaiterRegistration registrations[] = {
-                { net::ConnectionEvent::error, [this](net::Connection &conn) {
-                    if (!completed_) {
+            if (!connection->owner_event_handler()) {
+                auto terminal = [weak_state](net::Connection &conn) {
+                    auto state = weak_state.lock();
+                    if (state && !state->completed.load(std::memory_order_acquire)) {
                         auto h = conn.take_pending_read_coroutine();
                         if (!h) {
                             return;
                         }
-                        complete(IoStatus::connection_error);
+                        if (state->complete_with_buffered_data_on_terminal_event && conn.input_readable_bytes() > 0) {
+                            complete_shared(state, IoStatus::success);
+                        } else {
+                            complete_shared(state, IoStatus::connection_closed);
+                        }
                     }
-                } },
-                { net::ConnectionEvent::closed, terminal },
-                { net::ConnectionEvent::input_shutdown, std::move(terminal) },
-            };
-            waiter_count_ = connection->add_event_waiters(registrations,
-                                                           sizeof(registrations) / sizeof(registrations[0]),
-                                                           waiter_ids_.data(),
-                                                           waiter_ids_.size());
+                };
+                net::Connection::EventWaiterRegistration registrations[] = {
+                    { net::ConnectionEvent::readable, [weak_state](net::Connection &conn) {
+                        auto state = weak_state.lock();
+                        if (state && !state->completed.load(std::memory_order_acquire)) {
+                            (void)conn.take_pending_read_coroutine();
+                            complete_shared(state, IoStatus::success);
+                        }
+                    } },
+                    { net::ConnectionEvent::error, [weak_state](net::Connection &conn) {
+                        auto state = weak_state.lock();
+                        if (state && !state->completed.load(std::memory_order_acquire)) {
+                            auto h = conn.take_pending_read_coroutine();
+                            if (!h) {
+                                return;
+                            }
+                            complete_shared(state, IoStatus::connection_error);
+                        }
+                    } },
+                    { net::ConnectionEvent::closed, terminal },
+                    { net::ConnectionEvent::input_shutdown, std::move(terminal) },
+                };
+                state_->waiter_count = connection->add_event_waiters(registrations,
+                                                                     sizeof(registrations) / sizeof(registrations[0]),
+                                                                     state_->waiter_ids.data(),
+                                                                     state_->waiter_ids.size());
+            }
 
             if (connection->input_readable_bytes() > 0) {
                 result_.status = IoStatus::success;
+                state_->result.status = IoStatus::success;
                 connection->clear_pending_read_coroutine();
-                restore_handler_if_needed();
+                restore_shared(state_);
                 return false;
             }
 
             if (connection->input_shutdown()) {
                 result_.status = IoStatus::connection_closed;
+                state_->result.status = IoStatus::connection_closed;
                 connection->clear_pending_read_coroutine();
-                restore_handler_if_needed();
+                restore_shared(state_);
                 return false;
             }
 
             if (connection->get_connection_state() != net::ConnectionState::connected) {
                 result_.status = IoStatus::connection_closed;
+                state_->result.status = IoStatus::connection_closed;
                 connection->clear_pending_read_coroutine();
-                restore_handler_if_needed();
+                restore_shared(state_);
                 return false;
             }
 
@@ -142,6 +188,7 @@ namespace yuan::coroutine
                 timeout_state_ = std::make_shared<detail::AwaiterTimeoutState>();
                 timeout_state_->loop = runtime_.event_loop();
                 timeout_state_->handle = handle;
+                state_->timeout_state = timeout_state_;
                 detail::arm_awaiter_timeout(runtime_, timeout_ms_, timeout_state_);
             }
 
@@ -150,21 +197,24 @@ namespace yuan::coroutine
 
         ReadResult await_resume() noexcept
         {
-            if (!completed_) {
-                completed_ = true;
-                result_.status = IoStatus::success;
+            if (state_) {
+                result_ = state_->result;
             }
-            restore_handler_if_needed();
-
             auto *connection = connection_handle_.get();
             if (!connection || !runtime_.event_loop()) {
                 return ReadResult::with_status(IoStatus::invalid_state);
             }
 
-            if (timeout_state_ && timeout_state_->timed_out && !completed_) {
-                completed_ = true;
+            if (timeout_state_ && timeout_state_->timed_out &&
+                state_ && !state_->completed.exchange(true, std::memory_order_acq_rel)) {
                 result_.status = IoStatus::timed_out;
+                state_->result.status = IoStatus::timed_out;
             }
+            if (state_ && !state_->completed.exchange(true, std::memory_order_acq_rel) &&
+                state_->result.status == IoStatus::success) {
+                result_.status = state_->result.status;
+            }
+            restore_shared(state_);
             detail::cancel_awaiter_timeout(timeout_state_);
 
             if (result_.status == IoStatus::success) {
@@ -181,56 +231,72 @@ namespace yuan::coroutine
         }
 
     private:
-        void complete(IoStatus status) noexcept
+        struct SharedState
         {
-            if (completed_ || !handle_) {
+            RuntimeView runtime{};
+            net::ConnectionHandle connection_handle{};
+            std::shared_ptr<detail::AwaiterTimeoutState> timeout_state;
+            std::coroutine_handle<> handle{};
+            ReadResult result{};
+            std::array<uint64_t, 4> waiter_ids{};
+            std::size_t waiter_count = 0;
+            std::atomic_bool completed{false};
+            std::atomic_bool handler_restored{false};
+            bool complete_with_buffered_data_on_terminal_event = true;
+        };
+
+        static void cancel_shared_waiters(const std::shared_ptr<SharedState> &state) noexcept
+        {
+            if (!state || state->waiter_count == 0) {
                 return;
             }
-            completed_ = true;
-            result_.status = status;
-            if (timeout_state_) {
-                timeout_state_->completed = true;
+            if (auto *connection = state->connection_handle.get()) {
+                connection->remove_event_waiters(state->waiter_ids.data(), state->waiter_count);
             }
-            restore_handler_if_needed();
-            if (runtime_.event_loop()) {
-                runtime_.event_loop()->post_coroutine(handle_);
-            }
-        }
-        void restore_handler_if_needed() noexcept
-        {
-            auto *connection = connection_handle_.get();
-            cancel_waiters(connection);
-            if (handler_restored_) {
-                return;
-            }
-            handler_restored_ = true;
+            state->waiter_count = 0;
         }
 
-        void cancel_waiters(net::Connection *connection) noexcept
+        static void restore_shared(const std::shared_ptr<SharedState> &state) noexcept
         {
-            if (!connection || waiter_count_ == 0) {
-                waiter_count_ = 0;
+            if (!state || state->handler_restored.exchange(true, std::memory_order_acq_rel)) {
                 return;
             }
-            connection->remove_event_waiters(waiter_ids_.data(), waiter_count_);
-            waiter_count_ = 0;
+            cancel_shared_waiters(state);
         }
+
+        static void complete_shared(const std::weak_ptr<SharedState> &weak_state, IoStatus status) noexcept
+        {
+            complete_shared(weak_state.lock(), status);
+        }
+
+        static void complete_shared(const std::shared_ptr<SharedState> &state, IoStatus status) noexcept
+        {
+            if (!state || !state->handle || state->completed.exchange(true, std::memory_order_acq_rel)) {
+                return;
+            }
+            state->result.status = status;
+            if (state->timeout_state) {
+                state->timeout_state->completed = true;
+            }
+            restore_shared(state);
+            if (auto *loop = state->runtime.event_loop()) {
+                loop->post_coroutine(state->handle);
+            }
+        }
+
         RuntimeView runtime_{};
         net::ConnectionHandle connection_handle_{};
         uint32_t timeout_ms_ = 0;
         std::shared_ptr<detail::AwaiterTimeoutState> timeout_state_;
+        std::shared_ptr<SharedState> state_;
 
-        std::coroutine_handle<> handle_{};
         ReadResult result_{};
-        std::array<uint64_t, 4> waiter_ids_{};
-        std::size_t waiter_count_ = 0;
-        bool completed_ = false;
-        bool handler_restored_ = false;
         bool complete_with_buffered_data_on_terminal_event_ = true;
 
     public:
         ~AsyncReadAwaiter()
         {
+            restore_shared(state_);
             detail::cancel_awaiter_timeout(timeout_state_);
         }
     };
@@ -288,17 +354,17 @@ namespace yuan::coroutine
             handle_ = handle;
             net::Connection::EventWaiterRegistration registrations[] = {
                 { net::ConnectionEvent::writable, [this](net::Connection &conn) {
-                    if (!completed_ && conn.output_readable_bytes() == 0) {
+                    if (!completed_.load(std::memory_order_acquire) && conn.output_readable_bytes() == 0) {
                         complete(IoStatus::success);
                     }
                 } },
                 { net::ConnectionEvent::error, [this](net::Connection &) {
-                    if (!completed_) {
+                    if (!completed_.load(std::memory_order_acquire)) {
                         complete(IoStatus::connection_error);
                     }
                 } },
                 { net::ConnectionEvent::closed, [this](net::Connection &) {
-                    if (!completed_) {
+                    if (!completed_.load(std::memory_order_acquire)) {
                         complete(IoStatus::connection_closed);
                     }
                 } },
@@ -309,7 +375,7 @@ namespace yuan::coroutine
                                                           waiter_ids_.size());
             connection->write_and_flush(buffer_);
 
-            if (completed_) {
+            if (completed_.load(std::memory_order_acquire)) {
                 return true;
             }
             if (connection->output_readable_bytes() == 0) {
@@ -330,12 +396,11 @@ namespace yuan::coroutine
 
         WriteResult await_resume() noexcept
         {
-            restore_handler_if_needed();
-
-            if (timeout_state_ && timeout_state_->timed_out && !completed_) {
-                completed_ = true;
+            if (timeout_state_ && timeout_state_->timed_out &&
+                !completed_.exchange(true, std::memory_order_acq_rel)) {
                 result_.status = IoStatus::timed_out;
             }
+            restore_handler_if_needed();
             detail::cancel_awaiter_timeout(timeout_state_);
 
             return result_;
@@ -344,27 +409,23 @@ namespace yuan::coroutine
     private:
         void complete(IoStatus status) noexcept
         {
-            if (completed_ || !handle_) {
+            if (!handle_ || completed_.exchange(true, std::memory_order_acq_rel)) {
                 return;
             }
-            completed_ = true;
             result_.status = status;
             if (timeout_state_) {
                 timeout_state_->completed = true;
             }
             restore_handler_if_needed();
-            if (runtime_.event_loop()) {
-                runtime_.event_loop()->post_coroutine(handle_);
-            }
+            detail::resume_on_loop(runtime_.event_loop(), handle_);
         }
         void restore_handler_if_needed() noexcept
         {
             auto *connection = connection_handle_.get();
             cancel_waiters(connection);
-            if (handler_restored_) {
+            if (handler_restored_.exchange(true, std::memory_order_acq_rel)) {
                 return;
             }
-            handler_restored_ = true;
         }
 
         void cancel_waiters(net::Connection *connection) noexcept
@@ -386,8 +447,8 @@ namespace yuan::coroutine
         WriteResult result_{};
         std::array<uint64_t, 4> waiter_ids_{};
         std::size_t waiter_count_ = 0;
-        bool completed_ = false;
-        bool handler_restored_ = false;
+        std::atomic_bool completed_{false};
+        std::atomic_bool handler_restored_{false};
 
     public:
         ~AsyncWriteAwaiter()
@@ -504,9 +565,7 @@ namespace yuan::coroutine
                 timeout_state_->completed = true;
             }
             restore_handler_if_needed();
-            if (runtime_.event_loop()) {
-                runtime_.event_loop()->post_coroutine(handle_);
-            }
+            detail::resume_on_loop(runtime_.event_loop(), handle_);
         }
         void restore_handler_if_needed() noexcept
         {
@@ -630,9 +689,7 @@ namespace yuan::coroutine
             completed_ = true;
             result_ = status;
             restore_handler_if_needed();
-            if (runtime_.event_loop()) {
-                runtime_.event_loop()->post_coroutine(handle_);
-            }
+            detail::resume_on_loop(runtime_.event_loop(), handle_);
         }
         void restore_handler_if_needed() noexcept
         {
@@ -743,9 +800,7 @@ namespace yuan::coroutine
                 if (timeout_state_) {
                     timeout_state_->completed = true;
                 }
-                if (runtime_.event_loop()) {
-                    runtime_.event_loop()->post_coroutine(handle_);
-                }
+                detail::resume_on_loop(runtime_.event_loop(), handle_);
             });
 
             if (timeout_ms_ > 0 && runtime_.timer_manager()) {
@@ -794,9 +849,7 @@ namespace yuan::coroutine
                 connection->set_ssl_handshake_callback(nullptr);
                 connection->set_ssl_handshaking(false);
             }
-            if (runtime_.event_loop()) {
-                runtime_.event_loop()->post_coroutine(handle_);
-            }
+            detail::resume_on_loop(runtime_.event_loop(), handle_);
         }
 
         RuntimeView runtime_{};

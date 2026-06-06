@@ -98,10 +98,7 @@ namespace yuan::net
 
         if (adapter_) {
             if (!proc_one_buffer(buffer)) {
-                if (connectionHandlerOwner_) {
-                    notify_event_waiters(ConnectionEvent::error);
-                    connectionHandlerOwner_->on_error(*this);
-                }
+                notify_error_event();
                 abort();
                 return;
             }
@@ -123,10 +120,7 @@ namespace yuan::net
 
         if (adapter_) {
             if (!proc_one_buffer(buffer)) {
-                if (connectionHandlerOwner_) {
-                    notify_event_waiters(ConnectionEvent::error);
-                    connectionHandlerOwner_->on_error(*this);
-                }
+                notify_error_event();
                 abort();
                 return;
             }
@@ -265,28 +259,23 @@ namespace yuan::net
         }
         if (ok) {
             active_ = true;
-            notify_event_waiters(ConnectionEvent::readable);
-            handler->on_read(*this);
+            notify_readable_event();
         } else {
-            notify_event_waiters(ConnectionEvent::error);
+            notify_error_event();
             abort();
         }
     }
 
     void UdpConnection::on_write_event()
     {
-        [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
-        auto *handler = yuan::base::owner_ptr(handler_owner);
-        if (handler) {
-            handler->on_write(*this);
-        }
         process_pending_output_buffer();
         auto *front = output_buffer_.front();
         if (front && !front->empty()) {
             flush();
         }
+        front = output_buffer_.front();
         if (!front || front->empty()) {
-            notify_event_waiters(ConnectionEvent::writable);
+            notify_writable_event();
         }
     }
 
@@ -296,6 +285,7 @@ namespace yuan::net
             LOG_WARN("udp connection event handler switched, ip: {}, port: {}", address_.get_ip(), address_.get_port());
         }
         eventHandler_ = eventHandler;
+        set_owner_event_handler(eventHandler_);
     }
 
     void UdpConnection::do_close()
@@ -308,13 +298,11 @@ namespace yuan::net
         alive_timer_.cancel();
         alive_timer_.reset();
         auto self = std::static_pointer_cast<UdpConnection>(shared_from_this());
-        [[maybe_unused]] auto handler_owner = std::move(connectionHandlerOwner_);
-        auto *handler = yuan::base::owner_ptr(handler_owner);
-        if (handler && !close_notified_) {
+        if (!close_notified_) {
             close_notified_ = true;
-            notify_event_waiters(ConnectionEvent::closed);
-            handler->on_close(*this);
+            notify_closed_event();
         }
+        connectionHandlerOwner_.reset();
         if (instance_ && !instance_->is_closing()) {
             instance_->on_connection_close(self);
         }
@@ -338,12 +326,7 @@ namespace yuan::net
 
         state_ = state;
         if (state_ == ConnectionState::connected) {
-            [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
-            auto *handler = yuan::base::owner_ptr(handler_owner);
-            if (handler) {
-                notify_event_waiters(ConnectionEvent::connected);
-                handler->on_connected(*this);
-            }
+            notify_connected_event();
             if (instance_ && instance_->get_timer_manager()) {
                 alive_timer_ = instance_->get_timer_manager()->every(0, 10 * 1000, this);
             }
@@ -407,12 +390,7 @@ namespace yuan::net
             }
 
             if (!proc_one_buffer(*front)) {
-                [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
-                auto *handler = yuan::base::owner_ptr(handler_owner);
-                if (handler) {
-                    notify_event_waiters(ConnectionEvent::error);
-                    handler->on_error(*this);
-                }
+                notify_error_event();
                 abort();
                 return;
             }

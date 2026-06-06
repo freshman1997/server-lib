@@ -8,6 +8,8 @@
 #include "websocket_connection.h"
 #include "websocket_utils.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include "openssl/sha.h"
 #include "openssl/ssl.h"
@@ -24,6 +26,57 @@ namespace yuan::net::websocket
 #else
         return strcasecmp(a.c_str(), b.c_str()) == 0;
 #endif
+    }
+
+    static std::string trim_ascii(std::string_view value)
+    {
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+            value.remove_prefix(1);
+        }
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+            value.remove_suffix(1);
+        }
+        return std::string(value);
+    }
+
+    static bool header_has_token(const std::string &raw, const std::string &token)
+    {
+        std::size_t start = 0;
+        while (start <= raw.size()) {
+            const auto end = raw.find(',', start);
+            const auto len = (end == std::string::npos) ? std::string::npos : end - start;
+            if (iequals(trim_ascii(std::string_view(raw).substr(start, len)), token)) {
+                return true;
+            }
+            if (end == std::string::npos) {
+                break;
+            }
+            start = end + 1;
+        }
+        return false;
+    }
+
+    static bool is_valid_websocket_key(const std::string &raw)
+    {
+        const std::string key = trim_ascii(raw);
+        if (key.empty() || key.size() % 4 != 0) {
+            return false;
+        }
+
+        bool seen_padding = false;
+        for (char ch : key) {
+            const auto uch = static_cast<unsigned char>(ch);
+            const bool is_base64_char = std::isalnum(uch) || ch == '+' || ch == '/';
+            if (ch == '=') {
+                seen_padding = true;
+                continue;
+            }
+            if (seen_padding || !is_base64_char) {
+                return false;
+            }
+        }
+
+        return base::util::base64_decode(key).size() == 16;
     }
 
     WebSocketHandshaker::WebSocketHandshaker()
@@ -49,7 +102,7 @@ namespace yuan::net::websocket
         }
 
         auto conn = req->get_header("connection");
-        if (!conn || !iequals(*conn, "Upgrade")) {
+        if (!conn || !header_has_token(*conn, "Upgrade")) {
             return false;
         }
 
@@ -64,11 +117,11 @@ namespace yuan::net::websocket
         }
 
         auto key = req->get_header("sec-websocket-key");
-        if (!key || key->empty()) {
+        if (!key || !is_valid_websocket_key(*key)) {
             return false;
         }
 
-        client_key_ = *key;
+        client_key_ = trim_ascii(*key);
         server_key_ = WebSocketUtils::generate_server_key(client_key_);
 
         auto subProtocol = req->get_header("sec-websocket-protocol");
@@ -131,7 +184,7 @@ namespace yuan::net::websocket
             }
 
             auto conn = resp->get_header("connection");
-            if (!conn || !iequals(*conn, "Upgrade")) {
+            if (!conn || !header_has_token(*conn, "Upgrade")) {
                 return false;
             }
 
@@ -174,30 +227,23 @@ namespace yuan::net::websocket
     void WebSocketHandshaker::decode_into_set(const std::string & raw, std::set<std::string> & protos, char delimiter)
     {
         // json, mqtt
+        protos.clear();
         if (raw.empty()) {
             return;
         }
 
-        std::string word;
-        for (int i = 0; i < raw.size();) {
-            if (raw[i] == ' ') {
-                ++i;
-                continue;
+        std::size_t start = 0;
+        while (start <= raw.size()) {
+            const auto end = raw.find(delimiter, start);
+            const auto len = (end == std::string::npos) ? std::string::npos : end - start;
+            auto word = trim_ascii(std::string_view(raw).substr(start, len));
+            if (!word.empty()) {
+                protos.insert(std::move(word));
             }
-
-            while (i <= raw.size()) {
-                if (i + 1 <= raw.size() && raw[i] != delimiter) {
-                    word.push_back(raw[i]);
-                    ++i;
-                } else {
-                    protos.insert(word);
-
-                    ++i;
-                    word.clear();
-
-                    break;
-                }
+            if (end == std::string::npos) {
+                break;
             }
+            start = end + 1;
         }
     }
 

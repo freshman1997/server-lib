@@ -44,13 +44,13 @@ namespace yuan::net
                 return;
             }
 
+            connection->set_event_handler(runtime->event_loop());
             runtime->dispatch([this, connection, runtime]() {
                 if (!running_.load(std::memory_order_acquire) || !handler_) {
                     connection->close();
                     return;
                 }
 
-                connection->set_event_handler(runtime->event_loop());
                 AsyncConnectionContext ctx(connection,
                     static_cast<coroutine::RuntimeView>(runtime->runtime_view()));
                 auto task = handler_(std::move(ctx));

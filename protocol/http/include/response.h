@@ -10,7 +10,7 @@ namespace yuan::net::http
 {
     class HttpSessionContext;
     class HttpResponseParser;
-    
+
     class HttpResponse : public HttpPacket
     {
     public:
@@ -18,8 +18,8 @@ namespace yuan::net::http
         ~HttpResponse();
 
         // 禁用拷贝
-        HttpResponse(const HttpResponse&) = delete;
-        HttpResponse& operator=(const HttpResponse&) = delete;
+        HttpResponse(const HttpResponse &) = delete;
+        HttpResponse &operator=(const HttpResponse &) = delete;
 
     public:
         virtual void reset();
@@ -35,7 +35,7 @@ namespace yuan::net::http
 
         // append_body - 避免拷贝的版本
         void append_body(std::string_view data);
-        
+
         // 原始兼容接口
         void append_body(const char *data);
         void append_body(const std::string &data);
@@ -44,6 +44,8 @@ namespace yuan::net::http
         void send_body(std::string_view body,
                        std::string_view content_type = "application/octet-stream",
                        ResponseCode code = ResponseCode::ok_);
+        void finish();
+        bool has_sent() const { return headers_sent_; }
 
         void process_error(ResponseCode errorCode = ResponseCode::internal_server_error);
 
@@ -51,7 +53,7 @@ namespace yuan::net::http
 
         // JSON快捷方法
         void json(const std::string &json_str, ResponseCode code = ResponseCode::ok_);
-        
+
         // 重定向
         void redirect(const std::string &url, ResponseCode code = ResponseCode::found);
 

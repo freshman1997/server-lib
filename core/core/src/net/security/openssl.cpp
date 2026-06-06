@@ -2,6 +2,8 @@
 #include "net/security/ssl_handler.h"
 
 #include <cerrno>
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <memory>
 #include "openssl/ssl.h"
@@ -11,6 +13,41 @@ namespace yuan::net
 {
     namespace
     {
+        std::string normalize_tls_version(std::string value)
+        {
+            value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char ch) {
+                            return std::isspace(ch) != 0 || ch == '_' || ch == '-';
+                        }),
+                        value.end());
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            return value;
+        }
+
+        int tls_version_constant(const std::string &version)
+        {
+            const auto v = normalize_tls_version(version);
+            if (v.empty() || v == "default" || v == "auto") {
+                return 0;
+            }
+            if (v == "tlsv1" || v == "tls1" || v == "1.0" || v == "1") {
+                return TLS1_VERSION;
+            }
+            if (v == "tlsv1.1" || v == "tls1.1" || v == "1.1") {
+                return TLS1_1_VERSION;
+            }
+            if (v == "tlsv1.2" || v == "tls1.2" || v == "1.2") {
+                return TLS1_2_VERSION;
+            }
+#ifdef TLS1_3_VERSION
+            if (v == "tlsv1.3" || v == "tls1.3" || v == "1.3") {
+                return TLS1_3_VERSION;
+            }
+#endif
+            return -1;
+        }
+
         static int alpn_select_callback(SSL *, const unsigned char **out, unsigned char *outlen,
                                          const unsigned char *in, unsigned int inlen, void *arg)
         {
@@ -150,6 +187,81 @@ namespace yuan::net
         data_->alpn_protocols_storage_len_ = total;
 
         SSL_CTX_set_alpn_select_cb(data_->ctx_, alpn_select_callback, &data_->alpn_protocols_);
+    }
+
+    bool OpenSSLModule::set_min_protocol_version(const std::string &version)
+    {
+        if (!data_->ctx_ || version.empty()) {
+            return true;
+        }
+        const int parsed = tls_version_constant(version);
+        if (parsed < 0) {
+            data_->errmsg_ = "unsupported TLS min protocol version: " + version;
+            return false;
+        }
+        if (SSL_CTX_set_min_proto_version(data_->ctx_, parsed) != 1) {
+            ERR_print_errors_cb(set_err_msg, this);
+            return false;
+        }
+        return true;
+    }
+
+    bool OpenSSLModule::set_max_protocol_version(const std::string &version)
+    {
+        if (!data_->ctx_ || version.empty()) {
+            return true;
+        }
+        const int parsed = tls_version_constant(version);
+        if (parsed < 0) {
+            data_->errmsg_ = "unsupported TLS max protocol version: " + version;
+            return false;
+        }
+        if (SSL_CTX_set_max_proto_version(data_->ctx_, parsed) != 1) {
+            ERR_print_errors_cb(set_err_msg, this);
+            return false;
+        }
+        return true;
+    }
+
+    bool OpenSSLModule::set_cipher_list(const std::string &ciphers)
+    {
+        if (!data_->ctx_ || ciphers.empty()) {
+            return true;
+        }
+        if (SSL_CTX_set_cipher_list(data_->ctx_, ciphers.c_str()) != 1) {
+            ERR_print_errors_cb(set_err_msg, this);
+            return false;
+        }
+        return true;
+    }
+
+    bool OpenSSLModule::set_ciphersuites(const std::string &ciphersuites)
+    {
+        if (!data_->ctx_ || ciphersuites.empty()) {
+            return true;
+        }
+#ifdef TLS1_3_VERSION
+        if (SSL_CTX_set_ciphersuites(data_->ctx_, ciphersuites.c_str()) != 1) {
+            ERR_print_errors_cb(set_err_msg, this);
+            return false;
+        }
+#else
+        data_->errmsg_ = "TLS 1.3 ciphersuites are not supported by this OpenSSL build";
+        return false;
+#endif
+        return true;
+    }
+
+    void OpenSSLModule::set_prefer_server_ciphers(bool enabled)
+    {
+        if (!data_->ctx_) {
+            return;
+        }
+        if (enabled) {
+            SSL_CTX_set_options(data_->ctx_, SSL_OP_CIPHER_SERVER_PREFERENCE);
+        } else {
+            SSL_CTX_clear_options(data_->ctx_, SSL_OP_CIPHER_SERVER_PREFERENCE);
+        }
     }
 
     const std::string *OpenSSLModule::get_error_message() const

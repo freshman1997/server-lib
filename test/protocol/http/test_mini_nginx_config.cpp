@@ -49,9 +49,9 @@ namespace
         std::string output;
     };
 
-    RunResult run_and_capture(const std::string &bin,
-                              const std::string &cfg,
-                              std::chrono::milliseconds timeout)
+    RunResult run_and_capture_args(const std::string &bin,
+                                   const std::vector<std::string> &args,
+                                   std::chrono::milliseconds timeout)
     {
         int pipefd[2] = { -1, -1 };
         if (pipe(pipefd) != 0) {
@@ -64,7 +64,13 @@ namespace
             dup2(pipefd[1], STDERR_FILENO);
             close(pipefd[0]);
             close(pipefd[1]);
-            execl(bin.c_str(), bin.c_str(), cfg.c_str(), static_cast<char *>(nullptr));
+            std::vector<char *> argv;
+            argv.push_back(const_cast<char *>(bin.c_str()));
+            for (const auto &arg : args) {
+                argv.push_back(const_cast<char *>(arg.c_str()));
+            }
+            argv.push_back(nullptr);
+            execv(bin.c_str(), argv.data());
             _exit(127);
         }
 
@@ -118,6 +124,13 @@ namespace
         close(pipefd[0]);
 
         return result;
+    }
+
+    RunResult run_and_capture(const std::string &bin,
+                              const std::string &cfg,
+                              std::chrono::milliseconds timeout)
+    {
+        return run_and_capture_args(bin, { cfg }, timeout);
     }
 
     bool send_all(int fd, const std::string &data)
@@ -465,6 +478,22 @@ namespace
             "GET /old-static/index.html HTTP/1.1\r\n"
             "Host: 127.0.0.1:18087\r\n"
             "Connection: close\r\n\r\n");
+        const std::string return_ok = request(
+            "GET /return-ok HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Connection: close\r\n\r\n");
+        const std::string return_redirect = request(
+            "GET /return-redirect HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Connection: close\r\n\r\n");
+        const std::string rewrite_internal = request(
+            "GET /rewrite-internal/anything?from=test HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Connection: close\r\n\r\n");
+        const std::string rewrite_redirect = request(
+            "GET /rewrite-redirect/index.html?from=test HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Connection: close\r\n\r\n");
         const std::string rejected = request(
             "TRACE / HTTP/1.1\r\n"
             "Host: 127.0.0.1:18087\r\n"
@@ -477,6 +506,28 @@ namespace
             "GET /not-found-for-error-page HTTP/1.1\r\n"
             "Host: 127.0.0.1:18087\r\n"
             "Connection: close\r\n\r\n");
+        const std::string custom_403_as_200 = request(
+            "GET /noauto/ HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Connection: close\r\n\r\n");
+        const std::string auth_required = request(
+            "GET /protected/index.html HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Connection: close\r\n\r\n");
+        const std::string auth_ok = request(
+            "GET /protected/index.html HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Authorization: Basic dGVzdDpzZWNyZXQ=\r\n"
+            "Connection: close\r\n\r\n");
+        const std::string file_auth_required = request(
+            "GET /file-protected/index.html HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Connection: close\r\n\r\n");
+        const std::string file_auth_ok = request(
+            "GET /file-protected/index.html HTTP/1.1\r\n"
+            "Host: 127.0.0.1:18087\r\n"
+            "Authorization: Basic ZmlsZS11c2VyOmZpbGUtc2VjcmV0\r\n"
+            "Connection: close\r\n\r\n");
         const std::string nogzip_static = request(
             "GET /nogzip/index.html HTTP/1.1\r\n"
             "Host: 127.0.0.1:18087\r\n"
@@ -487,9 +538,17 @@ namespace
         waitpid(pid, nullptr, 0);
 
         return health.find(" 200 ") != std::string::npos &&
+               health.find("Server: mini_nginx_test") != std::string::npos &&
                health.find("X-Test-Header: edge") != std::string::npos &&
                redirect.find(" 301 ") != std::string::npos &&
                redirect.find("Location: /static/index.html") != std::string::npos &&
+               return_ok.find(" 200 ") != std::string::npos &&
+               return_redirect.find(" 301 ") != std::string::npos &&
+               return_redirect.find("Location: /static/index.html") != std::string::npos &&
+               rewrite_internal.find(" 200 ") != std::string::npos &&
+               rewrite_internal.find("return-ok") != std::string::npos &&
+               rewrite_redirect.find(" 302 ") != std::string::npos &&
+               rewrite_redirect.find("Location: /static/index.html?from=test") != std::string::npos &&
                rejected.find(" 405 ") != std::string::npos &&
                rejected.find("Allow:") != std::string::npos &&
                cached_static.find(" 200 ") != std::string::npos &&
@@ -497,6 +556,13 @@ namespace
                cached_static.find("Expires:") != std::string::npos &&
                cached_static.find("X-Static-Header: asset") != std::string::npos &&
                custom_404.find(" 404 ") != std::string::npos &&
+               custom_403_as_200.find(" 200 ") != std::string::npos &&
+               auth_required.find(" 401 ") != std::string::npos &&
+               auth_required.find("WWW-Authenticate: Basic realm=\"Protected\"") != std::string::npos &&
+               auth_ok.find(" 200 ") != std::string::npos &&
+               file_auth_required.find(" 401 ") != std::string::npos &&
+               file_auth_required.find("WWW-Authenticate: Basic realm=\"FileProtected\"") != std::string::npos &&
+               file_auth_ok.find(" 200 ") != std::string::npos &&
                nogzip_static.find(" 200 ") != std::string::npos &&
                nogzip_static.find("Content-Encoding:") == std::string::npos;
     }
@@ -518,6 +584,7 @@ int main()
     const auto cfg_inflight = work_dir / "mini_nginx_inflight_limit_test.json";
     const auto cfg_reload_limits = work_dir / "mini_nginx_reload_limits_test.json";
     const auto cfg_static_only = work_dir / "mini_nginx_static_only_test.json";
+    const auto basic_auth_file = work_dir / "mini_nginx_htpasswd_test.txt";
 
     {
         std::ofstream out(cfg_legacy, std::ios::binary | std::ios::trunc);
@@ -617,6 +684,7 @@ int main()
   "static": [
     {
       "location": "/",
+      "match": "prefix",
       "root": "release/mini_nginx/www",
       "auto_index": true,
       "cache_control": "public, max-age=60",
@@ -699,16 +767,35 @@ int main()
     }
 
     {
+        std::ofstream users(basic_auth_file, std::ios::binary | std::ios::trunc);
+        users << "# htpasswd-style users\n";
+        users << "file-user:{SHA}VpyjatNmM2L+AsHulD32T45uOlE=\n";
+    }
+
+    {
         std::ofstream out(cfg_static_only, std::ios::binary | std::ios::trunc);
         out << R"({
   "server": {
     "listen": 18087,
     "server_name": "mini-nginx-static-only",
+    "server_tokens": true,
+    "server_header": "mini_nginx_test",
     "enable_ssl": false,
+    "ssl_protocols": ["TLSv1.2", "TLSv1.3"],
+    "ssl_ciphers": "HIGH:!aNULL:!MD5",
+    "ssl_ciphersuites": "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256",
+    "ssl_prefer_server_ciphers": true,
+    "enable_http2": true,
+    "http2_tls_only": true,
+    "satisfy": "any",
     "backlog": 256,
     "use_iocp": true,
     "iocp_worker_count": 2,
     "allowed_methods": ["GET", "HEAD"],
+    "access": [
+      { "allow": "127.0.0.1" },
+      { "deny": "all" }
+    ],
     "client_max_body_size": "2m",
     "keepalive_timeout": "30s",
     "send_timeout": "5s"
@@ -732,9 +819,37 @@ int main()
       "preserve_path": true
     }
   ],
+  "returns": [
+    {
+      "path": "/return-ok",
+      "match": "exact",
+      "code": 200,
+      "body": "return-ok\n"
+    },
+    {
+      "path": "/return-redirect",
+      "match": "exact",
+      "code": 301,
+      "url": "/static/index.html"
+    }
+  ],
+  "rewrites": [
+    {
+      "pattern": "^/rewrite-internal/.*$",
+      "to": "/return-ok"
+    },
+    {
+      "from": "/rewrite-redirect",
+      "to": "/static",
+      "code": 302,
+      "prefix": true
+    }
+  ],
   "access_log": {
     "enabled": true,
-    "path": "tmp/mini_nginx_static_only_access.log"
+    "json": false,
+    "path": "tmp/mini_nginx_static_only_access.log",
+    "format": "$remote_addr - \"$request\" $status $body_bytes_sent $request_time"
   },
   "static": [
     {
@@ -746,7 +861,14 @@ int main()
       "gzip_static": true,
       "sendfile": true,
       "gzip_min_length": "1k",
+      "gzip_comp_level": 6,
+      "brotli_comp_level": 4,
+      "gzip_vary": true,
+      "gzip_http_version": "1.1",
+      "gzip_disable": ["BadBot"],
+      "gzip_proxied": ["auth", "no-cache"],
       "gzip_types": ["text/*", "application/json", "application/x-test"],
+      "allow": ["127.0.0.1/32"],
       "default_type": "application/octet-stream",
       "types": {
         "application/x-test": ["foo"]
@@ -761,6 +883,32 @@ int main()
       }
     },
     {
+      "location": "/noauto",
+      "root": "release/mini_nginx/www",
+      "autoindex": false,
+      "error_page": {
+        "403": "=200 /index.html"
+      }
+    },
+    {
+      "location": "/protected",
+      "root": "release/mini_nginx/www",
+      "auth_basic": {
+        "realm": "Protected",
+        "users": {
+          "test": "secret"
+        }
+      }
+    },
+    {
+      "location": "/file-protected",
+      "root": "release/mini_nginx/www",
+      "auth_basic": {
+        "realm": "FileProtected",
+        "auth_basic_user_file": ")" << basic_auth_file.string() << R"("
+      }
+    },
+    {
       "location": "/nogzip",
       "root": "release/mini_nginx/www",
       "autoindex": false,
@@ -772,6 +920,11 @@ int main()
     {
       "location": "/direct/",
       "proxy_pass": "http://127.0.0.1:1/backend",
+      "match": "prefix",
+      "access": [
+        { "allow": "127.0.0.1" },
+        { "deny": "all" }
+      ],
       "proxy_connect_timeout": "250ms",
       "proxy_read_timeout": "1s",
       "proxy_send_timeout": "1s"
@@ -793,6 +946,18 @@ int main()
     check(bad_port_result.exit_code != 0, "bad-port config should return non-zero");
     check(bad_port_result.output.find("port must be in range [1, 65535]") != std::string::npos,
           "bad-port config should report port range error");
+
+    const auto dry_run_result = run_and_capture_args(bin, { "-t", "-c", cfg_new.string() }, std::chrono::milliseconds(1000));
+    check(!dry_run_result.timed_out, "config test mode should exit quickly");
+    check(dry_run_result.exit_code == 0, "config test mode should return zero for valid config");
+    check(dry_run_result.output.find("test is successful") != std::string::npos,
+          "config test mode should report success");
+
+    const auto dry_run_bad_result = run_and_capture_args(bin, { "--test", "--config", cfg_bad_port.string() }, std::chrono::milliseconds(1000));
+    check(!dry_run_bad_result.timed_out, "bad config test mode should exit quickly");
+    check(dry_run_bad_result.exit_code != 0, "bad config test mode should return non-zero");
+    check(dry_run_bad_result.output.find("port must be in range [1, 65535]") != std::string::npos,
+          "bad config test mode should report validation error");
 
     const auto new_result = run_and_capture(bin, cfg_new.string(), std::chrono::milliseconds(1500));
     check(new_result.timed_out, "new-format config should start and keep running");
@@ -823,6 +988,7 @@ int main()
     std::filesystem::remove(cfg_inflight, ec);
     std::filesystem::remove(cfg_reload_limits, ec);
     std::filesystem::remove(cfg_static_only, ec);
+    std::filesystem::remove(basic_auth_file, ec);
     std::filesystem::remove(work_dir / "mini_nginx_access_test.log", ec);
     std::filesystem::remove(work_dir / "tmp" / "mini_nginx_static_only_access.log", ec);
     std::filesystem::remove(work_dir / "tmp", ec);

@@ -3,7 +3,14 @@ project(release_mini_nginx)
 
 set(RELEASE_MINI_NGINX_OUTPUT_DIR "${CMAKE_BINARY_DIR}/release/mini_nginx")
 
-add_executable(mini_nginx main.cpp)
+add_executable(mini_nginx
+    main.cpp
+    mini_nginx_app.cpp
+    mini_nginx_cli.cpp
+    mini_nginx_common.cpp
+    mini_nginx_config.cpp
+    mini_nginx_runtime.cpp
+)
 target_compile_features(mini_nginx PUBLIC cxx_std_20)
 target_link_libraries(mini_nginx PUBLIC App ServerServiceHttp)
 set_target_properties(mini_nginx PROPERTIES

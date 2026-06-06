@@ -133,9 +133,9 @@ namespace yuan::net
             return;
         }
 
-        loop_->on_new_connection(conn);
         conn->set_connection_handler(std::move(handler));
         conn->set_event_handler(loop_);
+        loop_->on_new_connection(conn);
     }
 
     void NetworkRuntime::register_connection(Connection * conn, std::shared_ptr<ConnectionHandler> handler)

@@ -3,6 +3,8 @@
 
 #include "buffer/byte_buffer.h"
 #include "buffer/buffer_chain.h"
+#include "net/handler/connection_handler.h"
+#include "net/handler/event_handler.h"
 #include "net/handler/select_handler.h"
 #include "net/security/ssl_handler.h"
 
@@ -36,7 +38,6 @@ namespace yuan::net
 {
     class InetAddress;
     class Channel;
-    class ConnectionHandler;
     class Socket;
 
     enum class ConnectionState {
@@ -66,10 +67,12 @@ namespace yuan::net
     public:
         using EventWaiter = std::function<void(Connection &)>;
         using PendingReadResumer = std::function<void(std::coroutine_handle<>)>;
+        using PendingReadEventResumer = std::function<void(ConnectionEvent)>;
         struct PendingRead
         {
             std::coroutine_handle<> handle{};
             PendingReadResumer resumer{};
+            PendingReadEventResumer event_resumer{};
         };
 
         struct EventWaiterRegistration
@@ -135,6 +138,11 @@ namespace yuan::net
         {
             return nullptr;
         }
+
+        virtual bool has_connection_handler() const
+        {
+            return static_cast<bool>(get_connection_handler_owner());
+        }
         virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler) = 0;
 
         virtual std::shared_ptr<SSLHandler> get_ssl_handler() const
@@ -179,6 +187,36 @@ namespace yuan::net
             return std::any_of(waiters_.begin(), waiters_.end(), [event](const auto &entry) {
                 return entry.event == event;
             });
+        }
+
+        bool has_event_observer(ConnectionEvent event, bool external_callback = false) const
+        {
+            return external_callback || has_connection_handler() || has_event_waiter(event);
+        }
+
+        EventHandler *owner_event_handler() const noexcept
+        {
+            return owner_event_handler_.load(std::memory_order_acquire);
+        }
+
+        bool is_in_owner_loop() const noexcept
+        {
+            auto *handler = owner_event_handler();
+            return !handler || handler->is_in_loop_thread();
+        }
+
+        void dispatch_in_owner_loop(std::function<void()> fn)
+        {
+            if (!fn) {
+                return;
+            }
+
+            auto *handler = owner_event_handler();
+            if (handler && !handler->is_in_loop_thread()) {
+                handler->queue_in_loop(std::move(fn));
+                return;
+            }
+            fn();
         }
 
         void remove_event_waiter(uint64_t id)
@@ -404,6 +442,120 @@ namespace yuan::net
         }
 
     protected:
+        void set_owner_event_handler(EventHandler *handler) noexcept
+        {
+            owner_event_handler_.store(handler, std::memory_order_release);
+        }
+
+        void notify_connected_event()
+        {
+            auto handler = has_connection_handler()
+                ? get_connection_handler_owner()
+                : std::shared_ptr<ConnectionHandler>{};
+            if (!handler && !has_event_waiter(ConnectionEvent::connected)) {
+                return;
+            }
+            notify_event_waiters(ConnectionEvent::connected);
+            if (handler) {
+                handler->on_connected(*this);
+            }
+        }
+
+        void notify_readable_event()
+        {
+            auto handler = has_connection_handler()
+                ? get_connection_handler_owner()
+                : std::shared_ptr<ConnectionHandler>{};
+            auto pending = take_pending_read();
+            if (pending.handle) {
+                if (pending.resumer) {
+                    pending.resumer(pending.handle);
+                } else if (auto *event_handler = owner_event_handler()) {
+                    event_handler->post_coroutine(pending.handle);
+                }
+            } else {
+                notify_event_waiters(ConnectionEvent::readable);
+            }
+            if (handler) {
+                handler->on_read(*this);
+            }
+        }
+
+        void notify_writable_event()
+        {
+            auto handler = has_connection_handler()
+                ? get_connection_handler_owner()
+                : std::shared_ptr<ConnectionHandler>{};
+            if (!handler && !has_event_waiter(ConnectionEvent::writable)) {
+                return;
+            }
+            notify_event_waiters(ConnectionEvent::writable);
+            if (handler) {
+                handler->on_write(*this);
+            }
+        }
+
+        void notify_error_event()
+        {
+            auto handler = has_connection_handler()
+                ? get_connection_handler_owner()
+                : std::shared_ptr<ConnectionHandler>{};
+            complete_pending_read_event(ConnectionEvent::error);
+            if (!handler && !has_event_waiter(ConnectionEvent::error)) {
+                return;
+            }
+            notify_event_waiters(ConnectionEvent::error);
+            if (handler) {
+                handler->on_error(*this);
+            }
+        }
+
+        void notify_input_shutdown_event()
+        {
+            auto handler = has_connection_handler()
+                ? get_connection_handler_owner()
+                : std::shared_ptr<ConnectionHandler>{};
+            complete_pending_read_event(ConnectionEvent::input_shutdown);
+            if (!handler && !has_event_waiter(ConnectionEvent::input_shutdown)) {
+                return;
+            }
+            notify_event_waiters(ConnectionEvent::input_shutdown);
+            if (handler) {
+                handler->on_input_shutdown(*this);
+            }
+        }
+
+        void notify_closed_event()
+        {
+            auto handler = has_connection_handler()
+                ? get_connection_handler_owner()
+                : std::shared_ptr<ConnectionHandler>{};
+            complete_pending_read_event(ConnectionEvent::closed);
+            if (!handler && !has_event_waiter(ConnectionEvent::closed)) {
+                clear_event_waiters();
+                return;
+            }
+            notify_event_waiters(ConnectionEvent::closed);
+            if (handler) {
+                handler->on_close(*this);
+            }
+            clear_event_waiters();
+        }
+
+        bool complete_pending_read_event(ConnectionEvent event)
+        {
+            auto pending = take_pending_read();
+            if (!pending.handle) {
+                return false;
+            }
+            if (pending.event_resumer) {
+                pending.event_resumer(event);
+            } else if (auto *event_handler = owner_event_handler()) {
+                event_handler->post_coroutine(pending.handle);
+            }
+            return true;
+        }
+
         size_t preferred_input_buffer_capacity() const noexcept
         {
             return std::min<size_t>(DEFAULT_INPUT_BUFFER_SIZE, max_packet_size_);
@@ -539,11 +691,14 @@ namespace yuan::net
             return pending_read_coroutine_;
         }
 
-        void set_pending_read_coroutine(std::coroutine_handle<> handle, PendingReadResumer resumer = {}) noexcept
+        void set_pending_read_coroutine(std::coroutine_handle<> handle,
+                                        PendingReadResumer resumer = {},
+                                        PendingReadEventResumer event_resumer = {}) noexcept
         {
             std::lock_guard<yuan::base::Spinlock> lock(pending_read_mutex_);
             pending_read_coroutine_ = handle;
             pending_read_resumer_ = std::move(resumer);
+            pending_read_event_resumer_ = std::move(event_resumer);
         }
 
         void clear_pending_read_coroutine() noexcept
@@ -551,6 +706,7 @@ namespace yuan::net
             std::lock_guard<yuan::base::Spinlock> lock(pending_read_mutex_);
             pending_read_coroutine_ = nullptr;
             pending_read_resumer_ = {};
+            pending_read_event_resumer_ = {};
         }
 
         std::coroutine_handle<> take_pending_read_coroutine() noexcept
@@ -559,6 +715,7 @@ namespace yuan::net
             auto h = pending_read_coroutine_;
             pending_read_coroutine_ = nullptr;
             pending_read_resumer_ = {};
+            pending_read_event_resumer_ = {};
             return h;
         }
 
@@ -567,9 +724,11 @@ namespace yuan::net
             std::lock_guard<yuan::base::Spinlock> lock(pending_read_mutex_);
             auto h = pending_read_coroutine_;
             auto resumer = std::move(pending_read_resumer_);
+            auto event_resumer = std::move(pending_read_event_resumer_);
             pending_read_coroutine_ = nullptr;
             pending_read_resumer_ = {};
-            return PendingRead{ h, std::move(resumer) };
+            pending_read_event_resumer_ = {};
+            return PendingRead{ h, std::move(resumer), std::move(event_resumer) };
         }
 
     protected:
@@ -597,6 +756,8 @@ namespace yuan::net
         mutable yuan::base::Spinlock pending_read_mutex_;
         std::coroutine_handle<> pending_read_coroutine_;
         PendingReadResumer pending_read_resumer_;
+        PendingReadEventResumer pending_read_event_resumer_;
+        std::atomic<EventHandler *> owner_event_handler_{nullptr};
     };
 
     using ConnectionPtr = std::shared_ptr<Connection>;

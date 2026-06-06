@@ -74,6 +74,10 @@ namespace yuan::net::websocket
             }
         }
 
+        if (!chunk->is_completed()) {
+            return 1;
+        }
+
         return 0;
     }
 
@@ -97,15 +101,8 @@ namespace yuan::net::websocket
 
     bool WebSocketPacketParser::unpack_loop(WebSocketConnection * conn)
     {
-        auto chunks = conn->get_input_chunks();
-        if (chunks->empty() || chunks->back().head_.is_fin()) {
-            chunks->push_back(ProtoChunk());
-        }
-
-        auto *pc = &chunks->back();
         while (true) {
-            ProtoChunk chunk;
-            const int unpackRes = read_chunk(&chunk, frame_buffer_);
+            const int unpackRes = read_chunk(&pending_frame_, frame_buffer_);
             if (unpackRes < 0) {
                 return false;
             }
@@ -115,46 +112,11 @@ namespace yuan::net::websocket
                 return true;
             }
 
-            bool merge = false;
-            if (pc->has_set_head_) {
-                if (!pc->head_.is_fin()) {
-                    if (!chunk.head_.is_fin() && (!chunk.head_.is_continue_frame() || chunk.body_.empty())) {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-                merge = true;
-            } else {
-                *pc = std::move(chunk);
-                if (!pc->head_.is_fin()) {
-                    if (!pc->head_.is_continue_frame() && !pc->head_.is_text_frame() && !pc->head_.is_binary_frame()) {
-                        return false;
-                    }
-                }
-            }
-
-            if (!merge && !pc->body_.empty() && pc->head_.need_mask()) {
-                apply_mask(pc->body_, static_cast<uint32_t>(pc->body_.readable_bytes()), pc->head_.masking_key_, 4);
-            }
-
-            if (merge) {
-                if (!chunk.body_.empty() && chunk.head_.need_mask()) {
-                    apply_mask(chunk.body_, static_cast<uint32_t>(chunk.body_.readable_bytes()), chunk.head_.masking_key_, 4);
-                }
-                pc->head_.ctrl_code_.fin_ = chunk.head_.ctrl_code_.fin_;
-                pc->head_.extend_pay_load_len_ += chunk.head_.extend_pay_load_len_;
-                pc->body_.append(chunk.body_);
-            }
-
-            if (pc->head_.extend_pay_load_len_ > PACKET_MAX_BYTE) {
+            if (!append_completed_frame(conn, std::move(pending_frame_))) {
+                pending_frame_ = ProtoChunk();
                 return false;
             }
-
-            if (pc->head_.is_fin() && pc->is_completed()) {
-                chunks->push_back(ProtoChunk());
-                pc = &chunks->back();
-            }
+            pending_frame_ = ProtoChunk();
 
             frame_buffer_.compact();
             if (frame_buffer_.empty()) {
@@ -162,11 +124,107 @@ namespace yuan::net::websocket
             }
         }
 
-        if (!chunks->empty() && !chunks->back().has_set_head_ && chunks->back().body_.empty()) {
-            chunks->pop_back();
+        frame_buffer_.compact();
+        return true;
+    }
+
+    bool WebSocketPacketParser::is_data_frame(const ProtoHead &head)
+    {
+        const auto opcode = head.opcode();
+        return opcode == static_cast<uint8_t>(OpCodeType::type_continue_frame) ||
+               opcode == static_cast<uint8_t>(OpCodeType::type_text_frame) ||
+               opcode == static_cast<uint8_t>(OpCodeType::type_binary_frame);
+    }
+
+    bool WebSocketPacketParser::is_control_frame(const ProtoHead &head)
+    {
+        const auto opcode = head.opcode();
+        return opcode == static_cast<uint8_t>(OpCodeType::type_close_frame) ||
+               opcode == static_cast<uint8_t>(OpCodeType::type_ping_frame) ||
+               opcode == static_cast<uint8_t>(OpCodeType::type_pong_frame);
+    }
+
+    bool WebSocketPacketParser::validate_frame(WebSocketConnection *conn, const ProtoChunk &chunk) const
+    {
+        if (!conn || !chunk.has_set_head_ || !chunk.is_completed()) {
+            return false;
         }
 
-        frame_buffer_.compact();
+        const auto &head = chunk.head_;
+        if (head.has_rsv()) {
+            return false;
+        }
+
+        if (!is_data_frame(head) && !is_control_frame(head)) {
+            return false;
+        }
+
+        const bool expects_mask = conn->mode_ == WorkMode::server_;
+        if (head.need_mask() != expects_mask) {
+            return false;
+        }
+
+        if (is_control_frame(head)) {
+            if (!head.is_fin() || head.extend_pay_load_len_ > 125) {
+                return false;
+            }
+            if (head.is_close_frame() && head.extend_pay_load_len_ == 1) {
+                return false;
+            }
+        }
+
+        if (!has_fragmented_message_ && head.is_continue_frame()) {
+            return false;
+        }
+
+        if (has_fragmented_message_ &&
+            (head.is_text_frame() || head.is_binary_frame())) {
+            return false;
+        }
+
+        return true;
+    }
+
+    bool WebSocketPacketParser::append_completed_frame(WebSocketConnection *conn, ProtoChunk &&chunk)
+    {
+        if (!validate_frame(conn, chunk)) {
+            return false;
+        }
+
+        if (!chunk.body_.empty() && chunk.head_.need_mask()) {
+            apply_mask(chunk.body_, static_cast<uint32_t>(chunk.body_.readable_bytes()), chunk.head_.masking_key_, 4);
+        }
+
+        if (is_control_frame(chunk.head_)) {
+            conn->get_input_chunks()->push_back(std::move(chunk));
+            return true;
+        }
+
+        if (chunk.head_.is_continue_frame()) {
+            fragmented_message_.body_.append(chunk.body_);
+            fragmented_message_.head_.extend_pay_load_len_ += chunk.head_.extend_pay_load_len_;
+            fragmented_message_.head_.ctrl_code_.fin_ = chunk.head_.ctrl_code_.fin_;
+            if (fragmented_message_.head_.extend_pay_load_len_ > PACKET_MAX_BYTE) {
+                has_fragmented_message_ = false;
+                fragmented_message_ = ProtoChunk();
+                return false;
+            }
+
+            if (fragmented_message_.head_.is_fin()) {
+                conn->get_input_chunks()->push_back(std::move(fragmented_message_));
+                fragmented_message_ = ProtoChunk();
+                has_fragmented_message_ = false;
+            }
+            return true;
+        }
+
+        if (chunk.head_.is_fin()) {
+            conn->get_input_chunks()->push_back(std::move(chunk));
+            return true;
+        }
+
+        fragmented_message_ = std::move(chunk);
+        has_fragmented_message_ = true;
         return true;
     }
 
@@ -211,6 +269,7 @@ namespace yuan::net::websocket
 
         uint8_t head2 = 0;
         if (use_mask_) {
+            update_mask();
             head2 = 0b10000000;
         }
 

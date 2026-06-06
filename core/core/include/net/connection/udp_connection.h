@@ -65,6 +65,11 @@ namespace yuan::net
             return connectionHandlerOwner_;
         }
 
+        bool has_connection_handler() const override
+        {
+            return static_cast<bool>(connectionHandlerOwner_);
+        }
+
         virtual void set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler);
 
     public: // select handler

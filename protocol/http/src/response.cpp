@@ -2,9 +2,9 @@
 
 #include "context.h"
 #include "cookie.h"
-#include "net/connection/connection.h"
 #include "header_key.h"
 #include "http_headers.h"
+#include "net/connection/connection.h"
 #include "response_code_desc.h"
 #include "response_parser.h"
 #include "sse.h"
@@ -39,8 +39,7 @@ namespace yuan::net::http
                                                        std::string_view content_type,
                                                        std::size_t body_size)
         {
-            struct Cache
-            {
+            struct Cache {
                 ResponseCode code = ResponseCode::invalid;
                 std::string content_type;
                 std::size_t body_size = static_cast<std::size_t>(-1);
@@ -100,8 +99,7 @@ namespace yuan::net::http
                 return {};
             }
 
-            struct Cache
-            {
+            struct Cache {
                 ResponseCode code = ResponseCode::invalid;
                 std::string content_type;
                 std::string body;
@@ -210,8 +208,8 @@ namespace yuan::net::http
 
         std::size_t payload_size = 2 + body.size();
         payload_size += !fast_line.empty()
-            ? fast_line.size()
-            : std::string_view("HTTP/1.1 ").size() + descIt->second.size() + 2;
+                            ? fast_line.size()
+                            : std::string_view("HTTP/1.1 ").size() + descIt->second.size() + 2;
         if (!content_type.empty()) {
             payload_size += std::string_view("Content-Type: ").size() + content_type.size() + 2;
         }
@@ -268,6 +266,20 @@ namespace yuan::net::http
         is_sse_ = false;
         headers_sent_ = false;
         sse_event_count_ = 0;
+    }
+
+    void HttpResponse::finish()
+    {
+        if (headers_sent_) {
+            return;
+        }
+
+        auto *conn = context_ ? context_->get_connection() : nullptr;
+        if (!conn) {
+            return;
+        }
+
+        pack_and_send(conn);
     }
 
     bool HttpResponse::pack_header(Connection *conn)
@@ -347,6 +359,7 @@ namespace yuan::net::http
         conn->append_output("\r\n\r\n");
         conn->append_output(msg);
         conn->flush();
+        headers_sent_ = true;
         conn->close();
     }
 

@@ -134,7 +134,7 @@ namespace yuan::net::websocket
 
     bool WebSocketConfigManager::is_client_use_mask()
     {
-        return data_->config_json_.value(client_use_mask_key, 0);
+        return data_->config_json_.value(client_use_mask_key, 1);
     }
 
     uint32_t WebSocketConfigManager::get_heat_beat_timeout()

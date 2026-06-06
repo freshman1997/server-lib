@@ -3,7 +3,6 @@
 #include <coroutine>
 #include <functional>
 #include <memory>
-#include <unordered_map>
 
 #include "net/handler/event_handler.h"
 #include "net/handler/connection_handler.h"
@@ -48,9 +47,9 @@ namespace yuan::net
 
         void queue_in_loop(std::function<void()> cb) override;
 
-        void post_coroutine(std::coroutine_handle<> handle) noexcept;
+        void post_coroutine(std::coroutine_handle<> handle) noexcept override;
 
-        bool is_in_loop_thread() const noexcept;
+        bool is_in_loop_thread() const noexcept override;
 
         bool accepts_poll_event_for_test(const PollEvent &event) const;
 
