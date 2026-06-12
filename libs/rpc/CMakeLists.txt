@@ -7,7 +7,6 @@ target_compile_features(YuanRpc PUBLIC cxx_std_20)
 target_include_directories(YuanRpc PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
     "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
-target_link_libraries(YuanRpc PUBLIC Core)
 
 add_library(yuan_rpc ALIAS YuanRpc)
 

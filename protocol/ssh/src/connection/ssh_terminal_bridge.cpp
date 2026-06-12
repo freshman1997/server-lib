@@ -6,7 +6,11 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 #include <array>
@@ -17,8 +21,250 @@
 
 namespace yuan::net::ssh
 {
+    class SshNonPtyShellProcess
+    {
+    public:
+        ~SshNonPtyShellProcess()
+        {
+            shutdown();
+        }
+
+        bool launch()
+        {
+#ifdef _WIN32
+            return false;
+#else
+            int stdin_pipe[2] = {-1, -1};
+            int stdout_pipe[2] = {-1, -1};
+            int stderr_pipe[2] = {-1, -1};
+            if (pipe(stdin_pipe) != 0 || pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0) {
+                close_pair(stdin_pipe);
+                close_pair(stdout_pipe);
+                close_pair(stderr_pipe);
+                return false;
+            }
+
+            const pid_t pid = fork();
+            if (pid < 0) {
+                close_pair(stdin_pipe);
+                close_pair(stdout_pipe);
+                close_pair(stderr_pipe);
+                return false;
+            }
+            if (pid == 0) {
+                (void)dup2(stdin_pipe[0], STDIN_FILENO);
+                (void)dup2(stdout_pipe[1], STDOUT_FILENO);
+                (void)dup2(stderr_pipe[1], STDERR_FILENO);
+                close_pair(stdin_pipe);
+                close_pair(stdout_pipe);
+                close_pair(stderr_pipe);
+                const char *shell = std::getenv("SHELL");
+                if (!shell || !*shell) {
+                    shell = "/bin/sh";
+                }
+                execl(shell, shell, nullptr);
+                execl("/bin/sh", "sh", nullptr);
+                _exit(127);
+            }
+
+            child_pid_ = pid;
+            stdin_fd_ = stdin_pipe[1];
+            stdout_fd_ = stdout_pipe[0];
+            stderr_fd_ = stderr_pipe[0];
+            close_fd(stdin_pipe[0]);
+            close_fd(stdout_pipe[1]);
+            close_fd(stderr_pipe[1]);
+            set_nonblocking(stdin_fd_);
+            set_nonblocking(stdout_fd_);
+            set_nonblocking(stderr_fd_);
+            return true;
+#endif
+        }
+
+        bool write_input(const std::vector<uint8_t> &data)
+        {
+#ifdef _WIN32
+            (void)data;
+            return false;
+#else
+            if (stdin_fd_ < 0 || data.empty()) {
+                return false;
+            }
+            size_t offset = 0;
+            while (offset < data.size()) {
+                const ssize_t n = write(stdin_fd_, data.data() + offset, data.size() - offset);
+                if (n > 0) {
+                    offset += static_cast<size_t>(n);
+                    continue;
+                }
+                if (n < 0 && (errno == EINTR)) {
+                    continue;
+                }
+                if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                    pollfd pfd{};
+                    pfd.fd = stdin_fd_;
+                    pfd.events = POLLOUT;
+                    if (poll(&pfd, 1, 50) <= 0) {
+                        return offset > 0;
+                    }
+                    continue;
+                }
+                return offset > 0;
+            }
+            return true;
+#endif
+        }
+
+        void close_input()
+        {
+#ifndef _WIN32
+            close_fd(stdin_fd_);
+#endif
+        }
+
+        bool read_stdout(std::vector<uint8_t> &out)
+        {
+            return read_available(stdout_fd_, out);
+        }
+
+        bool read_stderr(std::vector<uint8_t> &out)
+        {
+            return read_available(stderr_fd_, out);
+        }
+
+        int stdout_fd() const noexcept
+        {
+            return stdout_fd_;
+        }
+
+        int stderr_fd() const noexcept
+        {
+            return stderr_fd_;
+        }
+
+        bool poll_exit(int &exit_code)
+        {
+#ifdef _WIN32
+            (void)exit_code;
+            return false;
+#else
+            if (child_pid_ <= 0) {
+                return false;
+            }
+            int status = 0;
+            const pid_t rc = waitpid(child_pid_, &status, WNOHANG);
+            if (rc == 0) {
+                return false;
+            }
+            if (rc < 0) {
+                return false;
+            }
+            child_pid_ = -1;
+            if (WIFEXITED(status)) {
+                exit_code = WEXITSTATUS(status);
+            } else if (WIFSIGNALED(status)) {
+                exit_code = 128 + WTERMSIG(status);
+            } else {
+                exit_code = 1;
+            }
+            return true;
+#endif
+        }
+
+        void shutdown()
+        {
+#ifndef _WIN32
+            close_fd(stdin_fd_);
+            close_fd(stdout_fd_);
+            close_fd(stderr_fd_);
+            if (child_pid_ > 0) {
+                kill(child_pid_, SIGTERM);
+                int status = 0;
+                (void)waitpid(child_pid_, &status, 0);
+                child_pid_ = -1;
+            }
+#endif
+        }
+
+    private:
+#ifndef _WIN32
+        static void close_fd(int &fd)
+        {
+            if (fd >= 0) {
+                close(fd);
+                fd = -1;
+            }
+        }
+
+        static void close_pair(int fds[2])
+        {
+            close_fd(fds[0]);
+            close_fd(fds[1]);
+        }
+
+        static void set_nonblocking(int fd)
+        {
+            if (fd < 0) {
+                return;
+            }
+            const int flags = fcntl(fd, F_GETFL, 0);
+            if (flags >= 0) {
+                (void)fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+            }
+        }
+
+        static bool read_available(int fd, std::vector<uint8_t> &out)
+        {
+            out.clear();
+            if (fd < 0) {
+                return false;
+            }
+            std::array<uint8_t, 4096> buffer{};
+            while (true) {
+                const ssize_t n = read(fd, buffer.data(), buffer.size());
+                if (n > 0) {
+                    out.insert(out.end(), buffer.begin(), buffer.begin() + n);
+                    if (n < static_cast<ssize_t>(buffer.size())) {
+                        return true;
+                    }
+                    continue;
+                }
+                if (n == 0) {
+                    return !out.empty();
+                }
+                if (errno == EINTR) {
+                    continue;
+                }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    return !out.empty();
+                }
+                return !out.empty();
+            }
+        }
+
+        pid_t child_pid_ = -1;
+        int stdin_fd_ = -1;
+        int stdout_fd_ = -1;
+        int stderr_fd_ = -1;
+#else
+        int child_pid_ = -1;
+        int stdin_fd_ = -1;
+        int stdout_fd_ = -1;
+        int stderr_fd_ = -1;
+#endif
+    };
+
     namespace
     {
+        SshChannel *resolve_recipient_channel(SshConnectionManager *conn_mgr, uint32_t recipient_channel)
+        {
+            if (!conn_mgr) {
+                return nullptr;
+            }
+            auto *channel = conn_mgr->find_channel(recipient_channel);
+            return channel ? channel : conn_mgr->find_channel_by_remote(recipient_channel);
+        }
+
 #ifdef _WIN32
         bool drain_pipe_available(HANDLE pipe_handle, std::vector<uint8_t> & out, bool force_drain)
         {
@@ -154,7 +400,7 @@ namespace yuan::net::ssh
     }
 
     SshTerminalBridge::SshTerminalBridge(SshSession * session,
-                                         SshConnectionManager * conn_mgr)
+                                          SshConnectionManager * conn_mgr)
         : session_(session), conn_mgr_(conn_mgr)
     {
     }
@@ -184,7 +430,29 @@ namespace yuan::net::ssh
     bool SshTerminalBridge::has_any_pty_processes() const
     {
         std::lock_guard<std::mutex> lock(pty_mutex_);
-        return !pty_processes_.empty();
+        return !pty_processes_.empty() || !shell_processes_.empty();
+    }
+
+    bool SshTerminalBridge::has_any_client_pty_processes() const
+    {
+        std::vector<uint32_t> channel_ids;
+        {
+            std::lock_guard<std::mutex> lock(pty_mutex_);
+            channel_ids.reserve(pty_processes_.size());
+            for (const auto &entry : pty_processes_) {
+                if (entry.second && entry.second->ready()) {
+                    channel_ids.push_back(entry.first);
+                }
+            }
+        }
+
+        for (uint32_t channel_id : channel_ids) {
+            auto *channel = conn_mgr_ ? conn_mgr_->find_channel_by_remote(channel_id) : nullptr;
+            if (channel && channel->terminal_session_state().has_pty_request) {
+                return true;
+            }
+        }
+        return false;
     }
 
     int SshTerminalBridge::first_pty_master_fd() const
@@ -196,6 +464,35 @@ namespace yuan::net::ssh
             }
         }
         return -1;
+    }
+
+    std::vector<int> SshTerminalBridge::terminal_output_fds() const
+    {
+        std::vector<int> fds;
+        std::lock_guard<std::mutex> lock(pty_mutex_);
+        fds.reserve(pty_processes_.size() + shell_processes_.size() * 2);
+        for (const auto &entry : pty_processes_) {
+            if (entry.second && entry.second->ready()) {
+                const int fd = entry.second->backend().master_fd();
+                if (fd >= 0) {
+                    fds.push_back(fd);
+                }
+            }
+        }
+        for (const auto &entry : shell_processes_) {
+            if (!entry.second) {
+                continue;
+            }
+            const int stdout_fd = entry.second->stdout_fd();
+            const int stderr_fd = entry.second->stderr_fd();
+            if (stdout_fd >= 0) {
+                fds.push_back(stdout_fd);
+            }
+            if (stderr_fd >= 0 && stderr_fd != stdout_fd) {
+                fds.push_back(stderr_fd);
+            }
+        }
+        return fds;
     }
 
     bool SshTerminalBridge::pump_pty_once(uint32_t channel_remote_id, SshHandler * handler)
@@ -235,6 +532,11 @@ namespace yuan::net::ssh
 
         SshPtyExitState exit_state;
         if (process->poll_exit(&exit_state) && channel->mark_termination_notified()) {
+            output.clear();
+            if (process->read_output(&output, 64 * 1024) && !output.empty()) {
+                session_->enqueue_outgoing(conn_mgr_->build_channel_data(channel->remote_id(), output));
+            }
+
             auto *effective_handler = handler ? handler : &SshHandler::default_handler();
             auto exit_info = effective_handler->on_command_exit(session_, channel);
             if (exit_state.signaled) {
@@ -276,6 +578,64 @@ namespace yuan::net::ssh
         for (uint32_t channel_id : channel_ids) {
             pumped = pump_pty_once(channel_id, handler) || pumped;
         }
+
+        std::vector<uint32_t> shell_channel_ids;
+        {
+            std::lock_guard<std::mutex> lock(pty_mutex_);
+            shell_channel_ids.reserve(shell_processes_.size());
+            for (const auto &entry : shell_processes_) {
+                shell_channel_ids.push_back(entry.first);
+            }
+        }
+        for (uint32_t channel_id : shell_channel_ids) {
+            SshNonPtyShellProcess *process = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(pty_mutex_);
+                auto it = shell_processes_.find(channel_id);
+                if (it == shell_processes_.end() || !it->second) {
+                    continue;
+                }
+                process = &*it->second;
+            }
+            auto *channel = conn_mgr_ ? conn_mgr_->find_channel_by_remote(channel_id) : nullptr;
+            if (!channel) {
+                std::lock_guard<std::mutex> lock(pty_mutex_);
+                shell_processes_.erase(channel_id);
+                continue;
+            }
+
+            std::vector<uint8_t> output;
+            if (process->read_stdout(output) && !output.empty()) {
+                session_->enqueue_outgoing(conn_mgr_->build_channel_data(channel->remote_id(), output));
+                pumped = true;
+            }
+            if (process->read_stderr(output) && !output.empty()) {
+                session_->enqueue_outgoing(conn_mgr_->build_channel_extended_data(
+                    channel->remote_id(),
+                    static_cast<uint32_t>(SshChannelExtendedDataType::SSH_EXTENDED_DATA_STDERR),
+                    output));
+                pumped = true;
+            }
+
+            int exit_code = 0;
+            if (process->poll_exit(exit_code) && channel->mark_termination_notified()) {
+                if (process->read_stdout(output) && !output.empty()) {
+                    session_->enqueue_outgoing(conn_mgr_->build_channel_data(channel->remote_id(), output));
+                }
+                if (process->read_stderr(output) && !output.empty()) {
+                    session_->enqueue_outgoing(conn_mgr_->build_channel_extended_data(
+                        channel->remote_id(),
+                        static_cast<uint32_t>(SshChannelExtendedDataType::SSH_EXTENDED_DATA_STDERR),
+                        output));
+                }
+                session_->enqueue_outgoing(conn_mgr_->build_channel_exit_status(channel->remote_id(), static_cast<uint32_t>(exit_code)));
+                session_->enqueue_outgoing(conn_mgr_->build_channel_eof(channel->remote_id()));
+                session_->enqueue_outgoing(conn_mgr_->build_channel_close(channel->remote_id()));
+                std::lock_guard<std::mutex> lock(pty_mutex_);
+                shell_processes_.erase(channel_id);
+                pumped = true;
+            }
+        }
         return pumped;
     }
 
@@ -283,13 +643,20 @@ namespace yuan::net::ssh
     {
         std::lock_guard<std::mutex> lock(pty_mutex_);
         auto it = pty_processes_.find(channel_remote_id);
-        if (it == pty_processes_.end()) {
-            return;
-        }
-        if (it->second) {
+        if (it != pty_processes_.end() && it->second) {
             it->second->shutdown();
         }
-        pty_processes_.erase(it);
+        if (it != pty_processes_.end()) {
+            pty_processes_.erase(it);
+        }
+
+        auto shell_it = shell_processes_.find(channel_remote_id);
+        if (shell_it != shell_processes_.end() && shell_it->second) {
+            shell_it->second->shutdown();
+        }
+        if (shell_it != shell_processes_.end()) {
+            shell_processes_.erase(shell_it);
+        }
     }
 
     void SshTerminalBridge::shutdown_all_pty_processes()
@@ -301,18 +668,44 @@ namespace yuan::net::ssh
             }
         }
         pty_processes_.clear();
+        for (auto &entry : shell_processes_) {
+            if (entry.second) {
+                entry.second->shutdown();
+            }
+        }
+        shell_processes_.clear();
     }
 
     void SshTerminalBridge::handle_channel_data(const SshChannelDataMessage & msg, SshHandler * handler)
     {
-        if (!has_pty_process(msg.recipient_channel)) {
+        auto *channel = conn_mgr_ ? conn_mgr_->find_channel_by_remote(msg.recipient_channel) : nullptr;
+        if (!channel) {
+            channel = resolve_recipient_channel(conn_mgr_, msg.recipient_channel);
+        }
+        if (!channel) {
+            return;
+        }
+
+        const uint32_t pty_channel_id = channel->remote_id();
+        if (!has_pty_process(pty_channel_id)) {
+            SshNonPtyShellProcess *shell = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(pty_mutex_);
+                auto it = shell_processes_.find(pty_channel_id);
+                if (it != shell_processes_.end() && it->second) {
+                    shell = &*it->second;
+                }
+            }
+            if (shell) {
+                (void)shell->write_input(msg.data);
+            }
             return;
         }
         size_t total_written = 0;
         SshPtyProcess *process = nullptr;
         {
             std::lock_guard<std::mutex> lock(pty_mutex_);
-            auto it = pty_processes_.find(msg.recipient_channel);
+            auto it = pty_processes_.find(pty_channel_id);
             if (it != pty_processes_.end() && it->second) {
                 process = &*it->second;
             }
@@ -349,7 +742,7 @@ namespace yuan::net::ssh
 
         (void)total_written;
 #if defined(_WIN32)
-        (void)pump_pty_once(msg.recipient_channel, handler);
+        (void)pump_pty_once(pty_channel_id, handler);
 #else
         pollfd pfd{};
         pfd.fd = process->backend().master_fd();
@@ -361,11 +754,27 @@ namespace yuan::net::ssh
             if (rc <= 0 || (pfd.revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
                 break;
             }
-            if (!pump_pty_once(msg.recipient_channel, handler)) {
+            if (!pump_pty_once(pty_channel_id, handler)) {
                 break;
             }
         }
 #endif
+    }
+
+    void SshTerminalBridge::handle_channel_eof(const SshChannelEofMessage & msg)
+    {
+        auto *channel = conn_mgr_ ? conn_mgr_->find_channel_by_remote(msg.recipient_channel) : nullptr;
+        if (!channel) {
+            channel = resolve_recipient_channel(conn_mgr_, msg.recipient_channel);
+        }
+        if (!channel) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(pty_mutex_);
+        auto it = shell_processes_.find(channel->remote_id());
+        if (it != shell_processes_.end() && it->second) {
+            it->second->close_input();
+        }
     }
 
     void SshTerminalBridge::handle_channel_request(const SshChannelRequestMessage & msg,
@@ -379,16 +788,25 @@ namespace yuan::net::ssh
         } else if (msg.request_type == "exec") {
             maybe_start_exec_pty_bridge(msg, response, handler);
         } else if (msg.request_type == "shell") {
+            maybe_start_shell_pipe_bridge(msg, response);
             maybe_start_shell_pty_bridge(msg, response, handler);
         }
     }
 
     void SshTerminalBridge::on_pty_window_change_request(const SshChannelRequestMessage & msg)
     {
+        auto *channel = conn_mgr_ ? conn_mgr_->find_channel_by_remote(msg.recipient_channel) : nullptr;
+        if (!channel) {
+            channel = resolve_recipient_channel(conn_mgr_, msg.recipient_channel);
+        }
+        if (!channel) {
+            return;
+        }
+
         SshPtyProcess *process = nullptr;
         {
             std::lock_guard<std::mutex> lock(pty_mutex_);
-            auto it = pty_processes_.find(msg.recipient_channel);
+            auto it = pty_processes_.find(channel->remote_id());
             if (it != pty_processes_.end() && it->second) {
                 process = &*it->second;
             }
@@ -412,10 +830,15 @@ namespace yuan::net::ssh
 
     void SshTerminalBridge::on_pty_signal_request(const SshChannelRequestMessage & msg)
     {
+        auto *channel = resolve_recipient_channel(conn_mgr_, msg.recipient_channel);
+        if (!channel) {
+            return;
+        }
+
         SshPtyProcess *process = nullptr;
         {
             std::lock_guard<std::mutex> lock(pty_mutex_);
-            auto it = pty_processes_.find(msg.recipient_channel);
+            auto it = pty_processes_.find(channel->remote_id());
             if (it != pty_processes_.end() && it->second) {
                 process = &*it->second;
             }
@@ -434,6 +857,34 @@ namespace yuan::net::ssh
         process->send_signal(*sig_name, &err);
     }
 
+    void SshTerminalBridge::maybe_start_shell_pipe_bridge(const SshChannelRequestMessage & msg,
+                                                          const yuan::buffer::ByteBuffer & response)
+    {
+        if (response.readable_bytes() == 0) {
+            return;
+        }
+        auto span = response.readable_span();
+        const auto *span_bytes = reinterpret_cast<const uint8_t *>(span.data());
+        const bool success = !span.empty() &&
+                             span_bytes[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS);
+        auto *channel = resolve_recipient_channel(conn_mgr_, msg.recipient_channel);
+        if (!success || !channel) {
+            return;
+        }
+
+        auto &terminal_state = channel->terminal_session_state();
+        if (terminal_state.has_pty_request || has_pty_process(channel->remote_id())) {
+            return;
+        }
+
+        auto shell = std::make_unique<SshNonPtyShellProcess>();
+        if (!shell->launch()) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(pty_mutex_);
+        shell_processes_[channel->remote_id()] = std::move(shell);
+    }
+
     void SshTerminalBridge::maybe_start_shell_pty_bridge(const SshChannelRequestMessage & msg,
                                                           const yuan::buffer::ByteBuffer & response,
                                                           SshHandler * handler)
@@ -445,7 +896,7 @@ namespace yuan::net::ssh
         const auto *span_bytes = reinterpret_cast<const uint8_t *>(span.data());
         const bool success = !span.empty() &&
                              span_bytes[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS);
-        auto *channel = conn_mgr_ ? conn_mgr_->find_channel_by_remote(msg.recipient_channel) : nullptr;
+        auto *channel = resolve_recipient_channel(conn_mgr_, msg.recipient_channel);
         if (!success || !channel) {
             return;
         }
@@ -459,10 +910,18 @@ namespace yuan::net::ssh
         std::string err;
         if (pty->prepare(terminal_state.spec, &err) && pty->launch_shell("", true, &err)) {
             terminal_state.pty_bridge_active = true;
+            const int master_fd = pty->backend().master_fd();
             register_pty_process(channel->remote_id(), std::move(pty));
             for (int i = 0; i < 32; ++i) {
                 if (!pump_pty_once(channel->remote_id(), handler)) {
+#ifndef _WIN32
+                    pollfd pfd{};
+                    pfd.fd = master_fd;
+                    pfd.events = POLLIN;
+                    (void)poll(&pfd, 1, 2);
+#else
                     std::this_thread::sleep_for(std::chrono::milliseconds(2));
+#endif
                     continue;
                 }
             }
@@ -487,7 +946,7 @@ namespace yuan::net::ssh
         const auto *span_bytes = reinterpret_cast<const uint8_t *>(span.data());
         const bool success = !span.empty() &&
                              span_bytes[0] == static_cast<uint8_t>(SshMessageType::SSH_MSG_CHANNEL_SUCCESS);
-        auto *channel = conn_mgr_ ? conn_mgr_->find_channel_by_remote(msg.recipient_channel) : nullptr;
+        auto *channel = resolve_recipient_channel(conn_mgr_, msg.recipient_channel);
         if (!success || !channel) {
             return;
         }

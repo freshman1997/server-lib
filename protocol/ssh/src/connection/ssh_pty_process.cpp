@@ -819,7 +819,7 @@ namespace yuan::net::ssh
             if (yuan::platform::IsNativeRetryableError(yuan::platform::GetLastSystemError())) {
                 break;
             }
-            return false;
+            return !out->empty();
         }
 
         return !out->empty();

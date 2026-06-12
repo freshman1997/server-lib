@@ -1,6 +1,7 @@
 #include "connection/ssh_port_forwarding.h"
 #include "connection/ssh_connection_manager.h"
 #include "connection/ssh_direct_tcpip_handler.h"
+#include "connection/ssh_forwarded_tcpip_handler.h"
 #include "protocol/ssh_message_codec.h"
 #include "ssh_handler.h"
 #include "ssh_session.h"
@@ -94,7 +95,10 @@ namespace yuan::net::ssh
             std::lock_guard<std::mutex> lock(remote_mutex_);
             to_start.reserve(remote_forwards_.size());
             for (auto &item : remote_forwards_) {
-                if (!item.second.acceptor || item.second.accepting) {
+                if (!item.second.acceptor) {
+                    continue;
+                }
+                if (item.second.accepting && !item.second.acceptor->has_pending_connections()) {
                     continue;
                 }
                 item.second.accepting = true;
@@ -115,26 +119,24 @@ namespace yuan::net::ssh
                 continue;
             }
 
-            auto task = [this, key = start.key, acceptor = start.acceptor]() -> coroutine::Task<void> {
-                auto conn = co_await coroutine::async_accept(runtime_, acceptor.get());
-
-                {
-                    std::lock_guard<std::mutex> lock(remote_mutex_);
-                    auto it = remote_forwards_.find(key);
-                    if (it != remote_forwards_.end()) {
-                        it->second.accepting = false;
-                    }
+            auto conn = start.acceptor->dequeue_pending_connection();
+            {
+                std::lock_guard<std::mutex> lock(remote_mutex_);
+                auto it = remote_forwards_.find(start.key);
+                if (it != remote_forwards_.end()) {
+                    it->second.accepting = false;
                 }
-
-                if (!conn) {
-                    co_return;
-                }
-
-                on_remote_forward_accept_ready(key, conn);
-            }();
-            task.resume();
-            task.detach();
+            }
+            if (conn) {
+                on_remote_forward_accept_ready(start.key, conn);
+            }
         }
+    }
+
+    bool SshPortForwarding::has_remote_forwards() const
+    {
+        std::lock_guard<std::mutex> lock(remote_mutex_);
+        return !remote_forwards_.empty();
     }
 
     void SshPortForwarding::on_remote_forward_accept_ready(const std::string & key,
@@ -170,10 +172,7 @@ namespace yuan::net::ssh
             return;
         }
 
-        auto handler = std::make_unique<SshDirectTcpipHandler>(
-            session_,
-            accepted_remote.get_ip(),
-            static_cast<uint16_t>(accepted_remote.get_port()));
+        auto handler = std::make_unique<SshForwardedTcpipHandler>(session_, accepted_conn);
         if (!conn_mgr_->register_forwarded_tcpip_handler(*local_channel_id, std::move(handler))) {
             accepted_conn->close();
             return;

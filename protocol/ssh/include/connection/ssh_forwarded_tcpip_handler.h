@@ -27,12 +27,18 @@ namespace yuan::net::ssh
         void on_window_adjust(SshChannel *channel, uint32_t bytes_to_add) override;
 
     private:
-        coroutine::Task<void> relay_from_accepted(SshChannel *channel);
+        struct SharedState
+        {
+            std::shared_ptr<net::Connection> accepted_conn;
+            std::atomic<bool> closed{ false };
+        };
+
+        static coroutine::Task<void> relay_from_accepted(SshSession *session,
+                                                         uint32_t local_channel_id,
+                                                         std::shared_ptr<SharedState> state);
 
         SshSession *session_;
-        std::shared_ptr<net::Connection> accepted_conn_;
-        std::atomic<bool> relay_active_{ false };
-        std::atomic<bool> closed_{ false };
+        std::shared_ptr<SharedState> state_;
     };
 }
 

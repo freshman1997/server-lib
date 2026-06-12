@@ -81,14 +81,14 @@ namespace
     std::filesystem::path find_release_cli_binary()
     {
         const auto cwd = std::filesystem::current_path();
-        const auto candidate_from_build = cwd / "release" / "ssh" / "release_ssh_cli";
-        if (std::filesystem::exists(candidate_from_build)) {
-            return candidate_from_build;
-        }
-
         const auto candidate_from_repo = cwd / "build" / "release" / "ssh" / "release_ssh_cli";
         if (std::filesystem::exists(candidate_from_repo)) {
             return candidate_from_repo;
+        }
+
+        const auto candidate_from_build = cwd / "release" / "ssh" / "release_ssh_cli";
+        if (std::filesystem::exists(candidate_from_build)) {
+            return candidate_from_build;
         }
 
         return {};

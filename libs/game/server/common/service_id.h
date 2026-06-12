@@ -33,7 +33,9 @@ namespace yuan::game::server
         login = 5,
         match = 6,
         battle = 7,
-        chat = 8
+        chat = 8,
+        world = 9,
+        web = 10
     };
 
     struct GameServiceId
@@ -100,6 +102,10 @@ namespace yuan::game::server
                 return "battle";
             case GameServiceType::chat:
                 return "chat";
+            case GameServiceType::world:
+                return "world";
+            case GameServiceType::web:
+                return "web";
         }
         return "unknown";
     }
@@ -124,6 +130,15 @@ namespace yuan::game::server
         inline constexpr std::string_view zone_echo = "zone.echo";
         inline constexpr std::string_view global_echo = "global.echo";
         inline constexpr std::string_view global_player_lookup = "global.player.lookup";
+        inline constexpr std::string_view gateway_login_options = "gateway.login.options";
+        inline constexpr std::string_view gateway_login = "gateway.login";
+        inline constexpr std::string_view web_bootstrap = "web.bootstrap";
+        inline constexpr std::string_view world_login_options = "world.login.options";
+        inline constexpr std::string_view world_gateway_register = "world.gateway.register";
+        inline constexpr std::string_view world_zone_register = "world.zone.register";
+        inline constexpr std::string_view world_zone_select = "world.zone.select";
+        inline constexpr std::string_view world_player_zone_get = "world.player.zone.get";
+        inline constexpr std::string_view world_player_zone_set = "world.player.zone.set";
         inline constexpr std::string_view zone_player_enter = "zone.player.enter";
         inline constexpr std::string_view zone_player_leave = "zone.player.leave";
     }

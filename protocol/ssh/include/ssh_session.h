@@ -150,11 +150,14 @@ namespace yuan::net::ssh
         std::vector<ByteBuffer> drain_outgoing();
         void flush_channel_pending_data();
         void enqueue_pending_forwarded_tcpip_open(ByteBuffer buf);
+        bool has_pending_forwarded_tcpip_open() const;
         std::vector<ByteBuffer> drain_pending_forwarded_tcpip_open();
         void register_pty_process(uint32_t channel_remote_id, std::unique_ptr<SshPtyProcess> process);
         bool has_pty_process(uint32_t channel_remote_id) const;
         bool has_any_pty_processes() const;
+        bool has_any_client_pty_processes() const;
         int first_pty_master_fd() const;
+        std::vector<int> terminal_output_fds() const;
         bool pump_pty_once(uint32_t channel_remote_id, SshHandler *handler);
         bool pump_all_pty_once(SshHandler *handler);
         void shutdown_pty_for_channel(uint32_t channel_remote_id);
@@ -257,7 +260,7 @@ namespace yuan::net::ssh
         std::mutex outgoing_mutex_;
         std::deque<ByteBuffer> outgoing_;
 
-        std::mutex pending_forwarded_open_mutex_;
+        mutable std::mutex pending_forwarded_open_mutex_;
         std::deque<ByteBuffer> pending_forwarded_opens_;
 
         std::unique_ptr<SshTerminalBridge> terminal_bridge_;

@@ -13,16 +13,51 @@
 #include "transport/ssh_version_exchange.h"
 #include "transport/ssh_packet_codec.h"
 
+#include "event/event_loop.h"
+#include "net/channel/channel.h"
+#include "net/handler/select_handler.h"
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <functional>
 #include <iostream>
+#include <memory>
 #include <string_view>
 
 namespace yuan::net::ssh
 {
     namespace
     {
+        class SshPtyReadinessHandler final : public SelectHandler
+        {
+        public:
+            explicit SshPtyReadinessHandler(std::function<void()> on_read)
+                : on_read_(std::move(on_read))
+            {
+            }
+
+            void on_read_event() override
+            {
+                if (on_read_) {
+                    on_read_();
+                }
+            }
+
+            void on_write_event() override
+            {
+            }
+
+            void set_event_handler(EventHandler *eventHandler) override
+            {
+                event_handler_ = eventHandler;
+            }
+
+        private:
+            std::function<void()> on_read_;
+            EventHandler *event_handler_ = nullptr;
+        };
+
         bool contains_token_ci(const std::string & text, std::string_view token)
         {
             if (token.empty() || text.size() < token.size()) {
@@ -187,7 +222,6 @@ namespace yuan::net::ssh
 
     coroutine::Task<void> SshServer::handle_connection(AsyncConnectionContext ctx)
     {
-        std::cerr << "[ssh] incoming connection, active_sessions=" << session_mgr_.session_count() << '\n';
         auto *effective_handler = handler_ ? handler_ : &SshHandler::default_handler();
         if (!handler_ && config_.enable_builtin_terminal_handler) {
             effective_handler = &builtin_terminal_handler_;
@@ -206,9 +240,6 @@ namespace yuan::net::ssh
             ctx.close();
             co_return;
         }
-        std::cerr << "[ssh] session created id=" << session->session_id()
-                  << " active_sessions=" << session_mgr_.session_count() << '\n';
-
         session->transport() = SshTransport(&algo_registry_, yuan::base::owner_ptr(crypto_), true);
 
         session->set_client_connection(ctx.connection());
@@ -315,20 +346,126 @@ namespace yuan::net::ssh
             co_return;
         };
 
+        auto flush_outgoing_now = [&]()
+        {
+            auto buffers = session->drain_outgoing();
+            for (auto &buf : buffers) {
+                auto packet = session->transport().encode_packet(
+                    reinterpret_cast<const uint8_t *>(buf.read_ptr()), buf.readable_bytes());
+                session->transport().increment_send_seq();
+                ctx.write_and_flush(packet);
+            }
+        };
+
+        std::unique_ptr<EventLoop::ExternalFdRegistration> pty_readiness_registration;
+        int pty_readiness_fd = -1;
+        auto pty_readiness_active = [&]()->bool
+        {
+            return pty_readiness_registration && pty_readiness_registration->active();
+        };
+        std::function<void()> refresh_pty_readiness_registration;
+        refresh_pty_readiness_registration = [&]()
+        {
+            auto *loop = ctx.runtime_view().event_loop();
+            if (!loop) {
+                pty_readiness_registration.reset();
+                pty_readiness_fd = -1;
+                return;
+            }
+
+            if (!session->has_any_client_pty_processes()) {
+                pty_readiness_registration.reset();
+                pty_readiness_fd = -1;
+                return;
+            }
+
+            const int current_fd = session->first_pty_master_fd();
+            if (current_fd < 0) {
+                pty_readiness_registration.reset();
+                pty_readiness_fd = -1;
+                return;
+            }
+            if (pty_readiness_registration && pty_readiness_registration->active() &&
+                pty_readiness_fd == current_fd) {
+                return;
+            }
+
+            pty_readiness_registration.reset();
+            pty_readiness_fd = current_fd;
+            auto *callback_loop = loop;
+            auto readiness_handler = std::make_shared<SshPtyReadinessHandler>([&, session, callback_loop]() {
+                if (session->state() == SshSession::State::disconnected) {
+                    return;
+                }
+                if (session->pump_all_pty_once(effective_handler)) {
+                    flush_outgoing_now();
+                }
+                if (callback_loop) {
+                    callback_loop->queue_in_loop([&]() {
+                        if (!session->has_any_pty_processes()) {
+                            pty_readiness_registration.reset();
+                            pty_readiness_fd = -1;
+                        } else {
+                            refresh_pty_readiness_registration();
+                        }
+                    });
+                }
+            });
+            pty_readiness_registration = loop->register_external_fd(
+                current_fd,
+                std::move(readiness_handler),
+                Channel::READ_EVENT);
+            if (!pty_readiness_registration) {
+                pty_readiness_fd = -1;
+            }
+        };
+
+        auto terminal_readiness_fully_registered = [&]()->bool
+        {
+            if (!session->has_any_client_pty_processes()) {
+                return false;
+            }
+            const auto terminal_fds = session->terminal_output_fds();
+            if (terminal_fds.empty()) {
+                return false;
+            }
+            const int pty_fd = session->first_pty_master_fd();
+            for (int fd : terminal_fds) {
+                if (fd < 0 || fd == pty_fd) {
+                    continue;
+                }
+                return false;
+            }
+            return pty_fd >= 0 && pty_readiness_active();
+        };
+
         auto read_timeout_for_session = [&]()->uint32_t
         {
             uint32_t timeout_ms = config_.idle_timeout_ms;
-            if (session->has_any_pty_processes() && (timeout_ms == 0 || timeout_ms > 2)) {
+            const bool terminal_readiness_ready = terminal_readiness_fully_registered();
+            const bool needs_responsive_pump =
+                (session->has_any_pty_processes() && !terminal_readiness_ready) ||
+                session->connection_manager().channel_count() > 1 ||
+                session->connection_manager().has_remote_forwards() ||
+                session->has_pending_forwarded_tcpip_open();
+            if (needs_responsive_pump && (timeout_ms == 0 || timeout_ms > 2)) {
                 timeout_ms = 2;
             }
             return timeout_ms;
         };
 
-        auto pump_pty_and_flush = [&]()->coroutine::Task<void>
+        auto pump_async_and_flush = [&]()->coroutine::Task<void>
         {
+            session->connection_manager().poll_async_tasks();
+            auto forwarded_opens = session->drain_pending_forwarded_tcpip_open();
+            for (auto &open_packet : forwarded_opens) {
+                co_await send_packet(open_packet);
+            }
+            session->flush_channel_pending_data();
             if (session->pump_all_pty_once(effective_handler)) {
                 co_await flush_outgoing();
             }
+            refresh_pty_readiness_registration();
             co_await flush_outgoing();
         };
 
@@ -338,7 +475,7 @@ namespace yuan::net::ssh
                 if (read_result.status == coroutine::IoStatus::success) {
                     recv_buf.append(read_result.data);
                 } else if (read_result.status == coroutine::IoStatus::timed_out) {
-                    co_await pump_pty_and_flush();
+                    co_await pump_async_and_flush();
                     continue;
                 } else {
                     break;
@@ -364,7 +501,7 @@ namespace yuan::net::ssh
                     if (read_result.status == coroutine::IoStatus::success) {
                         recv_buf.append(read_result.data);
                     } else if (read_result.status == coroutine::IoStatus::timed_out) {
-                        co_await pump_pty_and_flush();
+                        co_await pump_async_and_flush();
                     } else {
                         goto session_end;
                     }
@@ -560,22 +697,24 @@ namespace yuan::net::ssh
                 }
 
                 co_await flush_outgoing();
+                refresh_pty_readiness_registration();
             }
 
             if (session->has_any_pty_processes()) {
                 if (session->pump_all_pty_once(effective_handler)) {
                     co_await flush_outgoing();
                 }
+                refresh_pty_readiness_registration();
             }
         }
 
     session_end:
+        pty_readiness_registration.reset();
+        pty_readiness_fd = -1;
         ctx.close();
         effective_handler->on_session_closed(session);
         session->set_state(SshSession::State::disconnected);
         session_mgr_.remove_session(session->session_id());
-        std::cerr << "[ssh] session removed id=" << session->session_id()
-                  << " active_sessions=" << session_mgr_.session_count() << '\n';
     }
 
     void SshServer::init_default_algorithms()

@@ -219,13 +219,13 @@ namespace
     std::filesystem::path find_release_cli_binary()
     {
         const auto cwd = std::filesystem::current_path();
-        const auto from_build = cwd / "release" / "ssh" / "release_ssh_cli";
-        if (std::filesystem::exists(from_build)) {
-            return from_build;
-        }
         const auto from_repo = cwd / "build" / "release" / "ssh" / "release_ssh_cli";
         if (std::filesystem::exists(from_repo)) {
             return from_repo;
+        }
+        const auto from_build = cwd / "release" / "ssh" / "release_ssh_cli";
+        if (std::filesystem::exists(from_build)) {
+            return from_build;
         }
         return {};
     }

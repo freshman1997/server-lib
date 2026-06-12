@@ -57,6 +57,7 @@ namespace yuan::net::ssh
         }
 
         void poll_remote_forward_accepts();
+        bool has_remote_forwards() const;
         bool attach_remote_forward_listener(const std::string &key,
                                             std::shared_ptr<net::StreamAcceptor> acceptor);
 

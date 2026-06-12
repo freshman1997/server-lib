@@ -1067,6 +1067,11 @@ namespace yuan::net::ssh
         port_forwarding_.poll_remote_forward_accepts();
     }
 
+    bool SshConnectionManager::has_remote_forwards() const
+    {
+        return port_forwarding_.has_remote_forwards();
+    }
+
     ByteBuffer SshConnectionManager::maybe_adjust_window(SshChannel * channel)
     {
         uint32_t current = channel->local_window();

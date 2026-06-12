@@ -66,9 +66,9 @@ namespace yuan::rpc
 
     std::string route_key(const Route &route)
     {
-        if (!route.name.empty()) {
-            return route.name;
+        if (route.service != 0 || route.method != 0) {
+            return std::to_string(route.service) + ":" + std::to_string(route.method);
         }
-        return std::to_string(route.service) + ":" + std::to_string(route.method);
+        return route.name;
     }
 }

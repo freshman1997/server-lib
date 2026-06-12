@@ -2,6 +2,7 @@
 #define YUAN_GAME_SERVER_COMMON_SERVICE_NODE_H
 
 #include "common/service_id.h"
+#include "common/game_rpc_protocol.h"
 #include "game_base/types.h"
 #include "yuan/rpc/rpc.h"
 

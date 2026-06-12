@@ -1,13 +1,11 @@
 #ifndef YUAN_RPC_CLIENT_SESSION_H
 #define YUAN_RPC_CLIENT_SESSION_H
 
-#include "core_connection_transport.h"
 #include "session.h"
 #include "client.h"
 #include "transport.h"
 
 #include <memory>
-#include <optional>
 #include <functional>
 #include <utility>
 
@@ -23,36 +21,12 @@ namespace yuan::rpc
             bind_transport(std::move(transport));
         }
 
-        explicit RpcClientSession(yuan::net::ConnectionContext context)
-        {
-            bind_connection(std::move(context));
-        }
-
         void bind_transport(std::shared_ptr<IFrameTransport> transport)
         {
             transport_ = std::move(transport);
             session_ = std::make_shared<RpcSession>(transport_);
             client_ = std::make_unique<Client>(*session_);
             session_->start();
-        }
-
-        void on_readable(yuan::net::ConnectionContext &context)
-        {
-            if (auto transport = core_transport()) {
-                transport->get().on_readable(context);
-            }
-        }
-
-        void on_closed()
-        {
-            if (auto transport = core_transport()) {
-                transport->get().on_closed();
-            }
-        }
-
-        void bind_connection(yuan::net::ConnectionContext context)
-        {
-            bind_transport(std::make_shared<CoreConnectionTransport>(std::move(context)));
         }
 
         [[nodiscard]] bool ready() const
@@ -103,15 +77,6 @@ namespace yuan::rpc
         }
 
     private:
-        std::optional<std::reference_wrapper<CoreConnectionTransport>> core_transport() const
-        {
-            auto core = std::dynamic_pointer_cast<CoreConnectionTransport>(transport_);
-            if (!core) {
-                return std::nullopt;
-            }
-            return *core;
-        }
-
         std::shared_ptr<IFrameTransport> transport_;
         std::shared_ptr<RpcSession> session_;
         std::unique_ptr<Client> client_;

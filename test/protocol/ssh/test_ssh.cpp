@@ -8,6 +8,7 @@
 #include "net/connection/connection.h"
 #include "net/socket/inet_address.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <chrono>
 #include <cstdlib>
@@ -5079,6 +5080,10 @@ bool test_session_pty_bridge_shell_data_and_exit_sequence()
     TEST_ASSERT(session.has_pty_process(89), "shell with accepted pty should start PTY process bridge");
     TEST_ASSERT(channel->terminal_session_state().pty_bridge_active,
                 "channel terminal state should mark PTY bridge active");
+    auto terminal_fds = session.terminal_output_fds();
+    TEST_ASSERT(!terminal_fds.empty(), "PTY bridge should expose a terminal output fd for event registration");
+    TEST_ASSERT(std::find(terminal_fds.begin(), terminal_fds.end(), session.first_pty_master_fd()) != terminal_fds.end(),
+                "PTY bridge terminal fd list should include the PTY master fd");
 
     const std::string script = "printf bridge-data; exit\n";
     SshChannelDataMessage data_msg;
@@ -5131,6 +5136,211 @@ bool test_session_pty_bridge_shell_data_and_exit_sequence()
     TEST_ASSERT(saw_bridge_output, "PTY bridge should forward shell output as channel-data");
     TEST_ASSERT(saw_exit_status, "PTY bridge should emit exit-status when shell exits");
     TEST_ASSERT(saw_close, "PTY bridge should emit channel-close when shell exits");
+    return true;
+#endif
+}
+
+bool test_session_no_pty_shell_exposes_stdout_stderr_fds()
+{
+#if defined(_WIN32)
+    return true;
+#else
+    class ShellAcceptHandler final : public SshHandler
+    {
+    public:
+        bool on_shell_request(SshSession *session,
+                              SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return true;
+        }
+    };
+
+    SshSession session(2009, nullptr);
+    session.set_state(SshSession::State::active);
+    auto *channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 95, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created for no-PTY shell fd exposure test");
+
+    ShellAcceptHandler handler;
+    SshChannelRequestMessage shell_req;
+    shell_req.recipient_channel = 95;
+    shell_req.request_type = "shell";
+    shell_req.want_reply = true;
+    auto shell_packet = SshMessageCodec::encode_channel_request(shell_req);
+    auto shell_packet_span = shell_packet.readable_span();
+    std::vector<uint8_t> shell_raw(
+        reinterpret_cast<const uint8_t *>(shell_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(shell_packet_span.data()) + shell_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, shell_raw, &handler);
+
+    TEST_ASSERT(session.has_any_pty_processes(), "accepted no-PTY shell should start pipe shell process");
+    auto terminal_fds = session.terminal_output_fds();
+    TEST_ASSERT(terminal_fds.size() >= 2, "no-PTY shell should expose stdout and stderr output fds");
+    TEST_ASSERT(std::all_of(terminal_fds.begin(), terminal_fds.end(), [](int fd) { return fd >= 0; }),
+                "no-PTY shell output fds should be valid");
+    TEST_ASSERT(std::adjacent_find(terminal_fds.begin(), terminal_fds.end()) == terminal_fds.end(),
+                "no-PTY shell output fds should not contain adjacent duplicates");
+
+    session.shutdown_all_pty_processes();
+    TEST_ASSERT(session.terminal_output_fds().empty(), "terminal output fd list should be empty after no-PTY shell shutdown");
+    return true;
+#endif
+}
+
+bool test_session_multiple_no_pty_shells_expose_multiple_terminal_fds()
+{
+#if defined(_WIN32)
+    return true;
+#else
+    class ShellAcceptHandler final : public SshHandler
+    {
+    public:
+        bool on_shell_request(SshSession *session,
+                              SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return true;
+        }
+    };
+
+    SshSession session(2010, nullptr);
+    session.set_state(SshSession::State::active);
+    auto *first_channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 96, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    auto *second_channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 97, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(first_channel != nullptr && second_channel != nullptr,
+                "channels should be created for multi no-PTY shell fd exposure test");
+
+    ShellAcceptHandler handler;
+    for (uint32_t remote_id : {96U, 97U}) {
+        SshChannelRequestMessage shell_req;
+        shell_req.recipient_channel = remote_id;
+        shell_req.request_type = "shell";
+        shell_req.want_reply = true;
+        auto shell_packet = SshMessageCodec::encode_channel_request(shell_req);
+        auto shell_packet_span = shell_packet.readable_span();
+        std::vector<uint8_t> shell_raw(
+            reinterpret_cast<const uint8_t *>(shell_packet_span.data()),
+            reinterpret_cast<const uint8_t *>(shell_packet_span.data()) + shell_packet_span.size());
+        session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, shell_raw, &handler);
+    }
+
+    auto terminal_fds = session.terminal_output_fds();
+    TEST_ASSERT(terminal_fds.size() >= 4,
+                "two no-PTY shells should expose stdout and stderr fds for each shell");
+    auto sorted_fds = terminal_fds;
+    std::sort(sorted_fds.begin(), sorted_fds.end());
+    TEST_ASSERT(std::adjacent_find(sorted_fds.begin(), sorted_fds.end()) == sorted_fds.end(),
+                "multiple no-PTY shell output fd list should not contain duplicates");
+
+    session.shutdown_all_pty_processes();
+    TEST_ASSERT(session.terminal_output_fds().empty(),
+                "multi no-PTY shell fd list should be empty after shutdown");
+    return true;
+#endif
+}
+
+bool test_session_pty_bridge_channel_close_tears_down_process_once()
+{
+#if defined(_WIN32)
+    return true;
+#else
+    class ShellAcceptHandler final : public SshHandler
+    {
+    public:
+        bool on_shell_request(SshSession *session,
+                              SshChannel *channel) override
+        {
+            (void)session;
+            (void)channel;
+            return true;
+        }
+
+        bool on_pty_request(SshSession *session,
+                            SshChannel *channel,
+                            const std::string &term,
+                            uint32_t width, uint32_t height,
+                            uint32_t pixel_width, uint32_t pixel_height,
+                            const std::vector<uint8_t> &modes) override
+        {
+            (void)session;
+            (void)channel;
+            (void)term;
+            (void)width;
+            (void)height;
+            (void)pixel_width;
+            (void)pixel_height;
+            (void)modes;
+            return true;
+        }
+    };
+
+    SshSession session(2008, nullptr);
+    session.set_state(SshSession::State::active);
+    auto *channel = session.connection_manager().create_channel(
+        SSH_CHANNEL_SESSION, 94, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created for PTY close teardown test");
+
+    ShellAcceptHandler handler;
+
+    yuan::buffer::ByteBuffer pty_payload;
+    SshMessageCodec::write_string(pty_payload, "xterm");
+    SshMessageCodec::write_uint32(pty_payload, 80);
+    SshMessageCodec::write_uint32(pty_payload, 24);
+    SshMessageCodec::write_uint32(pty_payload, 800);
+    SshMessageCodec::write_uint32(pty_payload, 600);
+    SshMessageCodec::write_string(pty_payload, std::string());
+    auto pty_span = pty_payload.readable_span();
+    SshChannelRequestMessage pty_req;
+    pty_req.recipient_channel = 94;
+    pty_req.request_type = "pty-req";
+    pty_req.want_reply = true;
+    pty_req.request_specific_data.assign(
+        reinterpret_cast<const uint8_t *>(pty_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_span.data()) + pty_span.size());
+    auto pty_packet = SshMessageCodec::encode_channel_request(pty_req);
+    auto pty_packet_span = pty_packet.readable_span();
+    std::vector<uint8_t> pty_raw(
+        reinterpret_cast<const uint8_t *>(pty_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(pty_packet_span.data()) + pty_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, pty_raw, &handler);
+
+    SshChannelRequestMessage shell_req;
+    shell_req.recipient_channel = 94;
+    shell_req.request_type = "shell";
+    shell_req.want_reply = true;
+    auto shell_packet = SshMessageCodec::encode_channel_request(shell_req);
+    auto shell_packet_span = shell_packet.readable_span();
+    std::vector<uint8_t> shell_raw(
+        reinterpret_cast<const uint8_t *>(shell_packet_span.data()),
+        reinterpret_cast<const uint8_t *>(shell_packet_span.data()) + shell_packet_span.size());
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_REQUEST, shell_raw, &handler);
+
+    TEST_ASSERT(session.has_pty_process(94), "shell bridge should start PTY process before close");
+    (void)session.drain_outgoing();
+
+    SshChannelCloseMessage close_msg;
+    close_msg.recipient_channel = channel->local_id();
+    auto close_packet = SshMessageCodec::encode_channel_close(close_msg);
+    auto close_span = close_packet.readable_span();
+    std::vector<uint8_t> close_raw(
+        reinterpret_cast<const uint8_t *>(close_span.data()),
+        reinterpret_cast<const uint8_t *>(close_span.data()) + close_span.size());
+
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_CLOSE, close_raw, &handler);
+    auto close_out = session.drain_outgoing();
+    TEST_ASSERT(!close_out.empty(), "first channel close should emit a close response");
+    TEST_ASSERT(!session.has_any_pty_processes(), "channel close should tear down active PTY process");
+    TEST_ASSERT(!session.pump_pty_once(94, &handler), "pump after channel close should not access torn-down PTY");
+
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_CLOSE, close_raw, &handler);
+    auto duplicate_close_out = session.drain_outgoing();
+    TEST_ASSERT(duplicate_close_out.empty(), "duplicate channel close after teardown should not emit more packets");
+    TEST_ASSERT(!session.has_any_pty_processes(), "duplicate channel close should keep PTY map empty");
     return true;
 #endif
 }
@@ -5704,6 +5914,9 @@ int main()
     RUN_TEST(test_pty_prepare_applies_requested_terminal_modes);
     RUN_TEST(test_pty_process_launch_shell_and_capture_output);
     RUN_TEST(test_session_pty_bridge_shell_data_and_exit_sequence);
+    RUN_TEST(test_session_no_pty_shell_exposes_stdout_stderr_fds);
+    RUN_TEST(test_session_multiple_no_pty_shells_expose_multiple_terminal_fds);
+    RUN_TEST(test_session_pty_bridge_channel_close_tears_down_process_once);
     RUN_TEST(test_session_pty_bridge_window_change_affects_shell_stty_size);
     RUN_TEST(test_session_pty_bridge_signal_terminates_shell_child);
     RUN_TEST(test_session_pty_bridge_exec_with_pty_outputs_and_exits);

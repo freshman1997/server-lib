@@ -29,8 +29,9 @@ int main()
     }
 
     GlobalService global(ServiceAddress{{1, 1, GameServiceType::global, 1, 1}, 100, yuan::game_base::ServerRole::world, 1, "global"});
-    ZoneService zone_1(ServiceAddress{{1, 1, GameServiceType::zone, 1, 1}, 200, yuan::game_base::ServerRole::scene, 1, "zone-1"}, tunnels);
-    ZoneService zone_2(ServiceAddress{{1, 1, GameServiceType::zone, 1, 2}, 201, yuan::game_base::ServerRole::scene, 1, "zone-2"}, tunnels);
+    auto forward = [&](TunnelEnvelope envelope) { return tunnels.forward(std::move(envelope)); };
+    ZoneService zone_1(ServiceAddress{{1, 1, GameServiceType::zone, 1, 1}, 200, yuan::game_base::ServerRole::scene, 1, "zone-1"}, forward);
+    ZoneService zone_2(ServiceAddress{{1, 1, GameServiceType::zone, 1, 2}, 201, yuan::game_base::ServerRole::scene, 1, "zone-2"}, forward);
     if (!require(global.address().service.pack() == pack_game_service_id(1, 1, GameServiceType::global, 1),
                  "packed global service id should match layout")) {
         return 29;
@@ -53,8 +54,7 @@ int main()
         return 5;
     }
 
-    yuan::rpc::Route global_route;
-    global_route.name = std::string(route::global_echo);
+    yuan::rpc::Route global_route = game_route::global_echo();
     auto response = zone_1.call(global.address(), global_route, yuan::rpc::Codec<std::string>::encode("hello-global"));
     if (!require(response.status == yuan::rpc::RpcStatus::ok, "zone to global through tunnel should succeed")) {
         return 6;
@@ -72,8 +72,7 @@ int main()
         return 14;
     }
 
-    yuan::rpc::Route zone_route;
-    zone_route.name = std::string(route::zone_echo);
+    yuan::rpc::Route zone_route = game_route::zone_echo();
     response = zone_2.call(zone_1.address(), zone_route, yuan::rpc::Codec<std::string>::encode("hello-zone"), {}, 77, 8801);
     if (!require(response.status == yuan::rpc::RpcStatus::ok, "zone to zone through tunnel should succeed")) {
         return 9;
@@ -233,7 +232,7 @@ int main()
     tunnel_reply_message.kind = yuan::rpc::MessageKind::request;
     tunnel_reply_message.request_id = 502;
     tunnel_reply_message.set_continuation_id(9502);
-    tunnel_reply_message.route.name = std::string(route::tunnel_reply);
+    tunnel_reply_message.route = game_route::tunnel_reply();
     tunnel_reply_message.payload = std::move(rpc_reply_payload);
     const auto rpc_reply_ack = tunnel_a->rpc_server().handle(tunnel_reply_message);
     if (!require(rpc_reply_ack.status == yuan::rpc::RpcStatus::ok && rpc_reply_replied,

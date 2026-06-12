@@ -6,7 +6,6 @@
 #include "client.h"
 #include "codec.h"
 #include "coroutine_rpc.h"
-#include "core_connection_transport.h"
 #include "frame_stream.h"
 #include "in_process_channel.h"
 #include "local_bus.h"

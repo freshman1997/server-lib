@@ -217,6 +217,7 @@ namespace yuan::coroutine
             restore_shared(state_);
             detail::cancel_awaiter_timeout(timeout_state_);
 
+            connection->clear_pending_read_coroutine();
             if (result_.status == IoStatus::success) {
                 result_.data = connection->take_and_clear_input_byte_buffer();
                 const bool empty_read = result_.data.readable_bytes() == 0;

@@ -60,6 +60,12 @@ namespace yuan::net::ssh
         pending_forwarded_opens_.push_back(std::move(buf));
     }
 
+    bool SshSession::has_pending_forwarded_tcpip_open() const
+    {
+        std::lock_guard<std::mutex> lock(pending_forwarded_open_mutex_);
+        return !pending_forwarded_opens_.empty();
+    }
+
     std::vector<ByteBuffer> SshSession::drain_pending_forwarded_tcpip_open()
     {
         std::vector<ByteBuffer> result;
@@ -89,9 +95,19 @@ namespace yuan::net::ssh
         return terminal_bridge_ && terminal_bridge_->has_any_pty_processes();
     }
 
+    bool SshSession::has_any_client_pty_processes() const
+    {
+        return terminal_bridge_ && terminal_bridge_->has_any_client_pty_processes();
+    }
+
     int SshSession::first_pty_master_fd() const
     {
         return terminal_bridge_ ? terminal_bridge_->first_pty_master_fd() : -1;
+    }
+
+    std::vector<int> SshSession::terminal_output_fds() const
+    {
+        return terminal_bridge_ ? terminal_bridge_->terminal_output_fds() : std::vector<int>{};
     }
 
     bool SshSession::pump_pty_once(uint32_t channel_remote_id, SshHandler * handler)
@@ -148,6 +164,8 @@ namespace yuan::net::ssh
             if (msg_type == SshMessageType::SSH_MSG_SERVICE_REQUEST) {
                 handle_service_request(payload, handler);
             } else if (msg_type == SshMessageType::SSH_MSG_CHANNEL_OPEN ||
+                       msg_type == SshMessageType::SSH_MSG_CHANNEL_OPEN_CONFIRMATION ||
+                       msg_type == SshMessageType::SSH_MSG_CHANNEL_OPEN_FAILURE ||
                        msg_type == SshMessageType::SSH_MSG_CHANNEL_DATA ||
                        msg_type == SshMessageType::SSH_MSG_CHANNEL_EOF ||
                        msg_type == SshMessageType::SSH_MSG_CHANNEL_CLOSE ||
@@ -284,6 +302,9 @@ namespace yuan::net::ssh
         case SshMessageType::SSH_MSG_CHANNEL_EOF: {
             auto msg = SshMessageCodec::decode_channel_eof(payload.data(), payload.size());
             if (msg) {
+                if (terminal_bridge_) {
+                    terminal_bridge_->handle_channel_eof(*msg);
+                }
                 resp = conn_mgr_.handle_channel_eof(*msg);
             }
             break;

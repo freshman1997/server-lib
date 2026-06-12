@@ -18,6 +18,7 @@ namespace yuan::base::time
 
         inline std::atomic<bool> system_override_enabled_{false};
         inline std::atomic<uint64_t> system_override_ms_{0};
+        inline std::atomic<int64_t> system_offset_seconds_{0};
 
         inline void advance_atomic_ms(std::atomic<uint64_t>& value, const int64_t delta_ms)
         {
@@ -59,8 +60,11 @@ namespace yuan::base::time
             return detail::system_override_ms_.load(std::memory_order_relaxed);
         }
         const auto time_now = std::chrono::system_clock::now();
-        return static_cast<uint64_t>(
+        const auto now = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(time_now.time_since_epoch()).count());
+        const auto offset = detail::system_offset_seconds_.load(std::memory_order_relaxed) * 1000LL;
+        return offset >= 0 ? now + static_cast<uint64_t>(offset)
+                           : (now > static_cast<uint64_t>(-offset) ? now - static_cast<uint64_t>(-offset) : 0ULL);
     }
 
     inline uint64_t system_now_us()
@@ -69,13 +73,21 @@ namespace yuan::base::time
             return detail::system_override_ms_.load(std::memory_order_relaxed) * 1000ULL;
         }
         const auto time_now = std::chrono::system_clock::now();
-        return static_cast<uint64_t>(
+        const auto now = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(time_now.time_since_epoch()).count());
+        const auto offset_us = detail::system_offset_seconds_.load(std::memory_order_relaxed) * 1000000LL;
+        return offset_us >= 0 ? now + static_cast<uint64_t>(offset_us)
+                              : (now > static_cast<uint64_t>(-offset_us) ? now - static_cast<uint64_t>(-offset_us) : 0ULL);
     }
 
     inline std::time_t system_now_seconds()
     {
         return static_cast<std::time_t>(system_now_ms() / 1000ULL);
+    }
+
+    inline uint64_t system_now_sec()
+    {
+        return static_cast<uint64_t>(system_now_seconds());
     }
 
     inline std::tm localtime(const std::time_t timestamp)
@@ -143,6 +155,16 @@ namespace yuan::base::time
         detail::system_override_enabled_.store(true, std::memory_order_relaxed);
     }
 
+    inline void set_system_time_offset_seconds(const int64_t offset_seconds)
+    {
+        detail::system_offset_seconds_.store(offset_seconds, std::memory_order_relaxed);
+    }
+
+    inline int64_t system_time_offset_seconds()
+    {
+        return detail::system_offset_seconds_.load(std::memory_order_relaxed);
+    }
+
     inline void advance_steady_time_for_test(const int64_t delta_ms)
     {
         set_steady_time_for_test(steady_now_ms());
@@ -159,6 +181,7 @@ namespace yuan::base::time
     {
         detail::steady_override_enabled_.store(false, std::memory_order_relaxed);
         detail::system_override_enabled_.store(false, std::memory_order_relaxed);
+        detail::system_offset_seconds_.store(0, std::memory_order_relaxed);
     }
 }
 

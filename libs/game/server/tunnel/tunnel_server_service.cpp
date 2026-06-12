@@ -1,28 +1,24 @@
-#include "tunnel/tunnel_process_service.h"
-
-#include "common/tcp_rpc.h"
+#include "tunnel/tunnel_server_service.h"
 
 #include <string>
 
 namespace yuan::game::server
 {
-    TunnelProcessService::TunnelProcessService(GameServiceId service_id, std::uint16_t listen_port, std::size_t expected_requests)
+    TunnelServerService::TunnelServerService(GameServiceId service_id, std::uint16_t listen_port, std::size_t expected_requests)
         : listen_port_(listen_port),
           expected_requests_(expected_requests),
           tunnel_({service_id, 1, yuan::game_base::ServerRole::gateway, service_id.world, "tunnel"})
     {
     }
 
-    void TunnelProcessService::set_runtime_context(const yuan::app::RuntimeContext &context)
+    void TunnelServerService::set_runtime_context(const yuan::app::RuntimeContext &context)
     {
         context_ = context;
     }
 
-    bool TunnelProcessService::init()
+    bool TunnelServerService::init()
     {
-        yuan::rpc::Route register_route;
-        register_route.name = std::string(route::tunnel_register);
-        (void)tunnel_.rpc_server().register_handler(register_route, [this](const yuan::rpc::Message &message) {
+        (void)tunnel_.rpc_server().register_handler(game_route::tunnel_register(), [this](const yuan::rpc::Message &message) {
             auto registration = decode_tunnel_registration(message.payload);
             yuan::rpc::Response response;
             if (!registration || registration->service_id == 0) {
@@ -34,7 +30,7 @@ namespace yuan::game::server
                 const auto service_id = registration->service_id;
                 const auto port = registration->port;
                 if (!tunnel_.register_endpoint_handler(service_id, [port](yuan::rpc::Message forwarded) {
-                        auto endpoint_response = tcp_rpc::call(port, forwarded);
+                        auto endpoint_response = rpc_network::RpcNetworkClient().call(rpc_network::RpcEndpoint{"127.0.0.1", port}, forwarded);
                         if (endpoint_response) {
                             return *endpoint_response;
                         }
@@ -52,23 +48,21 @@ namespace yuan::game::server
             return response;
         });
 
-        listen_fd_ = tcp_rpc::listen_loopback(listen_port_);
-        ok_ = listen_fd_ >= 0;
+        ok_ = rpc_server_.bind_loopback(listen_port_, tunnel_.rpc_server(), expected_requests_);
         return ok_;
     }
 
-    void TunnelProcessService::start()
+    void TunnelServerService::start()
     {
-        ok_ = listen_fd_ >= 0 && tcp_rpc::serve_n_concurrent(listen_fd_, tunnel_.rpc_server(), expected_requests_);
+        ok_ = ok_ && rpc_server_.run();
     }
 
-    void TunnelProcessService::stop()
+    void TunnelServerService::stop()
     {
-        tcp_rpc::close_fd(listen_fd_);
-        listen_fd_ = -1;
+        rpc_server_.stop();
     }
 
-    bool TunnelProcessService::ok() const
+    bool TunnelServerService::ok() const
     {
         return ok_;
     }

@@ -99,6 +99,7 @@ namespace yuan::net::ssh
 
         void set_runtime(coroutine::RuntimeView runtime);
         void poll_async_tasks();
+        bool has_remote_forwards() const;
 
         std::vector<ByteBuffer> drain_channel_pending_data();
 

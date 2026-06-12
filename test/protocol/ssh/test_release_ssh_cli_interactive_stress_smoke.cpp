@@ -81,14 +81,14 @@ namespace
     std::filesystem::path find_release_cli_binary()
     {
         const auto cwd = std::filesystem::current_path();
-        const auto candidate_from_build = cwd / "release" / "ssh" / "release_ssh_cli";
-        if (std::filesystem::exists(candidate_from_build)) {
-            return candidate_from_build;
-        }
-
         const auto candidate_from_repo = cwd / "build" / "release" / "ssh" / "release_ssh_cli";
         if (std::filesystem::exists(candidate_from_repo)) {
             return candidate_from_repo;
+        }
+
+        const auto candidate_from_build = cwd / "release" / "ssh" / "release_ssh_cli";
+        if (std::filesystem::exists(candidate_from_build)) {
+            return candidate_from_build;
         }
 
         return {};
@@ -160,8 +160,8 @@ int main()
 
     std::string script;
     script += "printf stress-start\\n";
-    script += "for i in 1 2 3 4 5 6 7 8 9 10; do printf loop-$i\\n; done\\n";
-    script += "printf stderr-line\\n 1>&2\\n";
+    script += "for i in 1 2 3 4 5 6 7 8 9 10; do printf loop-$i; done\\n";
+    script += "printf stderr-line 1>&2\\n";
     script += "printf stress-end\\n";
     script += "exit\\n";
 

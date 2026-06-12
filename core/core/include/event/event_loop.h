@@ -19,6 +19,7 @@ namespace yuan::net
     class Socket;
     class Connection;
     class Channel;
+    class SelectHandler;
 
     enum class EventLoopExitReason
     {
@@ -29,6 +30,8 @@ namespace yuan::net
     class EventLoop : public EventHandler
     {
     public:
+        class ExternalFdRegistration;
+
         EventLoop(Poller *_poller, timer::TimerManager *timer_manager);
         ~EventLoop();
 
@@ -53,12 +56,40 @@ namespace yuan::net
 
         bool accepts_poll_event_for_test(const PollEvent &event) const;
 
+        std::unique_ptr<ExternalFdRegistration> register_external_fd(
+            int fd,
+            std::shared_ptr<SelectHandler> handler,
+            int events);
+
     public:
         void wakeup();
 
     private:
         class HelperData;
         std::unique_ptr<HelperData> data_;
+    };
+
+    class EventLoop::ExternalFdRegistration
+    {
+    public:
+        ExternalFdRegistration(EventLoop *loop, int fd, std::shared_ptr<SelectHandler> handler, int events);
+        ~ExternalFdRegistration();
+
+        ExternalFdRegistration(const ExternalFdRegistration &) = delete;
+        ExternalFdRegistration &operator=(const ExternalFdRegistration &) = delete;
+        ExternalFdRegistration(ExternalFdRegistration &&) = delete;
+        ExternalFdRegistration &operator=(ExternalFdRegistration &&) = delete;
+
+        void close();
+        bool active() const noexcept;
+        Channel *channel() noexcept;
+        uint64_t generation() const noexcept;
+
+    private:
+        EventLoop *loop_ = nullptr;
+        std::shared_ptr<SelectHandler> handler_;
+        std::unique_ptr<Channel> channel_;
+        bool active_ = false;
     };
 }
 #endif

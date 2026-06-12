@@ -5,7 +5,7 @@ This directory contains release-oriented runnable targets for SSH server and CLI
 ## Binaries
 
 - `release_ssh_server`: SSH server entry with config, env, and CLI option support
-- `release_ssh_cli`: OpenSSH-shaped client CLI for probe and password-auth exec
+- `release_ssh_cli`: OpenSSH-shaped client CLI for probe, exec, shell, publickey/password auth, and forwarding smoke use
 
 Default build output:
 
@@ -77,6 +77,26 @@ release_ssh_cli --probe -p 2222 yuan@127.0.0.1
 release_ssh_cli -p 2222 --password yuan yuan@127.0.0.1 "whoami"
 release_ssh_cli -o Port=2222 -o User=yuan --probe 127.0.0.1
 release_ssh_cli --stderr-prefix -p 2222 --password yuan yuan@127.0.0.1 "echo out & dir nosuchfile"
+```
+
+Interactive shell:
+
+```bash
+release_ssh_cli -p 2222 --password yuan yuan@127.0.0.1
+```
+
+Public key authentication:
+
+```bash
+release_ssh_cli -p 2222 -i ~/.ssh/id_ed25519 yuan@127.0.0.1 "whoami"
+```
+
+Forwarding examples:
+
+```bash
+release_ssh_cli -p 2222 --password yuan -L 127.0.0.1:8080:127.0.0.1:80 yuan@127.0.0.1
+release_ssh_cli -p 2222 --password yuan -D 127.0.0.1:1080 yuan@127.0.0.1
+release_ssh_cli -p 2222 --password yuan -R 127.0.0.1:9000:127.0.0.1:80 yuan@127.0.0.1
 ```
 
 ## Health Check
@@ -162,14 +182,22 @@ build-win-mingw-ssh/release/ssh/release_ssh_cli.exe --version
 - TCP connect and SSH version probe via `--probe`
 - key exchange negotiation
 - password authentication
+- publickey authentication from `-i`
+- known_hosts verification/update with strict host key policy options
 - non-interactive `exec` command channels
+- interactive shell mode when no command is provided
+- PTY allocation for interactive TTY stdin, including terminal size, terminal modes, window-change, and SIGINT forwarding on Linux
+- no-PTY shell mode for piped stdin, matching OpenSSH's default behavior for non-TTY stdin
+- local forwarding via `-L`
+- dynamic SOCKS5 forwarding via `-D`
+- remote forwarding via `-R`
 - OpenSSH-shaped options: `-p`, `-l`, `-i`, `-o`, `-F`, `-q`, `-v`, `-V`
 
-It does **not** yet implement:
+Known limits:
 
-- interactive shell mode when no command is provided
-- publickey authentication from `-i`
-- known_hosts verification
-- local config-file parsing from `-F`
+- `-F` is accepted for OpenSSH-shaped compatibility, but full ssh_config file parsing is intentionally limited.
+- The bundled CLI is a release smoke/utility client, not a full OpenSSH replacement.
+- SFTP is supported by the server and validated with OpenSSH `sftp`; the bundled CLI does not implement an interactive SFTP client.
+- ZMODEM/lrzsz (`sz`/`rz`) is not built in. PTY sessions pass bytes through, but use SFTP or forwarding for reliable file transfer.
 
-For interactive shell/session validation, use OpenSSH client (`ssh`).
+For deeper interoperability validation, use OpenSSH client tools (`ssh`, `sftp`) against `release_ssh_server`.

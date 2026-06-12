@@ -1,13 +1,11 @@
 #ifndef YUAN_RPC_SERVER_SESSION_H
 #define YUAN_RPC_SERVER_SESSION_H
 
-#include "core_connection_transport.h"
 #include "server.h"
 #include "session.h"
 #include "transport.h"
 
 #include <memory>
-#include <optional>
 #include <functional>
 #include <utility>
 
@@ -29,12 +27,6 @@ namespace yuan::rpc
             bind_transport(std::move(transport));
         }
 
-        RpcServerSession(Server &server, yuan::net::ConnectionContext context)
-            : server_(&server)
-        {
-            bind_connection(std::move(context));
-        }
-
         void set_server(Server &server)
         {
             server_ = &server;
@@ -50,25 +42,6 @@ namespace yuan::rpc
             session_->start();
         }
 
-        void bind_connection(yuan::net::ConnectionContext context)
-        {
-            bind_transport(std::make_shared<CoreConnectionTransport>(std::move(context)));
-        }
-
-        void on_readable(yuan::net::ConnectionContext &context)
-        {
-            if (auto transport = core_transport()) {
-                transport->get().on_readable(context);
-            }
-        }
-
-        void on_closed()
-        {
-            if (auto transport = core_transport()) {
-                transport->get().on_closed();
-            }
-        }
-
         [[nodiscard]] bool ready() const
         {
             return static_cast<bool>(session_ && server_);
@@ -80,15 +53,6 @@ namespace yuan::rpc
         }
 
     private:
-        std::optional<std::reference_wrapper<CoreConnectionTransport>> core_transport() const
-        {
-            auto core = std::dynamic_pointer_cast<CoreConnectionTransport>(transport_);
-            if (!core) {
-                return std::nullopt;
-            }
-            return *core;
-        }
-
         Server *server_ = nullptr;
         std::shared_ptr<IFrameTransport> transport_;
         std::shared_ptr<RpcSession> session_;

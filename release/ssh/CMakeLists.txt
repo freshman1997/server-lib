@@ -3,7 +3,11 @@ project(release_ssh)
 
 set(RELEASE_SSH_OUTPUT_DIR "${CMAKE_BINARY_DIR}/release/ssh")
 
-add_executable(release_ssh_server ssh_server_main.cpp)
+add_executable(release_ssh_server
+    ssh_server_main.cpp
+    server/ssh_server_config.cpp
+    server/ssh_server_handler.cpp
+)
 target_compile_features(release_ssh_server PUBLIC cxx_std_20)
 target_link_libraries(release_ssh_server PUBLIC Core SshProto)
 target_include_directories(release_ssh_server PUBLIC
@@ -17,7 +21,18 @@ set_target_properties(release_ssh_server PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${RELEASE_SSH_OUTPUT_DIR}"
 )
 
-add_executable(release_ssh_cli ssh_cli_main.cpp)
+add_executable(release_ssh_cli
+    ssh_cli_main.cpp
+    client/ssh_cli_auth.cpp
+    client/ssh_cli_config.cpp
+    client/ssh_cli_forward.cpp
+    client/ssh_cli_forward_runtime.cpp
+    client/ssh_cli_messages.cpp
+    client/ssh_cli_session.cpp
+    client/ssh_cli_socket.cpp
+    client/ssh_cli_terminal.cpp
+    client/ssh_cli_transport.cpp
+)
 target_compile_features(release_ssh_cli PUBLIC cxx_std_20)
 target_link_libraries(release_ssh_cli PUBLIC SshProto Core)
 target_include_directories(release_ssh_cli PUBLIC "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/protocol/ssh/include")

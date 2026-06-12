@@ -13,6 +13,7 @@
 #include "logger.h"
 #include "net/channel/channel.h"
 #include "event/event_loop.h"
+#include "net/handler/select_handler.h"
 #include "net/poller/poller.h"
 #include "net/connection/connection.h"
 #include "net/connection/stream_transport.h"
@@ -452,5 +453,78 @@ namespace yuan::net
                it->second && it->second->has_events() &&
                it->second->generation() == event.generation &&
                (it->second->get_events() & event.revents) != Channel::NONE_EVENT;
+    }
+
+    std::unique_ptr<EventLoop::ExternalFdRegistration> EventLoop::register_external_fd(
+        int fd,
+        std::shared_ptr<SelectHandler> handler,
+        int events)
+    {
+        if (fd < 0 || !handler || events == Channel::NONE_EVENT) {
+            return nullptr;
+        }
+        return std::make_unique<ExternalFdRegistration>(this, fd, std::move(handler), events);
+    }
+
+    EventLoop::ExternalFdRegistration::ExternalFdRegistration(
+        EventLoop *loop,
+        int fd,
+        std::shared_ptr<SelectHandler> handler,
+        int events)
+        : loop_(loop),
+          handler_(std::move(handler)),
+          channel_(std::make_unique<Channel>(fd)),
+          active_(loop_ != nullptr && handler_ != nullptr && events != Channel::NONE_EVENT)
+    {
+        if (!active_) {
+            channel_.reset();
+            return;
+        }
+
+        handler_->set_event_handler(loop_);
+        channel_->set_handler(std::weak_ptr<SelectHandler>(handler_));
+        if (events & Channel::READ_EVENT) {
+            channel_->enable_read();
+        }
+        if (events & Channel::WRITE_EVENT) {
+            channel_->enable_write();
+        }
+        loop_->update_channel(channel_.get());
+    }
+
+    EventLoop::ExternalFdRegistration::~ExternalFdRegistration()
+    {
+        close();
+    }
+
+    void EventLoop::ExternalFdRegistration::close()
+    {
+        if (!active_) {
+            return;
+        }
+        active_ = false;
+        if (loop_ && channel_) {
+            loop_->close_channel(channel_.get());
+        }
+        if (channel_) {
+            channel_->disable_all();
+            channel_->clear_handler();
+        }
+        handler_.reset();
+    }
+
+    bool EventLoop::ExternalFdRegistration::active() const noexcept
+    {
+        return active_;
+    }
+
+    Channel *EventLoop::ExternalFdRegistration::channel() noexcept
+    {
+        return channel_.get();
+    }
+
+    uint64_t EventLoop::ExternalFdRegistration::generation() const noexcept
+    {
+        return channel_ ? channel_->generation() : 0;
     }
 }
