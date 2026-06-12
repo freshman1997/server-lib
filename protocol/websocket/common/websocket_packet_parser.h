@@ -42,6 +42,10 @@ namespace yuan::net::websocket
 
         static bool is_control_frame(const ProtoHead &head);
 
+        static bool is_valid_close_payload(const ProtoChunk &chunk);
+
+        static bool is_valid_close_code(uint16_t code);
+
         bool pack_header(::yuan::buffer::ByteBuffer &buff, uint8_t type, uint32_t buffSize, bool isEnd, bool isContinueFrame);
 
         bool pack_frame(const ::yuan::buffer::ByteBuffer &data, ::yuan::buffer::ByteBuffer &buff, std::size_t offset, uint32_t size);

@@ -5,6 +5,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <poll.h>
 #endif
 
 #include <array>
@@ -346,10 +348,24 @@ namespace yuan::net::ssh
         }
 
         (void)total_written;
+#if defined(_WIN32)
+        (void)pump_pty_once(msg.recipient_channel, handler);
+#else
+        pollfd pfd{};
+        pfd.fd = process->backend().master_fd();
+        pfd.events = POLLIN;
         for (int i = 0; i < 4; ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            (void)pump_pty_once(msg.recipient_channel, handler);
+            pfd.revents = 0;
+            const int timeout_ms = i == 0 ? 0 : 1;
+            const int rc = poll(&pfd, 1, timeout_ms);
+            if (rc <= 0 || (pfd.revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
+                break;
+            }
+            if (!pump_pty_once(msg.recipient_channel, handler)) {
+                break;
+            }
         }
+#endif
     }
 
     void SshTerminalBridge::handle_channel_request(const SshChannelRequestMessage & msg,

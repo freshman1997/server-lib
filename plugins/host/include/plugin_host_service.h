@@ -9,6 +9,7 @@
 #include "plugin/plugin_permission.h"
 
 #include <memory>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -57,6 +58,8 @@ namespace yuan::app
         bool health_check(const std::string &plugin_name) const;
 
         bool reload_config(const std::string &plugin_name);
+        bool reload_plugin(const std::string &plugin_name);
+        std::vector<std::string> reload_changed_script_plugins();
 
         void set_default_permissions(plugin::PluginPermission perm);
         void set_plugin_permissions(const std::string &plugin_name, plugin::PluginPermission perm);
@@ -65,6 +68,7 @@ namespace yuan::app
                                        plugin::ResourceCleanupFn cleanup,
                                        const std::string &description = "");
         bool untrack_plugin_resource(uint64_t resource_id);
+        void set_plugin_resource_quota(const std::string &plugin_name, const plugin::PluginResourceQuota &quota);
         std::string resource_leak_report(const std::string &plugin_name) const;
 
         void set_http_server_accessor(std::function<void *()> accessor);
@@ -87,6 +91,8 @@ namespace yuan::app
         plugin::HostStorage *prepare_plugin_storage(const std::string &plugin_name);
         plugin::PluginRunMode to_plugin_run_mode(RunMode mode) const;
         plugin::PluginEvent make_plugin_event(const std::string &plugin_name) const;
+        bool script_entry_path(const std::string &plugin_name, std::string &path) const;
+        bool update_script_timestamp(const std::string &plugin_name);
 
         plugin::HostEventBus *event_bus_ptr() const;
         plugin::HostLogger *logger_ptr() const;
@@ -122,6 +128,7 @@ namespace yuan::app
         std::unique_ptr<plugin::HostHttpInterceptor> http_interceptor_;
         std::unique_ptr<plugin::HostNetworkRuntime> network_runtime_;
         std::unordered_map<std::string, std::unique_ptr<plugin::HostStorage> > plugin_storages_;
+        std::unordered_map<std::string, std::filesystem::file_time_type> script_write_times_;
         std::function<void *()> pending_http_server_accessor_;
         std::function<bool(std::shared_ptr<plugin::HttpMiddlewareCallback>, std::string)> pending_http_middleware_installer_;
         std::function<bool(std::shared_ptr<plugin::HttpRouteCallback>, std::string, std::string, std::string)> pending_http_route_installer_;

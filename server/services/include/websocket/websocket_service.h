@@ -6,10 +6,11 @@
 #include "websocket.h"
 
 #include <memory>
+#include <functional>
+#include <string_view>
 
 namespace yuan::server
 {
-
     class WebSocketService : public yuan::app::Service, public yuan::app::RuntimeContextAwareService
     {
     public:
@@ -25,6 +26,10 @@ namespace yuan::server
         const yuan::net::websocket::WebSocketServer &server() const;
 
         void set_data_handler(yuan::net::websocket::WebSocketDataHandler *handler);
+
+        void set_origin_validator(std::function<bool(std::string_view)> validator);
+
+        void set_auth_validator(std::function<bool(const yuan::net::http::HttpRequest &)> validator);
 
     private:
         int port_;

@@ -39,6 +39,10 @@ namespace yuan::app
 
         std::string leak_report(const std::string &plugin_name) const override;
 
+        void set_quota(const std::string &plugin_name, const plugin::PluginResourceQuota &quota) override;
+        void clear_quota(const std::string &plugin_name) override;
+        plugin::PluginResourceQuota quota(const std::string &plugin_name) const override;
+
     private:
         struct TrackedResource
         {
@@ -53,6 +57,7 @@ namespace yuan::app
         uint64_t next_id_ = 1;
         std::unordered_map<uint64_t, TrackedResource> resources_;              // id -> resource
         std::unordered_map<std::string, std::vector<uint64_t> > plugin_index_; // plugin_name -> [ids]
+        std::unordered_map<std::string, plugin::PluginResourceQuota> quotas_;
     };
 
 } // namespace yuan::app

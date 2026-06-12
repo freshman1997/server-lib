@@ -64,10 +64,10 @@ namespace yuan::net::http
             while (pos < value.size()) {
                 const auto comma = value.find(',', pos);
                 auto end = comma == std::string_view::npos ? value.size() : comma;
-                while (pos < end && std::isspace(static_cast<unsigned char>(value[pos]))) {
+                while (pos < end && (value[pos] == ' ' || value[pos] == '\t')) {
                     ++pos;
                 }
-                while (end > pos && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+                while (end > pos && (value[end - 1] == ' ' || value[end - 1] == '\t')) {
                     --end;
                 }
                 if (token_equals_ci(value.substr(pos, end - pos), "chunked")) {

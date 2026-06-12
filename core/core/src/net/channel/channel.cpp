@@ -46,8 +46,7 @@ namespace yuan::net
     {
         handler_owner_ = handler;
         uses_handler_owner_ = true;
-        auto locked = handler_owner_.lock();
-        handler_ = yuan::base::owner_ptr(locked);
+        handler_ = nullptr;
     }
 
     void Channel::clear_handler()
@@ -59,11 +58,13 @@ namespace yuan::net
 
     void Channel::on_event()
     {
-        SelectHandler *handler = handler_;
-        if (!handler && uses_handler_owner_) {
-            auto locked = handler_owner_.lock();
-            handler = yuan::base::owner_ptr(locked);
-            handler_ = handler;
+        std::shared_ptr<SelectHandler> handler_owner;
+        SelectHandler *handler = nullptr;
+        if (uses_handler_owner_) {
+            handler_owner = handler_owner_.lock();
+            handler = yuan::base::owner_ptr(handler_owner);
+        } else {
+            handler = handler_;
         }
 
         if (!handler) {

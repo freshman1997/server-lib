@@ -23,6 +23,7 @@ namespace yredis
         bool subscribe_mode = false;
         bool connected = false;
         bool should_exit = false;
+        bool quiet = false;
     };
 
     void repl_loop(ReplState &state);

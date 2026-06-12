@@ -1,16 +1,20 @@
 cmake_minimum_required(VERSION 3.12)
-project(yuan_rpc)
-#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static")
+project(YuanRpc)
 
-include_directories(${CMAKE_CURRENT_LIST_DIR}/src/)
+file(GLOB YUAN_RPC_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
+add_library(YuanRpc ${YUAN_RPC_SOURCES})
+target_compile_features(YuanRpc PUBLIC cxx_std_20)
+target_include_directories(YuanRpc PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+target_link_libraries(YuanRpc PUBLIC Core)
 
-FILE(GLOB_RECURSE YUAN_RPC_SRC "./src/*.cpp")
+add_library(yuan_rpc ALIAS YuanRpc)
 
-add_library(yuan_rpc ${YUAN_RPC_SRC})
-target_link_libraries(yuan_rpc PUBLIC Core)
-target_include_directories(yuan_rpc PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/src>" "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
-
-#add_executable(redisCliTest ./test/TestRedis.cpp)
-#target_link_libraries(redisCliTest PUBLIC redisCli)
-#add_executable(redisCliTest1 ./test/TestRedis1.cpp)
-#target_link_libraries(redisCliTest1 PUBLIC redisCli)
+if(YUAN_BUILD_TESTS OR BUILD_TESTING)
+    add_executable(test_rpc_wire_protocol test/test_rpc_wire_protocol.cpp)
+    target_link_libraries(test_rpc_wire_protocol PUBLIC YuanRpc)
+    if(BUILD_TESTING)
+        add_test(NAME rpc_wire_protocol COMMAND test_rpc_wire_protocol)
+    endif()
+endif()

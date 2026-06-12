@@ -1029,10 +1029,9 @@ namespace yuan::net::socks5
                 }
             }
 
-            Socket *udp_sock = new Socket("", 0, true);
+            auto udp_sock = std::make_unique<Socket>("", 0, true);
             udp_sock->set_none_block(true);
             if (!udp_sock->valid()) {
-                delete udp_sock;
                 LOG_ERROR("socks5 server: failed to create UDP socket for associate");
                 send_reply(client_conn, ReplyCode::general_failure);
                 ctx.close();
@@ -1041,7 +1040,6 @@ namespace yuan::net::socks5
 
             udp_sock->set_reuse(true);
             if (!udp_sock->bind()) {
-                delete udp_sock;
                 LOG_ERROR("socks5 server: failed to bind UDP socket for associate");
                 send_reply(client_conn, ReplyCode::general_failure);
                 ctx.close();
@@ -1049,7 +1047,7 @@ namespace yuan::net::socks5
             }
 
             auto *runtime = listener_.runtime();
-            auto udp_acceptor = std::unique_ptr<DatagramAcceptor>(create_datagram_acceptor(udp_sock, *runtime));
+            auto udp_acceptor = std::unique_ptr<DatagramAcceptor>(create_datagram_acceptor(udp_sock.release(), *runtime));
             if (!udp_acceptor->listen()) {
                 LOG_ERROR("socks5 server: failed to listen on UDP socket for associate");
                 send_reply(client_conn, ReplyCode::general_failure);
@@ -1082,13 +1080,15 @@ namespace yuan::net::socks5
                        AddressType::ipv4, bind_ip, static_cast<uint16_t>(bind_port));
 
             if (config_.udp_idle_timeout_ms > 0 && runtime) {
-                Connection *client_conn_raw = &*client_conn;
+                std::weak_ptr<Connection> client_conn_weak = client_conn;
                 assoc->idle_timer = runtime->schedule(
                     config_.udp_idle_timeout_ms,
-                    [this, client_conn_raw]() {
-                        LOG_INFO("socks5 server: UDP association idle timer expired for client {}", reinterpret_cast<uintptr_t>(client_conn_raw));
-                        metrics_.idle_timeouts.fetch_add(1, std::memory_order_relaxed);
-                        close_udp_association(client_conn_raw);
+                    [this, client_conn_weak]() {
+                        if (auto client_conn = client_conn_weak.lock()) {
+                            LOG_INFO("socks5 server: UDP association idle timer expired for client {}", reinterpret_cast<uintptr_t>(&*client_conn));
+                            metrics_.idle_timeouts.fetch_add(1, std::memory_order_relaxed);
+                            close_udp_association(client_conn);
+                        }
                     });
             }
 
@@ -1317,13 +1317,15 @@ namespace yuan::net::socks5
             assoc->idle_timer.cancel();
             auto *runtime = listener_.runtime();
             if (runtime) {
-                Connection *client_conn_raw = &*assoc->client_conn;
+                std::weak_ptr<Connection> client_conn_weak = assoc->client_conn;
                 assoc->idle_timer = runtime->schedule(
                     config_.udp_idle_timeout_ms,
-                    [this, client_conn_raw]() {
-                        LOG_INFO("socks5 server: UDP association idle timer expired for client {}", reinterpret_cast<uintptr_t>(client_conn_raw));
-                        metrics_.idle_timeouts.fetch_add(1, std::memory_order_relaxed);
-                        close_udp_association(client_conn_raw);
+                    [this, client_conn_weak]() {
+                        if (auto client_conn = client_conn_weak.lock()) {
+                            LOG_INFO("socks5 server: UDP association idle timer expired for client {}", reinterpret_cast<uintptr_t>(&*client_conn));
+                            metrics_.idle_timeouts.fetch_add(1, std::memory_order_relaxed);
+                            close_udp_association(client_conn);
+                        }
                     });
             }
         }
@@ -1367,13 +1369,15 @@ namespace yuan::net::socks5
             assoc->idle_timer.cancel();
             auto *runtime = listener_.runtime();
             if (runtime) {
-                Connection *client_conn_raw = &*assoc->client_conn;
+                std::weak_ptr<Connection> client_conn_weak = assoc->client_conn;
                 assoc->idle_timer = runtime->schedule(
                     config_.udp_idle_timeout_ms,
-                    [this, client_conn_raw]() {
-                        LOG_INFO("socks5 server: UDP association idle timer expired for client {}", reinterpret_cast<uintptr_t>(client_conn_raw));
-                        metrics_.idle_timeouts.fetch_add(1, std::memory_order_relaxed);
-                        close_udp_association(client_conn_raw);
+                    [this, client_conn_weak]() {
+                        if (auto client_conn = client_conn_weak.lock()) {
+                            LOG_INFO("socks5 server: UDP association idle timer expired for client {}", reinterpret_cast<uintptr_t>(&*client_conn));
+                            metrics_.idle_timeouts.fetch_add(1, std::memory_order_relaxed);
+                            close_udp_association(client_conn);
+                        }
                     });
             }
         }

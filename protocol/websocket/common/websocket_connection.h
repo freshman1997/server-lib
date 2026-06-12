@@ -10,6 +10,7 @@
 
 #include <functional>
 #include <memory>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -23,7 +24,7 @@ namespace yuan::net::websocket
         error_
     };
 
-    class WebSocketConnection
+    class WebSocketConnection : public std::enable_shared_from_this<WebSocketConnection>
     {
         friend class WebSocketPacketParser;
 
@@ -68,6 +69,8 @@ namespace yuan::net::websocket
 
         void close(WebSocketCloseCode code = WebSocketCloseCode::normal_close_);
 
+        void shutdown();
+
         std::shared_ptr<Connection> get_native_connection();
 
         const std::string &get_url() const;
@@ -80,6 +83,8 @@ namespace yuan::net::websocket
         }
 
         void set_state(State state);
+
+        void mark_connected();
 
         void use_mask(bool on);
 
@@ -99,6 +104,32 @@ namespace yuan::net::websocket
 
         bool pack_control_frame(const ::yuan::buffer::ByteBuffer &data, uint8_t type, std::vector< ::yuan::buffer::ByteBuffer> &output);
 
+        void set_outbound_queue_limits(std::size_t max_messages, std::size_t max_bytes);
+
+        std::size_t outbound_queue_size() const;
+
+        std::size_t outbound_queue_bytes() const;
+
+        bool close_sent() const;
+
+        bool close_received() const;
+
+        bool force_closed() const;
+
+        bool close_handshake_expired(uint32_t now_ms = 0) const;
+
+        uint32_t last_read_time() const;
+
+        uint32_t last_write_time() const;
+
+        uint32_t last_ping_time() const;
+
+        uint32_t last_pong_time() const;
+
+        uint32_t max_message_size() const;
+
+        uint32_t max_fragmented_message_size() const;
+
         void send_ping_frame_to(Connection *conn);
         void send_ping_frame_to(const std::shared_ptr<Connection> &conn);
         void send_pong_frame_to(Connection *conn, const ::yuan::buffer::ByteBuffer &payload = {});
@@ -113,6 +144,19 @@ namespace yuan::net::websocket
     private:
         std::vector< ::yuan::buffer::ByteBuffer> *get_output_buffers();
         std::vector<ProtoChunk> *get_input_chunks();
+        bool enqueue_output(std::vector< ::yuan::buffer::ByteBuffer> &&output);
+        bool flush_output_queue();
+        void mark_close_sent();
+        void mark_close_received();
+        void mark_read_activity();
+        void mark_write_activity();
+        void mark_ping_sent();
+        void mark_pong_received();
+        void check_pong_deadline();
+        void schedule_close_deadline_timer();
+        void cancel_close_deadline_timer();
+        void force_close();
+        std::weak_ptr<WebSocketConnection> weak_self() noexcept;
 
     private:
         WorkMode mode_;
@@ -120,13 +164,30 @@ namespace yuan::net::websocket
         std::string url_;
         std::weak_ptr<Connection> conn_owner_;
         Connection *conn_;
+        NetworkRuntime *runtime_ = nullptr;
         timer::TimerHandle heartbeat_timer_;
+        timer::TimerHandle close_deadline_timer_;
         WebSocketHandshaker handshaker_;
         WebSocketPacketParser pkt_parser_;
         WebSocketConfigManager *config_;
         std::vector<ProtoChunk> input_chunks_;
         std::vector< ::yuan::buffer::ByteBuffer> output_chunks_;
-        uint32_t last_active_time_;
+        std::vector< ::yuan::buffer::ByteBuffer> outbound_queue_;
+        std::size_t outbound_queue_bytes_ = 0;
+        std::size_t outbound_queue_max_messages_ = 0;
+        std::size_t outbound_queue_max_bytes_ = 0;
+        uint32_t last_read_time_ = 0;
+        uint32_t last_write_time_ = 0;
+        uint32_t last_ping_time_ = 0;
+        uint32_t last_pong_time_ = 0;
+        uint32_t pong_deadline_ms_ = 0;
+        uint32_t close_handshake_timeout_ms_ = DEFAULT_CLOSE_HANDSHAKE_TIMEOUT_MS;
+        uint32_t max_message_size_ = PACKET_MAX_BYTE;
+        uint32_t max_fragmented_message_size_ = PACKET_MAX_BYTE;
+        uint32_t close_deadline_ms_ = 0;
+        bool close_sent_ = false;
+        bool close_received_ = false;
+        bool force_closed_ = false;
     };
 }
 #endif

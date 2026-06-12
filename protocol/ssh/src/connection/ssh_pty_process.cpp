@@ -5,6 +5,7 @@
 #include <clocale>
 #include <cstring>
 #include <chrono>
+#include <algorithm>
 #include <string_view>
 
 #if !defined(_WIN32)
@@ -95,9 +96,291 @@ namespace yuan::net::ssh
             }
         }
 
-        bool parse_terminal_modes(const std::vector<uint8_t> &, struct termios &)
+        bool read_terminal_mode_u32(const std::vector<uint8_t> &modes,
+                                    size_t &offset,
+                                    uint32_t &value)
         {
-            return false;
+            if (offset + 4 > modes.size()) {
+                return false;
+            }
+            value = (static_cast<uint32_t>(modes[offset]) << 24) |
+                    (static_cast<uint32_t>(modes[offset + 1]) << 16) |
+                    (static_cast<uint32_t>(modes[offset + 2]) << 8) |
+                    static_cast<uint32_t>(modes[offset + 3]);
+            offset += 4;
+            return true;
+        }
+
+        void apply_control_char(struct termios &term, size_t index, uint32_t value)
+        {
+            if (index >= NCCS) {
+                return;
+            }
+            term.c_cc[index] = value == 0xFFFFFFFFu ? _POSIX_VDISABLE : static_cast<cc_t>(value & 0xFFu);
+        }
+
+        speed_t terminal_speed_from_baud(uint32_t baud)
+        {
+            switch (baud) {
+#ifdef B0
+            case 0: return B0;
+#endif
+#ifdef B50
+            case 50: return B50;
+#endif
+#ifdef B75
+            case 75: return B75;
+#endif
+#ifdef B110
+            case 110: return B110;
+#endif
+#ifdef B134
+            case 134: return B134;
+#endif
+#ifdef B150
+            case 150: return B150;
+#endif
+#ifdef B200
+            case 200: return B200;
+#endif
+#ifdef B300
+            case 300: return B300;
+#endif
+#ifdef B600
+            case 600: return B600;
+#endif
+#ifdef B1200
+            case 1200: return B1200;
+#endif
+#ifdef B1800
+            case 1800: return B1800;
+#endif
+#ifdef B2400
+            case 2400: return B2400;
+#endif
+#ifdef B4800
+            case 4800: return B4800;
+#endif
+#ifdef B9600
+            case 9600: return B9600;
+#endif
+#ifdef B19200
+            case 19200: return B19200;
+#endif
+#ifdef B38400
+            case 38400: return B38400;
+#endif
+#ifdef B57600
+            case 57600: return B57600;
+#endif
+#ifdef B115200
+            case 115200: return B115200;
+#endif
+#ifdef B230400
+            case 230400: return B230400;
+#endif
+            default: return static_cast<speed_t>(0);
+            }
+        }
+
+        bool parse_terminal_modes(const std::vector<uint8_t> &modes, struct termios &term)
+        {
+            size_t offset = 0;
+            while (offset < modes.size()) {
+                const auto opcode = static_cast<TerminalOpcode>(modes[offset++]);
+                if (static_cast<uint8_t>(opcode) == 0) {
+                    return true;
+                }
+
+                uint32_t value = 0;
+                if (!read_terminal_mode_u32(modes, offset, value)) {
+                    return false;
+                }
+
+                switch (opcode) {
+                case TerminalOpcode::kVINTR:
+                    apply_control_char(term, VINTR, value);
+                    break;
+                case TerminalOpcode::kVQUIT:
+                    apply_control_char(term, VQUIT, value);
+                    break;
+                case TerminalOpcode::kVERASE:
+                    apply_control_char(term, VERASE, value);
+                    break;
+                case TerminalOpcode::kVKILL:
+                    apply_control_char(term, VKILL, value);
+                    break;
+                case TerminalOpcode::kVEOF:
+                    apply_control_char(term, VEOF, value);
+                    break;
+                case TerminalOpcode::kVEOL:
+                    apply_control_char(term, VEOL, value);
+                    break;
+#ifdef VEOL2
+                case TerminalOpcode::kVEOL2:
+                    apply_control_char(term, VEOL2, value);
+                    break;
+#endif
+                case TerminalOpcode::kVSTART:
+                    apply_control_char(term, VSTART, value);
+                    break;
+                case TerminalOpcode::kVSTOP:
+                    apply_control_char(term, VSTOP, value);
+                    break;
+                case TerminalOpcode::kVSUSP:
+                    apply_control_char(term, VSUSP, value);
+                    break;
+#ifdef VREPRINT
+                case TerminalOpcode::kVREPRINT:
+                    apply_control_char(term, VREPRINT, value);
+                    break;
+#endif
+#ifdef VWERASE
+                case TerminalOpcode::kVWERASE:
+                    apply_control_char(term, VWERASE, value);
+                    break;
+#endif
+#ifdef VLNEXT
+                case TerminalOpcode::kVLNEXT:
+                    apply_control_char(term, VLNEXT, value);
+                    break;
+#endif
+#ifdef VDISCARD
+                case TerminalOpcode::kVDISCARD:
+                    apply_control_char(term, VDISCARD, value);
+                    break;
+#endif
+                case TerminalOpcode::kIGNPAR:
+                    apply_termios_flag(term.c_iflag, IGNPAR, value);
+                    break;
+                case TerminalOpcode::kPARMRK:
+                    apply_termios_flag(term.c_iflag, PARMRK, value);
+                    break;
+                case TerminalOpcode::kINPCK:
+                    apply_termios_flag(term.c_iflag, INPCK, value);
+                    break;
+                case TerminalOpcode::kISTRIP:
+                    apply_termios_flag(term.c_iflag, ISTRIP, value);
+                    break;
+                case TerminalOpcode::kINLCR:
+                    apply_termios_flag(term.c_iflag, INLCR, value);
+                    break;
+                case TerminalOpcode::kIGNCR:
+                    apply_termios_flag(term.c_iflag, IGNCR, value);
+                    break;
+                case TerminalOpcode::kICRNL:
+                    apply_termios_flag(term.c_iflag, ICRNL, value);
+                    break;
+                case TerminalOpcode::kIXON:
+                    apply_termios_flag(term.c_iflag, IXON, value);
+                    break;
+#ifdef IXANY
+                case TerminalOpcode::kIXANY:
+                    apply_termios_flag(term.c_iflag, IXANY, value);
+                    break;
+#endif
+#ifdef IXOFF
+                case TerminalOpcode::kIXOFF:
+                    apply_termios_flag(term.c_iflag, IXOFF, value);
+                    break;
+#endif
+                case TerminalOpcode::kISIG:
+                    apply_termios_flag(term.c_lflag, ISIG, value);
+                    break;
+                case TerminalOpcode::kICANON:
+                    apply_termios_flag(term.c_lflag, ICANON, value);
+                    break;
+                case TerminalOpcode::kECHO:
+                    apply_termios_flag(term.c_lflag, ECHO, value);
+                    break;
+                case TerminalOpcode::kECHOE:
+                    apply_termios_flag(term.c_lflag, ECHOE, value);
+                    break;
+                case TerminalOpcode::kECHOK:
+                    apply_termios_flag(term.c_lflag, ECHOK, value);
+                    break;
+                case TerminalOpcode::kECHONL:
+                    apply_termios_flag(term.c_lflag, ECHONL, value);
+                    break;
+                case TerminalOpcode::kNOFLSH:
+                    apply_termios_flag(term.c_lflag, NOFLSH, value);
+                    break;
+                case TerminalOpcode::kTOSTOP:
+                    apply_termios_flag(term.c_lflag, TOSTOP, value);
+                    break;
+#ifdef IEXTEN
+                case TerminalOpcode::kIEXTEN:
+                    apply_termios_flag(term.c_lflag, IEXTEN, value);
+                    break;
+#endif
+#ifdef ECHOCTL
+                case TerminalOpcode::kECHOCTL:
+                    apply_termios_flag(term.c_lflag, ECHOCTL, value);
+                    break;
+#endif
+#ifdef ECHOKE
+                case TerminalOpcode::kECHOKE:
+                    apply_termios_flag(term.c_lflag, ECHOKE, value);
+                    break;
+#endif
+                case TerminalOpcode::kOPOST:
+                    apply_termios_flag(term.c_oflag, OPOST, value);
+                    break;
+#ifdef ONLCR
+                case TerminalOpcode::kONLCR:
+                    apply_termios_flag(term.c_oflag, ONLCR, value);
+                    break;
+#endif
+#ifdef OCRNL
+                case TerminalOpcode::kOCRNL:
+                    apply_termios_flag(term.c_oflag, OCRNL, value);
+                    break;
+#endif
+#ifdef ONOCR
+                case TerminalOpcode::kONOCR:
+                    apply_termios_flag(term.c_oflag, ONOCR, value);
+                    break;
+#endif
+#ifdef ONLRET
+                case TerminalOpcode::kONLRET:
+                    apply_termios_flag(term.c_oflag, ONLRET, value);
+                    break;
+#endif
+                case TerminalOpcode::kCS7:
+                    if (value != 0) {
+                        term.c_cflag = (term.c_cflag & ~CSIZE) | CS7;
+                    }
+                    break;
+                case TerminalOpcode::kCS8:
+                    if (value != 0) {
+                        term.c_cflag = (term.c_cflag & ~CSIZE) | CS8;
+                    }
+                    break;
+                case TerminalOpcode::kPARENB:
+                    apply_termios_flag(term.c_cflag, PARENB, value);
+                    break;
+                case TerminalOpcode::kPARODD:
+                    apply_termios_flag(term.c_cflag, PARODD, value);
+                    break;
+                case TerminalOpcode::kTTY_OP_ISPEED: {
+                    const speed_t speed = terminal_speed_from_baud(value);
+                    if (speed != static_cast<speed_t>(0) || value == 0) {
+                        cfsetispeed(&term, speed);
+                    }
+                    break;
+                }
+                case TerminalOpcode::kTTY_OP_OSPEED: {
+                    const speed_t speed = terminal_speed_from_baud(value);
+                    if (speed != static_cast<speed_t>(0) || value == 0) {
+                        cfsetospeed(&term, speed);
+                    }
+                    break;
+                }
+                default:
+                    break;
+                }
+            }
+            return true;
         }
 
         void apply_sane_terminal_defaults(int fd)
@@ -122,6 +405,22 @@ namespace yuan::net::ssh
             term.c_cc[VEOF] = 4;
 
             tcsetattr(fd, TCSANOW, &term);
+        }
+
+        void apply_requested_terminal_modes(int fd, const std::vector<uint8_t> &modes)
+        {
+            if (modes.empty()) {
+                return;
+            }
+
+            struct termios term;
+            if (tcgetattr(fd, &term) != 0) {
+                return;
+            }
+
+            if (parse_terminal_modes(modes, term)) {
+                tcsetattr(fd, TCSANOW, &term);
+            }
         }
 
         void apply_environment(const SshTerminalSpec &spec)
@@ -169,7 +468,8 @@ namespace yuan::net::ssh
                 }
                 if (pw->pw_dir && *pw->pw_dir != '\0') {
                     setenv("HOME", pw->pw_dir, 1);
-                    chdir(pw->pw_dir);
+                    const int ignored_chdir_result = chdir(pw->pw_dir);
+                    (void)ignored_chdir_result;
                 }
             }
 
@@ -334,6 +634,7 @@ namespace yuan::net::ssh
 #if !defined(_WIN32)
         if (backend_.slave_fd() >= 0) {
             apply_sane_terminal_defaults(backend_.slave_fd());
+            apply_requested_terminal_modes(backend_.slave_fd(), spec.terminal_modes);
         }
 #endif
 

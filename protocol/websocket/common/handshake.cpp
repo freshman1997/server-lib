@@ -2,6 +2,7 @@
 #include "base/utils/base64.h"
 #include "base/utils/string_util.h"
 #include "packet.h"
+#include "header_key.h"
 #include "request.h"
 #include "response_code.h"
 #include "websocket_config.h"
@@ -118,6 +119,15 @@ namespace yuan::net::websocket
 
         auto key = req->get_header("sec-websocket-key");
         if (!key || !is_valid_websocket_key(*key)) {
+            return false;
+        }
+
+        auto origin = req->get_header(http::http_header_key::origin);
+        if (origin && config_ && !config_->is_origin_allowed(*origin)) {
+            return false;
+        }
+
+        if (config_ && !config_->is_request_authorized(*req)) {
             return false;
         }
 

@@ -2,6 +2,8 @@
 #include "plugin/host_logger.h"
 #include "plugin/host_event_bus.h"
 #include "plugin/host_scheduler.h"
+#include "plugin/host_service_registry.h"
+#include "plugin/host_http_interceptor.h"
 #include "plugin/host_storage.h"
 #include "plugin/host_resource_guard.h"
 #include "plugin/plugin_context.h"
@@ -15,8 +17,10 @@
 #include <chrono>
 #include <cstring>
 #include <mutex>
+#include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace yuan::plugin
 {
@@ -33,6 +37,23 @@ namespace yuan::plugin
             HostResourceGuard *resource_guard;
             std::recursive_mutex *js_mutex;
             TsInterruptData *interrupt_data;
+        };
+
+        class TsRegisteredService final : public PluginService
+        {
+        public:
+            explicit TsRegisteredService(std::string value)
+                : value_(std::move(value))
+            {
+            }
+
+            const std::string &value() const
+            {
+                return value_;
+            }
+
+        private:
+            std::string value_;
         };
 
         struct TsEventCallback
@@ -131,6 +152,8 @@ namespace yuan::plugin
         static JSClassID js_storage_class_id = 0;
         static JSClassID js_eventbus_class_id = 0;
         static JSClassID js_scheduler_class_id = 0;
+        static JSClassID js_service_registry_class_id = 0;
+        static JSClassID js_http_interceptor_class_id = 0;
         static JSClassID js_ctx_info_class_id = 0;
 
         static TsCtxInfo *get_ctx_info(JSContext *ctx)
@@ -944,6 +967,288 @@ namespace yuan::plugin
         {
         }
 
+        // ---- ServiceRegistry binding ----
+
+        static JSValue make_service_descriptor(JSContext *ctx, const PluginServiceDescriptor &descriptor)
+        {
+            JSValue obj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, descriptor.name.c_str()));
+            JS_SetPropertyStr(ctx, obj, "pluginName", JS_NewString(ctx, descriptor.plugin_name.c_str()));
+            JS_SetPropertyStr(ctx, obj, "typeName", JS_NewString(ctx, descriptor.type_name.c_str()));
+            JS_SetPropertyStr(ctx, obj, "contractId", JS_NewString(ctx, descriptor.contract_id.c_str()));
+            JS_SetPropertyStr(ctx, obj, "contractVersion", JS_NewInt32(ctx, descriptor.contract_version));
+            JS_SetPropertyStr(ctx, obj, "managedLifecycle", JS_NewBool(ctx, descriptor.managed_lifecycle));
+            return obj;
+        }
+
+        static JSValue js_service_registry_register(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            if (argc < 1) {
+                return JS_ThrowTypeError(ctx, "serviceRegistry.register requires at least 1 argument");
+            }
+            auto *registry = static_cast<HostServiceRegistry *>(JS_GetOpaque(this_val, js_service_registry_class_id));
+            auto *ctx_info = get_ctx_info(ctx);
+            if (!registry || !ctx_info || ctx_info->plugin_name.empty()) {
+                return JS_NewBool(ctx, false);
+            }
+
+            const char *name = JS_ToCString(ctx, argv[0]);
+            const char *contract_id = argc > 1 ? JS_ToCString(ctx, argv[1]) : nullptr;
+            int32_t contract_version = 1;
+            if (argc > 2) {
+                JS_ToInt32(ctx, &contract_version, argv[2]);
+            }
+            const char *type_name = argc > 3 ? JS_ToCString(ctx, argv[3]) : nullptr;
+            const char *value = argc > 4 ? JS_ToCString(ctx, argv[4]) : nullptr;
+
+            PluginServiceDescriptor descriptor;
+            descriptor.name = name ? name : "";
+            descriptor.plugin_name = ctx_info->plugin_name;
+            descriptor.type_name = type_name ? type_name : "script.ts.service";
+            descriptor.contract_id = contract_id ? contract_id : descriptor.name;
+            descriptor.contract_version = contract_version <= 0 ? 1 : contract_version;
+            descriptor.managed_lifecycle = true;
+
+            auto service = std::make_shared<TsRegisteredService>(value ? value : "");
+            const bool ok = registry->register_service(
+                ctx_info->plugin_name, descriptor, make_plugin_service(std::move(service)));
+
+            if (ok && ctx_info->resource_guard) {
+                auto *reg = registry;
+                const auto plugin_name = ctx_info->plugin_name;
+                ctx_info->resource_guard->track(
+                    plugin_name,
+                    PluginResourceType::service_registration,
+                    [reg, plugin_name]() {
+                        if (reg) {
+                            reg->unregister_plugin_services(plugin_name);
+                        }
+                    },
+                    "service:" + descriptor.name);
+            }
+
+            if (name) JS_FreeCString(ctx, name);
+            if (contract_id) JS_FreeCString(ctx, contract_id);
+            if (type_name) JS_FreeCString(ctx, type_name);
+            if (value) JS_FreeCString(ctx, value);
+            return JS_NewBool(ctx, ok);
+        }
+
+        static JSValue js_service_registry_has(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            if (argc < 1) {
+                return JS_ThrowTypeError(ctx, "serviceRegistry.has requires 1 argument");
+            }
+            auto *registry = static_cast<HostServiceRegistry *>(JS_GetOpaque(this_val, js_service_registry_class_id));
+            const char *name = JS_ToCString(ctx, argv[0]);
+            const bool ok = registry && name && registry->has_service(name);
+            if (name) JS_FreeCString(ctx, name);
+            return JS_NewBool(ctx, ok);
+        }
+
+        static JSValue js_service_registry_describe(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            if (argc < 1) {
+                return JS_ThrowTypeError(ctx, "serviceRegistry.describe requires 1 argument");
+            }
+            auto *registry = static_cast<HostServiceRegistry *>(JS_GetOpaque(this_val, js_service_registry_class_id));
+            const char *name = JS_ToCString(ctx, argv[0]);
+            PluginServiceDescriptor descriptor;
+            const bool ok = registry && name && registry->describe_service(name, descriptor);
+            if (name) JS_FreeCString(ctx, name);
+            return ok ? make_service_descriptor(ctx, descriptor) : JS_NULL;
+        }
+
+        static JSValue js_service_registry_list(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            (void)argc;
+            (void)argv;
+            auto *registry = static_cast<HostServiceRegistry *>(JS_GetOpaque(this_val, js_service_registry_class_id));
+            auto services = registry ? registry->list_services() : std::vector<PluginServiceDescriptor>{};
+            JSValue arr = JS_NewArray(ctx);
+            for (uint32_t i = 0; i < services.size(); ++i) {
+                JS_SetPropertyUint32(ctx, arr, i, make_service_descriptor(ctx, services[i]));
+            }
+            return arr;
+        }
+
+        static JSValue js_service_registry_unregister_all(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            (void)argc;
+            (void)argv;
+            auto *registry = static_cast<HostServiceRegistry *>(JS_GetOpaque(this_val, js_service_registry_class_id));
+            auto *ctx_info = get_ctx_info(ctx);
+            if (registry && ctx_info) {
+                registry->unregister_plugin_services(ctx_info->plugin_name);
+            }
+            return JS_UNDEFINED;
+        }
+
+        static const JSCFunctionListEntry js_service_registry_proto_funcs[] = {
+            JS_CFUNC_DEF("register", 5, js_service_registry_register),
+            JS_CFUNC_DEF("has", 1, js_service_registry_has),
+            JS_CFUNC_DEF("describe", 1, js_service_registry_describe),
+            JS_CFUNC_DEF("list", 0, js_service_registry_list),
+            JS_CFUNC_DEF("unregisterAll", 0, js_service_registry_unregister_all),
+        };
+
+        static void js_service_registry_finalizer(JSRuntime *rt, JSValue val)
+        {
+        }
+
+        // ---- HttpInterceptor binding ----
+
+        static bool call_ts_http_callback(int cb_id, const std::string &path, const std::string &method)
+        {
+            TsEventCallback cb;
+            {
+                std::lock_guard<std::mutex> lock(g_ts_callbacks_mutex);
+                auto it = g_ts_event_callbacks.find(cb_id);
+                if (it == g_ts_event_callbacks.end()) {
+                    return true;
+                }
+                cb = it->second;
+            }
+            if (!cb.js_mutex) {
+                return true;
+            }
+            std::lock_guard<std::recursive_mutex> js_lock(*cb.js_mutex);
+            JSContext *js_ctx = cb.ctx;
+            if (cb.interrupt_data) {
+                set_callback_deadline(cb.interrupt_data, cb.execution_timeout_ms);
+            }
+            JSValue req = JS_NewObject(js_ctx);
+            JS_SetPropertyStr(js_ctx, req, "path", JS_NewString(js_ctx, path.c_str()));
+            JS_SetPropertyStr(js_ctx, req, "method", JS_NewString(js_ctx, method.c_str()));
+            JSValue argv[] = { req };
+            JSValue ret = JS_Call(js_ctx, cb.callback, JS_UNDEFINED, 1, argv);
+            if (cb.interrupt_data) {
+                clear_callback_deadline(cb.interrupt_data);
+            }
+            bool keep_going = true;
+            if (JS_IsException(ret)) {
+                JSValue exception = JS_GetException(js_ctx);
+                const char *err = JS_ToCString(js_ctx, exception);
+                LOG_ERROR("ts http interceptor callback error: {}", err ? err : "unknown");
+                JS_FreeCString(js_ctx, err);
+                JS_FreeValue(js_ctx, exception);
+            } else if (JS_IsBool(ret)) {
+                keep_going = JS_ToBool(js_ctx, ret) != 0;
+            }
+            JS_FreeValue(js_ctx, ret);
+            JS_FreeValue(js_ctx, req);
+            return keep_going;
+        }
+
+        static int store_ts_callback(JSContext *ctx, JSValueConst callback, TsCtxInfo *ctx_info)
+        {
+            TsEventCallback cb;
+            cb.ctx = ctx;
+            cb.callback = JS_DupValue(ctx, callback);
+            cb.plugin_name = ctx_info ? ctx_info->plugin_name : "";
+            cb.execution_timeout_ms = ctx_info ? ctx_info->execution_timeout_ms : 0;
+            cb.js_mutex = ctx_info ? ctx_info->js_mutex : nullptr;
+            cb.interrupt_data = ctx_info ? ctx_info->interrupt_data : nullptr;
+            std::lock_guard<std::mutex> lock(g_ts_callbacks_mutex);
+            int cb_id = g_ts_next_callback_id++;
+            g_ts_event_callbacks[cb_id] = std::move(cb);
+            return cb_id;
+        }
+
+        static JSValue js_http_add_middleware(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
+                return JS_ThrowTypeError(ctx, "httpInterceptor.addMiddleware requires callback");
+            }
+            auto *interceptor = static_cast<HostHttpInterceptor *>(JS_GetOpaque(this_val, js_http_interceptor_class_id));
+            auto *ctx_info = get_ctx_info(ctx);
+            if (!interceptor || !ctx_info || ctx_info->plugin_name.empty()) {
+                return JS_NewInt32(ctx, 0);
+            }
+            const char *name = argc > 1 ? JS_ToCString(ctx, argv[1]) : nullptr;
+            const int cb_id = store_ts_callback(ctx, argv[0], ctx_info);
+            auto id = interceptor->add_middleware(
+                ctx_info->plugin_name,
+                [cb_id](const std::string &path, const std::string &method, void *, void *) {
+                    return call_ts_http_callback(cb_id, path, method);
+                },
+                name ? name : "");
+            if (id != 0 && ctx_info->resource_guard) {
+                ctx_info->resource_guard->track(ctx_info->plugin_name,
+                                               PluginResourceType::callback,
+                                               [cb_id]() { (void)cleanup_event_callback_by_id(cb_id); },
+                                               "callback:http-middleware");
+            } else if (id == 0) {
+                (void)cleanup_event_callback_by_id(cb_id);
+            }
+            if (name) JS_FreeCString(ctx, name);
+            return JS_NewInt64(ctx, static_cast<int64_t>(id));
+        }
+
+        static JSValue js_http_add_route(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            if (argc < 2 || !JS_IsFunction(ctx, argv[1])) {
+                return JS_ThrowTypeError(ctx, "httpInterceptor.addRoute requires path and callback");
+            }
+            auto *interceptor = static_cast<HostHttpInterceptor *>(JS_GetOpaque(this_val, js_http_interceptor_class_id));
+            auto *ctx_info = get_ctx_info(ctx);
+            if (!interceptor || !ctx_info || ctx_info->plugin_name.empty()) {
+                return JS_NewInt32(ctx, 0);
+            }
+            const char *path = JS_ToCString(ctx, argv[0]);
+            const char *method = argc > 2 ? JS_ToCString(ctx, argv[2]) : nullptr;
+            const int cb_id = store_ts_callback(ctx, argv[1], ctx_info);
+            auto id = interceptor->add_route(
+                ctx_info->plugin_name,
+                path ? path : "",
+                [cb_id](const std::string &route_path, const std::string &route_method, void *, void *) {
+                    (void)call_ts_http_callback(cb_id, route_path, route_method);
+                },
+                method ? method : "");
+            if (id != 0 && ctx_info->resource_guard) {
+                ctx_info->resource_guard->track(ctx_info->plugin_name,
+                                               PluginResourceType::callback,
+                                               [cb_id]() { (void)cleanup_event_callback_by_id(cb_id); },
+                                               "callback:http-route");
+            } else if (id == 0) {
+                (void)cleanup_event_callback_by_id(cb_id);
+            }
+            if (path) JS_FreeCString(ctx, path);
+            if (method) JS_FreeCString(ctx, method);
+            return JS_NewInt64(ctx, static_cast<int64_t>(id));
+        }
+
+        static JSValue js_http_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            if (argc < 1) {
+                return JS_ThrowTypeError(ctx, "httpInterceptor.remove requires id");
+            }
+            auto *interceptor = static_cast<HostHttpInterceptor *>(JS_GetOpaque(this_val, js_http_interceptor_class_id));
+            int64_t id = 0;
+            JS_ToInt64(ctx, &id, argv[0]);
+            return JS_NewBool(ctx, interceptor && interceptor->remove(static_cast<HttpInterceptorId>(id)));
+        }
+
+        static JSValue js_http_is_available(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+        {
+            (void)ctx;
+            (void)argc;
+            (void)argv;
+            auto *interceptor = static_cast<HostHttpInterceptor *>(JS_GetOpaque(this_val, js_http_interceptor_class_id));
+            return JS_NewBool(ctx, interceptor && interceptor->is_available());
+        }
+
+        static const JSCFunctionListEntry js_http_interceptor_proto_funcs[] = {
+            JS_CFUNC_DEF("addMiddleware", 2, js_http_add_middleware),
+            JS_CFUNC_DEF("addRoute", 3, js_http_add_route),
+            JS_CFUNC_DEF("remove", 1, js_http_remove),
+            JS_CFUNC_DEF("isAvailable", 0, js_http_is_available),
+        };
+
+        static void js_http_interceptor_finalizer(JSRuntime *rt, JSValue val)
+        {
+        }
+
         static void js_ctx_info_finalizer(JSRuntime *rt, JSValue val)
         {
             auto *info = static_cast<TsCtxInfo *>(JS_GetOpaque(val, js_ctx_info_class_id));
@@ -1019,6 +1324,10 @@ namespace yuan::plugin
                           js_eventbus_proto_funcs, sizeof(js_eventbus_proto_funcs) / sizeof(js_eventbus_proto_funcs[0]));
         register_js_class(ctx, &js_scheduler_class_id, "HostScheduler", js_scheduler_finalizer,
                           js_scheduler_proto_funcs, sizeof(js_scheduler_proto_funcs) / sizeof(js_scheduler_proto_funcs[0]));
+        register_js_class(ctx, &js_service_registry_class_id, "HostServiceRegistry", js_service_registry_finalizer,
+                          js_service_registry_proto_funcs, sizeof(js_service_registry_proto_funcs) / sizeof(js_service_registry_proto_funcs[0]));
+        register_js_class(ctx, &js_http_interceptor_class_id, "HostHttpInterceptor", js_http_interceptor_finalizer,
+                          js_http_interceptor_proto_funcs, sizeof(js_http_interceptor_proto_funcs) / sizeof(js_http_interceptor_proto_funcs[0]));
 
         JSValue host = JS_NewObject(ctx);
 
@@ -1036,6 +1345,14 @@ namespace yuan::plugin
 
         if (context.scheduler) {
             JS_SetPropertyStr(ctx, host, "scheduler", make_instance(ctx, js_scheduler_class_id, context.scheduler));
+        }
+
+        if (context.service_registry) {
+            JS_SetPropertyStr(ctx, host, "serviceRegistry", make_instance(ctx, js_service_registry_class_id, context.service_registry));
+        }
+
+        if (context.http_interceptor) {
+            JS_SetPropertyStr(ctx, host, "httpInterceptor", make_instance(ctx, js_http_interceptor_class_id, context.http_interceptor));
         }
 
         JS_SetPropertyStr(ctx, host, "appName", JS_NewString(ctx, context.app_name.c_str()));

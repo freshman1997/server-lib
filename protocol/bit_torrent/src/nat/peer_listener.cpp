@@ -59,9 +59,8 @@ namespace yuan::net::bit_torrent
 
     bool PeerListener::try_bind_and_listen(int32_t port)
     {
-        auto *sock = new net::Socket("0.0.0.0", port);
+        auto sock = std::make_unique<net::Socket>("0.0.0.0", port);
         if (!sock->valid()) {
-            delete sock;
             return false;
         }
 
@@ -69,11 +68,10 @@ namespace yuan::net::bit_torrent
         sock->set_none_block(true);
 
         if (!sock->bind()) {
-            delete sock;
             return false;
         }
 
-        auto acceptor = std::unique_ptr<net::StreamAcceptor>(net::create_stream_acceptor(sock));
+        auto acceptor = std::unique_ptr<net::StreamAcceptor>(net::create_stream_acceptor(sock.release()));
         if (!acceptor->listen()) {
             return false;
         }

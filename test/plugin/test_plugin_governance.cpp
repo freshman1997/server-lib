@@ -2,6 +2,7 @@
 #include "eventbus/event_bus.h"
 #include "plugin_resource_guard.h"
 #include "plugin_protocol_service_adapter.h"
+#include "plugin_host_service.h"
 #include "plugin_service_registry_adapter.h"
 #include "plugin/plugin_call_guard.h"
 #include "plugin/plugin_context.h"
@@ -13,7 +14,9 @@
 #include "plugin/plugin_manifest.h"
 #include "plugin/plugin_meta.h"
 #include "plugin/plugin_state.h"
+#include "lua_script_plugin_adapter.h"
 #include "net/runtime/network_runtime.h"
+#include "ts_script_plugin_adapter.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -27,6 +30,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -47,6 +51,8 @@ constexpr socket_t kInvalidSocket = -1;
 #include "buffer/byte_buffer.h"
 #include "nlohmann/json.hpp"
 
+#include <any>
+
 namespace
 {
 
@@ -57,6 +63,9 @@ namespace
             std::exit(1);
         }
     }
+
+    std::unordered_map<std::string, int> fake_script_load_counts;
+    int fake_script_cleanup_count = 0;
 
     void close_socket(socket_t fd)
     {
@@ -566,14 +575,152 @@ namespace
 
         bool load_script(const std::string &) override
         {
+            ++fake_script_load_counts[manifest_.plugin_id];
+            script_loaded_ = true;
             return true;
         }
 
     protected:
-        bool do_init(const yuan::plugin::PluginContext &) override
+        bool do_init(const yuan::plugin::PluginContext &context) override
         {
+            if (context.resource_guard) {
+                context.resource_guard->track(manifest_.plugin_id,
+                                              yuan::plugin::PluginResourceType::callback,
+                                              []() { ++fake_script_cleanup_count; },
+                                              "fake script reload cleanup");
+            }
             return true;
         }
+    };
+
+    class TestServiceRegistry final : public yuan::plugin::HostServiceRegistry
+    {
+    public:
+        bool register_service(const std::string &plugin_name,
+                              const yuan::plugin::PluginServiceDescriptor &descriptor,
+                              std::any service) override
+        {
+            auto stored = descriptor;
+            stored.plugin_name = plugin_name;
+            services_[stored.name] = Entry{ stored, std::move(service) };
+            return true;
+        }
+
+        void unregister_plugin_services(const std::string &plugin_name) override
+        {
+            for (auto it = services_.begin(); it != services_.end();) {
+                if (it->second.descriptor.plugin_name == plugin_name) {
+                    it = services_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
+        std::any find_service(const std::string &name) const override
+        {
+            auto it = services_.find(name);
+            return it == services_.end() ? std::any{} : it->second.service;
+        }
+
+        bool describe_service(const std::string &name, yuan::plugin::PluginServiceDescriptor &descriptor) const override
+        {
+            auto it = services_.find(name);
+            if (it == services_.end()) {
+                return false;
+            }
+            descriptor = it->second.descriptor;
+            return true;
+        }
+
+        std::vector<yuan::plugin::PluginServiceDescriptor> list_services() const override
+        {
+            std::vector<yuan::plugin::PluginServiceDescriptor> result;
+            for (const auto &pair : services_) {
+                result.push_back(pair.second.descriptor);
+            }
+            return result;
+        }
+
+        bool has_service(const std::string &name) const override
+        {
+            return services_.find(name) != services_.end();
+        }
+
+    private:
+        struct Entry
+        {
+            yuan::plugin::PluginServiceDescriptor descriptor;
+            std::any service;
+        };
+
+        std::unordered_map<std::string, Entry> services_;
+    };
+
+    class TestHttpInterceptor final : public yuan::plugin::HostHttpInterceptor
+    {
+    public:
+        yuan::plugin::HttpInterceptorId add_middleware(
+            const std::string &plugin_name,
+            yuan::plugin::HttpMiddlewareCallback callback,
+            const std::string &name = "") override
+        {
+            const auto id = next_id_++;
+            entries_[id] = Entry{ plugin_name, std::move(callback), {}, name, {} };
+            return id;
+        }
+
+        yuan::plugin::HttpInterceptorId add_route(
+            const std::string &plugin_name,
+            const std::string &path,
+            yuan::plugin::HttpRouteCallback callback,
+            const std::string &method = "") override
+        {
+            const auto id = next_id_++;
+            entries_[id] = Entry{ plugin_name, {}, std::move(callback), path, method };
+            return id;
+        }
+
+        bool remove(yuan::plugin::HttpInterceptorId id) override
+        {
+            return entries_.erase(id) != 0;
+        }
+
+        void remove_by_plugin(const std::string &plugin_name) override
+        {
+            for (auto it = entries_.begin(); it != entries_.end();) {
+                if (it->second.plugin_name == plugin_name) {
+                    it = entries_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
+        bool is_available() const override
+        {
+            return available;
+        }
+
+        std::size_t count() const
+        {
+            return entries_.size();
+        }
+
+        bool available = true;
+
+    private:
+        struct Entry
+        {
+            std::string plugin_name;
+            yuan::plugin::HttpMiddlewareCallback middleware;
+            yuan::plugin::HttpRouteCallback route;
+            std::string name_or_path;
+            std::string method;
+        };
+
+        yuan::plugin::HttpInterceptorId next_id_ = 1;
+        std::unordered_map<yuan::plugin::HttpInterceptorId, Entry> entries_;
     };
 
     void test_state_machine_transitions()
@@ -4355,6 +4502,329 @@ namespace
         require(guard.tracked_count("cleanup-test") == 0, "no resources should remain after cleanup");
     }
 
+    void test_resource_guard_quota_limits()
+    {
+        yuan::app::PluginResourceGuard guard;
+
+        yuan::plugin::PluginResourceQuota quota;
+        quota.max_total_resources = 2;
+        quota.max_resources_by_type[yuan::plugin::PluginResourceType::callback] = 1;
+        guard.set_quota("quota-test", quota);
+
+        auto id1 = guard.track("quota-test", yuan::plugin::PluginResourceType::callback,
+                               []() {}, "cb1");
+        auto id2 = guard.track("quota-test", yuan::plugin::PluginResourceType::callback,
+                               []() {}, "cb2");
+        auto id3 = guard.track("quota-test", yuan::plugin::PluginResourceType::scheduler_task,
+                               []() {}, "task1");
+        auto id4 = guard.track("quota-test", yuan::plugin::PluginResourceType::event_subscription,
+                               []() {}, "sub1");
+
+        require(id1 != 0, "first callback should be tracked under quota");
+        require(id2 == 0, "second callback should be rejected by per-type quota");
+        require(id3 != 0, "scheduler task should be tracked under total quota");
+        require(id4 == 0, "third total resource should be rejected by total quota");
+        require(guard.tracked_count("quota-test") == 2, "quota test should track only accepted resources");
+
+        guard.clear_quota("quota-test");
+        auto id5 = guard.track("quota-test", yuan::plugin::PluginResourceType::event_subscription,
+                               []() {}, "sub2");
+        require(id5 != 0, "resource should be accepted after quota is cleared");
+        guard.cleanup_plugin("quota-test");
+    }
+
+    yuan::plugin::PluginManifest script_binding_manifest(const std::string &name, const std::string &language)
+    {
+        yuan::plugin::PluginManifest manifest;
+        manifest.name = name;
+        manifest.plugin_id = name;
+        manifest.version = "1.0.0";
+        manifest.run_mode = yuan::plugin::PluginRunMode::script;
+        manifest.language = language;
+        manifest.entry = language == "lua" ? "main.lua" : "main.ts";
+        return manifest;
+    }
+
+    yuan::plugin::PluginContext script_binding_context(const std::string &plugin_name,
+                                                       TestServiceRegistry &registry,
+                                                       TestHttpInterceptor &interceptor,
+                                                       yuan::app::PluginResourceGuard &guard)
+    {
+        yuan::plugin::PluginContext context;
+        context.app_name = "script-binding-test";
+        context.plugin_name = plugin_name;
+        context.service_registry = &registry;
+        context.http_interceptor = &interceptor;
+        context.resource_guard = &guard;
+        return context;
+    }
+
+    void test_lua_service_registry_and_http_bindings()
+    {
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-lua-bindings-" + std::to_string(static_cast<unsigned long long>(
+                                                        std::chrono::steady_clock::now().time_since_epoch().count())));
+        std::filesystem::create_directories(temp_root);
+        const auto script_path = temp_root / "main.lua";
+        {
+            std::ofstream script(script_path);
+            require(static_cast<bool>(script), "lua binding test script should be creatable");
+            script << "local plugin = {}\n";
+            script << "function plugin.on_init(ctx)\n";
+            script << "  if not ctx.service_registry or not ctx.http_interceptor then return false end\n";
+            script << "  if not ctx.http_interceptor:is_available() then return false end\n";
+            script << "  if not ctx.service_registry:register('lua.svc', 'contract.lua', 2, 'lua.type', 'value') then return false end\n";
+            script << "  if not ctx.service_registry:has('lua.svc') then return false end\n";
+            script << "  local desc = ctx.service_registry:describe('lua.svc')\n";
+            script << "  if not desc or desc.contract_id ~= 'contract.lua' or desc.contract_version ~= 2 then return false end\n";
+            script << "  if #ctx.service_registry:list() ~= 1 then return false end\n";
+            script << "  local mid = ctx.http_interceptor:add_middleware(function(path, method) return true end, 'lua-mw')\n";
+            script << "  local rid = ctx.http_interceptor:add_route('/lua', function(path, method) end, 'GET')\n";
+            script << "  if mid == 0 or rid == 0 then return false end\n";
+            script << "  if not ctx.http_interceptor:remove(mid) then return false end\n";
+            script << "  return true\n";
+            script << "end\n";
+            script << "function plugin.on_release() end\n";
+            script << "return plugin\n";
+        }
+
+        TestServiceRegistry registry;
+        TestHttpInterceptor interceptor;
+        yuan::app::PluginResourceGuard guard;
+        yuan::plugin::LuaScriptPluginAdapter adapter(script_binding_manifest("lua-binding", "lua"));
+        require(adapter.load_script(script_path.string()), "lua binding script should load");
+        require(adapter.on_init(script_binding_context("lua-binding", registry, interceptor, guard)),
+                "lua service/http binding script should initialize");
+        require(registry.has_service("lua.svc"), "lua binding should register a service");
+        require(interceptor.count() == 1, "lua binding should leave only the route after middleware removal");
+        require(guard.tracked_count("lua-binding") == 3,
+                "lua binding should track service registration and both http callbacks until cleanup");
+        guard.cleanup_plugin("lua-binding");
+        require(!registry.has_service("lua.svc"), "resource cleanup should unregister lua services");
+
+        adapter.on_release();
+        std::error_code ec;
+        std::filesystem::remove_all(temp_root, ec);
+    }
+
+    void test_ts_service_registry_and_http_bindings()
+    {
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-ts-bindings-" + std::to_string(static_cast<unsigned long long>(
+                                                       std::chrono::steady_clock::now().time_since_epoch().count())));
+        std::filesystem::create_directories(temp_root);
+        const auto script_path = temp_root / "main.ts";
+        {
+            std::ofstream script(script_path);
+            require(static_cast<bool>(script), "ts binding test script should be creatable");
+            script << "function on_init(host) {\n";
+            script << "  if (!host.serviceRegistry || !host.httpInterceptor) return false;\n";
+            script << "  if (!host.httpInterceptor.isAvailable()) return false;\n";
+            script << "  if (!host.serviceRegistry.register('ts.svc', 'contract.ts', 3, 'ts.type', 'value')) return false;\n";
+            script << "  if (!host.serviceRegistry.has('ts.svc')) return false;\n";
+            script << "  const desc = host.serviceRegistry.describe('ts.svc');\n";
+            script << "  if (!desc || desc.contractId !== 'contract.ts' || desc.contractVersion !== 3) return false;\n";
+            script << "  if (host.serviceRegistry.list().length !== 1) return false;\n";
+            script << "  const mid = host.httpInterceptor.addMiddleware(function(path, method) { return true; }, 'ts-mw');\n";
+            script << "  const rid = host.httpInterceptor.addRoute('/ts', function(path, method) {}, 'POST');\n";
+            script << "  if (mid === 0 || rid === 0) return false;\n";
+            script << "  if (!host.httpInterceptor.remove(mid)) return false;\n";
+            script << "  return true;\n";
+            script << "}\n";
+            script << "function on_release() {}\n";
+        }
+
+        TestServiceRegistry registry;
+        TestHttpInterceptor interceptor;
+        yuan::app::PluginResourceGuard guard;
+        yuan::plugin::TsScriptPluginAdapter adapter(script_binding_manifest("ts-binding", "typescript"));
+        require(adapter.load_script(script_path.string()), "ts binding script should load");
+        require(adapter.on_init(script_binding_context("ts-binding", registry, interceptor, guard)),
+                "ts service/http binding script should initialize");
+        require(registry.has_service("ts.svc"), "ts binding should register a service");
+        require(interceptor.count() == 1, "ts binding should leave only the route after middleware removal");
+        require(guard.tracked_count("ts-binding") == 3,
+                "ts binding should track service registration and both http callbacks until cleanup");
+        guard.cleanup_plugin("ts-binding");
+        require(!registry.has_service("ts.svc"), "resource cleanup should unregister ts services");
+
+        adapter.on_release();
+        std::error_code ec;
+        std::filesystem::remove_all(temp_root, ec);
+    }
+
+    void test_plugin_host_reload_changed_script_plugins()
+    {
+        fake_script_load_counts.clear();
+        fake_script_cleanup_count = 0;
+
+        const std::string language = "governance-reload-script";
+        yuan::plugin::ScriptPluginRegistry::instance().register_adapter(
+            language,
+            [](const yuan::plugin::PluginManifest &manifest, const yuan::plugin::PluginConfigView &) -> yuan::plugin::ScriptPluginAdapter * {
+                return new FakeScriptPlugin(manifest);
+            });
+
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-host-reload-" + std::to_string(static_cast<unsigned long long>(
+                                                        std::chrono::steady_clock::now().time_since_epoch().count())));
+        const auto plugin_dir = temp_root / "reload_script";
+        std::filesystem::create_directories(plugin_dir);
+
+        {
+            std::ofstream manifest(plugin_dir / "plugin.json");
+            require(static_cast<bool>(manifest), "reload script manifest should be creatable");
+            const auto doc = nlohmann::json{
+                {"run_mode", "script"},
+                {"language", language},
+                {"entry", "main.fake"},
+            };
+            manifest << doc.dump(2) << "\n";
+        }
+        {
+            std::ofstream script(plugin_dir / "main.fake");
+            require(static_cast<bool>(script), "reload script entry should be creatable");
+            script << "version=1\n";
+        }
+
+        yuan::app::PluginHostService host(temp_root.string(), { "reload_script" });
+        require(host.init(), "plugin host should load fake reload script");
+        require(fake_script_load_counts["reload_script"] == 1, "fake script should load once during host init");
+
+        auto reloaded = host.reload_changed_script_plugins();
+        require(reloaded.empty(), "unchanged script scan should not reload plugins");
+        require(fake_script_load_counts["reload_script"] == 1, "unchanged script should not load again");
+
+        const auto script_path = plugin_dir / "main.fake";
+        std::error_code ec;
+        const auto initial_write_time = std::filesystem::last_write_time(script_path, ec);
+        require(!ec, "reload script timestamp should be readable");
+        std::filesystem::last_write_time(script_path, initial_write_time + std::chrono::seconds(2), ec);
+        require(!ec, "reload script timestamp should be updateable");
+
+        reloaded = host.reload_changed_script_plugins();
+        require(reloaded.size() == 1 && reloaded[0] == "reload_script",
+                "changed script scan should reload the modified plugin");
+        require(fake_script_load_counts["reload_script"] == 2, "changed script should load a second time");
+        require(fake_script_cleanup_count == 1, "reload should clean up resources from the old plugin instance");
+        require(host.health_check_all().size() == 1, "reload should leave exactly one loaded plugin instance");
+
+        host.stop();
+        require(fake_script_cleanup_count == 2, "host stop should clean up resources from the reloaded plugin");
+        std::filesystem::remove_all(temp_root, ec);
+    }
+
+    void test_plugin_manifest_resource_quota_limits_host_resources()
+    {
+        fake_script_load_counts.clear();
+        fake_script_cleanup_count = 0;
+
+        const std::string language = "governance-quota-script";
+        yuan::plugin::ScriptPluginRegistry::instance().register_adapter(
+            language,
+            [](const yuan::plugin::PluginManifest &manifest, const yuan::plugin::PluginConfigView &) -> yuan::plugin::ScriptPluginAdapter * {
+                return new FakeScriptPlugin(manifest);
+            });
+
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-host-quota-" + std::to_string(static_cast<unsigned long long>(
+                                                       std::chrono::steady_clock::now().time_since_epoch().count())));
+        const auto plugin_dir = temp_root / "quota_script";
+        std::filesystem::create_directories(plugin_dir);
+
+        {
+            std::ofstream manifest(plugin_dir / "plugin.json");
+            require(static_cast<bool>(manifest), "quota script manifest should be creatable");
+            const auto doc = nlohmann::json{
+                {"run_mode", "script"},
+                {"language", language},
+                {"entry", "main.fake"},
+                {"resource_quota", {
+                    {"max_total_resources", 0},
+                    {"max_resources_by_type", {
+                        {"callback", 0}
+                    }}
+                }},
+            };
+            manifest << doc.dump(2) << "\n";
+        }
+        {
+            std::ofstream script(plugin_dir / "main.fake");
+            require(static_cast<bool>(script), "quota script entry should be creatable");
+            script << "version=1\n";
+        }
+
+        yuan::app::PluginHostService host(temp_root.string(), { "quota_script" });
+        require(host.init(), "plugin host should load fake quota script");
+        require(fake_script_load_counts["quota_script"] == 1, "quota script should load once");
+
+        host.stop();
+        require(fake_script_cleanup_count == 0,
+                "manifest resource_quota should reject the fake script tracked callback resource");
+
+        std::error_code ec;
+        std::filesystem::remove_all(temp_root, ec);
+    }
+
+    void test_script_bindings_respect_manifest_permissions()
+    {
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-permission-bindings-" + std::to_string(static_cast<unsigned long long>(
+                                                           std::chrono::steady_clock::now().time_since_epoch().count())));
+        const auto lua_dir = temp_root / "lua_no_caps";
+        const auto ts_dir = temp_root / "ts_no_caps";
+        std::filesystem::create_directories(lua_dir);
+        std::filesystem::create_directories(ts_dir);
+
+        {
+            std::ofstream manifest(lua_dir / "plugin.json");
+            require(static_cast<bool>(manifest), "lua no-caps manifest should be creatable");
+            const auto doc = nlohmann::json{
+                {"run_mode", "script"},
+                {"language", "lua"},
+                {"entry", "main.lua"},
+            };
+            manifest << doc.dump(2) << "\n";
+        }
+        {
+            std::ofstream script(lua_dir / "main.lua");
+            require(static_cast<bool>(script), "lua no-caps script should be creatable");
+            script << "local plugin = {}\n";
+            script << "function plugin.on_init(ctx)\n";
+            script << "  return ctx.service_registry == nil and ctx.http_interceptor == nil\n";
+            script << "end\n";
+            script << "function plugin.on_release() end\n";
+            script << "return plugin\n";
+        }
+
+        {
+            std::ofstream manifest(ts_dir / "plugin.json");
+            require(static_cast<bool>(manifest), "ts no-caps manifest should be creatable");
+            const auto doc = nlohmann::json{
+                {"run_mode", "script"},
+                {"language", "typescript"},
+                {"entry", "main.ts"},
+            };
+            manifest << doc.dump(2) << "\n";
+        }
+        {
+            std::ofstream script(ts_dir / "main.ts");
+            require(static_cast<bool>(script), "ts no-caps script should be creatable");
+            script << "function on_init(host) {\n";
+            script << "  return host.serviceRegistry === undefined && host.httpInterceptor === undefined;\n";
+            script << "}\n";
+            script << "function on_release() {}\n";
+        }
+
+        yuan::app::PluginHostService host(temp_root.string(), { "lua_no_caps", "ts_no_caps" });
+        require(host.init(), "scripts without service/http permissions should initialize with stripped bindings");
+        require(host.health_check_all().size() == 2, "permission binding test should load both scripts");
+        host.stop();
+
+        std::error_code ec;
+        std::filesystem::remove_all(temp_root, ec);
+    }
+
     void test_lifecycle_manager_cleanup_on_stop()
     {
         yuan::app::PluginResourceGuard guard;
@@ -4487,6 +4957,12 @@ int main()
     test_protocol_service_udp_peer_idle_cleanup();
     test_protocol_service_adapter_negative_paths();
     test_resource_guard_cleanup_on_stop();
+    test_resource_guard_quota_limits();
+    test_lua_service_registry_and_http_bindings();
+    test_ts_service_registry_and_http_bindings();
+    test_plugin_host_reload_changed_script_plugins();
+    test_plugin_manifest_resource_quota_limits_host_resources();
+    test_script_bindings_respect_manifest_permissions();
     std::cout << "  PASSED" << std::endl;
 
     std::cout << "all phase C governance tests passed" << std::endl;

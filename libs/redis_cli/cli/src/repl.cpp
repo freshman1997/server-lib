@@ -82,6 +82,7 @@ namespace yredis
         bool in_quote = false;
         char quote_char = 0;
         bool escaping = false;
+        bool token_started = false;
 
         for (char c : line)
         {
@@ -89,6 +90,7 @@ namespace yredis
             {
                 current += c;
                 escaping = false;
+                token_started = true;
                 continue;
             }
 
@@ -103,15 +105,11 @@ namespace yredis
                 if (c == quote_char)
                 {
                     in_quote = false;
-                    if (!current.empty())
-                    {
-                        tokens.push_back(current);
-                        current.clear();
-                    }
                 }
                 else
                 {
                     current += c;
+                    token_started = true;
                 }
             }
             else
@@ -120,30 +118,26 @@ namespace yredis
                 {
                     in_quote = true;
                     quote_char = c;
+                    token_started = true;
                 }
                 else if (c == ' ' || c == '\t')
                 {
-                    if (!current.empty())
+                    if (token_started)
                     {
                         tokens.push_back(current);
                         current.clear();
+                        token_started = false;
                     }
                 }
                 else
                 {
                     current += c;
+                    token_started = true;
                 }
             }
         }
 
-        if (in_quote)
-        {
-            if (!current.empty())
-            {
-                tokens.push_back(current);
-            }
-        }
-        else if (!current.empty())
+        if (token_started || in_quote)
         {
             tokens.push_back(current);
         }
@@ -298,15 +292,21 @@ namespace yredis
         }
 
         state.connected = true;
-        std::cout << ansi_green() << "Connected to " << state.opt.host_ << ":" << state.opt.port_
-                  << " db=" << state.opt.db_ << ansi_reset() << "\n";
+        if (!state.quiet)
+        {
+            std::cout << ansi_green() << "Connected to " << state.opt.host_ << ":" << state.opt.port_
+                      << " db=" << state.opt.db_ << ansi_reset() << "\n";
+        }
 
         if (state.opt.db_ > 0)
         {
             auto result = state.client->select(state.opt.db_);
             if (result && !result->as<yuan::redis::ErrorValue>())
             {
-                std::cout << ansi_green() << "Database " << state.opt.db_ << " selected." << ansi_reset() << "\n";
+                if (!state.quiet)
+                {
+                    std::cout << ansi_green() << "Database " << state.opt.db_ << " selected." << ansi_reset() << "\n";
+                }
             }
             else
             {
@@ -1153,6 +1153,11 @@ namespace yredis
         auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - start).count();
 
+        if (state.quiet)
+        {
+            return result;
+        }
+
         if (elapsed_us >= 1000000)
         {
             double sec = elapsed_us / 1000000.0;
@@ -1180,20 +1185,25 @@ namespace yredis
     void repl_loop(ReplState &state)
     {
         input_init(state);
+        const bool interactive = is_interactive();
 
         while (true)
         {
             if (state.should_exit)
             {
-                std::cout << ansi_cyan() << "Bye!" << ansi_reset() << "\n";
+                if (interactive) {
+                    std::cout << ansi_cyan() << "Bye!" << ansi_reset() << "\n";
+                }
                 break;
             }
 
-            std::string prompt = build_prompt(state);
+            std::string prompt = interactive ? build_prompt(state) : std::string();
             auto rr = read_line(prompt);
             if (rr.eof)
             {
-                std::cout << ansi_cyan() << "Bye!" << ansi_reset() << "\n";
+                if (interactive) {
+                    std::cout << ansi_cyan() << "Bye!" << ansi_reset() << "\n";
+                }
                 break;
             }
 

@@ -2,6 +2,7 @@
 #include "plugin/plugin.h"
 #include "plugin/plugin_symbol_solver.h"
 #include "plugin/plugin_state.h"
+#include "plugin/host_resource_guard.h"
 #include "plugin/script_plugin_registry.h"
 #include "plugin/extension_point_registry.h"
 #include "logger.h"
@@ -311,6 +312,47 @@ namespace yuan::plugin
             context.permission_guard = nullptr;
         }
 
+        PluginResourceType parse_resource_type(const std::string &type)
+        {
+            if (type == "event_subscription") return PluginResourceType::event_subscription;
+            if (type == "scheduler_task") return PluginResourceType::scheduler_task;
+            if (type == "service_registration") return PluginResourceType::service_registration;
+            if (type == "http_middleware") return PluginResourceType::http_middleware;
+            if (type == "http_route") return PluginResourceType::http_route;
+            if (type == "network_listener") return PluginResourceType::network_listener;
+            if (type == "network_connection") return PluginResourceType::network_connection;
+            if (type == "callback") return PluginResourceType::callback;
+            if (type == "coroutine_task") return PluginResourceType::coroutine_task;
+            if (type == "async_task") return PluginResourceType::async_task;
+            if (type == "storage_session") return PluginResourceType::storage_session;
+            return PluginResourceType::custom;
+        }
+
+        void apply_resource_quota_from_config(const std::string &plugin_name, const PluginContext &context)
+        {
+            if (!context.resource_guard || !context.config.loaded()) {
+                return;
+            }
+            auto *raw = context.config.raw();
+            if (!raw || !raw->contains("resource_quota") || !(*raw)["resource_quota"].is_object()) {
+                return;
+            }
+
+            const auto &quota_json = (*raw)["resource_quota"];
+            PluginResourceQuota quota;
+            if (quota_json.contains("max_total_resources") && quota_json["max_total_resources"].is_number_unsigned()) {
+                quota.max_total_resources = quota_json["max_total_resources"].get<size_t>();
+            }
+            if (quota_json.contains("max_resources_by_type") && quota_json["max_resources_by_type"].is_object()) {
+                for (auto it = quota_json["max_resources_by_type"].begin(); it != quota_json["max_resources_by_type"].end(); ++it) {
+                    if (it.value().is_number_unsigned()) {
+                        quota.max_resources_by_type[parse_resource_type(it.key())] = it.value().get<size_t>();
+                    }
+                }
+            }
+            context.resource_guard->set_quota(plugin_name, quota);
+        }
+
     } // namespace
 
     class PluginManager::PluginData
@@ -529,6 +571,7 @@ namespace yuan::plugin
         }
 
         apply_permission_boundary(context);
+        apply_resource_quota_from_config(plugin_name, context);
 
         for (const auto &ep : manifest.extension_points) {
             extension_point_registry_.register_extension_point(plugin_name, ep);

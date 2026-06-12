@@ -248,7 +248,7 @@ namespace yuan::net::http
 
             header_state = HeaderState::header_value;
             const char *value_begin = colon + 1;
-            if (value_begin < line_data_end && std::isblank(static_cast<unsigned char>(*value_begin))) {
+            if (value_begin < line_data_end && (*value_begin == ' ' || *value_begin == '\t')) {
                 ++value_begin;
             }
             std::string val(value_begin, static_cast<std::size_t>(line_data_end - value_begin));

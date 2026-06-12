@@ -13,18 +13,70 @@
 #include "logger.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
+#include <string_view>
 
 namespace yuan::net::websocket
 {
+    namespace
+    {
+        bool iequals_ascii(std::string_view lhs, std::string_view rhs)
+        {
+            if (lhs.size() != rhs.size()) {
+                return false;
+            }
+            for (std::size_t i = 0; i < lhs.size(); ++i) {
+                if (std::tolower(static_cast<unsigned char>(lhs[i])) !=
+                    std::tolower(static_cast<unsigned char>(rhs[i]))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        std::string_view trim_ascii(std::string_view value)
+        {
+            while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+                value.remove_prefix(1);
+            }
+            while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+                value.remove_suffix(1);
+            }
+            return value;
+        }
+
+        bool header_has_token(const std::string *value, std::string_view token)
+        {
+            if (!value) {
+                return false;
+            }
+
+            std::size_t start = 0;
+            while (start <= value->size()) {
+                const auto comma = value->find(',', start);
+                const auto end = comma == std::string::npos ? value->size() : comma;
+                if (iequals_ascii(trim_ascii(std::string_view(*value).substr(start, end - start)), token)) {
+                    return true;
+                }
+                if (comma == std::string::npos) {
+                    break;
+                }
+                start = comma + 1;
+            }
+            return false;
+        }
+    }
+
     void WebSocketProxy::install(http::HttpServer & server, http::HttpProxyHandler & proxy)
     {
         auto ws_proxy = std::make_shared<WebSocketProxy>(&proxy, &server);
         server.set_ws_proxy_handler(
             [ws_proxy](net::AsyncConnectionContext ctx, const std::string & url,
-                       const std::string & route_key, const std::string & client_key,
-                       const std::string & subproto, ::yuan::buffer::ByteBuffer leftover)->coroutine::Task<void> {
-                co_await ws_proxy->proxy_connection(std::move(ctx), url, route_key, client_key, subproto, std::move(leftover)); });
+                        const std::string & route_key, const std::string & client_key,
+                        const std::string & subproto, const std::string & origin,
+                        ::yuan::buffer::ByteBuffer leftover)->coroutine::Task<void> {
+                co_await ws_proxy->proxy_connection(std::move(ctx), url, route_key, client_key, subproto, origin, std::move(leftover)); });
     }
 
     WebSocketProxy::WebSocketProxy(http::HttpProxyHandler * http_proxy, http::HttpServer * server)
@@ -38,10 +90,11 @@ namespace yuan::net::websocket
     coroutine::Task<void> WebSocketProxy::proxy_connection(
         net::AsyncConnectionContext client_ctx,
         const std::string & raw_url,
-        const std::string & route_key,
-        const std::string & client_key,
-        const std::string & subproto,
-        ::yuan::buffer::ByteBuffer client_leftover)
+            const std::string & route_key,
+            const std::string & client_key,
+            const std::string & subproto,
+            const std::string & origin,
+            ::yuan::buffer::ByteBuffer client_leftover)
     {
         if (route_key.empty()) {
             client_ctx.close();
@@ -87,9 +140,10 @@ namespace yuan::net::websocket
             backend_session,
             target.host, target.port,
             path, route.connect_timeout_ms,
-            client_ip, subproto);
+            client_ip, subproto, origin);
         if (!hs_result.success) {
             LOG_WARN("[WSProxy] backend handshake failed for {}:{}", target.host, target.port);
+            backend_handshake_failures_.fetch_add(1, std::memory_order_relaxed);
             client_ctx.close();
             backend_session.close();
             co_return;
@@ -122,12 +176,14 @@ namespace yuan::net::websocket
         co_await client_ctx.flush_async();
 
         LOG_INFO("[WSProxy] proxy established: client <-> {}:{}", target.host, target.port);
+        active_tunnels_.fetch_add(1, std::memory_order_relaxed);
 
         auto state = std::make_shared<ProxySharedState>(
             std::move(client_ctx),
             std::move(backend_session.context()),
             &server_config_,
-            &client_config_);
+            &client_config_,
+            this);
 
         auto b2c = forward_frames(state, false, std::move(hs_result.leftover_data));
         b2c.resume();
@@ -143,9 +199,10 @@ namespace yuan::net::websocket
         const std::string & host,
         uint16_t port,
         const std::string & path,
-        int connect_timeout_ms,
-        const std::string & client_ip,
-        const std::string & subproto)
+            int connect_timeout_ms,
+            const std::string & client_ip,
+            const std::string & subproto,
+            const std::string & origin)
     {
         (void)connect_timeout_ms;
 
@@ -171,6 +228,10 @@ namespace yuan::net::websocket
             req_str += "Sec-WebSocket-Protocol: " + subproto + "\r\n";
         }
 
+        if (!origin.empty()) {
+            req_str += "Origin: " + origin + "\r\n";
+        }
+
         req_str += "X-Forwarded-Proto: http\r\n";
         req_str += "\r\n";
 
@@ -188,8 +249,9 @@ namespace yuan::net::websocket
         std::string expected_accept = WebSocketUtils::generate_server_key(proxy_key);
         bool handshake_ok = false;
 
+        const uint32_t backend_handshake_timeout = client_config_.get_handshake_timeout();
         for (int i = 0; i < 64; ++i) {
-            auto read_result = co_await session.read_awaiter();
+            auto read_result = co_await session.read_awaiter(backend_handshake_timeout);
             if (read_result.status != coroutine::IoStatus::success) {
                 break;
             }
@@ -209,19 +271,13 @@ namespace yuan::net::websocket
                 }
 
                 auto *conn_hdr = resp->get_header("connection");
-                if (!conn_hdr)
-                    break;
-                std::string conn_lower = *conn_hdr;
-                std::transform(conn_lower.begin(), conn_lower.end(), conn_lower.begin(), ::tolower);
-                if (conn_lower != "upgrade")
+                if (!header_has_token(conn_hdr, "Upgrade"))
                     break;
 
                 auto *upgrade_hdr = resp->get_header("upgrade");
                 if (!upgrade_hdr)
                     break;
-                std::string upgrade_lower = *upgrade_hdr;
-                std::transform(upgrade_lower.begin(), upgrade_lower.end(), upgrade_lower.begin(), ::tolower);
-                if (upgrade_lower != "websocket")
+                if (!iequals_ascii(trim_ascii(*upgrade_hdr), "websocket"))
                     break;
 
                 auto *accept_hdr = resp->get_header("sec-websocket-accept");
@@ -265,6 +321,9 @@ namespace yuan::net::websocket
             if (has_initial) {
                 has_initial = false;
                 if (!src_ws.pkt_parser().unpack_from(&src_ws, initial_data)) {
+                    if (state->owner) {
+                        state->owner->protocol_failures_.fetch_add(1, std::memory_order_relaxed);
+                    }
                     ::yuan::buffer::ByteBuffer empty_payload;
                     co_await send_control_frame_async(src_ctx, src_ws,
                                                       static_cast<uint8_t>(OpCodeType::type_close_frame), empty_payload);
@@ -278,6 +337,9 @@ namespace yuan::net::websocket
                 }
 
                 if (!src_ws.pkt_parser().unpack_from(&src_ws, read_result.data)) {
+                    if (state->owner) {
+                        state->owner->protocol_failures_.fetch_add(1, std::memory_order_relaxed);
+                    }
                     ::yuan::buffer::ByteBuffer empty_payload;
                     co_await send_control_frame_async(src_ctx, src_ws,
                                                       static_cast<uint8_t>(OpCodeType::type_close_frame), empty_payload);
@@ -294,6 +356,9 @@ namespace yuan::net::websocket
                 }
 
                 if (chunk.head_.is_close_frame()) {
+                    if (state->owner) {
+                        state->owner->normal_closes_.fetch_add(1, std::memory_order_relaxed);
+                    }
                     ::yuan::buffer::ByteBuffer close_payload;
                     if (chunk.body_.readable_bytes() >= 2) {
                         close_payload.append(chunk.body_);
@@ -319,6 +384,7 @@ namespace yuan::net::websocket
                     uint8_t opcode = chunk.head_.ctrl_code_.opcode_;
                     std::vector< ::yuan::buffer::ByteBuffer> output;
                     if (dst_ws.pack_frame(chunk.body_, opcode, output)) {
+                        const auto payload_bytes = static_cast<uint64_t>(chunk.body_.readable_bytes());
                         for (auto &buf : output) {
                             auto wr = co_await dst_ctx.write_async(buf);
                             if (wr.status != coroutine::IoStatus::success) {
@@ -330,6 +396,11 @@ namespace yuan::net::websocket
                             auto fr = co_await dst_ctx.flush_async();
                             if (fr.status != coroutine::IoStatus::success) {
                                 should_close = true;
+                            } else if (state->owner) {
+                                auto &counter = client_to_backend
+                                                    ? state->owner->tunnel_bytes_client_to_backend_
+                                                    : state->owner->tunnel_bytes_backend_to_client_;
+                                counter.fetch_add(payload_bytes, std::memory_order_relaxed);
                             }
                         }
                     }
@@ -359,8 +430,23 @@ namespace yuan::net::websocket
         state->backend_ctx.close();
 
         if (state->active_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            if (state->owner) {
+                state->owner->active_tunnels_.fetch_sub(1, std::memory_order_relaxed);
+            }
             state->close_all();
         }
+    }
+
+    WebSocketProxyMetricsSnapshot WebSocketProxy::metrics() const
+    {
+        WebSocketProxyMetricsSnapshot snapshot;
+        snapshot.active_tunnels = active_tunnels_.load(std::memory_order_relaxed);
+        snapshot.tunnel_bytes_client_to_backend = tunnel_bytes_client_to_backend_.load(std::memory_order_relaxed);
+        snapshot.tunnel_bytes_backend_to_client = tunnel_bytes_backend_to_client_.load(std::memory_order_relaxed);
+        snapshot.normal_closes = normal_closes_.load(std::memory_order_relaxed);
+        snapshot.protocol_failures = protocol_failures_.load(std::memory_order_relaxed);
+        snapshot.backend_handshake_failures = backend_handshake_failures_.load(std::memory_order_relaxed);
+        return snapshot;
     }
 
     coroutine::Task<void> WebSocketProxy::send_control_frame_async(

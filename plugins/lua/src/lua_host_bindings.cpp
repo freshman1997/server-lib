@@ -2,6 +2,8 @@
 #include "plugin/host_logger.h"
 #include "plugin/host_event_bus.h"
 #include "plugin/host_scheduler.h"
+#include "plugin/host_service_registry.h"
+#include "plugin/host_http_interceptor.h"
 #include "plugin/host_storage.h"
 #include "plugin/host_resource_guard.h"
 #include "plugin/plugin_context.h"
@@ -33,6 +35,23 @@ namespace yuan::plugin
             HostLogger *logger;
             HostResourceGuard *resource_guard;
             std::recursive_mutex *lua_mutex;
+        };
+
+        class LuaRegisteredService final : public PluginService
+        {
+        public:
+            explicit LuaRegisteredService(std::string value)
+                : value_(std::move(value))
+            {
+            }
+
+            const std::string &value() const
+            {
+                return value_;
+            }
+
+        private:
+            std::string value_;
         };
 
         struct LuaEventCallback
@@ -787,6 +806,272 @@ namespace yuan::plugin
             { nullptr, nullptr }
         };
 
+        // ---- ServiceRegistry binding ----
+
+        static int lua_service_registry_register(lua_State *L)
+        {
+            auto *registry = check_host_userdata<HostServiceRegistry>(L, 1, "yuan.HostServiceRegistry");
+            const char *name = luaL_checkstring(L, 2);
+            const char *contract_id = luaL_optstring(L, 3, name);
+            const int contract_version = static_cast<int>(luaL_optinteger(L, 4, 1));
+            const char *type_name = luaL_optstring(L, 5, "script.lua.service");
+            const char *value = luaL_optstring(L, 6, "");
+
+            auto *ctx_info = get_ctx_info(L);
+            if (!registry || !ctx_info || ctx_info->plugin_name.empty()) {
+                lua_pushboolean(L, 0);
+                return 1;
+            }
+
+            PluginServiceDescriptor descriptor;
+            descriptor.name = name ? name : "";
+            descriptor.plugin_name = ctx_info->plugin_name;
+            descriptor.type_name = type_name ? type_name : "script.lua.service";
+            descriptor.contract_id = contract_id ? contract_id : descriptor.name;
+            descriptor.contract_version = contract_version;
+            descriptor.managed_lifecycle = true;
+
+            auto service = std::make_shared<LuaRegisteredService>(value ? value : "");
+            const bool ok = registry->register_service(
+                ctx_info->plugin_name, descriptor, make_plugin_service(std::move(service)));
+
+            if (ok && ctx_info->resource_guard) {
+                auto *reg = registry;
+                const auto plugin_name = ctx_info->plugin_name;
+                ctx_info->resource_guard->track(
+                    plugin_name,
+                    PluginResourceType::service_registration,
+                    [reg, plugin_name]() {
+                        if (reg) {
+                            reg->unregister_plugin_services(plugin_name);
+                        }
+                    },
+                    "service:" + descriptor.name);
+            }
+
+            lua_pushboolean(L, ok ? 1 : 0);
+            return 1;
+        }
+
+        static int lua_service_registry_has(lua_State *L)
+        {
+            auto *registry = check_host_userdata<HostServiceRegistry>(L, 1, "yuan.HostServiceRegistry");
+            const char *name = luaL_checkstring(L, 2);
+            lua_pushboolean(L, (registry && registry->has_service(name ? name : "")) ? 1 : 0);
+            return 1;
+        }
+
+        static void push_service_descriptor(lua_State *L, const PluginServiceDescriptor &descriptor)
+        {
+            lua_createtable(L, 0, 6);
+            lua_pushstring(L, descriptor.name.c_str());
+            lua_setfield(L, -2, "name");
+            lua_pushstring(L, descriptor.plugin_name.c_str());
+            lua_setfield(L, -2, "plugin_name");
+            lua_pushstring(L, descriptor.type_name.c_str());
+            lua_setfield(L, -2, "type_name");
+            lua_pushstring(L, descriptor.contract_id.c_str());
+            lua_setfield(L, -2, "contract_id");
+            lua_pushinteger(L, descriptor.contract_version);
+            lua_setfield(L, -2, "contract_version");
+            lua_pushboolean(L, descriptor.managed_lifecycle ? 1 : 0);
+            lua_setfield(L, -2, "managed_lifecycle");
+        }
+
+        static int lua_service_registry_describe(lua_State *L)
+        {
+            auto *registry = check_host_userdata<HostServiceRegistry>(L, 1, "yuan.HostServiceRegistry");
+            const char *name = luaL_checkstring(L, 2);
+            PluginServiceDescriptor descriptor;
+            if (registry && registry->describe_service(name ? name : "", descriptor)) {
+                push_service_descriptor(L, descriptor);
+            } else {
+                lua_pushnil(L);
+            }
+            return 1;
+        }
+
+        static int lua_service_registry_list(lua_State *L)
+        {
+            auto *registry = check_host_userdata<HostServiceRegistry>(L, 1, "yuan.HostServiceRegistry");
+            auto services = registry ? registry->list_services() : std::vector<PluginServiceDescriptor>{};
+            lua_createtable(L, static_cast<int>(services.size()), 0);
+            int index = 1;
+            for (const auto &descriptor : services) {
+                lua_pushinteger(L, index++);
+                push_service_descriptor(L, descriptor);
+                lua_rawset(L, -3);
+            }
+            return 1;
+        }
+
+        static int lua_service_registry_unregister_all(lua_State *L)
+        {
+            auto *registry = check_host_userdata<HostServiceRegistry>(L, 1, "yuan.HostServiceRegistry");
+            auto *ctx_info = get_ctx_info(L);
+            if (registry && ctx_info) {
+                registry->unregister_plugin_services(ctx_info->plugin_name);
+            }
+            return 0;
+        }
+
+        static const luaL_Reg service_registry_methods[] = {
+            { "register", lua_service_registry_register },
+            { "has", lua_service_registry_has },
+            { "describe", lua_service_registry_describe },
+            { "list", lua_service_registry_list },
+            { "unregister_all", lua_service_registry_unregister_all },
+            { nullptr, nullptr }
+        };
+
+        // ---- HttpInterceptor binding ----
+
+        static bool call_lua_http_middleware(int cb_id,
+                                             const std::string &path,
+                                             const std::string &method)
+        {
+            LuaEventCallback cb;
+            {
+                std::lock_guard<std::mutex> lock(g_callbacks_mutex);
+                auto it = g_event_callbacks.find(cb_id);
+                if (it == g_event_callbacks.end()) {
+                    return true;
+                }
+                cb = it->second;
+            }
+            if (!cb.lua_mutex) {
+                return true;
+            }
+            std::lock_guard<std::recursive_mutex> lua_lock(*cb.lua_mutex);
+            lua_rawgeti(cb.L, LUA_REGISTRYINDEX, cb.ref);
+            lua_createtable(cb.L, 0, 2);
+            lua_pushstring(cb.L, path.c_str());
+            lua_setfield(cb.L, -2, "path");
+            lua_pushstring(cb.L, method.c_str());
+            lua_setfield(cb.L, -2, "method");
+            set_callback_hook(cb.L, cb.max_instructions_per_call);
+            const int ret = lua_pcall(cb.L, 1, 1, 0);
+            clear_callback_hook(cb.L);
+            if (ret != LUA_OK) {
+                const char *err = lua_tostring(cb.L, -1);
+                LOG_ERROR("lua http middleware callback error: {}", err ? err : "unknown");
+                log_lua_callback_error(cb.logger, err);
+                lua_pop(cb.L, 1);
+                return true;
+            }
+            const bool keep_going = lua_toboolean(cb.L, -1) != 0;
+            lua_pop(cb.L, 1);
+            return keep_going;
+        }
+
+        static void call_lua_http_route(int cb_id,
+                                        const std::string &path,
+                                        const std::string &method)
+        {
+            (void)call_lua_http_middleware(cb_id, path, method);
+        }
+
+        static int store_lua_callback(lua_State *L, int function_index, LuaCtxInfo *ctx_info)
+        {
+            lua_pushvalue(L, function_index);
+            int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+            LuaEventCallback cb;
+            cb.L = L;
+            cb.ref = ref;
+            cb.plugin_name = ctx_info ? ctx_info->plugin_name : "";
+            cb.max_instructions_per_call = ctx_info ? ctx_info->max_instructions_per_call : 0;
+            cb.logger = ctx_info ? ctx_info->logger : nullptr;
+            cb.lua_mutex = ctx_info ? ctx_info->lua_mutex : nullptr;
+
+            std::lock_guard<std::mutex> lock(g_callbacks_mutex);
+            int cb_id = g_next_callback_id++;
+            g_event_callbacks[cb_id] = std::move(cb);
+            return cb_id;
+        }
+
+        static int lua_http_add_middleware(lua_State *L)
+        {
+            auto *interceptor = check_host_userdata<HostHttpInterceptor>(L, 1, "yuan.HostHttpInterceptor");
+            luaL_checktype(L, 2, LUA_TFUNCTION);
+            const char *name = luaL_optstring(L, 3, "");
+            auto *ctx_info = get_ctx_info(L);
+            if (!interceptor || !ctx_info || ctx_info->plugin_name.empty()) {
+                lua_pushinteger(L, 0);
+                return 1;
+            }
+            const int cb_id = store_lua_callback(L, 2, ctx_info);
+            auto id = interceptor->add_middleware(
+                ctx_info->plugin_name,
+                [cb_id](const std::string &path, const std::string &method, void *, void *) {
+                    return call_lua_http_middleware(cb_id, path, method);
+                },
+                name ? name : "");
+            if (id != 0 && ctx_info->resource_guard) {
+                ctx_info->resource_guard->track(ctx_info->plugin_name,
+                                               PluginResourceType::callback,
+                                               [cb_id]() { (void)cleanup_event_callback_by_id(cb_id); },
+                                               "callback:http-middleware");
+            } else if (id == 0) {
+                (void)cleanup_event_callback_by_id(cb_id);
+            }
+            lua_pushinteger(L, static_cast<lua_Integer>(id));
+            return 1;
+        }
+
+        static int lua_http_add_route(lua_State *L)
+        {
+            auto *interceptor = check_host_userdata<HostHttpInterceptor>(L, 1, "yuan.HostHttpInterceptor");
+            const char *path = luaL_checkstring(L, 2);
+            luaL_checktype(L, 3, LUA_TFUNCTION);
+            const char *method = luaL_optstring(L, 4, "");
+            auto *ctx_info = get_ctx_info(L);
+            if (!interceptor || !ctx_info || ctx_info->plugin_name.empty()) {
+                lua_pushinteger(L, 0);
+                return 1;
+            }
+            const int cb_id = store_lua_callback(L, 3, ctx_info);
+            auto id = interceptor->add_route(
+                ctx_info->plugin_name,
+                path ? path : "",
+                [cb_id](const std::string &route_path, const std::string &route_method, void *, void *) {
+                    call_lua_http_route(cb_id, route_path, route_method);
+                },
+                method ? method : "");
+            if (id != 0 && ctx_info->resource_guard) {
+                ctx_info->resource_guard->track(ctx_info->plugin_name,
+                                               PluginResourceType::callback,
+                                               [cb_id]() { (void)cleanup_event_callback_by_id(cb_id); },
+                                               "callback:http-route");
+            } else if (id == 0) {
+                (void)cleanup_event_callback_by_id(cb_id);
+            }
+            lua_pushinteger(L, static_cast<lua_Integer>(id));
+            return 1;
+        }
+
+        static int lua_http_remove(lua_State *L)
+        {
+            auto *interceptor = check_host_userdata<HostHttpInterceptor>(L, 1, "yuan.HostHttpInterceptor");
+            auto id = static_cast<HttpInterceptorId>(luaL_checkinteger(L, 2));
+            lua_pushboolean(L, (interceptor && interceptor->remove(id)) ? 1 : 0);
+            return 1;
+        }
+
+        static int lua_http_is_available(lua_State *L)
+        {
+            auto *interceptor = check_host_userdata<HostHttpInterceptor>(L, 1, "yuan.HostHttpInterceptor");
+            lua_pushboolean(L, (interceptor && interceptor->is_available()) ? 1 : 0);
+            return 1;
+        }
+
+        static const luaL_Reg http_interceptor_methods[] = {
+            { "add_middleware", lua_http_add_middleware },
+            { "add_route", lua_http_add_route },
+            { "remove", lua_http_remove },
+            { "is_available", lua_http_is_available },
+            { nullptr, nullptr }
+        };
+
         static void register_userdata_type(lua_State *L, const char *meta_name, const luaL_Reg *methods)
         {
             luaL_newmetatable(L, meta_name);
@@ -827,8 +1112,10 @@ namespace yuan::plugin
         register_userdata_type(L, "yuan.HostStorage", storage_methods);
         register_userdata_type(L, "yuan.HostEventBus", eventbus_methods);
         register_userdata_type(L, "yuan.HostScheduler", scheduler_methods);
+        register_userdata_type(L, "yuan.HostServiceRegistry", service_registry_methods);
+        register_userdata_type(L, "yuan.HostHttpInterceptor", http_interceptor_methods);
 
-        lua_createtable(L, 0, 8);
+        lua_createtable(L, 0, 10);
 
         if (context.logger) {
             push_userdata(L, context.logger, "yuan.HostLogger");
@@ -848,6 +1135,16 @@ namespace yuan::plugin
         if (context.scheduler) {
             push_userdata(L, context.scheduler, "yuan.HostScheduler");
             lua_setfield(L, -2, "scheduler");
+        }
+
+        if (context.service_registry) {
+            push_userdata(L, context.service_registry, "yuan.HostServiceRegistry");
+            lua_setfield(L, -2, "service_registry");
+        }
+
+        if (context.http_interceptor) {
+            push_userdata(L, context.http_interceptor, "yuan.HostHttpInterceptor");
+            lua_setfield(L, -2, "http_interceptor");
         }
 
         lua_pushstring(L, context.app_name.c_str());

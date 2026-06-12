@@ -114,6 +114,8 @@ namespace yuan::net::http
         std::string ws_route_key_;
         std::string ws_client_key_;
         std::string ws_subproto_;
+        std::string ws_origin_;
+        bool ws_handoff_rejected_ = false;
 
     private:
         void reset() const;

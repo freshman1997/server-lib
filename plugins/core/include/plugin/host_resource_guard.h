@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -61,6 +62,12 @@ namespace yuan::plugin
         }
     }
 
+    struct PluginResourceQuota
+    {
+        size_t max_total_resources = (std::numeric_limits<size_t>::max)();
+        std::unordered_map<PluginResourceType, size_t> max_resources_by_type;
+    };
+
     /// 插件资源守卫 — 追踪插件注册的所有宿主资源, 卸载时自动清理
     ///
     /// 使用方式:
@@ -99,6 +106,20 @@ namespace yuan::plugin
 
         /// 生成指定插件的资源泄漏报告
         virtual std::string leak_report(const std::string &plugin_name) const = 0;
+
+        /// 设置/清除插件资源配额。默认实现保持兼容, 具体 Host 可选择支持。
+        virtual void set_quota(const std::string & /*plugin_name*/, const PluginResourceQuota & /*quota*/)
+        {
+        }
+
+        virtual void clear_quota(const std::string & /*plugin_name*/)
+        {
+        }
+
+        virtual PluginResourceQuota quota(const std::string & /*plugin_name*/) const
+        {
+            return {};
+        }
     };
 
 } // namespace yuan::plugin

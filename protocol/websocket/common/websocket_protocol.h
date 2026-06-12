@@ -7,6 +7,16 @@
 namespace yuan::net::websocket
 {
     constexpr uint32_t PACKET_MAX_BYTE = 1024 * 1024;
+    constexpr uint32_t DEFAULT_CLOSE_HANDSHAKE_TIMEOUT_MS = 5000;
+    constexpr uint32_t DEFAULT_HANDSHAKE_TIMEOUT_MS = 10000;
+    constexpr uint32_t DEFAULT_RATE_LIMIT_WINDOW_MS = 1000;
+    constexpr const char *DEFAULT_TLS_CERT_PATH = "./ca/ca.crt";
+    constexpr const char *DEFAULT_TLS_KEY_PATH = "./ca/ca.key";
+    constexpr uint8_t websocket_payload_len_16bit_marker = 126;
+    constexpr uint8_t websocket_payload_len_64bit_marker = 127;
+    constexpr uint64_t websocket_payload_len_7bit_max = 125;
+    constexpr uint64_t websocket_payload_len_16bit_max = 0xffff;
+    constexpr uint64_t websocket_payload_len_64bit_msb = uint64_t{1} << 63;
 
     enum class WorkMode : uint8_t {
         client_,

@@ -19,8 +19,11 @@
 #include "plugin/plugin_events.h"
 #include "plugin/plugin_manager.h"
 #include "plugin/plugin_state.h"
+#include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <utility>
 #include <iostream>
 
@@ -297,6 +300,7 @@ namespace yuan::app
 
         if (resource_guard_) {
             resource_guard_->cleanup_plugin(plugin_name);
+            resource_guard_->clear_quota(plugin_name);
         }
 
         if (service_registry_) {
@@ -373,6 +377,7 @@ namespace yuan::app
         }
 
         loaded_plugins_.push_back(plugin_name);
+        update_script_timestamp(plugin_name);
         if (runtime_context_.event_bus) {
             runtime_context_.event_bus->publish(
                 plugin::events::plugin_loaded,
@@ -413,6 +418,7 @@ namespace yuan::app
         plugin_storages_.erase(plugin_name);
         pluginManager.set_context(make_base_plugin_context(nullptr));
         loaded_plugins_.erase(it);
+        script_write_times_.erase(plugin_name);
 
         if (runtime_context_.event_bus) {
             runtime_context_.event_bus->publish(
@@ -420,6 +426,45 @@ namespace yuan::app
                 make_plugin_event(plugin_name));
         }
         return true;
+    }
+
+    bool PluginHostService::reload_plugin(const std::string & plugin_name)
+    {
+        const auto was_loaded = std::find(loaded_plugins_.begin(), loaded_plugins_.end(), plugin_name) != loaded_plugins_.end();
+        if (!was_loaded) {
+            return load_plugin(plugin_name);
+        }
+
+        if (!unload_plugin(plugin_name)) {
+            return false;
+        }
+        return load_plugin(plugin_name);
+    }
+
+    std::vector<std::string> PluginHostService::reload_changed_script_plugins()
+    {
+        std::vector<std::string> reloaded;
+        auto plugins_snapshot = loaded_plugins_;
+        for (const auto &plugin_name : plugins_snapshot) {
+            std::string path;
+            if (!script_entry_path(plugin_name, path)) {
+                continue;
+            }
+            std::error_code ec;
+            const auto current_time = std::filesystem::last_write_time(path, ec);
+            if (ec) {
+                continue;
+            }
+            auto it = script_write_times_.find(plugin_name);
+            if (it == script_write_times_.end()) {
+                script_write_times_[plugin_name] = current_time;
+                continue;
+            }
+            if (it->second != current_time && reload_plugin(plugin_name)) {
+                reloaded.push_back(plugin_name);
+            }
+        }
+        return reloaded;
     }
 
     plugin::Plugin *PluginHostService::get_plugin(const std::string & plugin_name) const
@@ -564,6 +609,14 @@ namespace yuan::app
         return resource_guard_->untrack(resource_id);
     }
 
+    void PluginHostService::set_plugin_resource_quota(const std::string &plugin_name,
+                                                      const plugin::PluginResourceQuota &quota)
+    {
+        if (resource_guard_) {
+            resource_guard_->set_quota(plugin_name, quota);
+        }
+    }
+
     std::string PluginHostService::resource_leak_report(const std::string &plugin_name) const
     {
         if (!resource_guard_) {
@@ -623,6 +676,53 @@ namespace yuan::app
     plugin::PluginEvent PluginHostService::make_plugin_event(const std::string & plugin_name) const
     {
         return make_plugin_event_impl(runtime_context_, plugin_name);
+    }
+
+    bool PluginHostService::script_entry_path(const std::string & plugin_name, std::string & path) const
+    {
+        std::error_code ec;
+        auto manifest_path = std::filesystem::path(plugin_path_) / plugin_name / "plugin.json";
+        if (!std::filesystem::exists(manifest_path, ec) || ec) {
+            manifest_path = std::filesystem::path(plugin_path_) / (plugin_name + ".json");
+            if (!std::filesystem::exists(manifest_path, ec) || ec) {
+                return false;
+            }
+        }
+
+        std::ifstream manifest_file(manifest_path);
+        if (!manifest_file.good()) {
+            return false;
+        }
+        try
+        {
+            nlohmann::json manifest;
+            manifest_file >> manifest;
+            if (manifest.value("run_mode", "") != "script") {
+                return false;
+            }
+            const auto entry = manifest.value("entry", std::string("main.lua"));
+            path = (std::filesystem::path(plugin_path_) / plugin_name / entry).string();
+            return true;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    bool PluginHostService::update_script_timestamp(const std::string & plugin_name)
+    {
+        std::string path;
+        if (!script_entry_path(plugin_name, path)) {
+            return false;
+        }
+        std::error_code ec;
+        auto timestamp = std::filesystem::last_write_time(path, ec);
+        if (ec) {
+            return false;
+        }
+        script_write_times_[plugin_name] = timestamp;
+        return true;
     }
 
     plugin::PluginLifecycleManager &PluginHostService::lifecycle_manager()
@@ -720,6 +820,7 @@ namespace yuan::app
             }
 
             loaded_plugins_.push_back(pluginName);
+            update_script_timestamp(pluginName);
             if (runtime_context_.event_bus) {
                 runtime_context_.event_bus->publish(
                     plugin::events::plugin_loaded,
@@ -810,6 +911,7 @@ namespace yuan::app
             }
         }
         loaded_plugins_.clear();
+        script_write_times_.clear();
         pluginManager.set_context(make_base_plugin_context(nullptr));
 
         resource_guard_.reset();

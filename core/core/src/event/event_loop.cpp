@@ -210,7 +210,7 @@ namespace yuan::net
         std::vector<PollEvent> events;
         events.reserve(4096);
 
-        std::vector<std::pair<Channel *, int>> active_channels;
+        std::vector<PollEvent> active_channels;
         active_channels.reserve(256);
 
         auto has_channels = [this]() {
@@ -268,14 +268,30 @@ namespace yuan::net
                             (it->second->get_events() & event.revents) == Channel::NONE_EVENT) {
                             continue;
                         }
-                        active_channels.emplace_back(it->second, event.revents);
+                        active_channels.push_back(event);
                     }
                 }
 
-                for (auto &[channel, revents] : active_channels) {
+                for (const auto &active_event : active_channels) {
+                    Channel *channel = nullptr;
+                    {
+                        std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
+                        auto it = data_->channels_.find(active_event.fd);
+                        if (it == data_->channels_.end()) {
+                            continue;
+                        }
+                        channel = it->second;
+                        if (!channel || active_event.generation == 0 ||
+                            channel->generation() != active_event.generation ||
+                            !channel->has_events() ||
+                            (channel->get_events() & active_event.revents) == Channel::NONE_EVENT) {
+                            continue;
+                        }
+                    }
+
                     processed_work = true;
                     try {
-                        channel->set_revent(revents);
+                        channel->set_revent(active_event.revents);
                         channel->on_event();
                     } catch (const std::exception& e) {
                         LOG_ERROR("Exception in event loop (fd={}): {}", channel->get_fd(), e.what());

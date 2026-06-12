@@ -9,6 +9,12 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "logger.h"
 #include "platform/native_platform.h"
 #include "option.h"
@@ -29,7 +35,10 @@ static int safe_stoi(const std::string &s, int default_val = 0)
 static void print_usage()
 {
     std::cout << "yredis - Redis CLI Tool (yuan::redis)\n\n"
-              << "Usage: yredis [options]\n\n"
+              << "Usage:\n"
+              << "  yredis [options]\n"
+              << "  yredis [options] -- <command> [arg ...]\n"
+              << "  yredis [options] <command> [arg ...]\n\n"
               << "Options:\n"
               << "  -h <host>       Redis host (default: localhost)\n"
               << "  -p <port>       Redis port (default: 6379)\n"
@@ -47,7 +56,43 @@ static void print_usage()
               << "  yredis -c                    Connect to localhost:6379 immediately\n"
               << "  yredis -h 127.0.0.1 -p 6380  Set host and port\n"
               << "  yredis -c -a mypassword       Connect with authentication\n"
-              << "  yredis -c -d 2                 Connect to database 2\n\n";
+              << "  yredis -c -d 2                 Connect to database 2\n"
+              << "  yredis -c GET mykey            Run one command and exit\n"
+              << "  yredis -c -- SET mykey value   Use -- before commands starting with '-'\n\n";
+}
+
+static bool stdin_is_tty()
+{
+#ifdef _WIN32
+    return _isatty(_fileno(stdin)) != 0;
+#else
+    return isatty(STDIN_FILENO) != 0;
+#endif
+}
+
+static int run_one_command(yredis::ReplState &state, const std::vector<std::string> &command)
+{
+    if (command.empty()) {
+        return 0;
+    }
+
+    state.client = std::make_shared<yuan::redis::RedisClient>(state.opt);
+    if (!state.client->ensure_connected()) {
+        std::cerr << yredis::ansi_red() << "Failed to connect to "
+                  << state.opt.host_ << ":" << state.opt.port_ << yredis::ansi_reset() << "\n";
+        state.client->close();
+        state.client.reset();
+        return 1;
+    }
+
+    std::vector<std::string> args(command.begin() + 1, command.end());
+    auto result = state.client->command(command[0], args);
+    std::cout << yredis::format_value(result, state.format_style);
+
+    const auto err = result ? result->as<yuan::redis::ErrorValue>() : nullptr;
+    state.client->close();
+    state.client.reset();
+    return err ? 2 : 0;
 }
 
 int main(int argc, char *argv[])
@@ -58,6 +103,7 @@ int main(int argc, char *argv[])
 
     yredis::ReplState state;
     bool auto_connect = false;
+    std::vector<std::string> one_shot_command;
 
     const char *env_auth = std::getenv("YREDIS_AUTH");
     if (env_auth && env_auth[0] != '\0') {
@@ -68,7 +114,14 @@ int main(int argc, char *argv[])
     {
         std::string arg = argv[i];
 
-        if (arg == "--help")
+        if (arg == "--")
+        {
+            for (++i; i < argc; ++i) {
+                one_shot_command.emplace_back(argv[i]);
+            }
+            break;
+        }
+        else if (arg == "--help")
         {
             print_usage();
             return 0;
@@ -114,10 +167,24 @@ int main(int argc, char *argv[])
         }
         else
         {
-            std::cerr << "Unknown option: " << arg << "\n";
-            print_usage();
-            return 1;
+            one_shot_command.emplace_back(std::move(arg));
+            for (++i; i < argc; ++i) {
+                one_shot_command.emplace_back(argv[i]);
+            }
+            break;
         }
+    }
+
+    if (!one_shot_command.empty())
+    {
+        return run_one_command(state, one_shot_command);
+    }
+
+    if (!stdin_is_tty())
+    {
+        state.quiet = true;
+        yredis::repl_loop(state);
+        return 0;
     }
 
     yredis::print_banner();

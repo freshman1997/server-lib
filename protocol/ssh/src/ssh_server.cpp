@@ -315,23 +315,30 @@ namespace yuan::net::ssh
             co_return;
         };
 
+        auto read_timeout_for_session = [&]()->uint32_t
+        {
+            uint32_t timeout_ms = config_.idle_timeout_ms;
+            if (session->has_any_pty_processes() && (timeout_ms == 0 || timeout_ms > 2)) {
+                timeout_ms = 2;
+            }
+            return timeout_ms;
+        };
+
+        auto pump_pty_and_flush = [&]()->coroutine::Task<void>
+        {
+            if (session->pump_all_pty_once(effective_handler)) {
+                co_await flush_outgoing();
+            }
+            co_await flush_outgoing();
+        };
+
         while (session->state() != SshSession::State::disconnected && running_.load(std::memory_order_relaxed)) {
             if (recv_buf.readable_bytes() == 0) {
-                uint32_t read_timeout_ms = config_.idle_timeout_ms;
-                if (session->has_any_pty_processes()) {
-                    if (read_timeout_ms == 0 || read_timeout_ms > 2) {
-                        read_timeout_ms = 2;
-                    }
-                }
-
-                auto read_result = co_await ctx.read_async(read_timeout_ms);
+                auto read_result = co_await ctx.read_async(read_timeout_for_session());
                 if (read_result.status == coroutine::IoStatus::success) {
                     recv_buf.append(read_result.data);
                 } else if (read_result.status == coroutine::IoStatus::timed_out) {
-                    if (session->pump_all_pty_once(effective_handler)) {
-                        co_await flush_outgoing();
-                    }
-                    co_await flush_outgoing();
+                    co_await pump_pty_and_flush();
                     continue;
                 } else {
                     break;
@@ -353,21 +360,11 @@ namespace yuan::net::ssh
                     goto session_end;
                 }
                 if (!parse.complete) {
-                    uint32_t read_timeout_ms = config_.idle_timeout_ms;
-                    if (session->has_any_pty_processes()) {
-                        if (read_timeout_ms == 0 || read_timeout_ms > 2) {
-                            read_timeout_ms = 2;
-                        }
-                    }
-
-                    auto read_result = co_await ctx.read_async(read_timeout_ms);
+                    auto read_result = co_await ctx.read_async(read_timeout_for_session());
                     if (read_result.status == coroutine::IoStatus::success) {
                         recv_buf.append(read_result.data);
                     } else if (read_result.status == coroutine::IoStatus::timed_out) {
-                        if (session->pump_all_pty_once(effective_handler)) {
-                            co_await flush_outgoing();
-                        }
-                        co_await flush_outgoing();
+                        co_await pump_pty_and_flush();
                     } else {
                         goto session_end;
                     }

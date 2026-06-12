@@ -19,6 +19,10 @@
 #include <thread>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <termios.h>
+#endif
+
 using namespace yuan::net::ssh;
 
 static int g_tests_run = 0;
@@ -4681,6 +4685,46 @@ bool test_session_dispatch_channel_close_exit_signal_payload_fields()
     return true;
 }
 
+bool test_session_dispatch_channel_close_uses_local_recipient_for_exit_and_pty_shutdown()
+{
+    SshSession session(1007, nullptr);
+    auto &mgr = session.connection_manager();
+    auto *channel = mgr.create_channel(SSH_CHANNEL_SESSION, 71, SSH_DEFAULT_WINDOW_SIZE, SSH_DEFAULT_MAX_PACKET_SIZE);
+    TEST_ASSERT(channel != nullptr, "channel should be created");
+    TEST_ASSERT(channel->local_id() != channel->remote_id(),
+                "test requires different local and remote channel ids");
+    TEST_ASSERT(channel->mark_command_started(), "channel should enter command-started state");
+
+    auto pty = std::make_unique<SshPtyProcess>();
+    session.register_pty_process(channel->remote_id(), std::move(pty));
+    TEST_ASSERT(session.has_any_pty_processes(), "test should register a PTY bridge by remote id");
+
+    SshChannelCloseMessage close_msg;
+    close_msg.recipient_channel = channel->local_id();
+    auto close_payload_buf = SshMessageCodec::encode_channel_close(close_msg);
+    auto close_span = close_payload_buf.readable_span();
+    std::vector<uint8_t> close_payload(
+        reinterpret_cast<const uint8_t *>(close_span.data()),
+        reinterpret_cast<const uint8_t *>(close_span.data()) + close_span.size());
+
+    session.set_state(SshSession::State::active);
+    session.dispatch(SshMessageType::SSH_MSG_CHANNEL_CLOSE, close_payload, nullptr);
+
+    auto outgoing = session.drain_outgoing();
+    TEST_ASSERT(outgoing.size() == 1,
+                "close by local recipient should emit one channel-close response");
+    TEST_ASSERT(!session.has_any_pty_processes(),
+                "close by local recipient should shut down PTY registered by remote id");
+
+    auto second_span = outgoing[0].readable_span();
+    auto close_resp = SshMessageCodec::decode_channel_close(
+        reinterpret_cast<const uint8_t *>(second_span.data()), second_span.size());
+    TEST_ASSERT(close_resp.has_value(), "response should decode as channel close");
+    TEST_ASSERT(close_resp->recipient_channel == 71,
+                "channel-close should target the peer's remote channel id");
+    return true;
+}
+
 bool test_channel_request_sequence_matrix_command_then_exec_shell_subsystem_fail()
 {
     class AcceptingHandler final : public SshHandler
@@ -4864,6 +4908,46 @@ bool test_pty_backend_prepare_and_shutdown_lifecycle()
     process.shutdown();
     TEST_ASSERT(!process.ready(), "pty process should not be ready after shutdown");
     return true;
+}
+
+bool test_pty_prepare_applies_requested_terminal_modes()
+{
+#if defined(_WIN32)
+    return true;
+#else
+    auto append_mode = [](std::vector<uint8_t> &modes, uint8_t opcode, uint32_t value) {
+        modes.push_back(opcode);
+        modes.push_back(static_cast<uint8_t>((value >> 24) & 0xFFu));
+        modes.push_back(static_cast<uint8_t>((value >> 16) & 0xFFu));
+        modes.push_back(static_cast<uint8_t>((value >> 8) & 0xFFu));
+        modes.push_back(static_cast<uint8_t>(value & 0xFFu));
+    };
+
+    SshPtyProcess process;
+    SshTerminalSpec spec;
+    spec.term_env = "xterm";
+    spec.width = 80;
+    spec.height = 24;
+    append_mode(spec.terminal_modes, 1, 4);
+    append_mode(spec.terminal_modes, 51, 0);
+    append_mode(spec.terminal_modes, 53, 0);
+    append_mode(spec.terminal_modes, 70, 0);
+    spec.terminal_modes.push_back(0);
+
+    std::string err;
+    TEST_ASSERT(process.prepare(spec, &err), "pty process should prepare with requested modes");
+
+    struct termios term;
+    TEST_ASSERT(tcgetattr(process.backend().slave_fd(), &term) == 0,
+                "test should read slave PTY termios");
+    TEST_ASSERT((term.c_lflag & ICANON) == 0, "requested modes should disable ICANON");
+    TEST_ASSERT((term.c_lflag & ECHO) == 0, "requested modes should disable ECHO");
+    TEST_ASSERT((term.c_oflag & OPOST) == 0, "requested modes should disable OPOST");
+    TEST_ASSERT(term.c_cc[VINTR] == 4, "requested modes should update VINTR");
+
+    process.shutdown();
+    return true;
+#endif
 }
 
 bool test_pty_process_launch_shell_and_capture_output()
@@ -5613,9 +5697,11 @@ int main()
     RUN_TEST(test_subsystem_success_then_rejects_other_command_requests);
     RUN_TEST(test_session_dispatch_channel_close_uses_handler_exit_status_value);
     RUN_TEST(test_session_dispatch_channel_close_exit_signal_payload_fields);
+    RUN_TEST(test_session_dispatch_channel_close_uses_local_recipient_for_exit_and_pty_shutdown);
     RUN_TEST(test_channel_request_sequence_matrix_command_then_exec_shell_subsystem_fail);
     RUN_TEST(test_terminal_session_state_records_accepted_pty_and_shell_flags);
     RUN_TEST(test_pty_backend_prepare_and_shutdown_lifecycle);
+    RUN_TEST(test_pty_prepare_applies_requested_terminal_modes);
     RUN_TEST(test_pty_process_launch_shell_and_capture_output);
     RUN_TEST(test_session_pty_bridge_shell_data_and_exit_sequence);
     RUN_TEST(test_session_pty_bridge_window_change_affects_shell_stty_size);

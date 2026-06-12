@@ -1,0 +1,12 @@
+{
+  "outdir": "/reports/output",
+  "servers": [
+    {
+      "agent": "yuan-server-lib-websocket",
+      "url": "ws://127.0.0.1:12211/"
+    }
+  ],
+  "cases": ["*"],
+  "exclude-cases": [],
+  "exclude-agent-cases": {}
+}

@@ -11,6 +11,7 @@
 #include "response_code.h"
 #include "net/security/ssl_module.h"
 #include <memory>
+#include <mutex>
 
 #if defined(WS_USE_SSL)
 #include "net/security/openssl.h"
@@ -30,6 +31,8 @@ namespace yuan::net::websocket
         std::shared_ptr<SSLModule> ssl_module_;
         std::unique_ptr<NetworkRuntime> owned_runtime_;
         net::AsyncClientSession session_;
+        std::mutex ws_mutex_;
+        std::shared_ptr<WebSocketConnection> ws_connection_;
     };
 
     WebSocketClient::WebSocketClient()
@@ -50,7 +53,7 @@ namespace yuan::net::websocket
 
 #if defined(WS_USE_SSL)
         data_->ssl_module_ = std::make_shared<OpenSSLModule>();
-        if (!data_->ssl_module_->init("./ca/ca.crt")) {
+        if (!data_->ssl_module_->init(data_->config_.get_tls_cert_path())) {
             if (auto msg = data_->ssl_module_->get_error_message()) {
                 LOG_ERROR("{}", msg->c_str());
             }
@@ -83,6 +86,14 @@ namespace yuan::net::websocket
 
     void WebSocketClient::exit()
     {
+        std::shared_ptr<WebSocketConnection> ws_connection;
+        {
+            std::lock_guard<std::mutex> lock(data_->ws_mutex_);
+            ws_connection = std::move(data_->ws_connection_);
+        }
+        if (ws_connection) {
+            ws_connection->shutdown();
+        }
         if (data_->session_.is_connected()) {
             data_->session_.close();
         }
@@ -134,19 +145,29 @@ namespace yuan::net::websocket
         }
 #endif
 
-        WebSocketConnection wsConn(WebSocketConnection::WorkMode::client_);
-        wsConn.bind_connection(conn);
-        wsConn.set_config(&data_->config_);
-        wsConn.set_url(url);
+        auto wsConn = std::make_shared<WebSocketConnection>(WebSocketConnection::WorkMode::client_);
+        wsConn->bind_connection(conn);
+        wsConn->set_config(&data_->config_);
+        wsConn->set_url(url);
+        {
+            std::lock_guard<std::mutex> lock(data_->ws_mutex_);
+            data_->ws_connection_ = wsConn;
+        }
+        auto session_guard = std::shared_ptr<void>(wsConn.get(), [this, wsConn](void *) {
+            std::lock_guard<std::mutex> lock(data_->ws_mutex_);
+            if (data_->ws_connection_ == wsConn) {
+                data_->ws_connection_.reset();
+            }
+        });
 
         if (data_->data_handler_) {
-            wsConn.on_data = [this](WebSocketConnection *c, const ::yuan::buffer::ByteBuffer &buf) {
+            wsConn->on_data = [this](WebSocketConnection *c, const ::yuan::buffer::ByteBuffer &buf) {
                 data_->data_handler_->on_data(c, buf);
             };
-            wsConn.on_connected_cb = [this](WebSocketConnection *c) {
+            wsConn->on_connected_cb = [this](WebSocketConnection *c) {
                 data_->data_handler_->on_connected(c);
             };
-            wsConn.on_close_cb = [this](WebSocketConnection *c) {
+            wsConn->on_close_cb = [this](WebSocketConnection *c) {
                 data_->data_handler_->on_close(c);
                 if (data_->owned_runtime_) {
                     data_->owned_runtime_->stop();
@@ -158,9 +179,10 @@ namespace yuan::net::websocket
             http::HttpSessionContext httpCtx(conn);
             httpCtx.set_mode(http::Mode::client);
             httpCtx.get_request()->set_raw_url(url);
+            const uint32_t handshake_timeout = data_->config_.get_handshake_timeout();
 
-            if (!wsConn.handshaker().on_handshake(httpCtx.get_request(), httpCtx.get_response(),
-                                                  WebSocketConnection::WorkMode::client_)) {
+            if (!wsConn->handshaker().on_handshake(httpCtx.get_request(), httpCtx.get_response(),
+                                                   WebSocketConnection::WorkMode::client_)) {
                 LOG_WARN("cant handshake!");
                 data_->session_.close();
                 if (data_->data_handler_) {
@@ -171,8 +193,8 @@ namespace yuan::net::websocket
 
             co_await data_->session_.flush_async();
 
-            while (!wsConn.handshaker().is_handshake_done()) {
-                auto read_result = co_await data_->session_.read_async();
+            while (!wsConn->handshaker().is_handshake_done()) {
+                auto read_result = co_await data_->session_.read_async(handshake_timeout);
                 if (read_result.status != coroutine::IoStatus::success) {
                     if (data_->data_handler_) {
                         data_->data_handler_->on_close(nullptr);
@@ -197,9 +219,9 @@ namespace yuan::net::websocket
                 }
 
                 if (httpCtx.is_completed()) {
-                    wsConn.handshaker().on_handshake(httpCtx.get_request(), httpCtx.get_response(),
-                                                     WebSocketConnection::WorkMode::client_, true);
-                    if (!wsConn.handshaker().is_handshake_done()) {
+                    wsConn->handshaker().on_handshake(httpCtx.get_request(), httpCtx.get_response(),
+                                                      WebSocketConnection::WorkMode::client_, true);
+                    if (!wsConn->handshaker().is_handshake_done()) {
                         LOG_WARN("cant handshake!");
                         data_->session_.close();
                         if (data_->data_handler_) {
@@ -212,7 +234,7 @@ namespace yuan::net::websocket
 
             auto leftover = httpCtx.take_leftover_buffer();
             if (!leftover.empty()) {
-                if (!wsConn.pkt_parser().unpack_from(&wsConn, leftover)) {
+                if (!wsConn->pkt_parser().unpack_from(wsConn.get(), leftover)) {
                     data_->session_.close();
                     if (data_->data_handler_) {
                         data_->data_handler_->on_close(nullptr);
@@ -222,57 +244,58 @@ namespace yuan::net::websocket
             }
         }
 
-        wsConn.set_state(WebSocketConnection::State::connected_);
-        wsConn.try_set_heartbeat_timer(yuan::base::owner_ptr(data_->owned_runtime_));
-        if (wsConn.on_connected_cb) {
-            wsConn.on_connected_cb(&wsConn);
+        wsConn->set_state(WebSocketConnection::State::connected_);
+        wsConn->try_set_heartbeat_timer(yuan::base::owner_ptr(data_->owned_runtime_));
+        if (wsConn->on_connected_cb) {
+            wsConn->on_connected_cb(wsConn.get());
         }
 
-        if (!wsConn.input_chunks().empty()) {
-            auto result = wsConn.dispatch_frames(conn);
+        if (!wsConn->input_chunks().empty()) {
+            auto result = wsConn->dispatch_frames(conn);
             if (result == FrameDispatchResult::close_) {
-                wsConn.send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::normal_close_);
+                wsConn->send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::normal_close_);
                 data_->session_.close();
             } else if (result == FrameDispatchResult::error_) {
-                wsConn.send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::invalid_palyload_);
+                wsConn->send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::invalid_palyload_);
                 data_->session_.close();
             }
             if (result != FrameDispatchResult::ok_) {
-                wsConn.set_state(WebSocketConnection::State::closed_);
-                if (wsConn.on_close_cb) {
-                    wsConn.on_close_cb(&wsConn);
+                wsConn->set_state(WebSocketConnection::State::closed_);
+                if (wsConn->on_close_cb) {
+                    wsConn->on_close_cb(wsConn.get());
                 }
                 co_return;
             }
         }
 
-        while (wsConn.connected()) {
-            auto read_result = co_await data_->session_.read_async();
+        const uint32_t read_idle_timeout = data_->config_.get_read_idle_timeout();
+        while (wsConn->connected()) {
+            auto read_result = co_await data_->session_.read_async(read_idle_timeout);
             if (read_result.status != coroutine::IoStatus::success) {
                 break;
             }
 
-            if (!wsConn.pkt_parser().unpack_from(&wsConn, read_result.data)) {
-                wsConn.send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::invalid_palyload_);
+            if (!wsConn->pkt_parser().unpack_from(wsConn.get(), read_result.data)) {
+                wsConn->send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::invalid_palyload_);
                 data_->session_.close();
                 break;
             }
 
-            auto result = wsConn.dispatch_frames(conn);
+            auto result = wsConn->dispatch_frames(conn);
             if (result == FrameDispatchResult::close_) {
-                wsConn.send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::normal_close_);
+                wsConn->send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::normal_close_);
                 data_->session_.close();
                 break;
             } else if (result == FrameDispatchResult::error_) {
-                wsConn.send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::invalid_palyload_);
+                wsConn->send_close_frame_to(conn, (uint16_t)WebSocketCloseCode::invalid_palyload_);
                 data_->session_.close();
                 break;
             }
         }
 
-        wsConn.set_state(WebSocketConnection::State::closed_);
-        if (wsConn.on_close_cb) {
-            wsConn.on_close_cb(&wsConn);
+        wsConn->set_state(WebSocketConnection::State::closed_);
+        if (wsConn->on_close_cb) {
+            wsConn->on_close_cb(wsConn.get());
         }
 
         co_return;

@@ -13,6 +13,11 @@ namespace yuan::net::http
 {
     namespace
     {
+        bool is_header_ows(char ch) noexcept
+        {
+            return ch == ' ' || ch == '\t';
+        }
+
         bool token_equals_ci(std::string_view token, std::string_view expected)
         {
             if (token.size() != expected.size()) {
@@ -147,10 +152,10 @@ namespace yuan::net::http
         while (pos <= value.size()) {
             const auto comma = value.find(',', pos);
             auto end = comma == std::string_view::npos ? value.size() : comma;
-            while (pos < end && std::isspace(static_cast<unsigned char>(value[pos]))) {
+            while (pos < end && is_header_ows(value[pos])) {
                 ++pos;
             }
-            while (end > pos && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+            while (end > pos && is_header_ows(value[end - 1])) {
                 --end;
             }
 

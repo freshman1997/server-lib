@@ -904,13 +904,12 @@ namespace yuan::net::http
         if (!runtime)
             return nullptr;
 
-        auto sock = new net::Socket(target_.host.c_str(), target_.port);
+        auto sock = std::make_unique<net::Socket>(target_.host.c_str(), target_.port);
         if (!sock->valid()) {
-            delete sock;
             return nullptr;
         }
 
-        auto conn = create_stream_connection(sock);
+        auto conn = create_stream_connection(sock.release());
         runtime->register_connection(conn, make_non_owning_handler(proxy));
 
         PooledConnection pc;

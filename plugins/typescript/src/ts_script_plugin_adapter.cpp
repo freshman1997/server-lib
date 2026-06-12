@@ -101,14 +101,18 @@ namespace yuan::plugin
             return true;
         }
 
-        JSClassID g_ts_stream_connection_class_id = 0;
-        JSClassID g_ts_datagram_endpoint_class_id = 0;
+        struct TsProtocolClassIds
+        {
+            JSClassID stream_connection = 0;
+            JSClassID datagram_endpoint = 0;
+        };
 
         static JSValue js_stream_connection_id(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
         {
             (void)argc;
             (void)argv;
-            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            auto *class_ids = static_cast<TsProtocolClassIds *>(JS_GetContextOpaque(ctx));
+            auto *conn = class_ids ? static_cast<HostStreamConnection *>(JS_GetOpaque(this_val, class_ids->stream_connection)) : nullptr;
             if (!conn) {
                 return JS_NewInt64(ctx, 0);
             }
@@ -119,7 +123,8 @@ namespace yuan::plugin
         {
             (void)argc;
             (void)argv;
-            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            auto *class_ids = static_cast<TsProtocolClassIds *>(JS_GetContextOpaque(ctx));
+            auto *conn = class_ids ? static_cast<HostStreamConnection *>(JS_GetOpaque(this_val, class_ids->stream_connection)) : nullptr;
             if (!conn) {
                 return JS_NewString(ctx, "");
             }
@@ -131,7 +136,8 @@ namespace yuan::plugin
         {
             (void)argc;
             (void)argv;
-            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            auto *class_ids = static_cast<TsProtocolClassIds *>(JS_GetContextOpaque(ctx));
+            auto *conn = class_ids ? static_cast<HostStreamConnection *>(JS_GetOpaque(this_val, class_ids->stream_connection)) : nullptr;
             if (!conn) {
                 return JS_NewString(ctx, "");
             }
@@ -143,7 +149,8 @@ namespace yuan::plugin
         {
             (void)argc;
             (void)argv;
-            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            auto *class_ids = static_cast<TsProtocolClassIds *>(JS_GetContextOpaque(ctx));
+            auto *conn = class_ids ? static_cast<HostStreamConnection *>(JS_GetOpaque(this_val, class_ids->stream_connection)) : nullptr;
             if (!conn) {
                 return JS_NULL;
             }
@@ -158,7 +165,8 @@ namespace yuan::plugin
         {
             (void)argc;
             (void)argv;
-            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            auto *class_ids = static_cast<TsProtocolClassIds *>(JS_GetContextOpaque(ctx));
+            auto *conn = class_ids ? static_cast<HostStreamConnection *>(JS_GetOpaque(this_val, class_ids->stream_connection)) : nullptr;
             if (!conn) {
                 return JS_NULL;
             }
@@ -180,7 +188,8 @@ namespace yuan::plugin
             if (argc < 1) {
                 return JS_ThrowTypeError(ctx, "connection.write requires 1 argument");
             }
-            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            auto *class_ids = static_cast<TsProtocolClassIds *>(JS_GetContextOpaque(ctx));
+            auto *conn = class_ids ? static_cast<HostStreamConnection *>(JS_GetOpaque(this_val, class_ids->stream_connection)) : nullptr;
             if (!conn) {
                 return JS_NewBool(ctx, false);
             }
@@ -199,7 +208,8 @@ namespace yuan::plugin
         {
             (void)argc;
             (void)argv;
-            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            auto *class_ids = static_cast<TsProtocolClassIds *>(JS_GetContextOpaque(ctx));
+            auto *conn = class_ids ? static_cast<HostStreamConnection *>(JS_GetOpaque(this_val, class_ids->stream_connection)) : nullptr;
             return JS_NewBool(ctx, conn && conn->flush());
         }
 
@@ -207,7 +217,8 @@ namespace yuan::plugin
         {
             (void)argc;
             (void)argv;
-            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            auto *class_ids = static_cast<TsProtocolClassIds *>(JS_GetContextOpaque(ctx));
+            auto *conn = class_ids ? static_cast<HostStreamConnection *>(JS_GetOpaque(this_val, class_ids->stream_connection)) : nullptr;
             if (conn) {
                 conn->close();
             }
@@ -218,7 +229,8 @@ namespace yuan::plugin
         {
             (void)argc;
             (void)argv;
-            auto *conn = static_cast<HostStreamConnection *>(JS_GetOpaque2(ctx, this_val, g_ts_stream_connection_class_id));
+            auto *class_ids = static_cast<TsProtocolClassIds *>(JS_GetContextOpaque(ctx));
+            auto *conn = class_ids ? static_cast<HostStreamConnection *>(JS_GetOpaque(this_val, class_ids->stream_connection)) : nullptr;
             return JS_NewBool(ctx, conn && conn->is_open());
         }
 
@@ -228,13 +240,22 @@ namespace yuan::plugin
             (void)val;
         }
 
+        TsProtocolClassIds *protocol_class_ids(JSContext *ctx)
+        {
+            return static_cast<TsProtocolClassIds *>(JS_GetContextOpaque(ctx));
+        }
+
         void ensure_stream_connection_class(JSContext *ctx)
         {
-            if (g_ts_stream_connection_class_id == 0) {
-                JS_NewClassID(&g_ts_stream_connection_class_id);
+            auto *class_ids = protocol_class_ids(ctx);
+            if (!class_ids) {
+                return;
+            }
+            if (class_ids->stream_connection == 0) {
+                JS_NewClassID(&class_ids->stream_connection);
             }
 
-            JSValue existing_proto = JS_GetClassProto(ctx, g_ts_stream_connection_class_id);
+            JSValue existing_proto = JS_GetClassProto(ctx, class_ids->stream_connection);
             if (!JS_IsUndefined(existing_proto) && !JS_IsNull(existing_proto)) {
                 JS_FreeValue(ctx, existing_proto);
                 return;
@@ -244,7 +265,7 @@ namespace yuan::plugin
             JSClassDef class_def{};
             class_def.class_name = "TsHostStreamConnection";
             class_def.finalizer = js_stream_connection_finalizer;
-            (void)JS_NewClass(JS_GetRuntime(ctx), g_ts_stream_connection_class_id, &class_def);
+            (void)JS_NewClass(JS_GetRuntime(ctx), class_ids->stream_connection, &class_def);
 
             JSValue proto = JS_NewObject(ctx);
             static const JSCFunctionListEntry funcs[] = {
@@ -259,14 +280,18 @@ namespace yuan::plugin
                 JS_CFUNC_DEF("isOpen", 0, js_stream_connection_is_open),
             };
             JS_SetPropertyFunctionList(ctx, proto, funcs, sizeof(funcs) / sizeof(funcs[0]));
-            JS_SetClassProto(ctx, g_ts_stream_connection_class_id, proto);
+            JS_SetClassProto(ctx, class_ids->stream_connection, proto);
         }
 
         JSValue make_stream_connection_instance(JSContext *ctx, HostStreamConnection &connection)
         {
             ensure_stream_connection_class(ctx);
-            JSValue proto = JS_GetClassProto(ctx, g_ts_stream_connection_class_id);
-            JSValue obj = JS_NewObjectProtoClass(ctx, proto, g_ts_stream_connection_class_id);
+            auto *class_ids = protocol_class_ids(ctx);
+            if (!class_ids || class_ids->stream_connection == 0) {
+                return JS_NULL;
+            }
+            JSValue proto = JS_GetClassProto(ctx, class_ids->stream_connection);
+            JSValue obj = JS_NewObjectProtoClass(ctx, proto, class_ids->stream_connection);
             JS_FreeValue(ctx, proto);
             JS_SetOpaque(obj, &connection);
             return obj;
@@ -279,8 +304,9 @@ namespace yuan::plugin
         {
             (void)argc;
             (void)argv;
+            auto *class_ids = protocol_class_ids(ctx);
             auto *endpoint =
-                static_cast<HostDatagramEndpoint *>(JS_GetOpaque2(ctx, this_val, g_ts_datagram_endpoint_class_id));
+                class_ids ? static_cast<HostDatagramEndpoint *>(JS_GetOpaque(this_val, class_ids->datagram_endpoint)) : nullptr;
             if (!endpoint) {
                 return JS_NewString(ctx, "");
             }
@@ -296,8 +322,9 @@ namespace yuan::plugin
             if (argc < 2) {
                 return JS_ThrowTypeError(ctx, "endpoint.sendTo requires 2 arguments");
             }
+            auto *class_ids = protocol_class_ids(ctx);
             auto *endpoint =
-                static_cast<HostDatagramEndpoint *>(JS_GetOpaque2(ctx, this_val, g_ts_datagram_endpoint_class_id));
+                class_ids ? static_cast<HostDatagramEndpoint *>(JS_GetOpaque(this_val, class_ids->datagram_endpoint)) : nullptr;
             if (!endpoint) {
                 return JS_NewBool(ctx, false);
             }
@@ -331,11 +358,15 @@ namespace yuan::plugin
 
         void ensure_datagram_endpoint_class(JSContext *ctx)
         {
-            if (g_ts_datagram_endpoint_class_id == 0) {
-                JS_NewClassID(&g_ts_datagram_endpoint_class_id);
+            auto *class_ids = protocol_class_ids(ctx);
+            if (!class_ids) {
+                return;
+            }
+            if (class_ids->datagram_endpoint == 0) {
+                JS_NewClassID(&class_ids->datagram_endpoint);
             }
 
-            JSValue existing_proto = JS_GetClassProto(ctx, g_ts_datagram_endpoint_class_id);
+            JSValue existing_proto = JS_GetClassProto(ctx, class_ids->datagram_endpoint);
             if (!JS_IsUndefined(existing_proto) && !JS_IsNull(existing_proto)) {
                 JS_FreeValue(ctx, existing_proto);
                 return;
@@ -345,7 +376,7 @@ namespace yuan::plugin
             JSClassDef class_def{};
             class_def.class_name = "TsHostDatagramEndpoint";
             class_def.finalizer = js_datagram_endpoint_finalizer;
-            (void)JS_NewClass(JS_GetRuntime(ctx), g_ts_datagram_endpoint_class_id, &class_def);
+            (void)JS_NewClass(JS_GetRuntime(ctx), class_ids->datagram_endpoint, &class_def);
 
             JSValue proto = JS_NewObject(ctx);
             static const JSCFunctionListEntry funcs[] = {
@@ -353,14 +384,18 @@ namespace yuan::plugin
                 JS_CFUNC_DEF("sendTo", 2, js_datagram_endpoint_send_to),
             };
             JS_SetPropertyFunctionList(ctx, proto, funcs, sizeof(funcs) / sizeof(funcs[0]));
-            JS_SetClassProto(ctx, g_ts_datagram_endpoint_class_id, proto);
+            JS_SetClassProto(ctx, class_ids->datagram_endpoint, proto);
         }
 
         JSValue make_datagram_endpoint_instance(JSContext *ctx, HostDatagramEndpoint &endpoint)
         {
             ensure_datagram_endpoint_class(ctx);
-            JSValue proto = JS_GetClassProto(ctx, g_ts_datagram_endpoint_class_id);
-            JSValue obj = JS_NewObjectProtoClass(ctx, proto, g_ts_datagram_endpoint_class_id);
+            auto *class_ids = protocol_class_ids(ctx);
+            if (!class_ids || class_ids->datagram_endpoint == 0) {
+                return JS_NULL;
+            }
+            JSValue proto = JS_GetClassProto(ctx, class_ids->datagram_endpoint);
+            JSValue obj = JS_NewObjectProtoClass(ctx, proto, class_ids->datagram_endpoint);
             JS_FreeValue(ctx, proto);
             JS_SetOpaque(obj, &endpoint);
             return obj;
@@ -421,6 +456,12 @@ namespace yuan::plugin
             }
             return false;
         }
+
+        void free_protocol_context_state(JSContext *ctx)
+        {
+            delete protocol_class_ids(ctx);
+            JS_SetContextOpaque(ctx, nullptr);
+        }
     } // namespace
 
     TsScriptPluginAdapter::TsScriptPluginAdapter(const PluginManifest & manifest)
@@ -442,6 +483,7 @@ namespace yuan::plugin
             cleanup_ts_plugin_callbacks(ctx_, callback_owner_name());
         }
         if (ctx_) {
+            free_protocol_context_state(ctx_);
             JS_FreeContext(ctx_);
             ctx_ = nullptr;
         }
@@ -483,6 +525,7 @@ namespace yuan::plugin
     {
         if (rt_) {
             cleanup_ts_plugin_callbacks(ctx_, callback_owner_name());
+            free_protocol_context_state(ctx_);
             JS_FreeContext(ctx_);
             ctx_ = nullptr;
             JS_FreeRuntime(rt_);
@@ -505,6 +548,7 @@ namespace yuan::plugin
             rt_ = nullptr;
             return false;
         }
+        JS_SetContextOpaque(ctx_, new TsProtocolClassIds());
 
         JS_AddIntrinsicBaseObjects(ctx_);
         JS_AddIntrinsicEval(ctx_);
@@ -553,6 +597,7 @@ namespace yuan::plugin
         std::ifstream file(script_path);
         if (!file.good()) {
             LOG_ERROR("failed to open js/ts script '{}'", script_path);
+            free_protocol_context_state(ctx_);
             JS_FreeContext(ctx_);
             ctx_ = nullptr;
             JS_FreeRuntime(rt_);
@@ -564,6 +609,7 @@ namespace yuan::plugin
         ss << file.rdbuf();
         std::string script_content = ss.str();
 
+        JS_UpdateStackTop(rt_);
         set_execution_deadline();
 
         int eval_flags = JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_STRICT;
@@ -577,6 +623,7 @@ namespace yuan::plugin
                 JS_FreeValue(ctx_, exception);
             }
             JS_FreeValue(ctx_, result);
+            free_protocol_context_state(ctx_);
             JS_FreeContext(ctx_);
             ctx_ = nullptr;
             JS_FreeRuntime(rt_);
@@ -591,6 +638,7 @@ namespace yuan::plugin
             JS_FreeCString(ctx_, err);
             JS_FreeValue(ctx_, exception);
             JS_FreeValue(ctx_, result);
+            free_protocol_context_state(ctx_);
             JS_FreeContext(ctx_);
             ctx_ = nullptr;
             JS_FreeRuntime(rt_);
@@ -608,6 +656,7 @@ namespace yuan::plugin
             JS_FreeAtom(ctx_, on_init_atom);
             JS_FreeValue(ctx_, global);
             JS_FreeValue(ctx_, result);
+            free_protocol_context_state(ctx_);
             JS_FreeContext(ctx_);
             ctx_ = nullptr;
             JS_FreeRuntime(rt_);
@@ -779,6 +828,7 @@ namespace yuan::plugin
 
         JSValue host_obj = ts_register_host_modules(ctx_, context, config_.execution_timeout_ms, &js_mutex_, &interrupt_data_);
 
+        JS_UpdateStackTop(rt_);
         set_execution_deadline();
         JSValue ret = JS_Call(ctx_, fn, JS_UNDEFINED, 1, &host_obj);
         clear_execution_deadline();
@@ -833,6 +883,7 @@ namespace yuan::plugin
             config_val = JS_NULL;
         }
 
+        JS_UpdateStackTop(rt_);
         set_execution_deadline();
         JSValue ret = JS_Call(ctx_, fn, JS_UNDEFINED, 1, &config_val);
         clear_execution_deadline();
@@ -882,6 +933,7 @@ namespace yuan::plugin
         JSValue payload_val = JS_NewStringLen(ctx_, payload ? payload : "", bytes.size());
         JSValue argv[2] = { conn_obj, payload_val };
 
+        JS_UpdateStackTop(rt_);
         set_execution_deadline();
         JSValue ret = JS_Call(ctx_, fn, JS_UNDEFINED, 2, argv);
         clear_execution_deadline();
@@ -959,6 +1011,7 @@ namespace yuan::plugin
         JSValue payload_val = JS_NewStringLen(ctx_, payload ? payload : "", bytes.size());
         JSValue argv[3] = { endpoint_obj, peer_val, payload_val };
 
+        JS_UpdateStackTop(rt_);
         set_execution_deadline();
         JSValue ret = JS_Call(ctx_, fn, JS_UNDEFINED, 3, argv);
         clear_execution_deadline();
@@ -980,10 +1033,14 @@ namespace yuan::plugin
         if (JS_IsException(ret)) {
             JSValue exception = JS_GetException(ctx_);
             const char *err = JS_ToCString(ctx_, exception);
+            JSValue message_val = JS_GetPropertyStr(ctx_, exception, "message");
+            const char *message = JS_ToCString(ctx_, message_val);
             LOG_ERROR("ts plugin '{}' protocol datagram handler '{}' error: {}",
                       manifest_.name,
                       handler_name,
-                      err ? err : "unknown");
+                      err ? err : (message ? message : "unknown"));
+            JS_FreeCString(ctx_, message);
+            JS_FreeValue(ctx_, message_val);
             JS_FreeCString(ctx_, err);
             JS_FreeValue(ctx_, exception);
             JS_FreeValue(ctx_, ret);
@@ -1034,6 +1091,7 @@ namespace yuan::plugin
             cleanup_ts_plugin_callbacks(ctx_, callback_owner_name());
         }
         if (ctx_) {
+            free_protocol_context_state(ctx_);
             JS_FreeContext(ctx_);
             ctx_ = nullptr;
         }
@@ -1061,6 +1119,7 @@ namespace yuan::plugin
             return true;
         }
 
+        JS_UpdateStackTop(rt_);
         set_execution_deadline();
         JSValue ret = JS_Call(ctx_, fn, JS_UNDEFINED, 0, nullptr);
         clear_execution_deadline();

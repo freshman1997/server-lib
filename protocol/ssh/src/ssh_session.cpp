@@ -303,10 +303,16 @@ namespace yuan::net::ssh
                                                                              exit_info.language_tag));
                     } else {
                         enqueue_outgoing(conn_mgr_.build_channel_exit_status(channel->remote_id(),
-                                                                             exit_info.exit_status));
+                                                                              exit_info.exit_status));
                     }
                 }
-                shutdown_pty_for_channel(msg->recipient_channel);
+                auto *recipient_channel = conn_mgr_.find_channel(msg->recipient_channel);
+                if (!recipient_channel) {
+                    recipient_channel = conn_mgr_.find_channel_by_remote(msg->recipient_channel);
+                }
+                if (recipient_channel) {
+                    shutdown_pty_for_channel(recipient_channel->remote_id());
+                }
                 resp = conn_mgr_.handle_channel_close(*msg, handler);
             }
             break;

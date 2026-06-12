@@ -67,4 +67,18 @@ namespace yuan::server
         }
     }
 
+    void WebSocketService::set_origin_validator(std::function<bool(std::string_view)> validator)
+    {
+        if (server_) {
+            server_->set_origin_validator(std::move(validator));
+        }
+    }
+
+    void WebSocketService::set_auth_validator(std::function<bool(const yuan::net::http::HttpRequest &)> validator)
+    {
+        if (server_) {
+            server_->set_auth_validator(std::move(validator));
+        }
+    }
+
 } // namespace yuan::server

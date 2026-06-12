@@ -25,6 +25,9 @@ namespace yuan::net::websocket
         mising_extension_           = 1010, // 必需扩展缺失
         internal_server_error_      = 1011, // 服务端错误
     };
+
+    constexpr uint16_t websocket_application_close_code_min = 3000;
+    constexpr uint16_t websocket_application_close_code_max = 4999;
 }
 
 #endif

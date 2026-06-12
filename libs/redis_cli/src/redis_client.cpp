@@ -126,10 +126,8 @@ namespace yuan::redis
             return -1;
         }
 
-        auto *sock = new net::Socket(addr.get_ip().c_str(), addr.get_port());
+        auto sock = std::make_unique<net::Socket>(addr.get_ip().c_str(), addr.get_port());
         if (!sock->valid()) {
-            delete sock;
-            sock = nullptr;
             impl_->last_error_.store(ErrorValue::from_string("create socket failed"));
             return -1;
         }
@@ -137,8 +135,6 @@ namespace yuan::redis
         sock->set_none_block(true);
         if (!sock->connect()) {
             const int socket_error = sock->last_error();
-            delete sock;
-            sock = nullptr;
             impl_->last_error_.store(ErrorValue::from_string(
                 impl_->option_.name_ + " connect failed, socket error: " + std::to_string(socket_error)));
             return -1;
@@ -146,7 +142,7 @@ namespace yuan::redis
 
         const auto loop = impl_->registry()->get_event_loop();
 
-        auto conn = create_stream_connection(sock);
+        auto conn = create_stream_connection(sock.release());
         conn->set_connection_handler(impl_);
         conn->set_event_handler(loop);
         if (auto stream = std::dynamic_pointer_cast<net::StreamTransport>(conn)) {

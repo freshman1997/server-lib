@@ -556,23 +556,20 @@ namespace yuan::net::bit_torrent
 
         int32_t bind_port = config.utp_port > 0 ? config.utp_port : config.listen_port;
 
-        auto *sock = new net::Socket("", bind_port, true);
+        auto sock = std::make_unique<net::Socket>("", bind_port, true);
         if (!sock->valid()) {
-            delete sock;
             return false;
         }
 
         sock->set_reuse(true);
         sock->set_none_block(true);
         if (!sock->bind()) {
-            delete sock;
             return false;
         }
 
-        acceptor_.reset(net::create_datagram_acceptor(sock, runtime_->runtime_view()));
+        acceptor_.reset(net::create_datagram_acceptor(sock.release(), runtime_->runtime_view()));
         if (!acceptor_->listen()) {
             acceptor_.reset();
-            delete sock;
             return false;
         }
 

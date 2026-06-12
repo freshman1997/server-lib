@@ -1,6 +1,9 @@
 add_executable(core_runtime_benchmark core_runtime_benchmark.cpp)
 target_link_libraries(core_runtime_benchmark PUBLIC Core App)
 
+add_executable(simple_search_benchmark simple_search_benchmark.cpp)
+target_link_libraries(simple_search_benchmark PUBLIC CoreBase)
+
 add_executable(http_worker_pool_benchmark http_worker_pool_benchmark.cpp)
 target_link_libraries(http_worker_pool_benchmark PUBLIC HttpProto ServerServiceHttp)
 

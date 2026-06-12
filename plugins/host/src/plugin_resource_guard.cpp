@@ -1,6 +1,8 @@
 #include "plugin_resource_guard.h"
 #include "logger.h"
 
+#include <algorithm>
+
 namespace yuan::app
 {
 
@@ -19,6 +21,33 @@ namespace yuan::app
         }
 
         std::lock_guard<std::mutex> lock(mutex_);
+
+        auto quota_it = quotas_.find(plugin_name);
+        if (quota_it != quotas_.end()) {
+            const auto total = plugin_index_[plugin_name].size();
+            if (total >= quota_it->second.max_total_resources) {
+                LOG_WARN("resource quota exceeded for plugin '{}': total {} >= {}",
+                         plugin_name, total, quota_it->second.max_total_resources);
+                return 0;
+            }
+
+            auto type_limit_it = quota_it->second.max_resources_by_type.find(type);
+            if (type_limit_it != quota_it->second.max_resources_by_type.end()) {
+                size_t type_count = 0;
+                for (auto existing_id : plugin_index_[plugin_name]) {
+                    auto res_it = resources_.find(existing_id);
+                    if (res_it != resources_.end() && res_it->second.type == type) {
+                        ++type_count;
+                    }
+                }
+                if (type_count >= type_limit_it->second) {
+                    LOG_WARN("resource quota exceeded for plugin '{}': type {} {} >= {}",
+                             plugin_name, plugin::to_string(type), type_count, type_limit_it->second);
+                    return 0;
+                }
+            }
+        }
+
         uint64_t id = next_id_++;
 
         TrackedResource resource;
@@ -219,6 +248,28 @@ namespace yuan::app
             report += "\n";
         }
         return report;
+    }
+
+    void PluginResourceGuard::set_quota(const std::string & plugin_name, const plugin::PluginResourceQuota & quota)
+    {
+        if (plugin_name.empty()) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        quotas_[plugin_name] = quota;
+    }
+
+    void PluginResourceGuard::clear_quota(const std::string & plugin_name)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        quotas_.erase(plugin_name);
+    }
+
+    plugin::PluginResourceQuota PluginResourceGuard::quota(const std::string & plugin_name) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = quotas_.find(plugin_name);
+        return it == quotas_.end() ? plugin::PluginResourceQuota{} : it->second;
     }
 
 } // namespace yuan::app

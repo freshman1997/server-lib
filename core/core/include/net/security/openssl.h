@@ -4,6 +4,8 @@
 #include "net/security/ssl_handler.h"
 #include <memory>
 
+typedef struct ssl_st SSL;
+
 namespace yuan::net
 {
     class OpenSSLModule : public SSLModule
@@ -56,7 +58,7 @@ namespace yuan::net
         virtual std::string_view get_alpn_selected() const override;
 
     private:
-        void set_ssl_data(OpenSSLModule *module, void *ssl, SSLMode mode);
+        void set_ssl_data(OpenSSLModule *module, SSL *ssl, SSLMode mode);
 
     private:
         class HandlerData;

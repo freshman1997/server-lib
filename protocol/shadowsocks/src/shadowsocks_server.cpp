@@ -253,15 +253,14 @@ namespace yuan::net::shadowsocks
                 bind_host = "0.0.0.0";
             }
 
-            Socket *udp_sock = new Socket(bind_host, config_.port, true);
+            auto udp_sock = std::make_unique<Socket>(bind_host, config_.port, true);
             udp_sock->set_none_block(true);
             udp_sock->set_reuse(true);
             if (!udp_sock->valid() || !udp_sock->bind()) {
                 LOG_ERROR("shadowsocks server: failed to bind UDP {}:{}", bind_host, config_.port);
-                delete udp_sock;
             } else {
                 auto *rt = listener_.runtime();
-                udp_acceptor_.reset(create_datagram_acceptor(udp_sock, *rt));
+                udp_acceptor_.reset(create_datagram_acceptor(udp_sock.release(), *rt));
                 if (!udp_acceptor_ || !udp_acceptor_->listen()) {
                     LOG_ERROR("shadowsocks server: failed to listen UDP {}:{}", bind_host, config_.port);
                     udp_acceptor_.reset();

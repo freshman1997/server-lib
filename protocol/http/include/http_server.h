@@ -177,12 +177,16 @@ namespace yuan::net::http
 
         using WsProxyHandler = std::function<coroutine::Task<void>(
             net::AsyncConnectionContext, const std::string &, const std::string &,
-            const std::string &, const std::string &, ::yuan::buffer::ByteBuffer)>;
+            const std::string &, const std::string &, const std::string &, ::yuan::buffer::ByteBuffer)>;
         using AccessLogHook = std::function<void(HttpRequest *, HttpResponse *, uint64_t)>;
 
         void set_ws_proxy_handler(WsProxyHandler handler)
         {
             ws_proxy_handler_ = std::move(handler);
+        }
+        bool has_ws_proxy_handler() const noexcept
+        {
+            return static_cast<bool>(ws_proxy_handler_);
         }
         void set_access_log_hook(AccessLogHook hook)
         {
@@ -222,6 +226,7 @@ namespace yuan::net::http
         bool parse_request(HttpSessionContext *context, const ::yuan::buffer::ByteBuffer &data);
         bool parse_request(HttpSessionContext *context, ::yuan::buffer::ByteBuffer &&data);
         bool validate_request_version(HttpSessionContext *context);
+        bool prepare_websocket_proxy_handoff(HttpSessionContext *context);
         bool is_h2_dispatch_path(std::string_view path) const;
         bool allow_new_connection(const net::Connection &conn, bool *tracked_per_ip = nullptr);
         void on_connection_closed(const net::Connection &conn, bool tracked_per_ip);

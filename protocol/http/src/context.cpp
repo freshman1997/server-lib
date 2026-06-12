@@ -27,6 +27,13 @@ namespace yuan::net::http
 
     void HttpSessionContext::reset() const
     {
+        auto *self = const_cast<HttpSessionContext *>(this);
+        self->ws_handoff_ = false;
+        self->ws_route_key_.clear();
+        self->ws_client_key_.clear();
+        self->ws_subproto_.clear();
+        self->ws_origin_.clear();
+        self->ws_handoff_rejected_ = false;
         request_->reset();
         response_->reset();
     }

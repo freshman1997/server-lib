@@ -28,6 +28,16 @@ namespace yuan::net::websocket
         ::yuan::buffer::ByteBuffer leftover_data;
     };
 
+    struct WebSocketProxyMetricsSnapshot
+    {
+        uint64_t active_tunnels = 0;
+        uint64_t tunnel_bytes_client_to_backend = 0;
+        uint64_t tunnel_bytes_backend_to_client = 0;
+        uint64_t normal_closes = 0;
+        uint64_t protocol_failures = 0;
+        uint64_t backend_handshake_failures = 0;
+    };
+
     class WebSocketProxy
     {
     public:
@@ -45,9 +55,12 @@ namespace yuan::net::websocket
             const std::string &route_key,
             const std::string &client_key,
             const std::string &subproto,
+            const std::string &origin,
             ::yuan::buffer::ByteBuffer client_leftover);
 
         static void install(http::HttpServer &server, http::HttpProxyHandler &proxy);
+
+        WebSocketProxyMetricsSnapshot metrics() const;
 
     private:
         coroutine::Task<HandshakeBackendResult> handshake_backend(
@@ -57,7 +70,8 @@ namespace yuan::net::websocket
             const std::string &path,
             int connect_timeout_ms,
             const std::string &client_ip,
-            const std::string &subproto);
+            const std::string &subproto,
+            const std::string &origin);
 
         coroutine::Task<void> forward_frames(
             std::shared_ptr<ProxySharedState> state,
@@ -74,6 +88,12 @@ namespace yuan::net::websocket
         http::HttpServer *server_;
         WebSocketConfigManager server_config_;
         WebSocketConfigManager client_config_;
+        std::atomic<uint64_t> active_tunnels_{0};
+        std::atomic<uint64_t> tunnel_bytes_client_to_backend_{0};
+        std::atomic<uint64_t> tunnel_bytes_backend_to_client_{0};
+        std::atomic<uint64_t> normal_closes_{0};
+        std::atomic<uint64_t> protocol_failures_{0};
+        std::atomic<uint64_t> backend_handshake_failures_{0};
     };
 
     struct ProxySharedState
@@ -85,12 +105,14 @@ namespace yuan::net::websocket
 
         std::atomic<bool> closed{ false };
         std::atomic<int> active_count{ 2 };
+        WebSocketProxy *owner = nullptr;
 
         ProxySharedState(net::AsyncConnectionContext &&cctx,
                          net::AsyncConnectionContext &&bctx,
                          WebSocketConfigManager *server_cfg,
-                         WebSocketConfigManager *client_cfg)
-            : client_ctx(std::move(cctx)), backend_ctx(std::move(bctx)), client_ws(WebSocketConnection::WorkMode::server_), backend_ws(WebSocketConnection::WorkMode::client_)
+                         WebSocketConfigManager *client_cfg,
+                         WebSocketProxy *proxy_owner)
+            : client_ctx(std::move(cctx)), backend_ctx(std::move(bctx)), client_ws(WebSocketConnection::WorkMode::server_), backend_ws(WebSocketConnection::WorkMode::client_), owner(proxy_owner)
         {
             client_ws.bind_connection(client_ctx.connection());
             client_ws.set_config(server_cfg);

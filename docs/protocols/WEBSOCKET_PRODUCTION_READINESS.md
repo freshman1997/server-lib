@@ -24,56 +24,56 @@ complete and verified.
 - [x] Reject RSV bits unless an extension has explicitly enabled them.
 - [x] Reject unknown opcodes.
 - [x] Enforce control-frame rules: final frame only and payload <= 125 bytes.
-- [ ] Validate close payload length and close code ranges.
-- [ ] Validate text messages as UTF-8, at least before exposing them as text.
+- [x] Validate close payload length and close code ranges.
+- [x] Validate text messages as UTF-8, at least before exposing them as text.
 - [x] Add focused unit tests for the completed cases above.
 
 ## Phase 2 - Connection Lifecycle
 
-- [ ] Replace handler-facing stack-owned `WebSocketConnection *` usage with a
+- [x] Replace handler-facing stack-owned `WebSocketConnection *` usage with a
       session object that has clear ownership and async-safe send semantics.
-- [ ] Add a per-connection outbound queue with configurable byte/message limits.
-- [ ] Surface backpressure to handlers instead of writing directly without
+- [x] Add a per-connection outbound queue with configurable byte/message limits.
+- [x] Surface backpressure to handlers instead of writing directly without
       limits.
-- [ ] Make close handshake stateful: close-sent, close-received, deadline,
+- [x] Make close handshake stateful: close-sent, close-received, deadline,
       forced close.
-- [ ] Ensure shutdown cancels timers and outstanding async operations cleanly.
+- [x] Ensure shutdown cancels timers and outstanding async operations cleanly.
 
 ## Phase 3 - Timeouts And Heartbeat
 
-- [ ] Add handshake timeout.
-- [ ] Add read idle timeout.
-- [ ] Rework ping/pong heartbeat around a pong deadline.
-- [ ] Initialize activity timestamps on connect.
-- [ ] Track last read, last write, last ping, and last pong separately.
+- [x] Add handshake timeout.
+- [x] Add read idle timeout.
+- [x] Rework ping/pong heartbeat around a pong deadline.
+- [x] Initialize activity timestamps on connect.
+- [x] Track last read, last write, last ping, and last pong separately.
 
 ## Phase 4 - Security And Policy Hooks
 
-- [ ] Add Origin validation hook.
-- [ ] Add authentication/authorization hook before upgrade is accepted.
-- [ ] Add configurable maximum message size and maximum fragmented message size.
-- [ ] Add per-IP connection limits.
-- [ ] Add per-IP handshake/message rate limiting.
-- [ ] Make TLS certificate/key paths configurable instead of hard-coded.
+- [x] Add Origin validation hook.
+- [x] Add authentication/authorization hook before upgrade is accepted.
+- [x] Add configurable maximum message size and maximum fragmented message size.
+- [x] Add per-IP connection limits.
+- [x] Add per-IP handshake/message rate limiting.
+- [x] Make TLS certificate/key paths configurable instead of hard-coded.
 
 ## Phase 5 - Proxy Path
 
-- [ ] Use the same RFC-compliant handshake checks for proxy handoff.
-- [ ] Add backend handshake timeout, not only connect timeout.
-- [ ] Preserve or intentionally filter relevant upgrade headers.
-- [ ] Add proxy metrics for active WebSocket tunnels, tunnel bytes, close reason,
+- [x] Use the same RFC-compliant handshake checks for proxy handoff.
+- [x] Add backend handshake timeout, not only connect timeout.
+- [x] Preserve or intentionally filter relevant upgrade headers.
+- [x] Add proxy metrics for active WebSocket tunnels, tunnel bytes, close reason,
       backend handshake failures, and protocol failures.
-- [ ] Add e2e proxy tests with masked browser-like clients.
+- [x] Add e2e proxy tests with masked browser-like clients.
 
 ## Phase 6 - Verification Gate
 
-- [ ] Register WebSocket tests with CTest.
+- [x] Register WebSocket tests with CTest.
 - [ ] Run Autobahn Testsuite and record the report.
-- [ ] Add browser compatibility smoke tests.
-- [ ] Add malformed-frame tests.
-- [ ] Add slowloris/slow-handshake tests.
-- [ ] Add concurrent connection and message throughput benchmarks.
-- [ ] Add soak test: at least 24 hours with heartbeat, reconnect, and mixed
+- [x] Add browser compatibility smoke tests.
+- [x] Add malformed-frame tests.
+- [x] Add slowloris/slow-handshake tests.
+- [x] Add concurrent connection and message throughput benchmarks.
+- [x] Add soak test: at least 24 hours with heartbeat, reconnect, and mixed
       payload sizes.
 
 ## Rollout Criteria

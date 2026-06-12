@@ -1,5 +1,6 @@
 #include "base/owner_ptr.h"
 #include "base/time.h"
+#include "base/utils/base64.h"
 #include "content/types.h"
 #include "context.h"
 #include "coroutine/io_result.h"
@@ -624,6 +625,32 @@ namespace yuan::net::http
                 pos = comma + 1;
             }
             return false;
+        }
+
+        bool is_valid_websocket_key(const std::string *raw)
+        {
+            if (!raw) {
+                return false;
+            }
+            const std::string_view key = trim_ascii(std::string_view(*raw));
+            if (key.empty() || key.size() % 4 != 0) {
+                return false;
+            }
+
+            bool seen_padding = false;
+            for (char ch : key) {
+                const auto uch = static_cast<unsigned char>(ch);
+                const bool is_base64_char = std::isalnum(uch) || ch == '+' || ch == '/';
+                if (ch == '=') {
+                    seen_padding = true;
+                    continue;
+                }
+                if (seen_padding || !is_base64_char) {
+                    return false;
+                }
+            }
+
+            return yuan::base::util::base64_decode(std::string(key)).size() == 16;
         }
 
         uint32_t keep_alive_idle_timeout_ms(const HttpServerConfig &config)
@@ -1646,6 +1673,8 @@ namespace yuan::net::http
             return false;
         }
 
+        (void)prepare_websocket_proxy_handoff(context);
+
         return true;
     }
 
@@ -1701,31 +1730,21 @@ namespace yuan::net::http
             return true;
         }
 
+        if (prepare_websocket_proxy_handoff(context)) {
+            return true;
+        }
+        if (response->get_response_code() == ResponseCode::bad_request) {
+            return true;
+        }
+
         if (proxy_ && proxy_->is_proxy_url(request->get_raw_url())) {
             const auto &route_key = proxy_->find_proxy_route(request->get_raw_url());
             auto *upgrade = request->get_header("upgrade");
             bool is_ws_upgrade = false;
             if (upgrade) {
-                std::string upgrade_lower = *upgrade;
-                std::transform(upgrade_lower.begin(), upgrade_lower.end(), upgrade_lower.begin(), ::tolower);
-                is_ws_upgrade = (upgrade_lower == "websocket");
+                is_ws_upgrade = iequals_ascii(trim_ascii(*upgrade), "websocket");
             }
-            if (is_ws_upgrade && ws_proxy_handler_) {
-                auto *client_key_hdr = request->get_header("sec-websocket-key");
-                std::string client_key = client_key_hdr ? *client_key_hdr : "";
-                if (!client_key.empty()) {
-                    std::string subproto;
-                    auto *subproto_hdr = request->get_header("sec-websocket-protocol");
-                    if (subproto_hdr && !subproto_hdr->empty()) {
-                        subproto = *subproto_hdr;
-                    }
-                    context->ws_handoff_ = true;
-                    context->ws_route_key_ = route_key;
-                    context->ws_client_key_ = client_key;
-                    context->ws_subproto_ = subproto;
-                    return true;
-                }
-            }
+
             if (is_ws_upgrade) {
                 proxy_->handle_websocket_upgrade_by_url(request, response, route_key);
             }
@@ -1741,6 +1760,69 @@ namespace yuan::net::http
             context->process_error(ResponseCode::not_found);
         }
 
+        return true;
+    }
+
+    bool HttpServer::prepare_websocket_proxy_handoff(HttpSessionContext *context)
+    {
+        if (!context || !proxy_ || !ws_proxy_handler_) {
+            return false;
+        }
+        if (context->ws_handoff_ || context->ws_handoff_rejected_) {
+            return true;
+        }
+        auto *request = context->get_request();
+        if (!request || !proxy_->is_proxy_url(request->get_raw_url())) {
+            return false;
+        }
+
+        auto lookup_header = [request](std::string_view key) -> const std::string * {
+            if (auto *value = request->get_header(key)) {
+                return value;
+            }
+            for (const auto &header : request->headers()) {
+                if (header_key_equals_ci(header.first, key)) {
+                    return &header.second;
+                }
+            }
+            return nullptr;
+        };
+
+        auto *upgrade = lookup_header("upgrade");
+        if (!upgrade || !iequals_ascii(trim_ascii(*upgrade), "websocket")) {
+            return false;
+        }
+
+        auto *client_key_hdr = lookup_header("sec-websocket-key");
+        auto *conn_hdr = lookup_header(http_header_key::connection);
+        auto *version_hdr = lookup_header("sec-websocket-version");
+        if (request->get_method() != HttpMethod::get_ ||
+            request->get_version() != HttpVersion::v_1_1 ||
+            !header_has_token(conn_hdr, "Upgrade") ||
+            !version_hdr || *version_hdr != "13" ||
+            !is_valid_websocket_key(client_key_hdr)) {
+            context->ws_handoff_rejected_ = true;
+            context->process_error(ResponseCode::bad_request);
+            return true;
+        }
+
+        std::string subproto;
+        auto *subproto_hdr = lookup_header("sec-websocket-protocol");
+        if (subproto_hdr && !subproto_hdr->empty()) {
+            subproto = *subproto_hdr;
+        }
+
+        std::string origin;
+        auto *origin_hdr = lookup_header(http_header_key::origin);
+        if (origin_hdr) {
+            origin = *origin_hdr;
+        }
+
+        context->ws_handoff_ = true;
+        context->ws_route_key_ = proxy_->find_proxy_route(request->get_raw_url());
+        context->ws_client_key_ = std::string(trim_ascii(std::string_view(*client_key_hdr)));
+        context->ws_subproto_ = subproto;
+        context->ws_origin_ = origin;
         return true;
     }
 
@@ -2370,6 +2452,35 @@ namespace yuan::net::http
                 }
 
                 (void)dispatch_request(context);
+
+                if (context->ws_handoff_ && ws_proxy_handler_) {
+                    std::string route_key = std::move(context->ws_route_key_);
+                    std::string raw_url = context->get_request()->get_raw_url();
+                    std::string client_key = std::move(context->ws_client_key_);
+                    std::string subproto = std::move(context->ws_subproto_);
+                    std::string origin = std::move(context->ws_origin_);
+                    auto leftover = context->take_leftover_buffer();
+                    release_inflight_request(context->get_request(), inflight_tracked);
+                    release_connection_count();
+                    erase_session(sessionId);
+
+                    co_await ws_proxy_handler_(std::move(ctx), raw_url, route_key, client_key, subproto, origin, std::move(leftover));
+                    co_return;
+                }
+
+                if (context->has_error()) {
+                    break;
+                }
+
+                if (context->ws_handoff_rejected_) {
+                    finalize_request(sessionId, session_ptr, context);
+                    if (inflight_tracked) {
+                        release_inflight_request(context->get_request(), true);
+                        inflight_tracked = false;
+                    }
+                    break;
+                }
+
                 if (proxy_ && proxy_->is_proxy_url(context->get_request()->get_raw_url())) {
                     co_await proxy_->serve_proxy_async(context->get_request(), context->get_response());
                     if (proxy_->has_client_mapping(conn.get())) {
@@ -2378,22 +2489,6 @@ namespace yuan::net::http
                         erase_session(sessionId);
                         co_return;
                     }
-                }
-
-                if (context->ws_handoff_ && ws_proxy_handler_) {
-                    std::string route_key = std::move(context->ws_route_key_);
-                    std::string raw_url = context->get_request()->get_raw_url();
-                    std::string client_key = std::move(context->ws_client_key_);
-                    std::string subproto = std::move(context->ws_subproto_);
-                    auto leftover = context->take_leftover_buffer();
-                    release_inflight_request(context->get_request(), inflight_tracked);
-                    release_connection_count();
-                    erase_session(sessionId);
-
-                    auto proxy_task = ws_proxy_handler_(std::move(ctx), raw_url, route_key, client_key, subproto, std::move(leftover));
-                    proxy_task.resume();
-                    proxy_task.detach();
-                    co_return;
                 }
 
                 finalize_request(sessionId, session_ptr, context);

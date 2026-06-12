@@ -1,5 +1,6 @@
 #include "websocket_packet_parser.h"
 #include "websocket_connection.h"
+#include "base/utils/utf.h"
 
 #include <cassert>
 #include <cstddef>
@@ -30,20 +31,27 @@ namespace yuan::net::websocket
             chunk->head_.set_2nd_byte(buff.read_u8());
 
             const uint32_t payloadLen = chunk->head_.get_pay_load_len();
-            if (payloadLen <= 125) {
+            if (payloadLen <= websocket_payload_len_7bit_max) {
                 chunk->head_.extend_pay_load_len_ = payloadLen;
-            } else if (payloadLen <= 126) {
+            } else if (payloadLen == websocket_payload_len_16bit_marker) {
                 if (buff.readable_bytes() < 2) {
                     buff.set_read_offset(from);
                     return 1;
                 }
                 chunk->head_.extend_pay_load_len_ = buff.read_u16() & 0xffff;
+                if (chunk->head_.extend_pay_load_len_ <= websocket_payload_len_7bit_max) {
+                    return -1;
+                }
             } else {
                 if (buff.readable_bytes() < 8) {
                     buff.set_read_offset(from);
                     return 1;
                 }
                 chunk->head_.extend_pay_load_len_ = buff.read_u64();
+                if ((chunk->head_.extend_pay_load_len_ & websocket_payload_len_64bit_msb) != 0 ||
+                    chunk->head_.extend_pay_load_len_ <= websocket_payload_len_16bit_max) {
+                    return -1;
+                }
             }
 
             if (chunk->head_.extend_pay_load_len_ > PACKET_MAX_BYTE) {
@@ -182,7 +190,46 @@ namespace yuan::net::websocket
             return false;
         }
 
+        if (!head.is_continue_frame() && head.is_fin() &&
+            head.extend_pay_load_len_ > conn->max_message_size()) {
+            return false;
+        }
+
+        if (!head.is_continue_frame() && !head.is_fin() &&
+            head.extend_pay_load_len_ > conn->max_fragmented_message_size()) {
+            return false;
+        }
+
         return true;
+    }
+
+    bool WebSocketPacketParser::is_valid_close_code(uint16_t code)
+    {
+        if (code >= static_cast<uint16_t>(WebSocketCloseCode::normal_close_) &&
+            code <= static_cast<uint16_t>(WebSocketCloseCode::internal_server_error_)) {
+            return code != static_cast<uint16_t>(WebSocketCloseCode::reserve_) &&
+                   code != static_cast<uint16_t>(WebSocketCloseCode::no_status_code_) &&
+                   code != static_cast<uint16_t>(WebSocketCloseCode::abnormal_close_);
+        }
+
+        return code >= websocket_application_close_code_min &&
+               code <= websocket_application_close_code_max;
+    }
+
+    bool WebSocketPacketParser::is_valid_close_payload(const ProtoChunk &chunk)
+    {
+        const auto payloadSize = chunk.body_.readable_bytes();
+        if (payloadSize == 0) {
+            return true;
+        }
+
+        if (payloadSize == 1) {
+            return false;
+        }
+
+        const auto *payload = reinterpret_cast<const uint8_t *>(chunk.body_.read_ptr());
+        const uint16_t code = static_cast<uint16_t>((static_cast<uint16_t>(payload[0]) << 8) | payload[1]);
+        return is_valid_close_code(code);
     }
 
     bool WebSocketPacketParser::append_completed_frame(WebSocketConnection *conn, ProtoChunk &&chunk)
@@ -196,6 +243,9 @@ namespace yuan::net::websocket
         }
 
         if (is_control_frame(chunk.head_)) {
+            if (chunk.head_.is_close_frame() && !is_valid_close_payload(chunk)) {
+                return false;
+            }
             conn->get_input_chunks()->push_back(std::move(chunk));
             return true;
         }
@@ -204,13 +254,19 @@ namespace yuan::net::websocket
             fragmented_message_.body_.append(chunk.body_);
             fragmented_message_.head_.extend_pay_load_len_ += chunk.head_.extend_pay_load_len_;
             fragmented_message_.head_.ctrl_code_.fin_ = chunk.head_.ctrl_code_.fin_;
-            if (fragmented_message_.head_.extend_pay_load_len_ > PACKET_MAX_BYTE) {
+            if (fragmented_message_.head_.extend_pay_load_len_ > conn->max_fragmented_message_size()) {
                 has_fragmented_message_ = false;
                 fragmented_message_ = ProtoChunk();
                 return false;
             }
 
             if (fragmented_message_.head_.is_fin()) {
+                if (fragmented_message_.head_.is_text_frame() &&
+                    !base::util::is_valid_utf8(fragmented_message_.body_.read_ptr(), fragmented_message_.body_.readable_bytes())) {
+                    fragmented_message_ = ProtoChunk();
+                    has_fragmented_message_ = false;
+                    return false;
+                }
                 conn->get_input_chunks()->push_back(std::move(fragmented_message_));
                 fragmented_message_ = ProtoChunk();
                 has_fragmented_message_ = false;
@@ -219,6 +275,10 @@ namespace yuan::net::websocket
         }
 
         if (chunk.head_.is_fin()) {
+            if (chunk.head_.is_text_frame() &&
+                !base::util::is_valid_utf8(chunk.body_.read_ptr(), chunk.body_.readable_bytes())) {
+                return false;
+            }
             conn->get_input_chunks()->push_back(std::move(chunk));
             return true;
         }
@@ -273,12 +333,12 @@ namespace yuan::net::websocket
             head2 = 0b10000000;
         }
 
-        if (buffSize <= 125) {
+        if (buffSize <= websocket_payload_len_7bit_max) {
             head2 |= static_cast<uint8_t>(buffSize);
-        } else if (buffSize <= 65535) {
-            head2 |= 126;
+        } else if (buffSize <= websocket_payload_len_16bit_max) {
+            head2 |= websocket_payload_len_16bit_marker;
         } else if (buffSize <= PACKET_MAX_BYTE) {
-            head2 |= 127;
+            head2 |= websocket_payload_len_64bit_marker;
         } else {
             return false;
         }
@@ -286,9 +346,9 @@ namespace yuan::net::websocket
         buff.append_u8(head1);
         buff.append_u8(head2);
 
-        if ((head2 & 0x7f) == 126) {
+        if ((head2 & 0x7f) == websocket_payload_len_16bit_marker) {
             buff.append_u16(static_cast<uint16_t>(buffSize));
-        } else if ((head2 & 0x7f) == 127) {
+        } else if ((head2 & 0x7f) == websocket_payload_len_64bit_marker) {
             buff.append_u64(buffSize);
         }
 

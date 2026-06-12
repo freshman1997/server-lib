@@ -92,11 +92,11 @@ Status legend:
 - [done] Add tracing hooks for inventory/reward/payment flows.
 - [done] Add pending coroutine pool for cross-process request/response wakeups.
   - evidence:
-    - `libs/game_coroutine/include/game_coroutine/coroutine_pool.h`
+    - `libs/game/game_coroutine/include/game_coroutine/coroutine_pool.h`
     - supports id-based wake (`complete/failed/canceled`), timeout wake, typed `std::any` context, batch cancel, and stats snapshot.
 - [done] Add reusable pending RPC runtime wrapper.
   - evidence:
-    - `libs/game_coroutine/include/game_coroutine/pending_rpc_service.h`
+    - `libs/game/game_coroutine/include/game_coroutine/pending_rpc_service.h`
     - supports begin request, per-request context, route/owner/predicate cancel, timeout tick, pending snapshot/restore, and stats access.
 - [done] Add coverage tests for pool and service runtime behavior.
   - evidence:
