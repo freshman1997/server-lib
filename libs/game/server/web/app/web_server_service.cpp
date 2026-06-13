@@ -4,6 +4,14 @@
 #include "redis_client.h"
 #include "internal/def.h"
 
+#include "http_client.h"
+#include "request.h"
+#include "response.h"
+
+#include "coroutine/sync_wait.h"
+
+#include "logger.h"
+
 namespace yuan::game::server
 {
     WebServerService::WebServerService(std::string listen_host,
@@ -29,8 +37,7 @@ namespace yuan::game::server
           redis_username_(std::move(redis_username)),
           redis_password_(std::move(redis_password)),
           redis_connect_timeout_ms_(redis_connect_timeout_ms),
-          redis_command_timeout_ms_(redis_command_timeout_ms),
-          web_context_({ServiceAddress{{}, 600, yuan::game_base::ServerRole::world, 0, "web"}})
+          redis_command_timeout_ms_(redis_command_timeout_ms)
     {
     }
 
@@ -61,21 +68,34 @@ namespace yuan::game::server
         option.connect_timeout_ms_ = redis_connect_timeout_ms_;
         option.name_ = "game-web-auth";
         redis_ = std::make_shared<yuan::redis::RedisClient>(option);
-        if (!register_web_handlers(web_rpc_, web_context_)) {
+        yuan::net::http::HttpServerConfig http_config;
+        http_config.enable_keep_alive = false;
+        http_config.server_name = "GameWeb/1.0";
+        http_server_ = std::make_unique<yuan::net::http::HttpServer>(http_config);
+        if (!register_web_http_handlers(*http_server_, web_context_)) {
             return false;
         }
-        ok_ = rpc_server_.start(rpc_network::RpcNetworkServerConfig{listen_host_, port_, 0}, web_rpc_);
+        ok_ = http_server_->init(port_);
         return ok_;
     }
 
     void WebServerService::start()
     {
-        ok_ = ok_ && rpc_server_.run();
+        if (ok_ && http_server_) {
+            http_thread_ = std::jthread([this](std::stop_token) {
+                http_server_->serve();
+            });
+        }
     }
 
     void WebServerService::stop()
     {
-        rpc_server_.stop();
+        if (http_server_) {
+            http_server_->stop();
+        }
+        if (http_thread_.joinable()) {
+            http_thread_.join();
+        }
     }
 
     bool WebServerService::ok() const
@@ -97,15 +117,15 @@ namespace yuan::game::server
             return WebAuthResponse{false, 0, {}, "account and password are required"};
         }
         const auto account_key = "game:account:" + request.account;
+        const auto existing = redis_->get(account_key);
+        if (existing && existing->get_type() != yuan::redis::resp_null) {
+            return WebAuthResponse{false, 0, {}, "account already exists"};
+        }
         const auto allocated = redis_->incr("game:account:next_uid");
         if (!allocated) {
             return WebAuthResponse{false, 0, {}, "failed to allocate player uid"};
         }
         const auto uid = static_cast<PlayerUid>(std::stoull(allocated->to_string()));
-        const auto existing = redis_->get(account_key);
-        if (existing && existing->get_type() != yuan::redis::resp_null) {
-            return WebAuthResponse{false, 0, {}, "account already exists"};
-        }
         const auto created = redis_->set(account_key, std::to_string(uid) + "\n" + request.password);
         if (!created || created->to_string() != "OK") {
             return WebAuthResponse{false, 0, {}, "failed to create account"};
@@ -134,22 +154,29 @@ namespace yuan::game::server
 
     std::optional<LoginOptionsResponse> WebServerService::fetch_login_options(PlayerUid player_uid) const
     {
-        yuan::rpc::Bytes world_payload;
-        if (!encode_login_options_request(LoginOptionsRequest{player_uid}, world_payload)) {
-            return std::nullopt;
-        }
-        yuan::rpc::Message message;
-        message.route = game_route::world_login_options();
-        message.payload = std::move(world_payload);
         const auto world_port = select_world_port(player_uid);
         if (world_port == 0) {
             return std::nullopt;
         }
-        auto response = rpc_network::RpcNetworkClient().call(rpc_network::RpcEndpoint{world_host_, world_port}, message);
-        if (!response || response->status != yuan::rpc::RpcStatus::ok) {
+        yuan::net::http::HttpClient http_client;
+        if (!http_client.query("http://" + world_host_ + ":" + std::to_string(world_port))) {
             return std::nullopt;
         }
-        return decode_login_options_response(response->payload);
+        yuan::net::NetworkRuntime runtime;
+        auto *http_response = yuan::coroutine::sync_wait(runtime.runtime_view(),
+            http_client.connect_async(runtime.runtime_view(), [player_uid, this](yuan::net::http::HttpRequest *request) {
+                request->set_method(yuan::net::http::HttpMethod::get_);
+                request->set_raw_url("/game/login_options?player_uid=" + std::to_string(player_uid));
+                request->add_header("Connection", "close");
+                request->add_header("Host", world_host_);
+                request->send();
+            }, redis_command_timeout_ms_));
+        if (!http_response || !http_response->good() || http_response->get_response_code() != yuan::net::http::ResponseCode::ok_) {
+            LOG_ERROR("web failed to fetch world login options uid={} world={}:{}", player_uid, world_host_, world_port);
+            return std::nullopt;
+        }
+        const auto *body = http_response->body_begin();
+        return decode_login_options_response_json(body ? std::string(body, http_response->get_body_length()) : std::string{});
     }
 
     std::uint16_t WebServerService::select_world_port(PlayerUid player_uid) const

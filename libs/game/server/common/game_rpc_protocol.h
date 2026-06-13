@@ -47,11 +47,7 @@ namespace yuan::game::server
         gateway_game_forward = 401,
         gateway_logout = 402,
         gateway_time_sync = 403,
-        gateway_push = 404,
-
-        web_bootstrap = 500
-        , web_register = 501
-        , web_login = 502
+        gateway_push = 404
     };
 
     inline yuan::rpc::Route make_game_route(GameRpcService service, GameRpcMethod method, std::string_view debug_name = {})
@@ -175,20 +171,6 @@ namespace yuan::game::server
             return make_game_route(GameRpcService::gateway, GameRpcMethod::gateway_push, "gateway.push");
         }
 
-        inline yuan::rpc::Route web_bootstrap()
-        {
-            return make_game_route(GameRpcService::web, GameRpcMethod::web_bootstrap, "web.bootstrap");
-        }
-
-        inline yuan::rpc::Route web_register()
-        {
-            return make_game_route(GameRpcService::web, GameRpcMethod::web_register, "web.register");
-        }
-
-        inline yuan::rpc::Route web_login()
-        {
-            return make_game_route(GameRpcService::web, GameRpcMethod::web_login, "web.login");
-        }
     }
 }
 

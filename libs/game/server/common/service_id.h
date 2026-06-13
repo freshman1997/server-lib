@@ -132,7 +132,6 @@ namespace yuan::game::server
         inline constexpr std::string_view global_player_lookup = "global.player.lookup";
         inline constexpr std::string_view gateway_login_options = "gateway.login.options";
         inline constexpr std::string_view gateway_login = "gateway.login";
-        inline constexpr std::string_view web_bootstrap = "web.bootstrap";
         inline constexpr std::string_view world_login_options = "world.login.options";
         inline constexpr std::string_view world_gateway_register = "world.gateway.register";
         inline constexpr std::string_view world_zone_register = "world.zone.register";

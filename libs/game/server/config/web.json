@@ -1,8 +1,4 @@
 {
-  "type": 10,
-  "region": 1,
-  "world": 1,
-  "instance": 1,
   "listen_host": "127.0.0.1",
   "listen_port": 25005,
   "target_world_host": "127.0.0.1",

@@ -5,17 +5,21 @@
 
 #include <functional>
 
+namespace yuan::net::http
+{
+    class HttpServer;
+}
+
 namespace yuan::game::server
 {
     struct WebHandlerContext
     {
-        ServiceAddress address;
         std::function<std::optional<LoginOptionsResponse>(LoginOptionsRequest)> bootstrap_provider;
         std::function<WebAuthResponse(WebAuthRequest)> register_handler;
         std::function<WebAuthResponse(WebAuthRequest)> login_handler;
     };
 
-    bool register_web_handlers(yuan::rpc::Server &server, WebHandlerContext &context);
+    bool register_web_http_handlers(yuan::net::http::HttpServer &server, WebHandlerContext &context);
 }
 
 #endif

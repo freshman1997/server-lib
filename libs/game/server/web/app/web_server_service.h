@@ -2,9 +2,12 @@
 #define YUAN_GAME_SERVER_WEB_WEB_SERVER_SERVICE_H
 
 #include "application.h"
-#include "common/rpc_network.h"
 #include "web/handler/web_handler.h"
 
+#include "http_server.h"
+
+#include <memory>
+#include <thread>
 #include <vector>
 
 namespace yuan::redis
@@ -59,9 +62,9 @@ namespace yuan::game::server
         bool ok_ = false;
         yuan::app::RuntimeContext context_;
         WebHandlerContext web_context_;
-        yuan::rpc::Server web_rpc_;
         std::shared_ptr<yuan::redis::RedisClient> redis_;
-        rpc_network::RpcNetworkServer rpc_server_;
+        std::unique_ptr<yuan::net::http::HttpServer> http_server_;
+        std::jthread http_thread_;
     };
 }
 

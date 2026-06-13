@@ -194,7 +194,7 @@ namespace yuan::game::server
                 return result;
             };
 
-            const auto type_value = root.contains("type") ? (root["type"].is_string() ? root["type"].get<std::string>() : std::to_string(root["type"].get<std::uint64_t>())) : std::string{};
+            const auto type_value = root.contains("type") ? (root["type"].is_string() ? root["type"].get<std::string>() : std::to_string(root["type"].get<std::uint64_t>())) : std::string{"web"};
             const auto type = parse_service_type(type_value);
             if (!type) {
                 return std::nullopt;

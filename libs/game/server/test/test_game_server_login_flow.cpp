@@ -32,7 +32,6 @@ int main()
 
     const GameServiceId world_id{1, 1, GameServiceType::world, 1, 1};
     const GameServiceId gateway_id{1, 1, GameServiceType::gateway, 1, 1};
-    const GameServiceId web_id{1, 1, GameServiceType::web, 1, 1};
     const GameServiceId zone_id{1, 1, GameServiceType::zone, 1, 1};
     const GameServiceId zone_2_id{1, 1, GameServiceType::zone, 1, 2};
 
@@ -42,8 +41,6 @@ int main()
     yuan::rpc::Server world_rpc;
     GatewayMsgContext gateway{ServiceAddress{gateway_id, 500, yuan::game_base::ServerRole::gateway, 1, "gateway"}, "127.0.0.1", 30001};
     yuan::rpc::Server gateway_rpc;
-    WebHandlerContext web{ServiceAddress{web_id, 600, yuan::game_base::ServerRole::gm, 1, "web"}};
-    yuan::rpc::Server web_rpc;
     const ServiceAddress zone_address{zone_id, 700, yuan::game_base::ServerRole::scene, 1, "zone"};
     const ServiceAddress zone_2_address{zone_2_id, 701, yuan::game_base::ServerRole::scene, 1, "zone-2"};
     yuan::rpc::Server zone_rpc;
@@ -105,25 +102,6 @@ int main()
         return 13;
     }
 
-    web.bootstrap_provider = [&](LoginOptionsRequest request) -> std::optional<LoginOptionsResponse> {
-        yuan::rpc::Bytes world_payload;
-        if (!encode_login_options_request(request, world_payload)) {
-            return std::nullopt;
-        }
-        TunnelEnvelope envelope;
-        envelope.source_service_id = web_id.pack();
-        envelope.target_service_id = world_id.pack();
-        envelope.source = service_id_key(web_id);
-        envelope.target = service_id_key(world_id);
-        envelope.route = game_route::world_login_options();
-        envelope.payload = std::move(world_payload);
-        const auto response = tunnel->forward(std::move(envelope));
-        if (response.status != yuan::rpc::RpcStatus::ok) {
-            return std::nullopt;
-        }
-        return decode_login_options_response(response.payload);
-    };
-
     gateway.login_handler = [&](ClientLoginRequest request) -> std::optional<ClientLoginResponse> {
         if (request.zone_service_id == 0) {
             return ClientLoginResponse{false, request.role_id, 0, 0, "no zone"};
@@ -164,26 +142,12 @@ int main()
     if (!require(register_gateway_msg_client(gateway_rpc, gateway), "gateway handlers should register")) {
         return 19;
     }
-    if (!require(register_web_handlers(web_rpc, web), "web handlers should register")) {
-        return 21;
-    }
 
-    yuan::rpc::Bytes bootstrap_payload;
-    if (!require(encode_login_options_request(LoginOptionsRequest{player_uid}, bootstrap_payload), "bootstrap request should encode")) {
-        return 5;
-    }
-    yuan::rpc::Message bootstrap_message;
-    bootstrap_message.route = game_route::web_bootstrap();
-    bootstrap_message.payload = std::move(bootstrap_payload);
-    const auto bootstrap_response = web_rpc.handle(bootstrap_message);
-    if (!require(bootstrap_response.status == yuan::rpc::RpcStatus::ok, "web bootstrap should succeed")) {
-        return 6;
-    }
-    const auto options = decode_login_options_response(bootstrap_response.payload);
-    if (!require(options && options->gateways.size() == 1 && options->roles.size() == 2, "web should return gateways and roles")) {
+    const auto options = world_login_options(world, player_uid);
+    if (!require(options.gateways.size() == 1 && options.roles.size() == 2, "world should return gateways and roles")) {
         return 7;
     }
-    if (!require(options->roles.front().role_id == role_id && options->roles.front().zone_service_id == zone_id.pack(), "role should include target zone")) {
+    if (!require(options.roles.front().role_id == role_id && options.roles.front().zone_service_id == zone_id.pack(), "role should include target zone")) {
         return 8;
     }
 
