@@ -11,6 +11,7 @@
 #include <random>
 #include <thread>
 #include <vector>
+#include <atomic>
 
 namespace yuan::game::server
 {
@@ -23,15 +24,27 @@ namespace yuan::game::server
     class ProcessMessageManager
     {
     public:
+        struct Metrics
+        {
+            std::uint64_t tunnel_call_attempts = 0;
+            std::uint64_t tunnel_call_retries = 0;
+            std::uint64_t tunnel_call_recoveries = 0;
+            std::uint64_t tunnel_call_failures = 0;
+        };
+
         ProcessMessageManager();
+        explicit ProcessMessageManager(std::vector<rpc_network::RpcEndpoint> tunnel_endpoints);
         explicit ProcessMessageManager(std::vector<std::uint16_t> tunnel_ports);
         ~ProcessMessageManager();
 
         ProcessMessageManager(const ProcessMessageManager &) = delete;
         ProcessMessageManager &operator=(const ProcessMessageManager &) = delete;
 
+        void set_tunnel_endpoints(std::vector<rpc_network::RpcEndpoint> tunnel_endpoints);
         void set_tunnel_ports(std::vector<std::uint16_t> tunnel_ports);
+        void add_tunnel_endpoint(rpc_network::RpcEndpoint tunnel_endpoint);
         void add_tunnel_port(std::uint16_t tunnel_port);
+        void set_heartbeat_interval_ms(std::uint64_t interval_ms);
         void start_heartbeat();
         void stop_heartbeat();
         [[nodiscard]] bool empty() const;
@@ -68,8 +81,10 @@ namespace yuan::game::server
                                                                                    TunnelSelectMode mode = TunnelSelectMode::random);
 
         [[nodiscard]] std::optional<yuan::rpc::Response> call_tunnel(yuan::rpc::Message message,
-                                                                     PackedGameServiceId route_key = 0,
-                                                                     TunnelSelectMode mode = TunnelSelectMode::hash_by_service_id);
+                                                                      PackedGameServiceId route_key = 0,
+                                                                      TunnelSelectMode mode = TunnelSelectMode::hash_by_service_id);
+
+        [[nodiscard]] Metrics metrics() const;
 
     private:
         void heartbeat_loop(std::stop_token stop_token);
@@ -77,7 +92,12 @@ namespace yuan::game::server
         mutable std::mutex mutex_;
         std::vector<std::shared_ptr<TunnelConnection>> tunnels_;
         std::jthread heartbeat_thread_;
+        std::chrono::milliseconds heartbeat_interval_{5000};
         std::mt19937 random_{std::random_device{}()};
+        std::atomic<std::uint64_t> tunnel_call_attempts_{0};
+        std::atomic<std::uint64_t> tunnel_call_retries_{0};
+        std::atomic<std::uint64_t> tunnel_call_recoveries_{0};
+        std::atomic<std::uint64_t> tunnel_call_failures_{0};
     };
 }
 

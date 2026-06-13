@@ -39,6 +39,7 @@ namespace yuan::game::server
     struct TunnelRegistration
     {
         PackedGameServiceId service_id = 0;
+        std::string host;
         std::uint16_t port = 0;
         std::string name;
     };

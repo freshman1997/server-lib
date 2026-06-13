@@ -30,6 +30,19 @@ namespace yuan::game::server
         return rpc_network::RpcNetworkClient().call(endpoint_, message);
     }
 
+    std::optional<yuan::rpc::Response> TunnelConnection::send_and_update_health(const yuan::rpc::Message &message)
+    {
+        const auto response = send(message);
+        std::scoped_lock lock(mutex_);
+        if (response && response->status != yuan::rpc::RpcStatus::unavailable) {
+            alive_ = true;
+            missed_heartbeats_ = 0;
+        } else if (++missed_heartbeats_ >= max_missed_heartbeats) {
+            alive_ = false;
+        }
+        return response;
+    }
+
     bool TunnelConnection::heartbeat()
     {
         yuan::rpc::Message message;

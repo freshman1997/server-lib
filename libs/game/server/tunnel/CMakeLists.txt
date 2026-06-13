@@ -1,4 +1,4 @@
-file(GLOB GAME_SERVER_TUNNEL_SOURCES CONFIGURE_DEPENDS "*_service.cpp")
+file(GLOB GAME_SERVER_TUNNEL_SOURCES CONFIGURE_DEPENDS "rpc/*.cpp" "app/*_server_service.cpp")
 add_library(GameServerTunnel ${GAME_SERVER_TUNNEL_SOURCES})
 target_compile_features(GameServerTunnel PUBLIC cxx_std_20)
 target_include_directories(GameServerTunnel PUBLIC
@@ -7,8 +7,7 @@ target_include_directories(GameServerTunnel PUBLIC
 target_link_libraries(GameServerTunnel PUBLIC GameServerCommon GameServerMessaging)
 
 if(YUAN_BUILD_TESTS OR BUILD_TESTING)
-    file(GLOB GAME_TUNNEL_SERVER_SOURCES CONFIGURE_DEPENDS "*_server.cpp")
-    list(FILTER GAME_TUNNEL_SERVER_SOURCES EXCLUDE REGEX "_server_service\\.cpp$")
+    file(GLOB GAME_TUNNEL_SERVER_SOURCES CONFIGURE_DEPENDS "app/*_server.cpp")
     add_executable(game_tunnel_server ${GAME_TUNNEL_SERVER_SOURCES})
     target_link_libraries(game_tunnel_server PUBLIC GameServerTunnel)
 endif()

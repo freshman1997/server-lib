@@ -7,6 +7,11 @@ namespace yuan::game::server
 {
     ProcessMessageManager::ProcessMessageManager() = default;
 
+    ProcessMessageManager::ProcessMessageManager(std::vector<rpc_network::RpcEndpoint> tunnel_endpoints)
+    {
+        set_tunnel_endpoints(std::move(tunnel_endpoints));
+    }
+
     ProcessMessageManager::ProcessMessageManager(std::vector<std::uint16_t> tunnel_ports)
     {
         set_tunnel_ports(std::move(tunnel_ports));
@@ -17,32 +22,53 @@ namespace yuan::game::server
         stop_heartbeat();
     }
 
-    void ProcessMessageManager::set_tunnel_ports(std::vector<std::uint16_t> tunnel_ports)
+    void ProcessMessageManager::set_tunnel_endpoints(std::vector<rpc_network::RpcEndpoint> tunnel_endpoints)
     {
         std::scoped_lock lock(mutex_);
         tunnels_.clear();
-        for (const auto port : tunnel_ports) {
-            const auto exists = std::find_if(tunnels_.begin(), tunnels_.end(), [port](const auto &connection) {
-                return connection->endpoint().port == port;
+        for (auto &endpoint : tunnel_endpoints) {
+            const auto exists = std::find_if(tunnels_.begin(), tunnels_.end(), [&endpoint](const auto &connection) {
+                return connection->endpoint().host == endpoint.host && connection->endpoint().port == endpoint.port;
             });
-            if (port != 0 && exists == tunnels_.end()) {
-                tunnels_.push_back(std::make_shared<TunnelConnection>(rpc_network::RpcEndpoint{"127.0.0.1", port}));
+            if (!endpoint.host.empty() && endpoint.port != 0 && exists == tunnels_.end()) {
+                tunnels_.push_back(std::make_shared<TunnelConnection>(std::move(endpoint)));
             }
+        }
+    }
+
+    void ProcessMessageManager::set_tunnel_ports(std::vector<std::uint16_t> tunnel_ports)
+    {
+        std::vector<rpc_network::RpcEndpoint> endpoints;
+        endpoints.reserve(tunnel_ports.size());
+        for (const auto port : tunnel_ports) {
+            endpoints.push_back(rpc_network::RpcEndpoint{"127.0.0.1", port});
+        }
+        set_tunnel_endpoints(std::move(endpoints));
+    }
+
+    void ProcessMessageManager::add_tunnel_endpoint(rpc_network::RpcEndpoint tunnel_endpoint)
+    {
+        if (tunnel_endpoint.host.empty() || tunnel_endpoint.port == 0) {
+            return;
+        }
+        std::scoped_lock lock(mutex_);
+        const auto exists = std::find_if(tunnels_.begin(), tunnels_.end(), [&tunnel_endpoint](const auto &connection) {
+            return connection->endpoint().host == tunnel_endpoint.host && connection->endpoint().port == tunnel_endpoint.port;
+        });
+        if (exists == tunnels_.end()) {
+            tunnels_.push_back(std::make_shared<TunnelConnection>(std::move(tunnel_endpoint)));
         }
     }
 
     void ProcessMessageManager::add_tunnel_port(std::uint16_t tunnel_port)
     {
-        if (tunnel_port == 0) {
-            return;
-        }
+        add_tunnel_endpoint(rpc_network::RpcEndpoint{"127.0.0.1", tunnel_port});
+    }
+
+    void ProcessMessageManager::set_heartbeat_interval_ms(std::uint64_t interval_ms)
+    {
         std::scoped_lock lock(mutex_);
-        const auto exists = std::find_if(tunnels_.begin(), tunnels_.end(), [tunnel_port](const auto &connection) {
-            return connection->endpoint().port == tunnel_port;
-        });
-        if (exists == tunnels_.end()) {
-            tunnels_.push_back(std::make_shared<TunnelConnection>(rpc_network::RpcEndpoint{"127.0.0.1", tunnel_port}));
-        }
+        heartbeat_interval_ = std::chrono::milliseconds(interval_ms == 0 ? 5000 : interval_ms);
     }
 
     void ProcessMessageManager::start_heartbeat()
@@ -89,6 +115,34 @@ namespace yuan::game::server
             index = live_indexes[static_cast<std::size_t>(route_key % live_indexes.size())];
         }
         return tunnels_[index]->endpoint();
+    }
+
+    namespace
+    {
+        std::vector<std::size_t> tunnel_attempt_order(const std::vector<std::shared_ptr<TunnelConnection>> &tunnels,
+                                                      PackedGameServiceId route_key,
+                                                      TunnelSelectMode mode,
+                                                      std::mt19937 &random)
+        {
+            std::vector<std::size_t> live;
+            std::vector<std::size_t> dead;
+            for (std::size_t index = 0; index < tunnels.size(); ++index) {
+                if (tunnels[index]->alive()) {
+                    live.push_back(index);
+                } else {
+                    dead.push_back(index);
+                }
+            }
+            if (mode == TunnelSelectMode::random) {
+                std::shuffle(live.begin(), live.end(), random);
+                std::shuffle(dead.begin(), dead.end(), random);
+            } else if (!live.empty()) {
+                const auto offset = static_cast<std::size_t>(route_key % live.size());
+                std::rotate(live.begin(), live.begin() + static_cast<std::ptrdiff_t>(offset), live.end());
+            }
+            live.insert(live.end(), dead.begin(), dead.end());
+            return live;
+        }
     }
 
     std::optional<yuan::rpc::Response> ProcessMessageManager::register_service(TunnelRegistration registration,
@@ -180,34 +234,54 @@ namespace yuan::game::server
                                                                            PackedGameServiceId route_key,
                                                                            TunnelSelectMode mode)
     {
-        std::shared_ptr<TunnelConnection> tunnel;
+        std::vector<std::shared_ptr<TunnelConnection>> tunnels;
+        std::vector<std::size_t> order;
         {
             std::scoped_lock lock(mutex_);
-            std::vector<std::size_t> live_indexes;
-            for (std::size_t index = 0; index < tunnels_.size(); ++index) {
-                if (tunnels_[index]->alive()) {
-                    live_indexes.push_back(index);
-                }
-            }
-            if (live_indexes.empty()) {
+            if (tunnels_.empty()) {
                 return std::nullopt;
             }
-            std::size_t index = 0;
-            if (mode == TunnelSelectMode::random) {
-                std::uniform_int_distribution<std::size_t> dist(0, live_indexes.size() - 1);
-                index = live_indexes[dist(random_)];
-            } else {
-                index = live_indexes[static_cast<std::size_t>(route_key % live_indexes.size())];
-            }
-            tunnel = tunnels_[index];
+            tunnels = tunnels_;
+            order = tunnel_attempt_order(tunnels_, route_key, mode, random_);
         }
-        return tunnel->send(message);
+        std::optional<yuan::rpc::Response> last_response;
+        int attempt = 0;
+        for (const auto index : order) {
+            tunnel_call_attempts_.fetch_add(1, std::memory_order_relaxed);
+            last_response = tunnels[index]->send_and_update_health(message);
+            if (last_response && last_response->status != yuan::rpc::RpcStatus::unavailable) {
+                if (attempt > 0) {
+                    tunnel_call_recoveries_.fetch_add(1, std::memory_order_relaxed);
+                }
+                return last_response;
+            }
+            ++attempt;
+            if (attempt < static_cast<int>(order.size())) {
+                tunnel_call_retries_.fetch_add(1, std::memory_order_relaxed);
+                std::this_thread::sleep_for(std::chrono::milliseconds{10 * attempt});
+            }
+        }
+        tunnel_call_failures_.fetch_add(1, std::memory_order_relaxed);
+        return last_response;
+    }
+
+    ProcessMessageManager::Metrics ProcessMessageManager::metrics() const
+    {
+        return Metrics{tunnel_call_attempts_.load(std::memory_order_relaxed),
+                       tunnel_call_retries_.load(std::memory_order_relaxed),
+                       tunnel_call_recoveries_.load(std::memory_order_relaxed),
+                       tunnel_call_failures_.load(std::memory_order_relaxed)};
     }
 
     void ProcessMessageManager::heartbeat_loop(std::stop_token stop_token)
     {
         while (!stop_token.stop_requested()) {
-            std::this_thread::sleep_for(std::chrono::seconds{5});
+            std::chrono::milliseconds interval;
+            {
+                std::scoped_lock lock(mutex_);
+                interval = heartbeat_interval_;
+            }
+            std::this_thread::sleep_for(interval);
             if (stop_token.stop_requested()) {
                 break;
             }

@@ -19,7 +19,6 @@ add_dependencies(test_game_server_smoke
     game_zone_server
     game_world_server
     game_gateway_server
-    game_web_server
     game_mock_client
     copy_game_server_configs)
 if(BUILD_TESTING)
@@ -30,6 +29,5 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:game_zone_server>
                 $<TARGET_FILE:game_world_server>
                 $<TARGET_FILE:game_gateway_server>
-                $<TARGET_FILE:game_web_server>
                 $<TARGET_FILE:game_mock_client>)
 endif()

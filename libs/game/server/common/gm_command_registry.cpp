@@ -38,6 +38,9 @@ namespace yuan::game::server
         GmCommandRegistry::instance().register_command(GmCommandDefinition{
             "set_time_offset_seconds",
             GameServiceType::global});
+        GmCommandRegistry::instance().register_command(GmCommandDefinition{
+            "set_player_level",
+            GameServiceType::zone});
     }
 
     std::optional<yuan::rpc::Route> gm_execute_route_for(GameServiceType executor_type)
@@ -45,6 +48,8 @@ namespace yuan::game::server
         switch (executor_type) {
             case GameServiceType::global:
                 return game_route::global_gm_execute();
+            case GameServiceType::zone:
+                return game_route::zone_gm_execute();
             default:
                 return std::nullopt;
         }

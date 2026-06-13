@@ -30,9 +30,18 @@ int main()
         return 1;
     }
 
-    GlobalService global(ServiceAddress{{1, 1, GameServiceType::global, 1, 1}, 100, yuan::game_base::ServerRole::world, 1, "global"});
-    WorldService world(ServiceAddress{{1, 1, GameServiceType::world, 1, 1}, 400, yuan::game_base::ServerRole::world, 1, "world"});
-    world.set_gm_forward_handler([&](GmCommandRequest request) -> std::optional<GmCommandResponse> {
+    const ServiceAddress global_address{{1, 1, GameServiceType::global, 1, 1}, 100, yuan::game_base::ServerRole::world, 1, "global"};
+    GlobalMsgEchoContext global_echo{global_address};
+    GlobalMsgGmContext global_gm;
+    yuan::rpc::Server global_rpc;
+    register_global_builtin_gm(global_gm);
+    if (!require(register_global_msg_echo(global_rpc, global_echo) && register_global_msg_gm(global_rpc, global_gm),
+                 "global handlers should register")) {
+        return 8;
+    }
+    WorldMsgContext world{ServiceAddress{{1, 1, GameServiceType::world, 1, 1}, 400, yuan::game_base::ServerRole::world, 1, "world"}};
+    yuan::rpc::Server world_rpc;
+    world.gm_forward_handler = [&](GmCommandRequest request) -> std::optional<GmCommandResponse> {
         const auto definition = GmCommandRegistry::instance().find(request.command);
         if (!definition) {
             return GmCommandResponse{false, "unknown gm command: " + request.command};
@@ -51,9 +60,9 @@ int main()
             return GmCommandResponse{false, "failed to encode gm command"};
         }
         TunnelEnvelope envelope;
-        envelope.source_service_id = world.address().service.pack();
+        envelope.source_service_id = world.address.service.pack();
         envelope.target_service_id = request.target_service_id;
-        envelope.source = service_key(world.address());
+        envelope.source = service_key(world.address);
         envelope.target = std::to_string(request.target_service_id);
         envelope.route = *route;
         envelope.payload = std::move(gm_payload);
@@ -62,12 +71,15 @@ int main()
             return GmCommandResponse{false, response.error.empty() ? "gm target failed" : response.error};
         }
         return decode_gm_command_response(response.payload);
-    });
+    };
+    if (!require(register_world_msg(world_rpc, world), "world handlers should register")) {
+        return 9;
+    }
 
-    if (!require(tunnels.register_endpoint(global.address(), global.rpc_server()), "global should register on tunnel")) {
+    if (!require(tunnels.register_endpoint(global_address, global_rpc), "global should register on tunnel")) {
         return 2;
     }
-    if (!require(tunnels.register_endpoint(world.address(), world.rpc_server()), "world should register on tunnel")) {
+    if (!require(tunnels.register_endpoint(world.address, world_rpc), "world should register on tunnel")) {
         return 3;
     }
 
@@ -80,7 +92,7 @@ int main()
     yuan::rpc::Message message;
     message.route = game_route::world_gm_forward();
     message.payload = std::move(payload);
-    const auto response = world.rpc_server().handle(message);
+    const auto response = world_rpc.handle(message);
     if (!require(response.status == yuan::rpc::RpcStatus::ok, "world gm forward should succeed")) {
         return 5;
     }

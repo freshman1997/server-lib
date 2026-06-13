@@ -1,5 +1,7 @@
 #include "common/game_messages.h"
 
+#include <nlohmann/json.hpp>
+
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -146,6 +148,10 @@ namespace yuan::game::server
             append_u32(out, info.online_players);
             append_u32(out, info.max_players);
             out.push_back(info.available ? 1 : 0);
+            append_u32(out, static_cast<std::uint32_t>(info.gateways.size()));
+            for (const auto &gateway : info.gateways) {
+                encode_gateway_info_body(gateway, out);
+            }
         }
 
         bool decode_zone_info_body(const yuan::rpc::Bytes &in, std::size_t &offset, ZoneInfo &info)
@@ -155,6 +161,16 @@ namespace yuan::game::server
                 return false;
             }
             info.available = in[offset++] != 0;
+            std::uint32_t gateway_count = 0;
+            if (!read_u32(in, offset, gateway_count)) {
+                return false;
+            }
+            info.gateways.resize(gateway_count);
+            for (auto &gateway : info.gateways) {
+                if (!decode_gateway_info_body(in, offset, gateway)) {
+                    return false;
+                }
+            }
             return true;
         }
     }
@@ -207,6 +223,8 @@ namespace yuan::game::server
         append_u32(out, 1);
         append_u64(out, update.player_id);
         append_u64(out, update.zone_service_id);
+        append_u64(out, update.source_zone_service_id);
+        append_u64(out, update.gateway_session_id);
         return true;
     }
 
@@ -233,6 +251,8 @@ namespace yuan::game::server
         append_u32(out, 1);
         append_u64(out, request.player_uid);
         append_u64(out, request.role_id);
+        append_u64(out, request.zone_service_id);
+        append_u64(out, request.gateway_session_id);
         return true;
     }
 
@@ -243,6 +263,7 @@ namespace yuan::game::server
         out.push_back(response.ok ? 1 : 0);
         append_u64(out, response.role_id);
         append_u64(out, response.zone_service_id);
+        append_u64(out, response.gateway_session_id);
         return append_string(out, response.message);
     }
 
@@ -252,6 +273,7 @@ namespace yuan::game::server
         append_u32(out, 1);
         append_u64(out, request.player_uid);
         append_u64(out, request.role_id);
+        append_u64(out, request.gateway_session_id);
         return append_bytes(out, request.payload);
     }
 
@@ -261,7 +283,17 @@ namespace yuan::game::server
         append_u32(out, 1);
         out.push_back(response.ok ? 1 : 0);
         append_u64(out, response.role_id);
+        append_u64(out, response.gateway_session_id);
         return append_bytes(out, response.payload) && append_string(out, response.message);
+    }
+
+    bool encode_client_push_message(const ClientPushMessage &message, yuan::rpc::Bytes &out)
+    {
+        out.clear();
+        append_u32(out, 1);
+        append_u64(out, message.role_id);
+        append_u64(out, message.gateway_session_id);
+        return append_bytes(out, message.payload) && append_string(out, message.message);
     }
 
     bool encode_client_time_sync_request(const ClientTimeSyncRequest &request, yuan::rpc::Bytes &out)
@@ -270,6 +302,7 @@ namespace yuan::game::server
         append_u32(out, 1);
         append_u64(out, request.player_uid);
         append_u64(out, request.role_id);
+        append_u64(out, request.gateway_session_id);
         append_u64(out, request.client_time_seconds);
         return true;
     }
@@ -332,6 +365,69 @@ namespace yuan::game::server
         append_u32(out, 1);
         out.push_back(response.ok ? 1 : 0);
         return append_string(out, response.message);
+    }
+
+    std::string encode_login_options_response_json(const LoginOptionsResponse &response)
+    {
+        nlohmann::json root;
+        root["gateways"] = nlohmann::json::array();
+        for (const auto &gateway : response.gateways) {
+            root["gateways"].push_back({{"host", gateway.host},
+                                         {"port", gateway.port},
+                                         {"name", gateway.name}});
+        }
+        root["roles"] = nlohmann::json::array();
+        for (const auto &role : response.roles) {
+            root["roles"].push_back({{"role_id", role.role_id},
+                                      {"name", role.name},
+                                      {"level", role.level},
+                                      {"zone_service_id", role.zone_service_id}});
+        }
+        root["zones"] = nlohmann::json::array();
+        for (const auto &zone : response.zones) {
+            root["zones"].push_back({{"name", zone.name},
+                                      {"online_players", zone.online_players},
+                                      {"max_players", zone.max_players},
+                                      {"available", zone.available}});
+        }
+        return root.dump();
+    }
+
+    std::optional<LoginOptionsResponse> decode_login_options_response_json(const std::string &json_text)
+    {
+        try {
+            const auto root = nlohmann::json::parse(json_text);
+            LoginOptionsResponse response;
+            for (const auto &item : root.value("gateways", nlohmann::json::array())) {
+                GatewayInfo gateway;
+                gateway.service_id = item.value("service_id", static_cast<PackedGameServiceId>(0));
+                gateway.host = item.value("host", std::string());
+                gateway.port = item.value("port", static_cast<std::uint16_t>(0));
+                gateway.name = item.value("name", std::string());
+                response.gateways.push_back(std::move(gateway));
+            }
+            for (const auto &item : root.value("roles", nlohmann::json::array())) {
+                PlayerRoleInfo role;
+                role.role_id = item.value("role_id", static_cast<RoleId>(0));
+                role.name = item.value("name", std::string());
+                role.level = item.value("level", static_cast<std::uint32_t>(1));
+                role.world_service_id = item.value("world_service_id", static_cast<PackedGameServiceId>(0));
+                role.zone_service_id = item.value("zone_service_id", static_cast<PackedGameServiceId>(0));
+                response.roles.push_back(std::move(role));
+            }
+            for (const auto &item : root.value("zones", nlohmann::json::array())) {
+                ZoneInfo zone;
+                zone.service_id = item.value("service_id", static_cast<PackedGameServiceId>(0));
+                zone.name = item.value("name", std::string());
+                zone.online_players = item.value("online_players", static_cast<std::uint32_t>(0));
+                zone.max_players = item.value("max_players", static_cast<std::uint32_t>(0));
+                zone.available = item.value("available", true);
+                response.zones.push_back(std::move(zone));
+            }
+            return response;
+        } catch (...) {
+            return std::nullopt;
+        }
     }
 
     std::optional<GatewayInfo> decode_gateway_info(const yuan::rpc::Bytes &in)
@@ -403,7 +499,16 @@ namespace yuan::game::server
         PlayerZoneUpdate update;
         std::size_t offset = 0;
         std::uint32_t version = 0;
-        if (!read_u32(in, offset, version) || version != 1 || !read_u64(in, offset, update.player_id) || !read_u64(in, offset, update.zone_service_id) || offset != in.size()) {
+        if (!read_u32(in, offset, version) || version != 1 || !read_u64(in, offset, update.player_id) || !read_u64(in, offset, update.zone_service_id)) {
+            return std::nullopt;
+        }
+        if (offset != in.size() && !read_u64(in, offset, update.source_zone_service_id)) {
+            return std::nullopt;
+        }
+        if (offset != in.size() && !read_u64(in, offset, update.gateway_session_id)) {
+            return std::nullopt;
+        }
+        if (offset != in.size()) {
             return std::nullopt;
         }
         return update;
@@ -436,7 +541,8 @@ namespace yuan::game::server
         ClientLoginRequest request;
         std::size_t offset = 0;
         std::uint32_t version = 0;
-        if (!read_u32(in, offset, version) || version != 1 || !read_u64(in, offset, request.player_uid) || !read_u64(in, offset, request.role_id) || offset != in.size()) {
+        if (!read_u32(in, offset, version) || version != 1 || !read_u64(in, offset, request.player_uid) || !read_u64(in, offset, request.role_id) ||
+            !read_u64(in, offset, request.zone_service_id) || !read_u64(in, offset, request.gateway_session_id) || offset != in.size()) {
             return std::nullopt;
         }
         return request;
@@ -451,7 +557,8 @@ namespace yuan::game::server
             return std::nullopt;
         }
         response.ok = in[offset++] != 0;
-        if (!read_u64(in, offset, response.role_id) || !read_u64(in, offset, response.zone_service_id) || !read_string(in, offset, response.message) || offset != in.size()) {
+        if (!read_u64(in, offset, response.role_id) || !read_u64(in, offset, response.zone_service_id) || !read_u64(in, offset, response.gateway_session_id) ||
+            !read_string(in, offset, response.message) || offset != in.size()) {
             return std::nullopt;
         }
         return response;
@@ -463,7 +570,7 @@ namespace yuan::game::server
         std::size_t offset = 0;
         std::uint32_t version = 0;
         if (!read_u32(in, offset, version) || version != 1 || !read_u64(in, offset, request.player_uid) || !read_u64(in, offset, request.role_id) ||
-            !read_bytes(in, offset, request.payload) || offset != in.size()) {
+            !read_u64(in, offset, request.gateway_session_id) || !read_bytes(in, offset, request.payload) || offset != in.size()) {
             return std::nullopt;
         }
         return request;
@@ -478,10 +585,24 @@ namespace yuan::game::server
             return std::nullopt;
         }
         response.ok = in[offset++] != 0;
-        if (!read_u64(in, offset, response.role_id) || !read_bytes(in, offset, response.payload) || !read_string(in, offset, response.message) || offset != in.size()) {
+        if (!read_u64(in, offset, response.role_id) || !read_u64(in, offset, response.gateway_session_id) || !read_bytes(in, offset, response.payload) ||
+            !read_string(in, offset, response.message) || offset != in.size()) {
             return std::nullopt;
         }
         return response;
+    }
+
+    std::optional<ClientPushMessage> decode_client_push_message(const yuan::rpc::Bytes &in)
+    {
+        ClientPushMessage message;
+        std::size_t offset = 0;
+        std::uint32_t version = 0;
+        if (!read_u32(in, offset, version) || version != 1 || !read_u64(in, offset, message.role_id) ||
+            !read_u64(in, offset, message.gateway_session_id) || !read_bytes(in, offset, message.payload) ||
+            !read_string(in, offset, message.message) || offset != in.size()) {
+            return std::nullopt;
+        }
+        return message;
     }
 
     std::optional<ClientTimeSyncRequest> decode_client_time_sync_request(const yuan::rpc::Bytes &in)
@@ -490,7 +611,7 @@ namespace yuan::game::server
         std::size_t offset = 0;
         std::uint32_t version = 0;
         if (!read_u32(in, offset, version) || version != 1 || !read_u64(in, offset, request.player_uid) ||
-            !read_u64(in, offset, request.role_id) || !read_u64(in, offset, request.client_time_seconds) || offset != in.size()) {
+            !read_u64(in, offset, request.role_id) || !read_u64(in, offset, request.gateway_session_id) || !read_u64(in, offset, request.client_time_seconds) || offset != in.size()) {
             return std::nullopt;
         }
         return request;

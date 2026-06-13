@@ -173,10 +173,13 @@ namespace yuan::game::server
 
     bool encode_tunnel_registration(const TunnelRegistration &registration, yuan::rpc::Bytes &out)
     {
-        constexpr std::uint32_t registration_version = 1;
+        constexpr std::uint32_t registration_version = 2;
         out.clear();
         append_u32(out, registration_version);
         append_u64(out, registration.service_id);
+        if (!append_string(out, registration.host)) {
+            return false;
+        }
         append_u32(out, registration.port);
         return append_string(out, registration.name);
     }
@@ -260,10 +263,14 @@ namespace yuan::game::server
         std::size_t offset = 0;
         std::uint32_t version = 0;
         std::uint32_t port = 0;
-        if (!read_u32(in, offset, version) || version != 1 ||
-            !read_u64(in, offset, registration.service_id) ||
-            !read_u32(in, offset, port) ||
-            !read_string(in, offset, registration.name) || offset != in.size()) {
+        if (!read_u32(in, offset, version) || (version != 1 && version != 2) ||
+            !read_u64(in, offset, registration.service_id)) {
+            return std::nullopt;
+        }
+        if (version == 2 && !read_string(in, offset, registration.host)) {
+            return std::nullopt;
+        }
+        if (!read_u32(in, offset, port) || !read_string(in, offset, registration.name) || offset != in.size()) {
             return std::nullopt;
         }
         registration.port = static_cast<std::uint16_t>(port);

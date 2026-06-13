@@ -33,6 +33,7 @@ namespace yuan::game::server
         zone_echo = 200,
         zone_player_enter = 201,
         zone_player_leave = 202,
+        zone_gm_execute = 203,
 
         world_login_options = 300,
         world_gateway_register = 301,
@@ -46,6 +47,7 @@ namespace yuan::game::server
         gateway_game_forward = 401,
         gateway_logout = 402,
         gateway_time_sync = 403,
+        gateway_push = 404,
 
         web_bootstrap = 500
         , web_register = 501
@@ -108,6 +110,11 @@ namespace yuan::game::server
             return make_game_route(GameRpcService::zone, GameRpcMethod::zone_player_leave, "zone.player.leave");
         }
 
+        inline yuan::rpc::Route zone_gm_execute()
+        {
+            return make_game_route(GameRpcService::zone, GameRpcMethod::zone_gm_execute, "zone.gm.execute");
+        }
+
         inline yuan::rpc::Route world_login_options()
         {
             return make_game_route(GameRpcService::world, GameRpcMethod::world_login_options, "world.login.options");
@@ -161,6 +168,11 @@ namespace yuan::game::server
         inline yuan::rpc::Route gateway_time_sync()
         {
             return make_game_route(GameRpcService::gateway, GameRpcMethod::gateway_time_sync, "gateway.time_sync");
+        }
+
+        inline yuan::rpc::Route gateway_push()
+        {
+            return make_game_route(GameRpcService::gateway, GameRpcMethod::gateway_push, "gateway.push");
         }
 
         inline yuan::rpc::Route web_bootstrap()

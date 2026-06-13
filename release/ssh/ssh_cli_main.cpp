@@ -1,3 +1,7 @@
+#ifdef _WIN32
+#include <winsock2.h>
+#endif
+
 #include "client/ssh_cli_auth.h"
 #include "client/ssh_cli_config.h"
 #include "client/ssh_cli_forward.h"
@@ -20,9 +24,7 @@
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#else
+#ifndef _WIN32
 #include <signal.h>
 #endif
 

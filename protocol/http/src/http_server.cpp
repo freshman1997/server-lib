@@ -1733,7 +1733,7 @@ namespace yuan::net::http
         if (prepare_websocket_proxy_handoff(context)) {
             return true;
         }
-        if (response->get_response_code() == ResponseCode::bad_request) {
+        if (context->has_error() && response->get_response_code() == ResponseCode::bad_request) {
             return true;
         }
 
@@ -2285,8 +2285,7 @@ namespace yuan::net::http
 
         auto httpCtx = std::make_unique<HttpSessionContext>(conn);
         httpCtx->set_request_timing_enabled(config_.track_request_time || static_cast<bool>(access_log_hook_));
-        const bool use_session_idle_timer = config::close_idle_connection &&
-                                            (config_.keep_alive_timeout_ms > 0 || config::connection_idle_timeout > 0);
+        const bool use_session_idle_timer = true;
         auto session = std::make_unique<HttpSession>(
             sessionId,
             std::move(httpCtx),
@@ -2347,7 +2346,11 @@ namespace yuan::net::http
                 break;
             }
             if (read_result.status != coroutine::IoStatus::success) {
-                break;
+                if (ctx.input_readable_bytes() == 0) {
+                    break;
+                }
+                read_result.status = coroutine::IoStatus::success;
+                read_result.data = ctx.take_input_byte_buffer();
             }
             session_ptr->reset_timer();
 

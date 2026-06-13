@@ -1,9 +1,13 @@
 #include "game_server.h"
 
+#include "messaging/process_message_manager.h"
+
 #include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
+#include <chrono>
 
 namespace
 {
@@ -28,26 +32,39 @@ int main()
         return 1;
     }
 
-    GlobalService global(ServiceAddress{{1, 1, GameServiceType::global, 1, 1}, 100, yuan::game_base::ServerRole::world, 1, "global"});
-    auto forward = [&](TunnelEnvelope envelope) { return tunnels.forward(std::move(envelope)); };
-    ZoneService zone_1(ServiceAddress{{1, 1, GameServiceType::zone, 1, 1}, 200, yuan::game_base::ServerRole::scene, 1, "zone-1"}, forward);
-    ZoneService zone_2(ServiceAddress{{1, 1, GameServiceType::zone, 1, 2}, 201, yuan::game_base::ServerRole::scene, 1, "zone-2"}, forward);
-    if (!require(global.address().service.pack() == pack_game_service_id(1, 1, GameServiceType::global, 1),
+    const ServiceAddress global_address{{1, 1, GameServiceType::global, 1, 1}, 100, yuan::game_base::ServerRole::world, 1, "global"};
+    GlobalMsgEchoContext global_echo{global_address};
+    GlobalMsgGmContext global_gm;
+    yuan::rpc::Server global_rpc;
+    register_global_builtin_gm(global_gm);
+    if (!require(register_global_msg_echo(global_rpc, global_echo) && register_global_msg_gm(global_rpc, global_gm),
+                 "global handlers should register")) {
+        return 40;
+    }
+    const ServiceAddress zone_1_address{{1, 1, GameServiceType::zone, 1, 1}, 200, yuan::game_base::ServerRole::scene, 1, "zone-1"};
+    const ServiceAddress zone_2_address{{1, 1, GameServiceType::zone, 1, 2}, 201, yuan::game_base::ServerRole::scene, 1, "zone-2"};
+    yuan::rpc::Server zone_1_rpc;
+    yuan::rpc::Server zone_2_rpc;
+    if (!require(register_zone_msg_echo(zone_1_rpc, zone_1_address) && register_zone_msg_echo(zone_2_rpc, zone_2_address),
+                 "zone echo handlers should register")) {
+        return 39;
+    }
+    if (!require(global_address.service.pack() == pack_game_service_id(1, 1, GameServiceType::global, 1),
                  "packed global service id should match layout")) {
         return 29;
     }
-    if (!require(unpack_game_service_id(zone_2.address().service.pack()) == zone_2.address().service,
+    if (!require(unpack_game_service_id(zone_2_address.service.pack()) == zone_2_address.service,
                  "packed zone service id should roundtrip")) {
         return 30;
     }
 
-    if (!require(tunnels.register_endpoint(global.address(), global.rpc_server()), "global should register on tunnels")) {
+    if (!require(tunnels.register_endpoint(global_address, global_rpc), "global should register on tunnels")) {
         return 2;
     }
-    if (!require(tunnels.register_endpoint(zone_1.address(), zone_1.rpc_server()), "zone-1 should register on tunnels")) {
+    if (!require(tunnels.register_endpoint(zone_1_address, zone_1_rpc), "zone-1 should register on tunnels")) {
         return 3;
     }
-    if (!require(tunnels.register_endpoint(zone_2.address(), zone_2.rpc_server()), "zone-2 should register on tunnels")) {
+    if (!require(tunnels.register_endpoint(zone_2_address, zone_2_rpc), "zone-2 should register on tunnels")) {
         return 4;
     }
     if (!require(tunnel_a->endpoint_count() == 3 && tunnel_b->endpoint_count() == 3, "all tunnel instances should know endpoints")) {
@@ -55,7 +72,14 @@ int main()
     }
 
     yuan::rpc::Route global_route = game_route::global_echo();
-    auto response = zone_1.call(global.address(), global_route, yuan::rpc::Codec<std::string>::encode("hello-global"));
+    TunnelEnvelope zone_to_global;
+    zone_to_global.source = service_key(zone_1_address);
+    zone_to_global.target = service_key(global_address);
+    zone_to_global.source_service_id = zone_1_address.service.pack();
+    zone_to_global.target_service_id = global_address.service.pack();
+    zone_to_global.route = global_route;
+    zone_to_global.payload = yuan::rpc::Codec<std::string>::encode("hello-global");
+    auto response = tunnels.forward(std::move(zone_to_global));
     if (!require(response.status == yuan::rpc::RpcStatus::ok, "zone to global through tunnel should succeed")) {
         return 6;
     }
@@ -65,22 +89,31 @@ int main()
     if (!require(response.metadata.find("global.node") != response.metadata.end(), "global metadata should be present")) {
         return 8;
     }
-    if (!require(response.metadata["tunnel.source"] == service_key(zone_1.address()), "global should know tunnel source")) {
+    if (!require(response.metadata["tunnel.source"] == service_key(zone_1_address), "global should know tunnel source")) {
         return 13;
     }
-    if (!require(response.metadata["tunnel.target"] == service_key(global.address()), "global should know tunnel target")) {
+    if (!require(response.metadata["tunnel.target"] == service_key(global_address), "global should know tunnel target")) {
         return 14;
     }
 
     yuan::rpc::Route zone_route = game_route::zone_echo();
-    response = zone_2.call(zone_1.address(), zone_route, yuan::rpc::Codec<std::string>::encode("hello-zone"), {}, 77, 8801);
+    TunnelEnvelope zone_to_zone;
+    zone_to_zone.source = service_key(zone_2_address);
+    zone_to_zone.target = service_key(zone_1_address);
+    zone_to_zone.source_service_id = zone_2_address.service.pack();
+    zone_to_zone.target_service_id = zone_1_address.service.pack();
+    zone_to_zone.request_id = 77;
+    zone_to_zone.continuation_id = 8801;
+    zone_to_zone.route = zone_route;
+    zone_to_zone.payload = yuan::rpc::Codec<std::string>::encode("hello-zone");
+    response = tunnels.forward(std::move(zone_to_zone));
     if (!require(response.status == yuan::rpc::RpcStatus::ok, "zone to zone through tunnel should succeed")) {
         return 9;
     }
     if (!require(response.metadata.find("zone.node") != response.metadata.end(), "zone metadata should be present")) {
         return 10;
     }
-    if (!require(response.metadata["tunnel.source"] == service_key(zone_2.address()), "target zone should know source zone")) {
+    if (!require(response.metadata["tunnel.source"] == service_key(zone_2_address), "target zone should know source zone")) {
         return 15;
     }
     if (!require(response.metadata["tunnel.origin.request_id"] == "77", "target zone should receive origin request id")) {
@@ -97,8 +130,8 @@ int main()
     }
 
     TunnelEnvelope random_zone_envelope;
-    random_zone_envelope.source = service_key(global.address());
-    random_zone_envelope.source_service_id = global.address().service.pack();
+    random_zone_envelope.source = service_key(global_address);
+    random_zone_envelope.source_service_id = global_address.service.pack();
     random_zone_envelope.target_type = GameServiceType::zone;
     random_zone_envelope.mode = TunnelEnvelope::ForwardMode::random_one;
     random_zone_envelope.request_id = 301;
@@ -114,8 +147,8 @@ int main()
     }
 
     TunnelEnvelope broadcast_zone_envelope;
-    broadcast_zone_envelope.source = service_key(global.address());
-    broadcast_zone_envelope.source_service_id = global.address().service.pack();
+    broadcast_zone_envelope.source = service_key(global_address);
+    broadcast_zone_envelope.source_service_id = global_address.service.pack();
     broadcast_zone_envelope.target_type = GameServiceType::zone;
     broadcast_zone_envelope.mode = TunnelEnvelope::ForwardMode::all_of_type;
     broadcast_zone_envelope.request_id = 302;
@@ -145,9 +178,9 @@ int main()
     }
 
     TunnelEnvelope async_envelope;
-    async_envelope.source = service_key(zone_1.address());
+    async_envelope.source = service_key(zone_1_address);
     async_envelope.target = service_key(async_global_address);
-    async_envelope.source_service_id = zone_1.address().service.pack();
+    async_envelope.source_service_id = zone_1_address.service.pack();
     async_envelope.target_service_id = async_global_address.service.pack();
     async_envelope.request_id = 501;
     async_envelope.continuation_id = 9501;
@@ -169,15 +202,15 @@ int main()
                  "async target should receive request and continuation ids")) {
         return 23;
     }
-    if (!require(captured_async_message.metadata["tunnel.source"] == service_key(zone_1.address()), "async target should know source")) {
+    if (!require(captured_async_message.metadata["tunnel.source"] == service_key(zone_1_address), "async target should know source")) {
         return 24;
     }
 
     TunnelReply async_reply;
     async_reply.source = service_key(async_global_address);
-    async_reply.target = service_key(zone_1.address());
+    async_reply.target = service_key(zone_1_address);
     async_reply.source_service_id = async_global_address.service.pack();
-    async_reply.target_service_id = zone_1.address().service.pack();
+    async_reply.target_service_id = zone_1_address.service.pack();
     async_reply.request_id = 501;
     async_reply.continuation_id = 9501;
     async_reply.status = yuan::rpc::RpcStatus::ok;
@@ -201,9 +234,9 @@ int main()
     bool rpc_reply_replied = false;
     yuan::rpc::Response rpc_reply_response;
     TunnelEnvelope rpc_reply_envelope;
-    rpc_reply_envelope.source = service_key(zone_2.address());
+    rpc_reply_envelope.source = service_key(zone_2_address);
     rpc_reply_envelope.target = service_key(async_global_address);
-    rpc_reply_envelope.source_service_id = zone_2.address().service.pack();
+    rpc_reply_envelope.source_service_id = zone_2_address.service.pack();
     rpc_reply_envelope.target_service_id = async_global_address.service.pack();
     rpc_reply_envelope.request_id = 502;
     rpc_reply_envelope.continuation_id = 9502;
@@ -218,9 +251,9 @@ int main()
 
     TunnelReply rpc_reply;
     rpc_reply.source = service_key(async_global_address);
-    rpc_reply.target = service_key(zone_2.address());
+    rpc_reply.target = service_key(zone_2_address);
     rpc_reply.source_service_id = async_global_address.service.pack();
-    rpc_reply.target_service_id = zone_2.address().service.pack();
+    rpc_reply.target_service_id = zone_2_address.service.pack();
     rpc_reply.request_id = 502;
     rpc_reply.continuation_id = 9502;
     rpc_reply.payload = yuan::rpc::Codec<std::string>::encode("rpc-reply-response");
@@ -244,12 +277,116 @@ int main()
         return 34;
     }
 
-    response = zone_1.call(ServiceAddress{{1, 1, GameServiceType::zone, 1, 999}, 999, yuan::game_base::ServerRole::scene, 1, "missing"}, zone_route, {});
+    TunnelEnvelope missing_envelope;
+    missing_envelope.source = service_key(zone_1_address);
+    missing_envelope.target = service_key(ServiceAddress{{1, 1, GameServiceType::zone, 1, 999}, 999, yuan::game_base::ServerRole::scene, 1, "missing"});
+    missing_envelope.source_service_id = zone_1_address.service.pack();
+    missing_envelope.target_service_id = pack_game_service_id(1, 1, GameServiceType::zone, 999);
+    missing_envelope.route = zone_route;
+    response = tunnels.forward(std::move(missing_envelope));
     if (!require(response.status == yuan::rpc::RpcStatus::not_found, "missing tunnel target should fail")) {
         return 11;
     }
 
-    if (!require(global.request_count() == 1, "global should receive exactly one request")) {
+    const auto retry_tunnel_port = rpc_network::reserve_loopback_port();
+    if (!require(retry_tunnel_port != 0, "retry tunnel port should be reserved")) {
+        return 40;
+    }
+    rpc_network::RpcNetworkServer retry_tunnel_server;
+    if (!require(retry_tunnel_server.start(rpc_network::RpcNetworkServerConfig{"127.0.0.1", retry_tunnel_port, 0}, tunnel_a->rpc_server()),
+                 "retry tunnel network server should start")) {
+        return 41;
+    }
+    std::thread retry_tunnel_thread([&retry_tunnel_server] {
+        (void)retry_tunnel_server.run();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    ProcessMessageManager retry_manager({rpc_network::RpcEndpoint{"127.0.0.1", 1}, rpc_network::RpcEndpoint{"127.0.0.1", retry_tunnel_port}});
+    auto retry_response = retry_manager.send_to_service(zone_1_address.service.pack(),
+                                                         global_address.service.pack(),
+                                                         game_route::global_echo(),
+                                                         yuan::rpc::Codec<std::string>::encode("retry-global"));
+    if (!require(retry_response && retry_response->status == yuan::rpc::RpcStatus::ok,
+                 "process message manager should retry next tunnel endpoint")) {
+        return 42;
+    }
+    if (!require(yuan::rpc::Codec<std::string>::decode(retry_response->payload) == "retry-global",
+                  "retry tunnel response payload mismatch")) {
+        return 43;
+    }
+    TunnelEnvelope retry_metrics_envelope;
+    retry_metrics_envelope.source = service_key(zone_1_address);
+    retry_metrics_envelope.target = service_key(global_address);
+    retry_metrics_envelope.source_service_id = zone_1_address.service.pack();
+    retry_metrics_envelope.target_service_id = global_address.service.pack();
+    retry_metrics_envelope.route = game_route::global_echo();
+    retry_metrics_envelope.payload = yuan::rpc::Codec<std::string>::encode("retry-metrics-global");
+    yuan::rpc::Bytes retry_metrics_payload;
+    if (!require(encode_tunnel_envelope(retry_metrics_envelope, retry_metrics_payload), "retry metrics tunnel envelope should encode")) {
+        return 44;
+    }
+    yuan::rpc::Message retry_metrics_message;
+    retry_metrics_message.route = game_route::tunnel_forward();
+    retry_metrics_message.payload = std::move(retry_metrics_payload);
+    const auto retry_metrics_response = retry_manager.call_tunnel(std::move(retry_metrics_message), 0);
+    if (!require(retry_metrics_response && retry_metrics_response->status == yuan::rpc::RpcStatus::ok,
+                 "process message manager should recover after retrying a dead first endpoint")) {
+        return 51;
+    }
+    const auto retry_metrics = retry_manager.metrics();
+    if (!require(retry_metrics.tunnel_call_retries >= 1 && retry_metrics.tunnel_call_recoveries >= 1,
+                 "process message manager should record retry and recovery metrics")) {
+        return 52;
+    }
+    retry_tunnel_server.stop();
+    if (retry_tunnel_thread.joinable()) {
+        retry_tunnel_thread.join();
+    }
+
+    const auto recovery_tunnel_port = rpc_network::reserve_loopback_port();
+    if (!require(recovery_tunnel_port != 0, "recovery tunnel port should be reserved")) {
+        return 45;
+    }
+    ProcessMessageManager recovery_manager({rpc_network::RpcEndpoint{"127.0.0.1", recovery_tunnel_port}});
+    auto down_response = recovery_manager.send_to_service(zone_1_address.service.pack(),
+                                                          global_address.service.pack(),
+                                                          game_route::global_echo(),
+                                                          yuan::rpc::Codec<std::string>::encode("recovery-down"));
+    if (!require(!down_response, "down tunnel endpoint should fail before server starts")) {
+        return 46;
+    }
+    rpc_network::RpcNetworkServer recovery_tunnel_server;
+    if (!require(recovery_tunnel_server.start(rpc_network::RpcNetworkServerConfig{"127.0.0.1", recovery_tunnel_port, 0}, tunnel_a->rpc_server()),
+                 "recovery tunnel network server should start")) {
+        return 47;
+    }
+    std::thread recovery_tunnel_thread([&recovery_tunnel_server] {
+        (void)recovery_tunnel_server.run();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    auto recovered_response = recovery_manager.send_to_service(zone_1_address.service.pack(),
+                                                               global_address.service.pack(),
+                                                               game_route::global_echo(),
+                                                               yuan::rpc::Codec<std::string>::encode("recovery-up"));
+    recovery_tunnel_server.stop();
+    if (recovery_tunnel_thread.joinable()) {
+        recovery_tunnel_thread.join();
+    }
+    if (!require(recovered_response && recovered_response->status == yuan::rpc::RpcStatus::ok,
+                 "process message manager should reconnect to a previously dead tunnel endpoint")) {
+        return 48;
+    }
+    if (!require(yuan::rpc::Codec<std::string>::decode(recovered_response->payload) == "recovery-up",
+                 "recovered tunnel response payload mismatch")) {
+        return 49;
+    }
+    const auto recovery_metrics = recovery_manager.metrics();
+    if (!require(recovery_metrics.tunnel_call_failures >= 1,
+                 "process message manager should record failed down-endpoint calls")) {
+        return 50;
+    }
+
+    if (!require(global_echo.request_count == 4, "global should receive direct, retried, metrics, and recovered requests")) {
         return 12;
     }
     return EXIT_SUCCESS;

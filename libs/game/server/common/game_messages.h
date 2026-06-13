@@ -38,18 +38,20 @@ namespace yuan::game::server
         std::uint32_t online_players = 0;
         std::uint32_t max_players = 0;
         bool available = true;
+        std::vector<GatewayInfo> gateways;
     };
 
     struct LoginOptionsRequest { PlayerUid player_uid = 0; };
-    struct LoginOptionsResponse { std::vector<GatewayInfo> gateways; std::vector<PlayerRoleInfo> roles; };
+    struct LoginOptionsResponse { std::vector<GatewayInfo> gateways; std::vector<PlayerRoleInfo> roles; std::vector<ZoneInfo> zones; };
     struct PlayerZoneQuery { PlayerId player_id = 0; };
     struct ZoneSelectRequest { PlayerUid player_uid = 0; RoleId role_id = 0; };
-    struct PlayerZoneUpdate { PlayerId player_id = 0; PackedGameServiceId zone_service_id = 0; };
-    struct ClientLoginRequest { PlayerUid player_uid = 0; RoleId role_id = 0; };
-    struct ClientLoginResponse { bool ok = false; RoleId role_id = 0; PackedGameServiceId zone_service_id = 0; std::string message; };
-    struct ClientGameRequest { PlayerUid player_uid = 0; RoleId role_id = 0; yuan::rpc::Bytes payload; };
-    struct ClientGameResponse { bool ok = false; RoleId role_id = 0; yuan::rpc::Bytes payload; std::string message; };
-    struct ClientTimeSyncRequest { PlayerUid player_uid = 0; RoleId role_id = 0; std::uint64_t client_time_seconds = 0; };
+    struct PlayerZoneUpdate { PlayerId player_id = 0; PackedGameServiceId zone_service_id = 0; PackedGameServiceId source_zone_service_id = 0; std::uint64_t gateway_session_id = 0; };
+    struct ClientLoginRequest { PlayerUid player_uid = 0; RoleId role_id = 0; PackedGameServiceId zone_service_id = 0; std::uint64_t gateway_session_id = 0; };
+    struct ClientLoginResponse { bool ok = false; RoleId role_id = 0; PackedGameServiceId zone_service_id = 0; std::uint64_t gateway_session_id = 0; std::string message; };
+    struct ClientGameRequest { PlayerUid player_uid = 0; RoleId role_id = 0; std::uint64_t gateway_session_id = 0; yuan::rpc::Bytes payload; };
+    struct ClientGameResponse { bool ok = false; RoleId role_id = 0; std::uint64_t gateway_session_id = 0; yuan::rpc::Bytes payload; std::string message; };
+    struct ClientPushMessage { RoleId role_id = 0; std::uint64_t gateway_session_id = 0; yuan::rpc::Bytes payload; std::string message; };
+    struct ClientTimeSyncRequest { PlayerUid player_uid = 0; RoleId role_id = 0; std::uint64_t gateway_session_id = 0; std::uint64_t client_time_seconds = 0; };
     struct ClientTimeSyncResponse
     {
         bool ok = false;
@@ -75,12 +77,16 @@ namespace yuan::game::server
     bool encode_client_login_response(const ClientLoginResponse &response, yuan::rpc::Bytes &out);
     bool encode_client_game_request(const ClientGameRequest &request, yuan::rpc::Bytes &out);
     bool encode_client_game_response(const ClientGameResponse &response, yuan::rpc::Bytes &out);
+    bool encode_client_push_message(const ClientPushMessage &message, yuan::rpc::Bytes &out);
     bool encode_client_time_sync_request(const ClientTimeSyncRequest &request, yuan::rpc::Bytes &out);
     bool encode_client_time_sync_response(const ClientTimeSyncResponse &response, yuan::rpc::Bytes &out);
     bool encode_web_auth_request(const WebAuthRequest &request, yuan::rpc::Bytes &out);
     bool encode_web_auth_response(const WebAuthResponse &response, yuan::rpc::Bytes &out);
     bool encode_gm_command_request(const GmCommandRequest &request, yuan::rpc::Bytes &out);
     bool encode_gm_command_response(const GmCommandResponse &response, yuan::rpc::Bytes &out);
+
+    std::string encode_login_options_response_json(const LoginOptionsResponse &response);
+    std::optional<LoginOptionsResponse> decode_login_options_response_json(const std::string &json_text);
 
     std::optional<GatewayInfo> decode_gateway_info(const yuan::rpc::Bytes &in);
     std::optional<LoginOptionsRequest> decode_login_options_request(const yuan::rpc::Bytes &in);
@@ -93,6 +99,7 @@ namespace yuan::game::server
     std::optional<ClientLoginResponse> decode_client_login_response(const yuan::rpc::Bytes &in);
     std::optional<ClientGameRequest> decode_client_game_request(const yuan::rpc::Bytes &in);
     std::optional<ClientGameResponse> decode_client_game_response(const yuan::rpc::Bytes &in);
+    std::optional<ClientPushMessage> decode_client_push_message(const yuan::rpc::Bytes &in);
     std::optional<ClientTimeSyncRequest> decode_client_time_sync_request(const yuan::rpc::Bytes &in);
     std::optional<ClientTimeSyncResponse> decode_client_time_sync_response(const yuan::rpc::Bytes &in);
     std::optional<WebAuthRequest> decode_web_auth_request(const yuan::rpc::Bytes &in);

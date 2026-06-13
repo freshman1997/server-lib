@@ -3,10 +3,12 @@
 #include "protocol/ssh_message_codec.h"
 
 #include <array>
+#include <cstddef>
 #include <iostream>
 
 #ifdef _WIN32
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
 #include <sys/socket.h>

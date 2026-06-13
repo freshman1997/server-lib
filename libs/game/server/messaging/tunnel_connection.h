@@ -17,6 +17,7 @@ namespace yuan::game::server
         [[nodiscard]] const rpc_network::RpcEndpoint &endpoint() const;
         [[nodiscard]] bool alive() const;
         [[nodiscard]] std::optional<yuan::rpc::Response> send(const yuan::rpc::Message &message) const;
+        [[nodiscard]] std::optional<yuan::rpc::Response> send_and_update_health(const yuan::rpc::Message &message);
         bool heartbeat();
 
     private:

@@ -1,4 +1,4 @@
-#include "web/web_service.h"
+#include "web/handler/web_handler.h"
 
 #include <iostream>
 
@@ -18,17 +18,21 @@ int main()
 {
     using namespace yuan::game::server;
 
-    WebService web({{1, 7, GameServiceType::web, 7, 1}, 600, yuan::game_base::ServerRole::world, 7, "web"});
+    WebHandlerContext web{{{1, 7, GameServiceType::web, 7, 1}, 600, yuan::game_base::ServerRole::world, 7, "web"}};
+    yuan::rpc::Server web_rpc;
     LoginOptionsResponse options;
     options.gateways.push_back({pack_game_service_id(1, 7, GameServiceType::gateway, 1), "127.0.0.1", 30001, "gateway-a"});
     options.roles.push_back({10001, "hero", 9, pack_game_service_id(1, 7, GameServiceType::world, 1), 0});
 
-    web.set_register_handler([&options](WebAuthRequest request) {
+    web.register_handler = [&options](WebAuthRequest request) {
         return WebAuthResponse{request.account == "alice" && request.password == "pw", 42, options, "registered"};
-    });
-    web.set_login_handler([&options](WebAuthRequest request) {
+    };
+    web.login_handler = [&options](WebAuthRequest request) {
         return WebAuthResponse{request.account == "alice" && request.password == "pw", 42, options, "login ok"};
-    });
+    };
+    if (!require(register_web_handlers(web_rpc, web), "web handlers should register")) {
+        return 7;
+    }
 
     yuan::rpc::Bytes payload;
     if (!require(encode_web_auth_request({"alice", "pw"}, payload), "auth request should encode")) {
@@ -38,7 +42,7 @@ int main()
     yuan::rpc::Message register_message;
     register_message.route = game_route::web_register();
     register_message.payload = payload;
-    const auto register_response = web.rpc_server().handle(register_message);
+    const auto register_response = web_rpc.handle(register_message);
     if (!require(register_response.status == yuan::rpc::RpcStatus::ok, "register should return ok status")) {
         return 2;
     }
@@ -54,7 +58,7 @@ int main()
     yuan::rpc::Message login_message;
     login_message.route = game_route::web_login();
     login_message.payload = std::move(payload);
-    const auto login_response = web.rpc_server().handle(login_message);
+    const auto login_response = web_rpc.handle(login_message);
     if (!require(login_response.status == yuan::rpc::RpcStatus::ok, "login should return ok status")) {
         return 5;
     }
