@@ -1,5 +1,6 @@
 #ifdef _WIN32
 #include <winsock2.h>
+#include <windows.h>
 #endif
 
 #include "client/ssh_cli_auth.h"
@@ -37,6 +38,17 @@ namespace
     void cli_sigint_handler(int)
     {
         g_cli_sigint_count = 1;
+    }
+#else
+    volatile LONG g_cli_sigint_count = 0;
+
+    BOOL WINAPI cli_ctrl_handler(DWORD type)
+    {
+        if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
+            InterlockedIncrement(&g_cli_sigint_count);
+            return TRUE;
+        }
+        return FALSE;
     }
 #endif
 
@@ -159,7 +171,9 @@ namespace
         bool stdin_eof_sent = false;
         bool shell_ready = false;
         TerminalSize last_terminal_size = query_terminal_size();
-#ifndef _WIN32
+#ifdef _WIN32
+        LONG handled_sigint_count = 0;
+#else
         sig_atomic_t handled_sigint_count = 0;
 #endif
         uint32_t local_channel_id = 0;
@@ -598,7 +612,6 @@ namespace
             }
 
             if (allocate_pty && shell_ready) {
-#ifndef _WIN32
                 if (g_cli_sigint_count > handled_sigint_count) {
                     handled_sigint_count = g_cli_sigint_count;
                     (void)send_signal_request(fd, transport, remote_channel_id, "INT");
@@ -612,7 +625,6 @@ namespace
                     last_terminal_size = current_size;
                     (void)send_window_change_request(fd, transport, remote_channel_id, current_size);
                 }
-#endif
             }
 
             if (!pump_forward_target_reads()) {
@@ -643,7 +655,9 @@ int main(int argc, char **argv)
         return 1;
     }
 
-#ifndef _WIN32
+#ifdef _WIN32
+    SetConsoleCtrlHandler(cli_ctrl_handler, TRUE);
+#else
     signal(SIGINT, cli_sigint_handler);
     signal(SIGPIPE, SIG_IGN);
 #endif

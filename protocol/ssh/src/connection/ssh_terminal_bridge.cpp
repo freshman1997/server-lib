@@ -124,12 +124,22 @@ namespace yuan::net::ssh
 
         bool read_stdout(std::vector<uint8_t> &out)
         {
+#ifdef _WIN32
+            out.clear();
+            return false;
+#else
             return read_available(stdout_fd_, out);
+#endif
         }
 
         bool read_stderr(std::vector<uint8_t> &out)
         {
+#ifdef _WIN32
+            out.clear();
+            return false;
+#else
             return read_available(stderr_fd_, out);
+#endif
         }
 
         int stdout_fd() const noexcept

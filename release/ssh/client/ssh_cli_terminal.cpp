@@ -20,7 +20,39 @@
 
 namespace yuan::release_ssh::client
 {
-#ifndef _WIN32
+#ifdef _WIN32
+    struct LocalTerminalState
+    {
+        HANDLE input = nullptr;
+        HANDLE output = nullptr;
+        DWORD input_mode = 0;
+        DWORD output_mode = 0;
+        bool has_output_mode = false;
+    };
+
+    bool console_has_char_input(HANDLE h)
+    {
+        DWORD count = 0;
+        if (!GetNumberOfConsoleInputEvents(h, &count) || count == 0) {
+            return false;
+        }
+
+        std::vector<INPUT_RECORD> records(count);
+        DWORD read = 0;
+        if (!PeekConsoleInputA(h, records.data(), count, &read)) {
+            return false;
+        }
+        for (DWORD i = 0; i < read; ++i) {
+            const auto &event = records[i];
+            if (event.EventType == KEY_EVENT &&
+                event.Event.KeyEvent.bKeyDown &&
+                event.Event.KeyEvent.uChar.AsciiChar != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+#else
     struct LocalTerminalState
     {
         termios original{};
@@ -49,6 +81,48 @@ namespace yuan::release_ssh::client
     bool LocalTerminalRawGuard::enable()
     {
 #ifdef _WIN32
+        if (active_) {
+            return true;
+        }
+        if (!stdin_is_tty()) {
+            return true;
+        }
+
+        auto *state = new LocalTerminalState();
+        state->input = GetStdHandle(STD_INPUT_HANDLE);
+        state->output = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (state->input == INVALID_HANDLE_VALUE || state->input == nullptr) {
+            delete state;
+            return false;
+        }
+        if (!GetConsoleMode(state->input, &state->input_mode)) {
+            delete state;
+            return false;
+        }
+
+        DWORD input_mode = state->input_mode;
+        input_mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT);
+        input_mode |= ENABLE_EXTENDED_FLAGS;
+#ifdef ENABLE_VIRTUAL_TERMINAL_INPUT
+        input_mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
+#endif
+        if (!SetConsoleMode(state->input, input_mode)) {
+            delete state;
+            return false;
+        }
+
+        if (state->output != INVALID_HANDLE_VALUE && state->output != nullptr &&
+            GetConsoleMode(state->output, &state->output_mode)) {
+            state->has_output_mode = true;
+            DWORD output_mode = state->output_mode;
+#ifdef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            output_mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+#endif
+            (void)SetConsoleMode(state->output, output_mode);
+        }
+
+        state_ = state;
+        active_ = true;
         return true;
 #else
         if (active_) {
@@ -82,15 +156,22 @@ namespace yuan::release_ssh::client
 
     void LocalTerminalRawGuard::restore()
     {
-#ifndef _WIN32
         if (active_) {
             auto *state = static_cast<LocalTerminalState *>(state_);
+#ifdef _WIN32
+            if (state->input != INVALID_HANDLE_VALUE && state->input != nullptr) {
+                (void)SetConsoleMode(state->input, state->input_mode);
+            }
+            if (state->has_output_mode && state->output != INVALID_HANDLE_VALUE && state->output != nullptr) {
+                (void)SetConsoleMode(state->output, state->output_mode);
+            }
+#else
             (void)tcsetattr(STDIN_FILENO, TCSADRAIN, &state->original);
+#endif
             delete state;
             state_ = nullptr;
             active_ = false;
         }
-#endif
     }
 
     StdinNonblockingGuard::StdinNonblockingGuard()
@@ -123,7 +204,7 @@ namespace yuan::release_ssh::client
 
         DWORD mode = 0;
         if (GetConsoleMode(h, &mode)) {
-            return WaitForSingleObject(h, 0) == WAIT_OBJECT_0;
+            return console_has_char_input(h);
         }
 
         if (GetFileType(h) != FILE_TYPE_PIPE) {
@@ -165,14 +246,14 @@ namespace yuan::release_ssh::client
 
         DWORD mode = 0;
         if (GetConsoleMode(h, &mode)) {
-            DWORD n_chars = 0;
-            if (!ReadConsoleA(h, buf.data(), static_cast<DWORD>(buf.size()), &n_chars, nullptr)) {
+            DWORD n = 0;
+            if (!ReadFile(h, buf.data(), static_cast<DWORD>(buf.size()), &n, nullptr)) {
                 return StdinPollResult::error;
             }
-            if (n_chars == 0) {
+            if (n == 0) {
                 return StdinPollResult::eof;
             }
-            out.assign(buf.data(), static_cast<size_t>(n_chars));
+            out.assign(buf.data(), static_cast<size_t>(n));
             return StdinPollResult::data;
         }
 
@@ -217,7 +298,22 @@ namespace yuan::release_ssh::client
     TerminalSize query_terminal_size()
     {
         TerminalSize ts;
-#ifndef _WIN32
+#ifdef _WIN32
+        HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (h != INVALID_HANDLE_VALUE && h != nullptr) {
+            CONSOLE_SCREEN_BUFFER_INFO info{};
+            if (GetConsoleScreenBufferInfo(h, &info)) {
+                const SHORT cols = static_cast<SHORT>(info.srWindow.Right - info.srWindow.Left + 1);
+                const SHORT rows = static_cast<SHORT>(info.srWindow.Bottom - info.srWindow.Top + 1);
+                if (cols > 0) {
+                    ts.cols = static_cast<uint32_t>(cols);
+                }
+                if (rows > 0) {
+                    ts.rows = static_cast<uint32_t>(rows);
+                }
+            }
+        }
+#else
         winsize ws{};
         if (ioctl(STDIN_FILENO, TIOCGWINSZ, &ws) == 0) {
             if (ws.ws_col > 0) {

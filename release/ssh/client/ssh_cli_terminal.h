@@ -35,9 +35,7 @@ namespace yuan::release_ssh::client
     private:
         void restore();
 
-#ifndef _WIN32
         void *state_ = nullptr;
-#endif
         bool active_ = false;
     };
 
