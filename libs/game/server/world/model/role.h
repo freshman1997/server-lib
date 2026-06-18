@@ -7,30 +7,29 @@
 #include <unordered_map>
 #include <unordered_set>
 
-namespace yuan::redis
-{
-    class RedisClient;
-}
-
 namespace yuan::game::server
 {
     class RoleCache
     {
     public:
-        void ensure_player_roles(PlayerUid player_uid,
-                                 yuan::redis::RedisClient *redis,
-                                 PackedGameServiceId world_service_id,
+        struct LoadedPlayerRoles
+        {
+            PlayerUid player_uid = 0;
+            std::vector<SSPlayerRoleInfo> roles;
+            bool created_default_role = false;
+            bool missing_role_list = false;
+        };
+        using PlayerRolesSaver = std::function<bool(PlayerUid, const std::vector<SSPlayerRoleInfo> &)>;
+
+        [[nodiscard]] bool is_player_loaded(PlayerUid player_uid) const;
+        void apply_player_roles(const LoadedPlayerRoles &loaded,
                                  std::function<void(PlayerUid, const SSPlayerRoleInfo &)> add_role);
         void mark_role_zone(PlayerId player_id, PackedGameServiceId zone_service_id);
-        void flush_dirty(yuan::redis::RedisClient *redis, PackedGameServiceId world_service_id);
+        std::size_t flush_dirty(const PlayerRolesSaver &saver, PackedGameServiceId world_service_id);
         [[nodiscard]] std::size_t dirty_player_count() const;
         [[nodiscard]] std::size_t dirty_role_count() const;
 
     private:
-        [[nodiscard]] std::optional<SSPlayerRoleInfo> load_role(RoleId role_id, yuan::redis::RedisClient *redis) const;
-        [[nodiscard]] SSPlayerRoleInfo create_role(PlayerUid player_uid, yuan::redis::RedisClient *redis, PackedGameServiceId world_service_id) const;
-        [[nodiscard]] std::string random_role_name() const;
-
         mutable std::mutex mutex_;
         std::unordered_set<PlayerUid> loaded_players_;
         std::unordered_map<PlayerUid, std::vector<RoleId>> role_ids_by_player_uid_;

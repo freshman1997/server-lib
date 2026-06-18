@@ -268,6 +268,7 @@ namespace yuan::net::http
             cc->total_bytes = total_bytes_;
             cc->trailer_checksum = trailer_checksum_;
             packet->set_body_content(new Content(ContentType::not_support, cc.release()));
+            packet->set_body_length(static_cast<uint32_t>(total_bytes_));
             packet->set_body_state(BodyState::fully);
         }
 

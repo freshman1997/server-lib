@@ -10,12 +10,14 @@
 #include "net/runtime/network_runtime.h"
 #include "net/async/async_request_client.h"
 #include "net/session/stream_server_session.h"
+#include "timer/timer_handle.h"
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <condition_variable>
@@ -65,6 +67,15 @@ namespace yuan::game::server::rpc_network
 
         bool start(const RpcNetworkServerConfig &config, yuan::rpc::Server &server);
         bool bind_loopback(std::uint16_t port, yuan::rpc::Server &server, std::size_t expected_requests = 1);
+        [[nodiscard]] yuan::timer::TimerHandle schedule_periodic(std::uint32_t delay_ms,
+                                                                  std::uint32_t interval_ms,
+                                                                  std::function<void()> callback,
+                                                                  int repeat = 0);
+        void cancel_timer(const yuan::timer::TimerHandle &timer);
+        void call_async_detached(const RpcEndpoint &endpoint,
+                                 yuan::rpc::Message message,
+                                 std::function<void(std::optional<yuan::rpc::Response>)> callback,
+                                 RpcNetworkClientConfig client_config = {});
         void set_connection_closed_callback(std::function<void(std::uint64_t)> callback);
         [[nodiscard]] bool write_message_to_connection(std::uint64_t connection_id, const yuan::rpc::Message &message);
         [[nodiscard]] bool write_response_to_connection(std::uint64_t connection_id, yuan::rpc::Response response);
@@ -76,6 +87,8 @@ namespace yuan::game::server::rpc_network
 
         [[nodiscard]] bool ok() const;
         [[nodiscard]] std::uint16_t port() const;
+        [[nodiscard]] yuan::net::NetworkRuntime &runtime() noexcept { return runtime_; }
+        [[nodiscard]] const yuan::net::NetworkRuntime &runtime() const noexcept { return runtime_; }
 
     private:
         struct ConnectionState
@@ -84,7 +97,7 @@ namespace yuan::game::server::rpc_network
             std::uint64_t last_activity_ms = 0;
         };
 
-        void idle_monitor_loop(std::stop_token stop_token);
+        void check_idle_connections();
 
         yuan::net::NetworkRuntime runtime_;
         yuan::net::StreamServerSession session_;
@@ -92,7 +105,7 @@ namespace yuan::game::server::rpc_network
         std::function<void(std::uint64_t)> connection_closed_callback_;
         mutable std::mutex connections_mutex_;
         std::unordered_map<std::uint64_t, ConnectionState> connections_;
-        std::jthread idle_monitor_thread_;
+        yuan::timer::TimerHandle idle_monitor_timer_;
         std::size_t max_connections_ = 0;
         std::size_t max_buffered_bytes_ = 1024 * 1024;
         std::uint64_t idle_timeout_ms_ = 0;
@@ -161,15 +174,20 @@ namespace yuan::game::server::rpc_network
         };
 
         void worker_loop(std::stop_token stop_token);
-        bool ensure_connected(const RpcEndpoint &endpoint);
+        struct ClientState
+        {
+            std::unique_ptr<yuan::net::AsyncRequestClient> client;
+            yuan::rpc::wire::FrameStreamDecoder decoder;
+        };
+
+        [[nodiscard]] std::string endpoint_key(const RpcEndpoint &endpoint) const;
+        ClientState *ensure_connected(const RpcEndpoint &endpoint);
         void fail_all(std::deque<QueuedCall> &calls);
 
         RpcNetworkClientConfig config_;
         std::size_t max_pending_ = 1024;
         yuan::net::NetworkRuntime runtime_;
-        yuan::net::AsyncRequestClient client_;
-        std::optional<RpcEndpoint> connected_endpoint_;
-        yuan::rpc::wire::FrameStreamDecoder decoder_;
+        std::unordered_map<std::string, ClientState> clients_;
         std::atomic<yuan::rpc::RequestId> next_request_id_{1};
         std::atomic_size_t pending_count_{0};
         mutable std::mutex mutex_;

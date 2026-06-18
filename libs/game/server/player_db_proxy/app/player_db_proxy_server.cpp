@@ -19,18 +19,7 @@ int main(int argc, char **argv)
         return 2;
     }
     yuan::app::Application app(yuan::game::server::make_game_runtime_context("game.player_db_proxy"));
-    auto service = std::make_shared<yuan::game::server::PlayerDbProxyServerService>(config->service_id,
-                                                                                   config->listen_host,
-                                                                                   config->listen_port,
-                                                                                   config->tunnel_endpoints,
-                                                                                   config->redis_host,
-                                                                                   config->redis_port,
-                                                                                   config->redis_db,
-                                                                                   config->redis_username,
-                                                                                   config->redis_password,
-                                                                                   config->redis_connect_timeout_ms,
-                                                                                   config->redis_command_timeout_ms,
-                                                                                   config->tunnel_heartbeat_interval_ms);
+    auto service = std::make_shared<yuan::game::server::PlayerDbProxyServerService>(*config);
     if (!app.add_service("player_db_proxy", service) || !app.start()) {
         LOG_ERROR("player_db_proxy server failed to start");
         app.stop();

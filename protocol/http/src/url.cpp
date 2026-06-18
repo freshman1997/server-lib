@@ -128,32 +128,22 @@ namespace yuan::url
         size_t i = pos;
 
         while (i < sz) {
-            // 解析 key
-            size_t eq_pos = url.find_first_of('=', i);
-            if (eq_pos == std::string::npos || eq_pos == i) {
-                // 没有 '=' 或 key 为空
+            const size_t next = url.find_first_of('&', i);
+            const size_t part_end = next == std::string::npos ? sz : next;
+            const size_t eq_pos = url.find_first_of('=', i);
+            if (eq_pos == std::string::npos || eq_pos >= part_end || eq_pos == i) {
                 if (!fromBody) break;
-                return i >= sz;  // body 模式下要求严格格式
+                return part_end == sz && i >= sz;
             }
 
             std::string key = url_decode(url.data() + i, url.data() + eq_pos, true);
+            std::string val = url_decode(url.data() + eq_pos + 1, url.data() + part_end, true);
+            params[std::move(key)].push_back(std::move(val));
 
-            // 解析 value(s) —— 支持标准 '&' 分隔的多值
-            i = eq_pos + 1;
-            while (i < sz) {
-                size_t next = url.find_first_of('&', i);
-                if (next == std::string::npos) next = sz;
-
-                std::string val = url_decode(url.data() + i, url.data() + next, true);
-                params[key].push_back(std::move(val));
-
-                if (next < sz) {
-                    i = next + 1; // 跳过 '&'
-                } else {
-                    i = sz;
-                    break;
-                }
+            if (next == std::string::npos) {
+                break;
             }
+            i = next + 1;
         }
         return true;
     }

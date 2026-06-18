@@ -9,7 +9,6 @@
 #include "http_server.h"
 
 #include <memory>
-#include <thread>
 #include <vector>
 
 namespace yuan::game::server
@@ -59,7 +58,6 @@ namespace yuan::game::server
         WebHandlerContext web_context_;
         std::unique_ptr<WebAuthService> auth_service_;
         std::unique_ptr<yuan::net::http::HttpServer> http_server_;
-        std::jthread http_thread_;
     };
 }
 

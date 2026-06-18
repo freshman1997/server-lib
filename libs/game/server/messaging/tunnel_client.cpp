@@ -1,4 +1,4 @@
-#include "messaging/tunnel_connection.h"
+#include "messaging/tunnel_client.h"
 
 #include "common/game_rpc_protocol.h"
 
@@ -9,30 +9,36 @@ namespace yuan::game::server
         constexpr std::uint32_t max_missed_heartbeats = 3;
     }
 
-    TunnelConnection::TunnelConnection(rpc_network::RpcEndpoint endpoint)
+    TunnelClient::TunnelClient(rpc_network::RpcEndpoint endpoint)
         : endpoint_(std::move(endpoint))
     {
     }
 
-    const rpc_network::RpcEndpoint &TunnelConnection::endpoint() const
+    const rpc_network::RpcEndpoint &TunnelClient::endpoint() const
     {
         return endpoint_;
     }
 
-    bool TunnelConnection::alive() const
+    bool TunnelClient::alive() const
     {
         std::scoped_lock lock(mutex_);
         return alive_;
     }
 
-    std::optional<yuan::rpc::Response> TunnelConnection::send(const yuan::rpc::Message &message) const
+    std::optional<yuan::rpc::Response> TunnelClient::send(const yuan::rpc::Message &message) const
     {
         return rpc_network::RpcNetworkClient().call(endpoint_, message);
     }
 
-    std::optional<yuan::rpc::Response> TunnelConnection::send_and_update_health(const yuan::rpc::Message &message)
+    std::optional<yuan::rpc::Response> TunnelClient::send_and_update_health(const yuan::rpc::Message &message)
     {
         const auto response = send(message);
+        update_health_from_response(response);
+        return response;
+    }
+
+    void TunnelClient::update_health_from_response(const std::optional<yuan::rpc::Response> &response)
+    {
         std::scoped_lock lock(mutex_);
         if (response && response->status != yuan::rpc::RpcStatus::unavailable) {
             alive_ = true;
@@ -40,14 +46,10 @@ namespace yuan::game::server
         } else if (++missed_heartbeats_ >= max_missed_heartbeats) {
             alive_ = false;
         }
-        return response;
     }
 
-    bool TunnelConnection::heartbeat()
+    void TunnelClient::update_health_from_heartbeat(const std::optional<yuan::rpc::Response> &response)
     {
-        yuan::rpc::Message message;
-        message.route = game_route::tunnel_heartbeat();
-        const auto response = send(message);
         const auto ok = response && response->status == yuan::rpc::RpcStatus::ok;
         std::scoped_lock lock(mutex_);
         if (ok) {
@@ -56,6 +58,14 @@ namespace yuan::game::server
         } else if (++missed_heartbeats_ >= max_missed_heartbeats) {
             alive_ = false;
         }
-        return ok;
+    }
+
+    bool TunnelClient::heartbeat()
+    {
+        yuan::rpc::Message message;
+        message.route = game_route::tunnel_heartbeat();
+        const auto response = send(message);
+        update_health_from_heartbeat(response);
+        return response && response->status == yuan::rpc::RpcStatus::ok;
     }
 }

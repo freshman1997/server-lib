@@ -1343,13 +1343,19 @@ namespace yuan::net::http
                 return false;
             }
 
-            thread_pool_ = std::make_unique<thread::ThreadPool>(config_.thread_pool_size);
+            if (config_.thread_pool_size > 0) {
+                thread_pool_ = std::make_unique<thread::ThreadPool>(config_.thread_pool_size);
+            }
         } catch (const std::exception &e) {
             LOG_ERROR("Exception during server init: {}", e.what());
-            thread_pool_ = std::make_unique<thread::ThreadPool>(config_.thread_pool_size);
+            if (config_.thread_pool_size > 0) {
+                thread_pool_ = std::make_unique<thread::ThreadPool>(config_.thread_pool_size);
+            }
         } catch (...) {
             LOG_ERROR("Unknown exception during server init");
-            thread_pool_ = std::make_unique<thread::ThreadPool>(config_.thread_pool_size);
+            if (config_.thread_pool_size > 0) {
+                thread_pool_ = std::make_unique<thread::ThreadPool>(config_.thread_pool_size);
+            }
         }
 
         return true;
@@ -1605,7 +1611,13 @@ namespace yuan::net::http
         }
 
         if (!context->try_parse_request_content()) {
+            if (auto *packet = context->get_packet(); packet && packet->is_chunked() && packet->get_body_state() == BodyState::partial) {
+                return false;
+            }
             context->process_error(ResponseCode::bad_request);
+            return false;
+        }
+        if (auto *packet = context->get_packet(); packet && packet->is_chunked() && packet->get_body_state() == BodyState::partial) {
             return false;
         }
 
@@ -1635,7 +1647,13 @@ namespace yuan::net::http
         }
 
         if (!context->try_parse_request_content()) {
+            if (auto *packet = context->get_packet(); packet && packet->is_chunked() && packet->get_body_state() == BodyState::partial) {
+                return false;
+            }
             context->process_error(ResponseCode::bad_request);
+            return false;
+        }
+        if (auto *packet = context->get_packet(); packet && packet->is_chunked() && packet->get_body_state() == BodyState::partial) {
             return false;
         }
 
@@ -1665,7 +1683,13 @@ namespace yuan::net::http
         }
 
         if (!context->try_parse_request_content()) {
+            if (auto *packet = context->get_packet(); packet && packet->is_chunked() && packet->get_body_state() == BodyState::partial) {
+                return false;
+            }
             context->process_error(ResponseCode::bad_request);
+            return false;
+        }
+        if (auto *packet = context->get_packet(); packet && packet->is_chunked() && packet->get_body_state() == BodyState::partial) {
             return false;
         }
 
@@ -1761,6 +1785,60 @@ namespace yuan::net::http
         }
 
         return true;
+    }
+
+    coroutine::Task<bool> HttpServer::dispatch_request_async(HttpSessionContext *context)
+    {
+        auto *request = context->get_request();
+        auto *response = context->get_response();
+
+        if (request->is_options()) {
+            handle_options_preflight(request, response);
+            co_return true;
+        }
+
+        apply_http1_connection_response_headers(request, response, config_.enable_keep_alive);
+
+        if (!global_pipeline_.empty() && !global_pipeline_.execute(request, response)) {
+            if (response && response->get_response_code() == ResponseCode::too_many_requests) {
+                increment_reject_counter(reject_route_key(request), RejectReason::rate_limit);
+            }
+            co_return true;
+        }
+
+        if (prepare_websocket_proxy_handoff(context)) {
+            co_return true;
+        }
+        if (context->has_error() && response->get_response_code() == ResponseCode::bad_request) {
+            co_return true;
+        }
+
+        if (proxy_ && proxy_->is_proxy_url(request->get_raw_url())) {
+            const auto &route_key = proxy_->find_proxy_route(request->get_raw_url());
+            auto *upgrade = request->get_header("upgrade");
+            bool is_ws_upgrade = false;
+            if (upgrade) {
+                is_ws_upgrade = iequals_ascii(trim_ascii(*upgrade), "websocket");
+            }
+
+            if (is_ws_upgrade) {
+                proxy_->handle_websocket_upgrade_by_url(request, response, route_key);
+            }
+            co_return true;
+        }
+
+        const std::string dispatch_path(request->get_path());
+        if (const auto async_it = async_mappings_.find(dispatch_path); async_it != async_mappings_.end()) {
+            co_await async_it->second(request, response);
+        } else if (const auto *handler = dispatcher_.get_handler_ptr(dispatch_path)) {
+            (*handler)(request, response);
+        } else if (has_static_regex_match(dispatch_path)) {
+            serve_static(request, response);
+        } else {
+            context->process_error(ResponseCode::not_found);
+        }
+
+        co_return true;
     }
 
     bool HttpServer::prepare_websocket_proxy_handoff(HttpSessionContext *context)
@@ -1985,6 +2063,14 @@ namespace yuan::net::http
         if (url.empty() || !func)
             return;
         dispatcher_.register_handler(url, func, is_prefix);
+    }
+
+    void HttpServer::on_async(const std::string &url, async_request_function func)
+    {
+        if (url.empty() || !func) {
+            return;
+        }
+        async_mappings_[url] = std::move(func);
     }
 
     void HttpServer::on(const std::string &url, request_function func,
@@ -2454,7 +2540,24 @@ namespace yuan::net::http
                     break;
                 }
 
-                (void)dispatch_request(context);
+                if (!async_mappings_.empty()) {
+                    (void)co_await dispatch_request_async(context);
+                } else if (thread_pool_) {
+                    auto dispatch_future = thread_pool_->submit([this, context] {
+                        (void)dispatch_request(context);
+                    });
+                    while (dispatch_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+                        co_await ctx.runtime_view().sleep_for(1);
+                        if (!ctx.is_connected()) {
+                            break;
+                        }
+                    }
+                    if (dispatch_future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+                        dispatch_future.get();
+                    }
+                } else {
+                    (void)dispatch_request(context);
+                }
 
                 if (context->ws_handoff_ && ws_proxy_handler_) {
                     std::string route_key = std::move(context->ws_route_key_);

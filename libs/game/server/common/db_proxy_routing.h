@@ -15,6 +15,8 @@ namespace yuan::game::server
         PackedGameServiceId service_id = 0;
         std::uint32_t shard = 0;
         std::string state = "open";
+        std::string host;
+        std::uint16_t port = 0;
     };
 
     struct DbProxyRoutingConfig
@@ -37,6 +39,20 @@ namespace yuan::game::server
             }
         }
         return std::nullopt;
+    }
+
+    inline const DbProxyEndpointConfig *select_db_proxy_endpoint(std::uint64_t owner_id, const DbProxyRoutingConfig &routing)
+    {
+        const auto service_id = select_db_proxy(owner_id, routing);
+        if (!service_id) {
+            return nullptr;
+        }
+        for (const auto &endpoint : routing.endpoints) {
+            if (endpoint.service_id == *service_id) {
+                return &endpoint;
+            }
+        }
+        return nullptr;
     }
 }
 

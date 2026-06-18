@@ -186,7 +186,8 @@ world_endpoints=1,127.0.0.1,25103,open;2,127.0.0.1,25104,open
     { "host": "127.0.0.1", "port": 25000 }
   ],
   "redis_host": "127.0.0.1",
-  "redis_port": 6379
+  "redis_port": 6379,
+  "redis_pool_size": 8
 })json";
     }
     const auto rank_config = load_service_server_config(rank_path.string());
@@ -207,7 +208,8 @@ world_endpoints=1,127.0.0.1,25103,open;2,127.0.0.1,25104,open
   "listen_host": "127.0.0.1",
   "listen_port": 25007,
   "redis_host": "127.0.0.1",
-  "redis_port": 6379
+  "redis_port": 6379,
+  "redis_pool_size": 8
 })json";
     }
     const auto chat_config = load_service_server_config(chat_path.string());
@@ -231,12 +233,13 @@ world_endpoints=1,127.0.0.1,25103,open;2,127.0.0.1,25104,open
     { "host": "127.0.0.1", "port": 25000 }
   ],
   "redis_host": "127.0.0.1",
-  "redis_port": 6379
+  "redis_port": 6379,
+  "redis_pool_size": 8
 })json";
     }
     const auto player_db_config = load_service_server_config(player_db_path.string());
     fs::remove(player_db_path, ignored);
-    if (!require(player_db_config.has_value() && player_db_config->service_id.type == GameServiceType::player_db_proxy,
+    if (!require(player_db_config.has_value() && player_db_config->service_id.type == GameServiceType::player_db_proxy && player_db_config->redis_pool_size == 8,
                  "player db proxy config should parse")) {
         return 15;
     }

@@ -293,7 +293,7 @@ namespace yuan::net::http
 
         bool route_has_response_header_rules(const ProxyRoute &route)
         {
-            return !route.response_headers.empty() || !route.hide_response_headers.empty();
+            return !route.response_headers.empty() || !route.hide_response_headers.empty() || !route.proxy_redirects.empty();
         }
 
         std::string upper_ascii(std::string value)

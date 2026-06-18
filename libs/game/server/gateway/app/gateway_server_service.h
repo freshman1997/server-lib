@@ -3,7 +3,9 @@
 
 #include "application.h"
 #include "common/rpc_network.h"
+#include "common/service_config.h"
 #include "gateway/rpc/gateway_msg_client.h"
+#include "timer/timer_handle.h"
 
 #include <atomic>
 #include <chrono>
@@ -26,18 +28,10 @@ namespace yuan::game::server
             std::uint64_t zone_call_failures = 0;
             std::uint64_t active_connections = 0;
             std::uint64_t active_sessions = 0;
+            std::uint64_t handler_queue_size = 0;
         };
 
-        GatewayServerService(GameServiceId service_id,
-                              std::string listen_host,
-                              std::uint16_t port,
-                              std::string public_host,
-                              std::vector<std::pair<PackedGameServiceId, std::string>> zone_endpoints,
-                              std::uint64_t metrics_log_interval_ms = 0,
-                              rpc_network::RpcNetworkServerConfig rpc_server_config = {},
-                              std::uint64_t login_token_secret = kDefaultLoginTokenSecret,
-                              std::uint64_t gateway_internal_secret = kDefaultLoginTokenSecret,
-                              std::uint64_t drain_timeout_ms = 3000);
+        explicit GatewayServerService(ServiceServerConfig config);
 
         void set_runtime_context(const yuan::app::RuntimeContext &context) override;
         bool init() override;
@@ -58,10 +52,9 @@ namespace yuan::game::server
         bool push_to_client(std::uint64_t gateway_session_id, yuan::rpc::Bytes payload);
         bool close_client_session(std::uint64_t gateway_session_id);
         void enqueue_client_connection_closed(std::uint64_t connection_id);
-        void cleanup_loop(std::stop_token stop_token);
         void handle_client_connection_closed(std::uint64_t connection_id, int attempt);
         void handle_session_cleanup(const GatewaySessionModel::SessionRecord &session, int attempt);
-        void metrics_loop(std::stop_token stop_token) const;
+        void log_metrics() const;
         yuan::rpc::Response enqueue_gateway_message(yuan::rpc::Message message);
         void gateway_handler_loop(std::stop_token stop_token);
         bool register_deferred_gateway_route(yuan::rpc::Route route);
@@ -84,16 +77,16 @@ namespace yuan::game::server
         yuan::app::RuntimeContext context_;
         GameServiceId service_id_;
         std::unordered_map<PackedGameServiceId, rpc_network::RpcEndpoint> zone_endpoints_;
-        mutable std::unordered_map<PackedGameServiceId, std::unique_ptr<rpc_network::RpcNetworkPersistentAsyncClient>> zone_clients_;
+        mutable std::unordered_map<PackedGameServiceId, std::unique_ptr<rpc_network::RpcNetworkPersistentClient>> zone_clients_;
         mutable std::mutex zone_clients_mutex_;
         GatewayMsgContext gateway_context_;
         yuan::rpc::Server gateway_rpc_;
         yuan::rpc::Server gateway_handler_rpc_;
         rpc_network::RpcNetworkServer rpc_server_;
-        mutable std::jthread metrics_thread_;
+        yuan::timer::TimerHandle metrics_timer_;
         std::jthread gateway_handler_thread_;
-        std::jthread cleanup_thread_;
-        std::mutex gateway_handler_mutex_;
+        std::uint64_t gateway_handler_queue_limit_ = 4096;
+        mutable std::mutex gateway_handler_mutex_;
         std::condition_variable_any gateway_handler_cv_;
         std::deque<yuan::rpc::Message> gateway_handler_queue_;
         struct CleanupTask
@@ -103,8 +96,6 @@ namespace yuan::game::server
             GatewaySessionModel::SessionRecord session;
             int attempt = 0;
         };
-        std::mutex cleanup_mutex_;
-        std::condition_variable_any cleanup_cv_;
         std::vector<CleanupTask> cleanup_queue_;
         mutable std::atomic<std::uint64_t> zone_call_attempts_{0};
         mutable std::atomic<std::uint64_t> zone_call_retries_{0};

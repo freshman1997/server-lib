@@ -17,7 +17,7 @@
   "redis_connect_timeout_ms": 1000,
   "redis_command_timeout_ms": 1000,
   "redis_flush_interval_ms": 5000,
-  "world_ownership_store": "memory",
+  "world_ownership_store": "proxy",
   "login_reservation_ttl_ms": 3000,
   "zone_report_ttl_ms": 3000,
   "tunnel_heartbeat_interval_ms": 1000,
@@ -31,7 +31,7 @@
     "version": 1,
     "shard_count": 1,
     "endpoints": [
-      { "service_id": 4504702628659201, "shard": 0, "state": "open" }
+      { "service_id": 4504702628659201, "shard": 0, "state": "open", "host": "127.0.0.1", "port": 25008 }
     ]
   }
 }

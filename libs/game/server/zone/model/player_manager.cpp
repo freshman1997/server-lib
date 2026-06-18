@@ -41,6 +41,7 @@ namespace yuan::game::server
             }
             if (players_by_role_.contains(request.role_id)) {
                 dirty_roles_.insert(request.role_id);
+                dirty_versions_[request.role_id] = next_dirty_version_++;
             }
         }
         return true;
@@ -58,37 +59,49 @@ namespace yuan::game::server
         }
         it->second.level = level;
         dirty_roles_.insert(role_id);
+        dirty_versions_[role_id] = next_dirty_version_++;
         return true;
     }
 
-    void PlayerManager::flush_dirty(const PlayerSaver &saver, PackedGameServiceId zone_service_id)
+    std::size_t PlayerManager::flush_dirty(const PlayerSaver &saver, PackedGameServiceId zone_service_id)
     {
         if (!saver) {
             LOG_ERROR("zone player flush failed: saver unavailable zone_service={} dirty_roles={}",
                       zone_service_id, dirty_count());
-            return;
+            return dirty_count();
         }
 
         std::unordered_map<RoleId, Player> dirty_players;
+        std::unordered_map<RoleId, std::uint64_t> snapshot_versions;
         {
             std::scoped_lock lock(mutex_);
             for (const auto role_id : dirty_roles_) {
                 const auto it = players_by_role_.find(role_id);
                 if (it != players_by_role_.end()) {
                     dirty_players.emplace(role_id, it->second);
+                    snapshot_versions[role_id] = dirty_versions_[role_id];
                 }
             }
-            dirty_roles_.clear();
         }
 
         for (const auto &[role_id, data] : dirty_players) {
-            if (!saver(data)) {
+            const bool saved = saver(data);
+            if (saved) {
+                std::scoped_lock lock(mutex_);
+                const auto version_it = dirty_versions_.find(role_id);
+                const auto snapshot_it = snapshot_versions.find(role_id);
+                if (version_it != dirty_versions_.end() && snapshot_it != snapshot_versions.end() && version_it->second == snapshot_it->second) {
+                    dirty_roles_.erase(role_id);
+                    dirty_versions_.erase(version_it);
+                }
+            } else {
                 LOG_ERROR("zone player flush failed: player_uid={} role_id={} zone_service={}",
                           data.player_uid,
                           data.role_id,
                           zone_service_id);
             }
         }
+        return dirty_count();
     }
 
     std::size_t PlayerManager::dirty_count() const
@@ -138,13 +151,5 @@ namespace yuan::game::server
             }
         }
         return Player::from_login(request);
-    }
-
-    void PlayerManager::mark_dirty(RoleId role_id)
-    {
-        std::scoped_lock lock(mutex_);
-        if (players_by_role_.contains(role_id)) {
-            dirty_roles_.insert(role_id);
-        }
     }
 }

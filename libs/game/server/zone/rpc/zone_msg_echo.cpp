@@ -2,11 +2,14 @@
 
 #include "common/metadata_keys.h"
 
+#include <functional>
+
 namespace yuan::game::server
 {
-    bool register_zone_msg_echo(yuan::rpc::Server &server, ServiceAddress address)
+    namespace
     {
-        return server.register_handler(game_route::zone_echo(), [address = std::move(address)](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_zone_echo(ServiceAddress address, const yuan::rpc::Message &message)
+        {
             yuan::rpc::Response response;
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
@@ -21,6 +24,11 @@ namespace yuan::game::server
             (void)encode_binary(CSGameResponse{true, request->role_id, 0, request->payload, "zone game ok"}, response.payload);
             response.metadata[game_metadata_key::zone_node] = service_key(address);
             return response;
-        });
+        }
+    }
+
+    bool register_zone_msg_echo(yuan::rpc::Server &server, ServiceAddress address)
+    {
+        return server.register_handler(game_route::zone_echo(), std::bind_front(handle_zone_echo, std::move(address)));
     }
 }

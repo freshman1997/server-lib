@@ -8,11 +8,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-namespace yuan::redis
-{
-    class RedisClient;
-}
-
 namespace yuan::game::server
 {
     class PlayerManager
@@ -24,7 +19,7 @@ namespace yuan::game::server
         bool online(SSGatewayLoginRequest request, const PlayerLoader &loader = {});
         bool offline(SSGatewayLoginRequest request);
         bool set_level(RoleId role_id, std::uint32_t level);
-        void flush_dirty(const PlayerSaver &saver, PackedGameServiceId zone_service_id);
+        std::size_t flush_dirty(const PlayerSaver &saver, PackedGameServiceId zone_service_id);
         [[nodiscard]] std::size_t dirty_count() const;
         [[nodiscard]] std::size_t online_count() const;
         [[nodiscard]] bool role_online(RoleId role_id) const;
@@ -34,7 +29,6 @@ namespace yuan::game::server
 
     private:
         [[nodiscard]] Player load_or_create(SSGatewayLoginRequest request, const PlayerLoader &loader) const;
-        void mark_dirty(RoleId role_id);
 
         mutable std::mutex mutex_;
         std::unordered_map<RoleId, Player> players_by_role_;
@@ -42,6 +36,8 @@ namespace yuan::game::server
         std::unordered_map<std::uint64_t, RoleId> role_by_gateway_session_;
         std::unordered_set<RoleId> online_roles_;
         std::unordered_set<RoleId> dirty_roles_;
+        std::unordered_map<RoleId, std::uint64_t> dirty_versions_;
+        std::uint64_t next_dirty_version_ = 1;
     };
 }
 

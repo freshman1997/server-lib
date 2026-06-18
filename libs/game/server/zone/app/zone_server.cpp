@@ -22,26 +22,7 @@ int main(int argc, char **argv)
     }
 
     yuan::app::Application app(yuan::game::server::make_game_runtime_context("game.zone"));
-    auto service = std::make_shared<yuan::game::server::ZoneServerService>(config->service_id,
-                                                                                 config->target_world_id,
-                                                                                 config->target_player_db_proxy_id,
-                                                                                 config->player_db_proxy_routing,
-                                                                                config->listen_host,
-                                                                               config->tunnel_endpoints,
-                                                                              config->listen_port,
-                                                                             config->redis_host,
-                                                                             config->redis_port,
-                                                                             config->redis_db,
-                                                                             config->redis_username,
-                                                                               config->redis_password,
-                                                                                config->redis_connect_timeout_ms,
-                                                                                config->redis_command_timeout_ms,
-                                                                                config->redis_flush_interval_ms,
-                                                                                config->zone_load_sync_interval_ms,
-                                                                                 config->zone_max_players,
-                                                                                 config->tunnel_heartbeat_interval_ms,
-                                                                                 config->world_routing,
-                                                                                 config->gateway_endpoints);
+    auto service = std::make_shared<yuan::game::server::ZoneServerService>(*config);
     if (!app.add_service("zone", service) || !app.start()) {
         LOG_ERROR("zone server failed to start");
         app.stop();

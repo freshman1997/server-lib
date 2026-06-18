@@ -15,5 +15,6 @@
   "rpc_max_connections": 0,
   "rpc_max_buffered_bytes": 1048576,
   "rpc_idle_timeout_ms": 600000,
-  "gateway_drain_timeout_ms": 3000
+  "gateway_drain_timeout_ms": 3000,
+  "gateway_handler_queue_limit": 4096
 }

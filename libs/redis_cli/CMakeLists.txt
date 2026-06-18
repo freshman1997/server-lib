@@ -5,6 +5,8 @@ project(redis_cli)
 include_directories(${CMAKE_CURRENT_LIST_DIR}/src/)
 
 FILE(GLOB_RECURSE REDIS_CLI_SRC "./src/*.cpp")
+list(APPEND REDIS_CLI_SRC "${CMAKE_CURRENT_LIST_DIR}/src/redis_async_executor.cpp")
+list(REMOVE_DUPLICATES REDIS_CLI_SRC)
 
 add_library(redisCli ${REDIS_CLI_SRC})
 target_link_libraries(redisCli PUBLIC Core)

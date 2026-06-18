@@ -14,6 +14,7 @@
 #include <any>
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -3017,6 +3018,10 @@ namespace
 
 int main()
 {
+#ifndef _WIN32
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
+
 #ifdef _WIN32
     WSADATA wsa{};
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
@@ -3362,8 +3367,10 @@ int main()
         resp->send();
     });
     service->server().on("/__query_route", [](yuan::net::http::HttpRequest *req,
-                                              yuan::net::http::HttpResponse *resp) {
-        const std::string body = "task_id=" + std::to_string(req->get_param_int("task_id", 0));
+                                               yuan::net::http::HttpResponse *resp) {
+        const std::string body = "task_id=" + std::to_string(req->get_param_int("task_id", 0)) +
+                                 ";name=" + req->get_param("name") +
+                                 ";space=" + req->get_param("space");
         resp->set_response_code(yuan::net::http::ResponseCode::ok_);
         resp->add_header("Content-Type", "text/plain");
         resp->add_header("Content-Length", std::to_string(body.size()));
@@ -3381,11 +3388,15 @@ int main()
     service->start();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    const std::string query_route_resp = http_get(port, "/__query_route?task_id=42");
+    const std::string query_route_resp = http_get(port, "/__query_route?task_id=42&name=SmokeRole&space=hello+world");
     check(query_route_resp.find("200 OK") != std::string::npos,
           "registered route should match request path without query string");
     check(query_route_resp.find("task_id=42") != std::string::npos,
           "query parameters should remain available to route handlers");
+    check(query_route_resp.find("name=SmokeRole") != std::string::npos,
+          "second query parameter should remain available to route handlers");
+    check(query_route_resp.find("space=hello world") != std::string::npos,
+          "query parameters should decode plus as space");
     const std::string auto_finish_resp = http_get(port, "/__auto_finish");
     check(auto_finish_resp.find("200 OK") != std::string::npos,
           "handler without explicit send should auto-finish HTTP/1 response");

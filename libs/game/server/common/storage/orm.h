@@ -33,6 +33,9 @@ namespace yuan::game::server::storage
         virtual OrmResult insert(std::string table, std::string key, OrmFields fields) = 0;
         virtual OrmResult update(std::string table, std::string key, OrmFields fields) = 0;
         virtual OrmResult delete_(std::string table, std::string key) = 0;
+        virtual OrmResult exists(std::string table, std::string key);
+        virtual OrmResult upsert(std::string table, std::string key, OrmFields fields);
+        virtual OrmResult compare_and_update(std::string table, std::string key, std::string version_field, std::uint64_t expected_version, OrmFields fields);
 
         virtual std::vector<OrmResult> batch(const std::vector<DbOrmOperation> &operations, bool transactional = false);
     };

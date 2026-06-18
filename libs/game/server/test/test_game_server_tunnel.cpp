@@ -4,7 +4,7 @@
 #include "common/proto/client_proto.h"
 #include "global/rpc/global_msg_echo.h"
 #include "global/rpc/global_msg_gm.h"
-#include "messaging/process_message_manager.h"
+#include "messaging/tunnel_client_manager.h"
 #include "tunnel/rpc/tunnel_service.h"
 #include "zone/rpc/zone_msg_echo.h"
 
@@ -310,7 +310,7 @@ int main()
         (void)retry_tunnel_server.run();
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    ProcessMessageManager retry_manager({rpc_network::RpcEndpoint{"127.0.0.1", 1}, rpc_network::RpcEndpoint{"127.0.0.1", retry_tunnel_port}});
+    TunnelClientManager retry_manager({rpc_network::RpcEndpoint{"127.0.0.1", 1}, rpc_network::RpcEndpoint{"127.0.0.1", retry_tunnel_port}});
     auto retry_response = retry_manager.send_to_service(zone_1_address.service.pack(),
                                                          global_address.service.pack(),
                                                          game_route::global_echo(),
@@ -356,7 +356,7 @@ int main()
     if (!require(recovery_tunnel_port != 0, "recovery tunnel port should be reserved")) {
         return 45;
     }
-    ProcessMessageManager recovery_manager({rpc_network::RpcEndpoint{"127.0.0.1", recovery_tunnel_port}});
+    TunnelClientManager recovery_manager({rpc_network::RpcEndpoint{"127.0.0.1", recovery_tunnel_port}});
     auto down_response = recovery_manager.send_to_service(zone_1_address.service.pack(),
                                                           global_address.service.pack(),
                                                           game_route::global_echo(),

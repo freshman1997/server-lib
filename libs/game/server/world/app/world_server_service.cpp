@@ -1,6 +1,7 @@
 #include "world/app/world_server_service.h"
 
 #include "common/gm_command_registry.h"
+#include "common/proto/player_db_proto.h"
 #include "common/proto/world_db_proto.h"
 #include "content_type.h"
 #include "header_key.h"
@@ -8,8 +9,6 @@
 #include "middleware.h"
 #include "internal/def.h"
 #include "logger.h"
-#include "option.h"
-#include "redis_client.h"
 #include "request.h"
 #include "response.h"
 #include "world/model/world_ownership_store.h"
@@ -41,52 +40,29 @@ namespace yuan::game::server
             root["error"] = error;
             return root.dump();
         }
+
     }
 
-    WorldServerService::WorldServerService(GameServiceId service_id,
-                                            std::string listen_host,
-                                            std::uint16_t port,
-                                            std::uint16_t http_port,
-                                            std::vector<rpc_network::RpcEndpoint> tunnel_endpoints,
-                                           std::string redis_host,
-                                           std::uint16_t redis_port,
-                                           std::uint16_t redis_db,
-                                           std::string redis_username,
-                                             std::string redis_password,
-                                              std::uint16_t redis_connect_timeout_ms,
-                                              std::uint16_t redis_command_timeout_ms,
-                                              std::uint16_t redis_flush_interval_ms,
-                                              std::string world_ownership_store,
-                                               std::uint64_t login_reservation_ttl_ms,
-                                               std::uint64_t zone_report_ttl_ms,
-                                                std::uint64_t tunnel_heartbeat_interval_ms,
-                                                std::uint64_t login_token_secret,
-                                                WorldRoutingConfig world_routing,
-                                                DbProxyRoutingConfig world_db_proxy_routing,
-                                                std::uint64_t metrics_log_interval_ms)
-        : listen_host_(std::move(listen_host)),
-          port_(port),
-          http_port_(http_port),
-          service_id_(service_id),
-          redis_host_(std::move(redis_host)),
-          redis_port_(redis_port),
-          redis_db_(redis_db),
-          redis_username_(std::move(redis_username)),
-          redis_password_(std::move(redis_password)),
-          redis_connect_timeout_ms_(redis_connect_timeout_ms),
-          redis_command_timeout_ms_(redis_command_timeout_ms),
-          redis_flush_interval_ms_(redis_flush_interval_ms),
-          world_ownership_store_(std::move(world_ownership_store)),
-          metrics_log_interval_ms_(metrics_log_interval_ms),
-          world_db_proxy_routing_(std::move(world_db_proxy_routing)),
-          world_context_({ServiceAddress{service_id, 400, yuan::game_base::ServerRole::world, service_id.world, "world"}}),
-          messaging_(std::move(tunnel_endpoints))
+    WorldServerService::WorldServerService(ServiceServerConfig config)
+        : listen_host_(std::move(config.listen_host)),
+          port_(config.listen_port),
+          http_port_(config.http_port),
+          service_id_(config.service_id),
+          redis_flush_interval_ms_(config.redis_flush_interval_ms),
+          world_ownership_store_(std::move(config.world_ownership_store)),
+          metrics_log_interval_ms_(config.metrics_log_interval_ms),
+          player_db_proxy_service_id_(config.target_player_db_proxy_id),
+          player_db_proxy_routing_(std::move(config.player_db_proxy_routing)),
+          world_db_proxy_routing_(std::move(config.world_db_proxy_routing)),
+          world_context_({ServiceAddress{service_id_, 400, yuan::game_base::ServerRole::world, service_id_.world, "world"}})
     {
-        world_context_.login_reservation_ttl_ms = login_reservation_ttl_ms == 0 ? 3000 : login_reservation_ttl_ms;
-        world_context_.zone_report_ttl_ms = zone_report_ttl_ms == 0 ? 3000 : zone_report_ttl_ms;
-        world_context_.login_token_secret = login_token_secret == 0 ? kDefaultLoginTokenSecret : login_token_secret;
-        world_context_.world_routing = std::move(world_routing);
-        messaging_.set_heartbeat_interval_ms(tunnel_heartbeat_interval_ms);
+        world_context_.login_reservation_ttl_ms = config.login_reservation_ttl_ms == 0 ? 3000 : config.login_reservation_ttl_ms;
+        world_context_.zone_report_ttl_ms = config.zone_report_ttl_ms == 0 ? 3000 : config.zone_report_ttl_ms;
+        world_context_.login_token_secret = config.login_token_secret == 0 ? kDefaultLoginTokenSecret : config.login_token_secret;
+        world_context_.world_routing = std::move(config.world_routing);
+        tunnel_client_manager_.set_tunnel_endpoints(config.tunnel_endpoints);
+        tunnel_client_manager_.set_heartbeat_interval_ms(config.tunnel_heartbeat_interval_ms);
+        tunnel_client_manager_.configure_registered_service(TunnelRegistration{service_id_.pack(), listen_host_, port_, "world"}, "world");
     }
 
     void WorldServerService::set_runtime_context(const yuan::app::RuntimeContext &context)
@@ -96,19 +72,8 @@ namespace yuan::game::server
 
     bool WorldServerService::init()
     {
-        yuan::redis::Option option;
-        option.host_ = redis_host_;
-        option.port_ = redis_port_;
-        option.db_ = redis_db_;
-        option.username_ = redis_username_;
-        option.password_ = redis_password_;
-        option.timeout_ms_ = redis_command_timeout_ms_;
-        option.command_timeout_ms_ = redis_command_timeout_ms_;
-        option.connect_timeout_ms_ = redis_connect_timeout_ms_;
-        option.name_ = "game-world-db";
-        redis_ = std::make_shared<yuan::redis::RedisClient>(option);
-        if (world_ownership_store_ == "redis") {
-            world_context_.ownership_store = std::make_shared<RedisWorldOwnershipStore>(redis_);
+        if (world_ownership_store_ == "proxy" || world_ownership_store_ == "world_db_proxy") {
+            world_context_.ownership_store = std::make_shared<WorldDbProxyOwnershipStore>(service_id_.pack(), world_db_proxy_routing_, tunnel_client_manager_);
         } else if (world_ownership_store_ == "memory") {
             world_context_.ownership_store = std::make_shared<InMemoryWorldOwnershipStore>();
         } else {
@@ -118,6 +83,12 @@ namespace yuan::game::server
         register_builtin_gm_commands();
         world_context_.before_login_options = [this](PlayerUid player_uid) {
             ensure_player_roles(player_uid);
+        };
+        world_context_.before_login_options_async = [this](PlayerUid player_uid, std::function<void()> done) {
+            ensure_player_roles_async_callback(player_uid, std::move(done));
+        };
+        world_context_.write_deferred_response = [this](std::uint64_t connection_id, yuan::rpc::Response response) {
+            (void)rpc_server_.write_response_to_connection(connection_id, std::move(response));
         };
         world_context_.after_player_zone_set = [this](PlayerId player_id, PackedGameServiceId zone_service_id) {
             mark_role_dirty(player_id, zone_service_id);
@@ -131,11 +102,12 @@ namespace yuan::game::server
         ok_ = rpc_server_.start(rpc_network::RpcNetworkServerConfig{listen_host_, port_, 0}, world_rpc_);
         if (ok_ && http_port_ != 0) {
             yuan::net::http::HttpServerConfig http_config;
+            http_config.thread_pool_size = 0;
             http_config.enable_keep_alive = false;
             http_config.server_name = "GameWorld/1.0";
             http_server_ = std::make_unique<yuan::net::http::HttpServer>(http_config);
             register_http_routes();
-            ok_ = http_server_->init(http_port_);
+            ok_ = http_server_->init(http_port_, rpc_server_.runtime());
         }
         return ok_;
     }
@@ -143,22 +115,17 @@ namespace yuan::game::server
     void WorldServerService::start()
     {
         draining_.store(false, std::memory_order_relaxed);
-        messaging_.start_heartbeat();
+        tunnel_client_manager_.start_registered_service(rpc_server_);
         flush_thread_ = std::jthread([this](std::stop_token stop_token) {
             flush_loop(stop_token);
         });
         if (metrics_log_interval_ms_ != 0) {
-            metrics_thread_ = std::jthread([this](std::stop_token stop_token) {
-                metrics_loop(stop_token);
+            metrics_timer_ = rpc_server_.schedule_periodic(metrics_log_interval_ms_, metrics_log_interval_ms_, [this] {
+                log_metrics();
             });
         }
-        register_thread_ = std::jthread([this](std::stop_token stop_token) {
-            register_loop(stop_token);
-        });
         if (http_server_) {
-            http_thread_ = std::jthread([this](std::stop_token) {
-                http_server_->serve();
-            });
+            http_server_->serve();
         }
         ok_ = ok_ && rpc_server_.run();
     }
@@ -166,27 +133,17 @@ namespace yuan::game::server
     void WorldServerService::stop()
     {
         draining_.store(true, std::memory_order_relaxed);
-        messaging_.stop_heartbeat();
+        tunnel_client_manager_.stop_registered_service();
         if (http_server_) {
             http_server_->stop();
         }
-        if (http_thread_.joinable()) {
-            http_thread_.join();
-        }
+        rpc_server_.cancel_timer(metrics_timer_);
         flush_thread_.request_stop();
-        metrics_thread_.request_stop();
-        register_thread_.request_stop();
         if (flush_thread_.joinable()) {
             flush_thread_.join();
         }
-        if (register_thread_.joinable()) {
-            register_thread_.join();
-        }
-        if (metrics_thread_.joinable()) {
-            metrics_thread_.join();
-        }
         flush_dirty_roles();
-        const auto metrics = messaging_.metrics();
+        const auto metrics = tunnel_client_manager_.metrics();
         LOG_INFO("world messaging metrics tunnel_attempts={} tunnel_retries={} tunnel_recoveries={} tunnel_failures={}",
                  metrics.tunnel_call_attempts,
                  metrics.tunnel_call_retries,
@@ -200,29 +157,6 @@ namespace yuan::game::server
         return ok_;
     }
 
-    bool WorldServerService::register_to_tunnel()
-    {
-        TunnelRegistration registration;
-        registration.service_id = service_id_.pack();
-        registration.host = listen_host_;
-        registration.port = port_;
-        registration.name = "world";
-        auto response = messaging_.register_service(std::move(registration));
-        return response && response->status == yuan::rpc::RpcStatus::ok;
-    }
-
-    void WorldServerService::register_loop(std::stop_token stop_token)
-    {
-        while (!stop_token.stop_requested()) {
-            if (register_to_tunnel()) {
-                (void)wait_for_stop(stop_token, std::chrono::seconds{5});
-            } else {
-                LOG_ERROR("world failed to register to tunnel service_id={}", service_id_.pack());
-                (void)wait_for_stop(stop_token, std::chrono::milliseconds{500});
-            }
-        }
-    }
-
     void WorldServerService::register_http_routes()
     {
         if (!http_server_) {
@@ -232,38 +166,164 @@ namespace yuan::game::server
             response->set_response_code(yuan::net::http::ResponseCode::ok_);
             return yuan::net::http::MiddlewareResult::next;
         }, "game_world_default_ok");
-        http_server_->on("/game/login_options", [this](yuan::net::http::HttpRequest *request,
-                                                        yuan::net::http::HttpResponse *response) {
+        http_server_->on_async("/game/login_options", [this](yuan::net::http::HttpRequest *request,
+                                                              yuan::net::http::HttpResponse *response) -> yuan::coroutine::Task<void> {
             if (!request->is_get()) {
                 response->json(encode_http_error_json("method not allowed"), yuan::net::http::ResponseCode::method_not_allowed);
-                return;
+                co_return;
             }
             const auto player_uid_text = request->get_param("player_uid");
             if (draining_.load(std::memory_order_relaxed)) {
                 response->json(encode_http_error_json("world is draining"), yuan::net::http::ResponseCode::service_unavailable);
-                return;
+                co_return;
             }
             if (player_uid_text.empty()) {
                 response->json(encode_http_error_json("missing player_uid"), yuan::net::http::ResponseCode::bad_request);
-                return;
+                co_return;
             }
             PlayerUid player_uid = 0;
             try {
                 player_uid = static_cast<PlayerUid>(std::stoull(player_uid_text));
             } catch (...) {
                 response->json(encode_http_error_json("invalid player_uid"), yuan::net::http::ResponseCode::bad_request);
+                co_return;
+            }
+            co_await ensure_player_roles_async(player_uid);
+            response->json(encode_login_options_response_json(world_login_options(world_context_, player_uid)));
+        });
+        http_server_->on("/game/create_role", [this](yuan::net::http::HttpRequest *request,
+                                                     yuan::net::http::HttpResponse *response) {
+            if (!request->is_get()) {
+                response->json(encode_http_error_json("method not allowed"), yuan::net::http::ResponseCode::method_not_allowed);
                 return;
             }
-            ensure_player_roles(player_uid);
-            response->json(encode_login_options_response_json(world_login_options(world_context_, player_uid)));
+            PlayerUid player_uid = 0;
+            try {
+                player_uid = static_cast<PlayerUid>(std::stoull(request->get_param("player_uid")));
+            } catch (...) {
+                response->json(encode_http_error_json("invalid player_uid"), yuan::net::http::ResponseCode::bad_request);
+                return;
+            }
+            const auto name = request->get_param("name");
+            auto role = create_role(player_uid, name);
+            if (!role) {
+                response->json(encode_http_error_json("create role failed"), yuan::net::http::ResponseCode::bad_request);
+                return;
+            }
+            nlohmann::json root;
+            root["ok"] = true;
+            root["player_uid"] = player_uid;
+            root["role_id"] = role->role_id;
+            root["message"] = "created";
+            response->json(root.dump());
         });
     }
 
     void WorldServerService::ensure_player_roles(PlayerUid player_uid)
     {
-        roles_.ensure_player_roles(player_uid, redis_.get(), service_id_.pack(), [this](PlayerUid uid, const SSPlayerRoleInfo &role) {
+        if (roles_.is_player_loaded(player_uid)) {
+            return;
+        }
+        const auto loaded = load_player_roles_from_db(player_uid);
+        roles_.apply_player_roles(loaded, [this](PlayerUid uid, const SSPlayerRoleInfo &role) {
             world_add_role(world_context_, uid, role);
         });
+    }
+
+    yuan::coroutine::Task<void> WorldServerService::ensure_player_roles_async(PlayerUid player_uid)
+    {
+        ensure_player_roles(player_uid);
+        co_return;
+    }
+
+    void WorldServerService::ensure_player_roles_async_callback(PlayerUid player_uid, std::function<void()> done)
+    {
+        ensure_player_roles(player_uid);
+        done();
+    }
+
+    RoleCache::LoadedPlayerRoles WorldServerService::load_player_roles_from_db(PlayerUid player_uid) const
+    {
+        RoleCache::LoadedPlayerRoles loaded;
+        loaded.player_uid = player_uid;
+        const auto target_proxy = select_db_proxy(player_uid, world_db_proxy_routing_);
+        if (!target_proxy) {
+            LOG_ERROR("world player roles load failed: world_db_proxy unavailable player_uid={}", player_uid);
+            return loaded;
+        }
+        yuan::rpc::Bytes payload;
+        SSWorldDbPlayerRolesGetRequest request;
+        request.player_uid = player_uid;
+        request.world_service_id = service_id_.pack();
+        if (!encode_binary(request, payload)) {
+            return loaded;
+        }
+        auto response = tunnel_client_manager_.send_to_service(service_id_.pack(), *target_proxy, game_route::world_db_player_roles_get(), std::move(payload));
+        if (!response || response->status != yuan::rpc::RpcStatus::ok) {
+            LOG_ERROR("world player roles load via world_db_proxy failed player_uid={} proxy_service={} status={}",
+                      player_uid,
+                      *target_proxy,
+                      response ? static_cast<int>(response->status) : -1);
+            return loaded;
+        }
+        const auto body = decode_binary<SSWorldDbPlayerRolesResponse>(response->payload);
+        if (!body || !body->ok) {
+            LOG_ERROR("world player roles load decode failed player_uid={} proxy_service={}", player_uid, *target_proxy);
+            return loaded;
+        }
+        loaded.player_uid = body->player_uid;
+        loaded.roles = body->roles;
+        loaded.created_default_role = false;
+        loaded.missing_role_list = body->missing_role_list;
+        return loaded;
+    }
+
+    std::optional<SSPlayerRoleInfo> WorldServerService::create_role(PlayerUid player_uid, std::string name)
+    {
+        if (player_uid == 0 || name.empty()) {
+            return std::nullopt;
+        }
+        ensure_player_roles(player_uid);
+        if (const auto existing = world_context_.roles_by_player_uid.find(player_uid); existing != world_context_.roles_by_player_uid.end() && !existing->second.empty()) {
+            LOG_ERROR("world create role rejected: player already has role player_uid={}", player_uid);
+            return std::nullopt;
+        }
+
+        const auto role_id = static_cast<RoleId>(player_uid * 100 + 1);
+        SSPlayerRoleInfo role{role_id, std::move(name), 1, service_id_.pack(), 0};
+        const auto target_player_proxy = select_db_proxy(role_id, player_db_proxy_routing_).value_or(player_db_proxy_service_id_.pack());
+        if (target_player_proxy == 0) {
+            LOG_ERROR("world create role failed: player_db_proxy unavailable player_uid={}", player_uid);
+            return std::nullopt;
+        }
+        yuan::rpc::Bytes player_payload;
+        SSPlayerDbCreateRoleRequest player_request;
+        player_request.player_uid = player_uid;
+        player_request.role_id = role_id;
+        player_request.name = role.name;
+        if (!encode_binary(player_request, player_payload)) {
+            return std::nullopt;
+        }
+        auto player_response = tunnel_client_manager_.send_to_service(service_id_.pack(), target_player_proxy, game_route::player_db_create_role(), std::move(player_payload));
+        if (!player_response || player_response->status != yuan::rpc::RpcStatus::ok) {
+            LOG_ERROR("world create role failed via player_db_proxy player_uid={} role_id={} proxy_service={} status={}",
+                      player_uid,
+                      role_id,
+                      target_player_proxy,
+                      player_response ? static_cast<int>(player_response->status) : -1);
+            return std::nullopt;
+        }
+        if (!save_player_roles_to_db(player_uid, {role})) {
+            LOG_ERROR("world create role failed: world_db save failed player_uid={} role_id={}", player_uid, role_id);
+            return std::nullopt;
+        }
+        RoleCache::LoadedPlayerRoles loaded;
+        loaded.player_uid = player_uid;
+        loaded.roles = {role};
+        roles_.apply_player_roles(loaded, [this](PlayerUid uid, const SSPlayerRoleInfo &loaded_role) {
+            world_add_role(world_context_, uid, loaded_role);
+        });
+        return role;
     }
 
     void WorldServerService::mark_role_dirty(PlayerId player_id, PackedGameServiceId zone_service_id)
@@ -273,6 +333,32 @@ namespace yuan::game::server
             std::scoped_lock lock(pending_role_locations_mutex_);
             pending_role_locations_[player_id] = zone_service_id;
         }
+    }
+
+    bool WorldServerService::save_player_roles_to_db(PlayerUid player_uid, const std::vector<SSPlayerRoleInfo> &roles) const
+    {
+        const auto target_proxy = select_db_proxy(player_uid, world_db_proxy_routing_);
+        if (!target_proxy) {
+            LOG_ERROR("world player roles save failed: world_db_proxy unavailable player_uid={}", player_uid);
+            return false;
+        }
+        yuan::rpc::Bytes payload;
+        SSWorldDbPlayerRolesSaveRequest request;
+        request.player_uid = player_uid;
+        request.roles = roles;
+        request.data_version = 0;
+        if (!encode_binary(request, payload)) {
+            return false;
+        }
+        auto response = tunnel_client_manager_.send_to_service(service_id_.pack(), *target_proxy, game_route::world_db_player_roles_save(), std::move(payload));
+        const bool ok = response && response->status == yuan::rpc::RpcStatus::ok;
+        if (!ok) {
+            LOG_ERROR("world player roles save via world_db_proxy failed player_uid={} proxy_service={} status={}",
+                      player_uid,
+                      *target_proxy,
+                      response ? static_cast<int>(response->status) : -1);
+        }
+        return ok;
     }
 
     bool WorldServerService::save_role_location_to_db(PlayerId player_id, PackedGameServiceId zone_service_id) const
@@ -294,7 +380,7 @@ namespace yuan::game::server
         if (!encode_binary(request, payload)) {
             return false;
         }
-        auto response = messaging_.send_to_service(service_id_.pack(), *target_proxy, game_route::world_db_role_location_set(), std::move(payload));
+        auto response = tunnel_client_manager_.send_to_service(service_id_.pack(), *target_proxy, game_route::world_db_role_location_set(), std::move(payload));
         const bool ok = response && response->status == yuan::rpc::RpcStatus::ok;
         if (!ok) {
             LOG_ERROR("world role location save via world_db_proxy failed role_id={} proxy_service={} status={}",
@@ -337,7 +423,7 @@ namespace yuan::game::server
             return SSGmCommandResponse{false, "failed to encode gm command"};
         }
 
-        auto response = messaging_.send_to_service(service_id_.pack(),
+        auto response = tunnel_client_manager_.send_to_service(service_id_.pack(),
                                                    request.target_service_id,
                                                    *route,
                                                    std::move(gm_payload));
@@ -353,7 +439,9 @@ namespace yuan::game::server
 
     void WorldServerService::flush_dirty_roles()
     {
-        roles_.flush_dirty(redis_.get(), service_id_.pack());
+        (void)roles_.flush_dirty([this](PlayerUid player_uid, const std::vector<SSPlayerRoleInfo> &roles) {
+            return save_player_roles_to_db(player_uid, roles);
+        }, service_id_.pack());
         std::unordered_map<PlayerId, PackedGameServiceId> pending_locations;
         {
             std::scoped_lock lock(pending_role_locations_mutex_);
@@ -378,19 +466,13 @@ namespace yuan::game::server
         }
     }
 
-    void WorldServerService::metrics_loop(std::stop_token stop_token) const
+    void WorldServerService::log_metrics() const
     {
-        const auto interval = std::chrono::milliseconds(metrics_log_interval_ms_);
-        while (!stop_token.stop_requested()) {
-            if (wait_for_stop(stop_token, interval)) {
-                break;
-            }
-            const auto metrics = messaging_.metrics();
-            LOG_INFO("world messaging metrics tunnel_attempts={} tunnel_retries={} tunnel_recoveries={} tunnel_failures={}",
-                     metrics.tunnel_call_attempts,
-                     metrics.tunnel_call_retries,
-                     metrics.tunnel_call_recoveries,
-                     metrics.tunnel_call_failures);
-        }
+        const auto metrics = tunnel_client_manager_.metrics();
+        LOG_INFO("world messaging metrics tunnel_attempts={} tunnel_retries={} tunnel_recoveries={} tunnel_failures={}",
+                 metrics.tunnel_call_attempts,
+                 metrics.tunnel_call_retries,
+                 metrics.tunnel_call_recoveries,
+                 metrics.tunnel_call_failures);
     }
 }

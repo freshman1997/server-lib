@@ -64,12 +64,24 @@ namespace yuan::game::server
 
         player_db_load_role = 600,
         player_db_save_role = 601,
+        player_db_create_role = 602,
+        player_db_mail_create = 603,
+        player_db_mail_list = 604,
+        player_db_mail_get = 605,
+        player_db_mail_claim_attachment = 606,
 
         world_db_role_location_get = 700,
         world_db_role_location_set = 701,
+        world_db_player_roles_get = 702,
+        world_db_player_roles_save = 703,
+        world_db_ownership_compare_and_set = 704,
 
         global_db_config_get = 800,
-        global_db_config_set = 801
+        global_db_config_set = 801,
+        global_db_mail_create = 802,
+        global_db_mail_list = 803,
+        global_db_mail_get = 804,
+        global_db_mail_claim_attachment = 805
     };
 
     inline yuan::rpc::Route make_game_route(GameRpcService service, GameRpcMethod method, std::string_view debug_name = {})
@@ -243,6 +255,31 @@ namespace yuan::game::server
             return make_game_route(GameRpcService::player_db, GameRpcMethod::player_db_save_role, "player_db.save_role");
         }
 
+        inline yuan::rpc::Route player_db_create_role()
+        {
+            return make_game_route(GameRpcService::player_db, GameRpcMethod::player_db_create_role, "player_db.create_role");
+        }
+
+        inline yuan::rpc::Route player_db_mail_create()
+        {
+            return make_game_route(GameRpcService::player_db, GameRpcMethod::player_db_mail_create, "player_db.mail.create");
+        }
+
+        inline yuan::rpc::Route player_db_mail_list()
+        {
+            return make_game_route(GameRpcService::player_db, GameRpcMethod::player_db_mail_list, "player_db.mail.list");
+        }
+
+        inline yuan::rpc::Route player_db_mail_get()
+        {
+            return make_game_route(GameRpcService::player_db, GameRpcMethod::player_db_mail_get, "player_db.mail.get");
+        }
+
+        inline yuan::rpc::Route player_db_mail_claim_attachment()
+        {
+            return make_game_route(GameRpcService::player_db, GameRpcMethod::player_db_mail_claim_attachment, "player_db.mail.claim_attachment");
+        }
+
         inline yuan::rpc::Route world_db_role_location_get()
         {
             return make_game_route(GameRpcService::world_db, GameRpcMethod::world_db_role_location_get, "world_db.role_location.get");
@@ -253,6 +290,21 @@ namespace yuan::game::server
             return make_game_route(GameRpcService::world_db, GameRpcMethod::world_db_role_location_set, "world_db.role_location.set");
         }
 
+        inline yuan::rpc::Route world_db_player_roles_get()
+        {
+            return make_game_route(GameRpcService::world_db, GameRpcMethod::world_db_player_roles_get, "world_db.player_roles.get");
+        }
+
+        inline yuan::rpc::Route world_db_player_roles_save()
+        {
+            return make_game_route(GameRpcService::world_db, GameRpcMethod::world_db_player_roles_save, "world_db.player_roles.save");
+        }
+
+        inline yuan::rpc::Route world_db_ownership_compare_and_set()
+        {
+            return make_game_route(GameRpcService::world_db, GameRpcMethod::world_db_ownership_compare_and_set, "world_db.ownership.compare_and_set");
+        }
+
         inline yuan::rpc::Route global_db_config_get()
         {
             return make_game_route(GameRpcService::global_db, GameRpcMethod::global_db_config_get, "global_db.config.get");
@@ -261,6 +313,26 @@ namespace yuan::game::server
         inline yuan::rpc::Route global_db_config_set()
         {
             return make_game_route(GameRpcService::global_db, GameRpcMethod::global_db_config_set, "global_db.config.set");
+        }
+
+        inline yuan::rpc::Route global_db_mail_create()
+        {
+            return make_game_route(GameRpcService::global_db, GameRpcMethod::global_db_mail_create, "global_db.mail.create");
+        }
+
+        inline yuan::rpc::Route global_db_mail_list()
+        {
+            return make_game_route(GameRpcService::global_db, GameRpcMethod::global_db_mail_list, "global_db.mail.list");
+        }
+
+        inline yuan::rpc::Route global_db_mail_get()
+        {
+            return make_game_route(GameRpcService::global_db, GameRpcMethod::global_db_mail_get, "global_db.mail.get");
+        }
+
+        inline yuan::rpc::Route global_db_mail_claim_attachment()
+        {
+            return make_game_route(GameRpcService::global_db, GameRpcMethod::global_db_mail_claim_attachment, "global_db.mail.claim_attachment");
         }
 
     }

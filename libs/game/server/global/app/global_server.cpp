@@ -21,11 +21,7 @@ int main(int argc, char **argv)
         return 2;
     }
     yuan::app::Application app(yuan::game::server::make_game_runtime_context("game.global"));
-    auto service = std::make_shared<yuan::game::server::GlobalServerService>(config->service_id,
-                                                                               config->listen_host,
-                                                                               config->listen_port,
-                                                                               config->tunnel_endpoints,
-                                                                               config->tunnel_heartbeat_interval_ms);
+    auto service = std::make_shared<yuan::game::server::GlobalServerService>(*config);
     if (!app.add_service("global", service) || !app.start()) {
         LOG_ERROR("global server failed to start");
         app.stop();

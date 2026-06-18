@@ -17,8 +17,23 @@ namespace yuan::game::server::storage
         record.table = std::move(table);
         record.key = std::move(key);
         record.fields = std::move(result.rows.front().fields);
+        if (auto it = record.fields.find("object_blob"); it != record.fields.end()) {
+            record.object_blob = field_to_bytes(it->second);
+        }
         record.version = field_u64(record.fields, "data_version", 0);
         return record;
+    }
+
+    OrmResult EntityStore::insert(EntityRecord record)
+    {
+        if (record.version == 0) {
+            record.version = 1;
+        }
+        if (!record.object_blob.empty()) {
+            record.fields["object_blob"] = bytes_to_field(record.object_blob);
+        }
+        record.fields["data_version"] = std::to_string(record.version);
+        return orm_.insert(std::move(record.table), std::move(record.key), std::move(record.fields));
     }
 
     OrmResult EntityStore::save(EntityRecord record)
@@ -26,12 +41,23 @@ namespace yuan::game::server::storage
         if (record.version == 0) {
             record.version = 1;
         }
-        record.fields["data_version"] = std::to_string(record.version);
-        auto existing = orm_.query(record.table, record.key, 1);
-        if (existing.ok && existing.rows.empty()) {
-            return orm_.insert(std::move(record.table), std::move(record.key), std::move(record.fields));
+        if (!record.object_blob.empty()) {
+            record.fields["object_blob"] = bytes_to_field(record.object_blob);
         }
-        return orm_.update(std::move(record.table), std::move(record.key), std::move(record.fields));
+        record.fields["data_version"] = std::to_string(record.version);
+        return orm_.upsert(std::move(record.table), std::move(record.key), std::move(record.fields));
+    }
+
+    OrmResult EntityStore::compare_and_save(EntityRecord record, std::uint64_t expected_version)
+    {
+        if (record.version == 0) {
+            record.version = expected_version + 1;
+        }
+        if (!record.object_blob.empty()) {
+            record.fields["object_blob"] = bytes_to_field(record.object_blob);
+        }
+        record.fields["data_version"] = std::to_string(record.version);
+        return orm_.compare_and_update(std::move(record.table), std::move(record.key), "data_version", expected_version, std::move(record.fields));
     }
 
     OrmResult EntityStore::remove(std::string table, std::string key)
@@ -46,6 +72,9 @@ namespace yuan::game::server::storage
         for (auto &record : records) {
             if (record.version == 0) {
                 record.version = 1;
+            }
+            if (!record.object_blob.empty()) {
+                record.fields["object_blob"] = bytes_to_field(record.object_blob);
             }
             record.fields["data_version"] = std::to_string(record.version);
             operations.push_back(DbOrmOperation{static_cast<std::uint32_t>(DbOrmOpType::update),
@@ -73,5 +102,15 @@ namespace yuan::game::server::storage
     std::uint32_t field_u32(const OrmFields &fields, const std::string &name, std::uint32_t fallback)
     {
         return static_cast<std::uint32_t>(field_u64(fields, name, fallback));
+    }
+
+    std::string bytes_to_field(const yuan::rpc::Bytes &bytes)
+    {
+        return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+    }
+
+    yuan::rpc::Bytes field_to_bytes(const std::string &value)
+    {
+        return yuan::rpc::Bytes(value.begin(), value.end());
     }
 }

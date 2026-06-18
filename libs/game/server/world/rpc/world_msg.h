@@ -45,6 +45,8 @@ namespace yuan::game::server
         std::unordered_map<PackedGameServiceId, SSZoneInfo> zones;
         std::unordered_map<PackedGameServiceId, std::uint64_t> zone_last_report_ms;
         std::function<void(PlayerUid)> before_login_options;
+        std::function<void(PlayerUid, std::function<void()>)> before_login_options_async;
+        std::function<void(std::uint64_t, yuan::rpc::Response)> write_deferred_response;
         std::function<void(PlayerId, PackedGameServiceId)> after_player_zone_set;
         std::function<std::optional<SSGmCommandResponse>(SSGmCommandRequest)> gm_forward_handler;
     };

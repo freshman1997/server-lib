@@ -601,6 +601,9 @@ namespace yuan::net::http
     bool HttpPacket::parse(const yuan::buffer::ByteBuffer & buff)
     {
         if (is_ok() && !is_downloading()) {
+            if (is_chunked() && get_body_state() == BodyState::partial && !buff.empty()) {
+                input_cache_.append(buff);
+            }
             return true;
         }
 
@@ -626,6 +629,9 @@ namespace yuan::net::http
     bool HttpPacket::parse(yuan::buffer::ByteBuffer &&buff)
     {
         if (is_ok() && !is_downloading()) {
+            if (is_chunked() && get_body_state() == BodyState::partial && !buff.empty()) {
+                input_cache_.append(buff);
+            }
             return true;
         }
 

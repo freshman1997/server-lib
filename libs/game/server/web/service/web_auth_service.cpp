@@ -12,6 +12,8 @@
 
 #include "logger.h"
 
+#include <nlohmann/json.hpp>
+
 namespace yuan::game::server
 {
     WebAuthService::WebAuthService(std::string world_host,
@@ -104,6 +106,56 @@ namespace yuan::game::server
         }
         const auto uid = static_cast<PlayerUid>(std::stoull(stored.substr(0, sep)));
         return WebAuthResponse{true, uid, fetch_login_options(uid).value_or(LoginOptionsResponse{}), "login ok"};
+    }
+
+    WebCreateRoleResponse WebAuthService::create_role(WebCreateRoleRequest request) const
+    {
+        if (request.player_uid == 0 || request.name.empty()) {
+            return WebCreateRoleResponse{false, request.player_uid, 0, "player_uid and name are required"};
+        }
+        const auto world_number = route_world_number_by_player_uid(request.player_uid, world_routing_);
+        if (!world_number) {
+            return WebCreateRoleResponse{false, request.player_uid, 0, "world routing unavailable"};
+        }
+        std::string world_host = world_host_;
+        auto world_port = select_world_port(request.player_uid);
+        for (const auto &endpoint : world_endpoints_) {
+            if (endpoint.world == *world_number) {
+                if (endpoint.state != "open") {
+                    return WebCreateRoleResponse{false, request.player_uid, 0, "world unavailable"};
+                }
+                world_host = endpoint.host;
+                world_port = endpoint.port;
+                break;
+            }
+        }
+        yuan::net::http::HttpClient http_client;
+        if (!http_client.query("http://" + world_host + ":" + std::to_string(world_port))) {
+            return WebCreateRoleResponse{false, request.player_uid, 0, "world unavailable"};
+        }
+        yuan::net::NetworkRuntime runtime;
+        const auto url = "/game/create_role?player_uid=" + std::to_string(request.player_uid) + "&name=" + request.name;
+        auto *http_response = yuan::coroutine::sync_wait(runtime.runtime_view(),
+            http_client.connect_async(runtime.runtime_view(), [url, world_host](yuan::net::http::HttpRequest *http_request) {
+                http_request->set_method(yuan::net::http::HttpMethod::get_);
+                http_request->set_raw_url(url);
+                http_request->add_header("Connection", "close");
+                http_request->add_header("Host", world_host);
+                http_request->send();
+            }, redis_command_timeout_ms_));
+        if (!http_response || !http_response->good() || http_response->get_response_code() != yuan::net::http::ResponseCode::ok_) {
+            return WebCreateRoleResponse{false, request.player_uid, 0, "world create role failed"};
+        }
+        const auto *body = http_response->body_begin();
+        try {
+            const auto root = nlohmann::json::parse(body ? std::string(body, http_response->get_body_length()) : std::string{});
+            return WebCreateRoleResponse{root.value("ok", false),
+                                         root.value("player_uid", request.player_uid),
+                                         root.value("role_id", static_cast<RoleId>(0)),
+                                         root.value("message", std::string{})};
+        } catch (...) {
+            return WebCreateRoleResponse{false, request.player_uid, 0, "invalid world response"};
+        }
     }
 
     std::optional<LoginOptionsResponse> WebAuthService::fetch_login_options(PlayerUid player_uid) const

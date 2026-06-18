@@ -47,6 +47,7 @@ namespace
             return false;
         }
         if (WIFSIGNALED(status)) {
+            std::cerr << "process " << pid << " terminated by signal " << WTERMSIG(status) << '\n';
             return allow_sigterm && WTERMSIG(status) == SIGTERM;
         } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
             std::cerr << "process " << pid << " exited with status " << WEXITSTATUS(status) << '\n';
@@ -170,9 +171,14 @@ int main(int argc, char **argv)
     world_template["http_port"] = world_http_port;
     world_template["tunnel_endpoints"] = nlohmann::json::array({{{"host", "127.0.0.1"}, {"port", tunnel_port}}});
     world_template["world_db_proxies"] = nlohmann::json{{"strategy", "modulo"},
-                                                         {"version", 1},
-                                                         {"shard_count", 1},
-                                                         {"endpoints", nlohmann::json::array({{{"service_id", 4504702628659201ULL}, {"shard", 0}, {"state", "open"}}})}};
+                                                          {"version", 1},
+                                                          {"shard_count", 1},
+                                                          {"endpoints", nlohmann::json::array({{{"service_id", 4504702628659201ULL}, {"shard", 0}, {"state", "open"}, {"host", "127.0.0.1"}, {"port", world_db_proxy_port}}})}};
+    world_template["target_player_db_proxy_instance"] = 1;
+    world_template["player_db_proxies"] = nlohmann::json{{"strategy", "modulo"},
+                                                          {"version", 1},
+                                                          {"shard_count", 1},
+                                                          {"endpoints", nlohmann::json::array({{{"service_id", 4504702360223745ULL}, {"shard", 0}, {"state", "open"}}})}};
     gateway_template["listen_port"] = gateway_port;
     gateway_template["zone_endpoints"] = nlohmann::json::array({{{"service_id", 4504699675869185ULL}, {"host", "127.0.0.1"}, {"port", zone_port}}});
     player_db_proxy_template["listen_port"] = player_db_proxy_port;
@@ -205,12 +211,6 @@ int main(int argc, char **argv)
     }
     wait_startup();
 
-    const pid_t world_pid = spawn_process(argv[4], world_config);
-    if (!require(world_pid > 0, "world process should spawn")) {
-        return 17;
-    }
-    wait_startup();
-
     const pid_t player_db_proxy_pid = spawn_process(argv[6], player_db_proxy_config);
     if (!require(player_db_proxy_pid > 0, "player db proxy process should spawn")) {
         return 25;
@@ -220,6 +220,12 @@ int main(int argc, char **argv)
     const pid_t world_db_proxy_pid = spawn_process(argv[7], world_db_proxy_config);
     if (!require(world_db_proxy_pid > 0, "world db proxy process should spawn")) {
         return 27;
+    }
+    wait_startup();
+
+    const pid_t world_pid = spawn_process(argv[4], world_config);
+    if (!require(world_pid > 0, "world process should spawn")) {
+        return 17;
     }
     wait_startup();
 
@@ -237,6 +243,10 @@ int main(int argc, char **argv)
 
     const auto player_uid_text = std::to_string(static_cast<unsigned long long>(
         std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto role_id = static_cast<unsigned long long>(std::stoull(player_uid_text) * 100 + 1);
+    (void)redis.command("DEL", {"game:world_db:player_roles:" + player_uid_text,
+                                  "game:world_db:role_info:" + std::to_string(role_id),
+                                  "game:player_db:player_role:" + std::to_string(role_id)});
     const pid_t client_pid = ::fork();
     if (client_pid == 0) {
         const auto world_http_port_text = std::to_string(world_http_port);
@@ -251,15 +261,15 @@ int main(int argc, char **argv)
     const bool client_ok = wait_exit(client_pid);
     stop_process(gateway_pid);
     stop_process(zone_pid);
+    stop_process(world_pid);
     stop_process(world_db_proxy_pid);
     stop_process(player_db_proxy_pid);
-    stop_process(world_pid);
     stop_process(tunnel_pid);
     const bool gateway_ok = wait_exit(gateway_pid, client_ok);
     const bool zone_ok = wait_exit(zone_pid, client_ok);
+    const bool world_ok = wait_exit(world_pid, client_ok);
     const bool world_db_proxy_ok = wait_exit(world_db_proxy_pid, client_ok);
     const bool player_db_proxy_ok = wait_exit(player_db_proxy_pid, client_ok);
-    const bool world_ok = wait_exit(world_pid, client_ok);
     const bool tunnel_ok = wait_exit(tunnel_pid, client_ok);
     if (!require(client_ok, "mock client should exit successfully")) {
         return 21;

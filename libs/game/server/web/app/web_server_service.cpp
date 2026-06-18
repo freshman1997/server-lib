@@ -66,6 +66,9 @@ namespace yuan::game::server
         web_context_.login_handler = [this](WebAuthRequest request) {
             return auth_service_->login_account(std::move(request));
         };
+        web_context_.create_role_handler = [this](WebCreateRoleRequest request) {
+            return auth_service_->create_role(std::move(request));
+        };
         yuan::net::http::HttpServerConfig http_config;
         http_config.enable_keep_alive = false;
         http_config.server_name = "GameWeb/1.0";
@@ -80,9 +83,7 @@ namespace yuan::game::server
     void WebServerService::start()
     {
         if (ok_ && http_server_) {
-            http_thread_ = std::jthread([this](std::stop_token) {
-                http_server_->serve();
-            });
+            http_server_->serve();
         }
     }
 
@@ -90,9 +91,6 @@ namespace yuan::game::server
     {
         if (http_server_) {
             http_server_->stop();
-        }
-        if (http_thread_.joinable()) {
-            http_thread_.join();
         }
     }
 

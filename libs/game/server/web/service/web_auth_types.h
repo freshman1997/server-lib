@@ -20,6 +20,20 @@ namespace yuan::game::server
         LoginOptionsResponse login_options;
         std::string message;
     };
+
+    struct WebCreateRoleRequest
+    {
+        PlayerUid player_uid = 0;
+        std::string name;
+    };
+
+    struct WebCreateRoleResponse
+    {
+        bool ok = false;
+        PlayerUid player_uid = 0;
+        RoleId role_id = 0;
+        std::string message;
+    };
 }
 
 #endif

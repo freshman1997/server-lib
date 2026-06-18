@@ -92,9 +92,6 @@ namespace yuan::game::server
         if (http_server_) {
             http_server_->stop();
         }
-        if (http_thread_.joinable()) {
-            http_thread_.join();
-        }
     }
 
     bool ChatWebServerService::ok() const

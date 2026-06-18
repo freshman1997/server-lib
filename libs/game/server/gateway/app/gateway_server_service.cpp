@@ -6,34 +6,29 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <functional>
 #include <sstream>
 #include <thread>
 
 namespace yuan::game::server
 {
-    GatewayServerService::GatewayServerService(GameServiceId service_id,
-                                                  std::string listen_host,
-                                                   std::uint16_t port,
-                                                   std::string public_host,
-                                                     std::vector<std::pair<PackedGameServiceId, std::string>> zone_endpoints,
-                                                      std::uint64_t metrics_log_interval_ms,
-                                                     rpc_network::RpcNetworkServerConfig rpc_server_config,
-                                                     std::uint64_t login_token_secret,
-                                                     std::uint64_t gateway_internal_secret,
-                                                     std::uint64_t drain_timeout_ms)
-        : listen_host_(std::move(listen_host)),
-          port_(port),
-          metrics_log_interval_ms_(metrics_log_interval_ms),
-          drain_timeout_ms_(drain_timeout_ms == 0 ? 3000 : drain_timeout_ms),
-          rpc_server_config_(std::move(rpc_server_config)),
-          service_id_(service_id)
+    GatewayServerService::GatewayServerService(ServiceServerConfig config)
+        : listen_host_(std::move(config.listen_host)),
+          port_(config.listen_port),
+          metrics_log_interval_ms_(config.metrics_log_interval_ms),
+          drain_timeout_ms_(config.gateway_drain_timeout_ms == 0 ? 3000 : config.gateway_drain_timeout_ms),
+          gateway_handler_queue_limit_(config.gateway_handler_queue_limit == 0 ? 4096 : config.gateway_handler_queue_limit),
+          service_id_(config.service_id)
     {
-        gateway_context_.address = ServiceAddress{service_id, 500, yuan::game_base::ServerRole::gateway, service_id.world, "gateway"};
-        gateway_context_.public_host = std::move(public_host);
+        rpc_server_config_.max_connections = static_cast<std::size_t>(config.rpc_max_connections);
+        rpc_server_config_.max_buffered_bytes = static_cast<std::size_t>(config.rpc_max_buffered_bytes);
+        rpc_server_config_.idle_timeout_ms = config.rpc_idle_timeout_ms == 0 ? 10 * 60 * 1000 : config.rpc_idle_timeout_ms;
+        gateway_context_.address = ServiceAddress{service_id_, 500, yuan::game_base::ServerRole::gateway, service_id_.world, "gateway"};
+        gateway_context_.public_host = std::move(config.public_host);
         gateway_context_.public_port = port_;
-        gateway_context_.login_token_secret = login_token_secret == 0 ? kDefaultLoginTokenSecret : login_token_secret;
-        gateway_context_.gateway_internal_secret = gateway_internal_secret == 0 ? kDefaultLoginTokenSecret : gateway_internal_secret;
-        for (auto &[service_id, endpoint] : zone_endpoints) {
+        gateway_context_.login_token_secret = config.login_token_secret == 0 ? kDefaultLoginTokenSecret : config.login_token_secret;
+        gateway_context_.gateway_internal_secret = config.gateway_internal_secret == 0 ? kDefaultLoginTokenSecret : config.gateway_internal_secret;
+        for (auto &[service_id, endpoint] : config.zone_endpoints) {
             const auto colon = endpoint.rfind(':');
             if (service_id == 0 || colon == std::string::npos || colon + 1 >= endpoint.size()) {
                 continue;
@@ -102,17 +97,13 @@ namespace yuan::game::server
         draining_.store(false, std::memory_order_relaxed);
 
         if (metrics_log_interval_ms_ != 0) {
-            metrics_thread_ = std::jthread([this](std::stop_token stop_token) {
-                metrics_loop(stop_token);
+            metrics_timer_ = rpc_server_.schedule_periodic(metrics_log_interval_ms_, metrics_log_interval_ms_, [this] {
+                log_metrics();
             });
         }
 
         gateway_handler_thread_ = std::jthread([this](std::stop_token stop_token) {
             gateway_handler_loop(stop_token);
-        });
-
-        cleanup_thread_ = std::jthread([this](std::stop_token stop_token) {
-            cleanup_loop(stop_token);
         });
 
         ok_ = ok_ && rpc_server_.run();
@@ -125,31 +116,24 @@ namespace yuan::game::server
         wait_for_gateway_queue(deadline);
         drain_sessions(deadline);
         wait_for_zone_pending(deadline);
-        metrics_thread_.request_stop();
+        rpc_server_.cancel_timer(metrics_timer_);
         gateway_handler_thread_.request_stop();
         gateway_handler_cv_.notify_all();
-        if (metrics_thread_.joinable()) {
-            metrics_thread_.join();
-        }
         if (gateway_handler_thread_.joinable()) {
             gateway_handler_thread_.join();
         }
 
         rpc_server_.close_all_connections();
-        cleanup_thread_.request_stop();
-        cleanup_cv_.notify_all();
-        if (cleanup_thread_.joinable()) {
-            cleanup_thread_.join();
-        }
 
         const auto current_metrics = metrics();
-        LOG_INFO("gateway zone metrics attempts={} retries={} recoveries={} failures={} active_connections={} active_sessions={}",
+        LOG_INFO("gateway zone metrics attempts={} retries={} recoveries={} failures={} active_connections={} active_sessions={} handler_queue_size={}",
                  current_metrics.zone_call_attempts,
                  current_metrics.zone_call_retries,
                  current_metrics.zone_call_recoveries,
                  current_metrics.zone_call_failures,
                  current_metrics.active_connections,
-                 current_metrics.active_sessions);
+                 current_metrics.active_sessions,
+                 current_metrics.handler_queue_size);
         
         rpc_server_.stop();
     }
@@ -161,12 +145,18 @@ namespace yuan::game::server
 
     GatewayServerService::Metrics GatewayServerService::metrics() const
     {
+        std::uint64_t handler_queue_size = 0;
+        {
+            std::lock_guard<std::mutex> lock(gateway_handler_mutex_);
+            handler_queue_size = gateway_handler_queue_.size();
+        }
         return Metrics{zone_call_attempts_.load(std::memory_order_relaxed),
                        zone_call_retries_.load(std::memory_order_relaxed),
                        zone_call_recoveries_.load(std::memory_order_relaxed),
                        zone_call_failures_.load(std::memory_order_relaxed),
                        static_cast<std::uint64_t>(rpc_server_.active_connection_count()),
-                       static_cast<std::uint64_t>(gateway_context_.sessions.session_count())};
+                       static_cast<std::uint64_t>(gateway_context_.sessions.session_count()),
+                       handler_queue_size};
     }
 
     std::string GatewayServerService::prometheus_metrics() const
@@ -184,7 +174,9 @@ namespace yuan::game::server
             << "# TYPE game_gateway_active_connections gauge\n"
             << "game_gateway_active_connections " << current.active_connections << "\n"
             << "# TYPE game_gateway_active_sessions gauge\n"
-            << "game_gateway_active_sessions " << current.active_sessions << "\n";
+            << "game_gateway_active_sessions " << current.active_sessions << "\n"
+            << "# TYPE game_gateway_handler_queue_size gauge\n"
+            << "game_gateway_handler_queue_size " << current.handler_queue_size << "\n";
 
         return out.str();
     }
@@ -259,11 +251,10 @@ namespace yuan::game::server
     void GatewayServerService::handle_session_cleanup(const GatewaySessionModel::SessionRecord &session, int attempt)
     {
         yuan::rpc::Bytes logout_payload;
-        const auto logout_result = forward_to_zone(session.zone_service_id,
-                                                   game_route::zone_player_leave(),
-                                                   GatewayForwardContext{session.gateway_session_id, session.connection_id},
-                                                   logout_payload,
-                                                   session.gateway_session_id);
+        const auto logout_result = call_zone(session.zone_service_id,
+                                             game_route::zone_player_leave(),
+                                             std::move(logout_payload),
+                                             session.gateway_session_id);
         if (logout_result && logout_result->status == yuan::rpc::RpcStatus::ok) {
             gateway_context_.sessions.logout_session(session.gateway_session_id);
             return;
@@ -284,10 +275,10 @@ namespace yuan::game::server
         retry.session = session;
         retry.attempt = attempt + 1;
         {
-            std::lock_guard<std::mutex> lock(cleanup_mutex_);
+            std::lock_guard<std::mutex> lock(gateway_handler_mutex_);
             cleanup_queue_.push_back(retry);
         }
-        cleanup_cv_.notify_one();
+        gateway_handler_cv_.notify_one();
     }
 
     void GatewayServerService::enqueue_client_connection_closed(std::uint64_t connection_id)
@@ -299,91 +290,28 @@ namespace yuan::game::server
         task.due_at = std::chrono::steady_clock::now();
         task.connection_id = connection_id;
         {
-            std::lock_guard<std::mutex> lock(cleanup_mutex_);
+            std::lock_guard<std::mutex> lock(gateway_handler_mutex_);
             cleanup_queue_.push_back(task);
         }
-        cleanup_cv_.notify_one();
+        gateway_handler_cv_.notify_one();
     }
 
-    void GatewayServerService::cleanup_loop(std::stop_token stop_token)
+    void GatewayServerService::log_metrics() const
     {
-        while (!stop_token.stop_requested()) {
-            std::vector<CleanupTask> pending;
-            {
-                std::unique_lock<std::mutex> lock(cleanup_mutex_);
-                cleanup_cv_.wait(lock, stop_token, [this] { return !cleanup_queue_.empty(); });
-                if (stop_token.stop_requested()) {
-                    break;
-                }
-
-                while (!cleanup_queue_.empty()) {
-                    const auto next = std::min_element(cleanup_queue_.begin(), cleanup_queue_.end(), [](const CleanupTask &lhs, const CleanupTask &rhs) {
-                        return lhs.due_at < rhs.due_at;
-                    });
-
-                    const auto now = std::chrono::steady_clock::now();
-                    if (next->due_at > now) {
-                        cleanup_cv_.wait_until(lock, stop_token, next->due_at, [this, due_at = next->due_at] {
-                            return std::any_of(cleanup_queue_.begin(), cleanup_queue_.end(), [due_at](const CleanupTask &task) {
-                                return task.due_at < due_at;
-                            });
-                        });
-                        if (stop_token.stop_requested()) {
-                            break;
-                        }
-                        continue;
-                    }
-
-                    pending.push_back(*next);
-                    cleanup_queue_.erase(next);
-                }
-
-                if (stop_token.stop_requested()) {
-                    break;
-                }
-            }
-
-            for (const auto &task : pending) {
-                if (task.connection_id != 0) {
-                    handle_client_connection_closed(task.connection_id, task.attempt);
-                } else if (task.session.gateway_session_id != 0) {
-                    handle_session_cleanup(task.session, task.attempt);
-                }
-            }
-        }
-    }
-
-    void GatewayServerService::metrics_loop(std::stop_token stop_token) const
-    {
-        const auto interval = std::chrono::milliseconds(metrics_log_interval_ms_);
-        while (!stop_token.stop_requested()) {
-            std::mutex wait_mutex;
-            std::condition_variable_any wait_cv;
-            std::unique_lock<std::mutex> lock(wait_mutex);
-            if (wait_cv.wait_for(lock, stop_token, interval, [] { return false; })) {
-                continue;
-            }
-            
-            if (stop_token.stop_requested()) {
-                break;
-            }
-
-            const auto current_metrics = metrics();
-            LOG_INFO("gateway zone metrics attempts={} retries={} recoveries={} failures={} active_connections={} active_sessions={}",
-                     current_metrics.zone_call_attempts,
-                     current_metrics.zone_call_retries,
-                     current_metrics.zone_call_recoveries,
-                     current_metrics.zone_call_failures,
-                     current_metrics.active_connections,
-                     current_metrics.active_sessions);
-        }
+        const auto current_metrics = metrics();
+        LOG_INFO("gateway zone metrics attempts={} retries={} recoveries={} failures={} active_connections={} active_sessions={} handler_queue_size={}",
+                 current_metrics.zone_call_attempts,
+                 current_metrics.zone_call_retries,
+                 current_metrics.zone_call_recoveries,
+                 current_metrics.zone_call_failures,
+                 current_metrics.active_connections,
+                 current_metrics.active_sessions,
+                 current_metrics.handler_queue_size);
     }
 
     bool GatewayServerService::register_deferred_gateway_route(yuan::rpc::Route route)
     {
-        return gateway_rpc_.register_handler(route, [this](const yuan::rpc::Message &message) {
-            return enqueue_gateway_message(message);
-        });
+        return gateway_rpc_.register_handler(route, std::bind_front(&GatewayServerService::enqueue_gateway_message, this));
     }
 
     yuan::rpc::Response GatewayServerService::enqueue_gateway_message(yuan::rpc::Message message)
@@ -405,6 +333,11 @@ namespace yuan::game::server
         }
         {
             std::lock_guard<std::mutex> lock(gateway_handler_mutex_);
+            if (gateway_handler_queue_.size() >= gateway_handler_queue_limit_) {
+                response.status = yuan::rpc::RpcStatus::unavailable;
+                response.error = "gateway handler queue is full";
+                return response;
+            }
             gateway_handler_queue_.push_back(std::move(message));
         }
         gateway_handler_cv_.notify_one();
@@ -416,18 +349,42 @@ namespace yuan::game::server
     {
         while (!stop_token.stop_requested()) {
             std::deque<yuan::rpc::Message> pending;
+            std::vector<CleanupTask> cleanup_pending;
             {
                 std::unique_lock<std::mutex> lock(gateway_handler_mutex_);
-                gateway_handler_cv_.wait(lock, stop_token, [this] { return !gateway_handler_queue_.empty(); });
+                gateway_handler_cv_.wait_for(lock, stop_token, std::chrono::milliseconds(10), [this] {
+                    if (!gateway_handler_queue_.empty()) {
+                        return true;
+                    }
+                    const auto now = std::chrono::steady_clock::now();
+                    return std::any_of(cleanup_queue_.begin(), cleanup_queue_.end(), [now](const CleanupTask &task) { return task.due_at <= now; });
+                });
                 if (stop_token.stop_requested()) {
                     break;
                 }
                 pending.swap(gateway_handler_queue_);
+
+                const auto now = std::chrono::steady_clock::now();
+                for (auto it = cleanup_queue_.begin(); it != cleanup_queue_.end();) {
+                    if (it->due_at <= now) {
+                        cleanup_pending.push_back(*it);
+                        it = cleanup_queue_.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
             }
             for (auto &message : pending) {
                 const auto connection_id = static_cast<std::uint64_t>(std::strtoull(message.metadata[rpc_network::metadata_key::connection_id].c_str(), nullptr, 10));
                 auto response = gateway_handler_rpc_.handle(std::move(message));
                 (void)rpc_server_.write_response_to_connection(connection_id, std::move(response));
+            }
+            for (const auto &task : cleanup_pending) {
+                if (task.connection_id != 0) {
+                    handle_client_connection_closed(task.connection_id, task.attempt);
+                } else if (task.session.gateway_session_id != 0) {
+                    handle_session_cleanup(task.session, task.attempt);
+                }
             }
         }
     }
@@ -437,7 +394,7 @@ namespace yuan::game::server
         while (std::chrono::steady_clock::now() < deadline) {
             {
                 std::lock_guard<std::mutex> lock(gateway_handler_mutex_);
-                if (gateway_handler_queue_.empty()) {
+                if (gateway_handler_queue_.empty() && cleanup_queue_.empty()) {
                     return;
                 }
             }
@@ -470,22 +427,7 @@ namespace yuan::game::server
 
     void GatewayServerService::wait_for_zone_pending(std::chrono::steady_clock::time_point deadline) const
     {
-        while (std::chrono::steady_clock::now() < deadline) {
-            bool empty = true;
-            {
-                std::lock_guard<std::mutex> lock(zone_clients_mutex_);
-                for (const auto &[zone_service_id, client] : zone_clients_) {
-                    if (client && (client->queued_size() != 0 || client->pending_size() != 0)) {
-                        empty = false;
-                        break;
-                    }
-                }
-            }
-            if (empty) {
-                return;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
+        (void)deadline;
     }
 
     std::optional<rpc_network::RpcEndpoint> GatewayServerService::zone_endpoint(PackedGameServiceId zone_service_id) const
@@ -518,7 +460,7 @@ namespace yuan::game::server
                 std::lock_guard<std::mutex> lock(zone_clients_mutex_);
                 auto &client = zone_clients_[zone_service_id];
                 if (!client) {
-                    client = std::make_unique<rpc_network::RpcNetworkPersistentAsyncClient>();
+                    client = std::make_unique<rpc_network::RpcNetworkPersistentClient>();
                 }
                 last_response = client->call(*endpoint, message);
             }

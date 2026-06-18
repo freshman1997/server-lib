@@ -2,12 +2,10 @@
 #define YUAN_GAME_SERVER_WORLD_MODEL_WORLD_OWNERSHIP_STORE_H
 
 #include "common/codec/game_binary_codec.h"
+#include "common/db_proxy_routing.h"
+#include "messaging/tunnel_client_manager.h"
 
-#include "redis_client.h"
-
-#include <memory>
 #include <optional>
-#include <string>
 #include <unordered_map>
 
 namespace yuan::game::server
@@ -42,10 +40,12 @@ namespace yuan::game::server
         std::unordered_map<PlayerId, WorldOwnershipRecord> records_;
     };
 
-    class RedisWorldOwnershipStore final : public WorldOwnershipStore
+    class WorldDbProxyOwnershipStore final : public WorldOwnershipStore
     {
     public:
-        RedisWorldOwnershipStore(std::shared_ptr<yuan::redis::RedisClient> redis, std::string key_prefix = "game:world:owner:");
+        WorldDbProxyOwnershipStore(PackedGameServiceId source_service_id,
+                                   DbProxyRoutingConfig routing,
+                                   TunnelClientManager &tunnel_client_manager);
 
         [[nodiscard]] std::optional<WorldOwnershipRecord> get(PlayerId player_id) const override;
         [[nodiscard]] bool compare_and_set(PlayerId player_id,
@@ -54,10 +54,9 @@ namespace yuan::game::server
                                            WorldOwnershipRecord next) override;
 
     private:
-        [[nodiscard]] std::string key(PlayerId player_id) const;
-
-        std::shared_ptr<yuan::redis::RedisClient> redis_;
-        std::string key_prefix_;
+        PackedGameServiceId source_service_id_ = 0;
+        DbProxyRoutingConfig routing_;
+        TunnelClientManager *tunnel_client_manager_ = nullptr;
     };
 }
 

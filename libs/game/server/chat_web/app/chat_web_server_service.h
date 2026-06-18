@@ -10,7 +10,6 @@
 
 #include <memory>
 #include <string>
-#include <thread>
 
 namespace yuan::game::server
 {
@@ -48,7 +47,6 @@ namespace yuan::game::server
         std::unique_ptr<ChatService> chat_service_;
         ChatHandlerContext chat_context_;
         std::unique_ptr<yuan::net::http::HttpServer> http_server_;
-        std::jthread http_thread_;
         bool ok_ = false;
     };
 }

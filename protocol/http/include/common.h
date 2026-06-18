@@ -3,6 +3,8 @@
 #include <functional>
 #include <string>
 
+#include "coroutine/task.h"
+
 namespace yuan::net::http 
 {
     class HttpRequest;
@@ -15,6 +17,7 @@ namespace yuan::net::http
     };
 
     typedef std::function<void (HttpRequest *req, HttpResponse *resp)> request_function;
+    typedef std::function<yuan::coroutine::Task<void> (HttpRequest *req, HttpResponse *resp)> async_request_function;
 
 
     class HttpSession;

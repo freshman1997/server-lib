@@ -38,6 +38,7 @@ namespace yuan::game::server
         std::optional<LoginOptionsResponse> fetch_bootstrap(LoginOptionsRequest request) const;
         WebAuthResponse register_account(WebAuthRequest request) const;
         WebAuthResponse login_account(WebAuthRequest request) const;
+        WebCreateRoleResponse create_role(WebCreateRoleRequest request) const;
 
     private:
         [[nodiscard]] std::uint16_t select_world_port(PlayerUid player_uid) const;

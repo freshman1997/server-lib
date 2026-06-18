@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <functional>
 
 namespace yuan::game::server
 {
@@ -110,11 +111,9 @@ namespace yuan::game::server
             response.error = std::move(error);
             return response;
         }
-    }
 
-    bool register_rank_msg(yuan::rpc::Server &server, RankMsgContext &context)
-    {
-        const bool role_update = server.register_handler(game_route::rank_role_update(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_rank_role_update(RankMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto request = decode_binary<SSRankRoleUpdateRequest>(message.payload);
             if (!request || request->role.role_id == 0) {
                 return binary_response(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid rank role update");
@@ -124,9 +123,10 @@ namespace yuan::game::server
             yuan::rpc::Bytes payload;
             (void)encode_binary(response, payload);
             return binary_response(message, ok ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::unavailable, std::move(payload));
-        });
+        }
 
-        const bool role_get = server.register_handler(game_route::rank_role_get(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_rank_role_get(RankMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto request = decode_binary<SSRankRoleGetRequest>(message.payload);
             if (!request || request->role_id == 0) {
                 return binary_response(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid rank role get");
@@ -141,9 +141,10 @@ namespace yuan::game::server
             yuan::rpc::Bytes payload;
             (void)encode_binary(response, payload);
             return binary_response(message, yuan::rpc::RpcStatus::ok, std::move(payload));
-        });
+        }
 
-        const bool score_update = server.register_handler(game_route::rank_score_update(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_rank_score_update(RankMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto request = decode_binary<SSRankScoreUpdateRequest>(message.payload);
             if (!request || request->board.empty() || request->member.empty()) {
                 return binary_response(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid rank score update");
@@ -160,9 +161,10 @@ namespace yuan::game::server
             yuan::rpc::Bytes payload;
             (void)encode_binary(response, payload);
             return binary_response(message, response.ok ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::unavailable, std::move(payload));
-        });
+        }
 
-        const bool score_remove = server.register_handler(game_route::rank_score_remove(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_rank_score_remove(RankMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto request = decode_binary<SSRankScoreRemoveRequest>(message.payload);
             if (!request || request->board.empty() || request->member.empty()) {
                 return binary_response(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid rank score remove");
@@ -175,9 +177,10 @@ namespace yuan::game::server
             yuan::rpc::Bytes payload;
             (void)encode_binary(response, payload);
             return binary_response(message, response.ok ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::unavailable, std::move(payload));
-        });
+        }
 
-        const bool score_get = server.register_handler(game_route::rank_score_get(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_rank_score_get(RankMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto request = decode_binary<SSRankScoreGetRequest>(message.payload);
             if (!request || request->board.empty() || request->member.empty()) {
                 return binary_response(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid rank score get");
@@ -195,9 +198,10 @@ namespace yuan::game::server
             yuan::rpc::Bytes payload;
             (void)encode_binary(response, payload);
             return binary_response(message, yuan::rpc::RpcStatus::ok, std::move(payload));
-        });
+        }
 
-        const bool top_get = server.register_handler(game_route::rank_top_get(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_rank_top_get(RankMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto request = decode_binary<SSRankTopGetRequest>(message.payload);
             if (!request || request->board.empty()) {
                 return binary_response(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid rank top get");
@@ -226,7 +230,17 @@ namespace yuan::game::server
             yuan::rpc::Bytes payload;
             (void)encode_binary(response, payload);
             return binary_response(message, yuan::rpc::RpcStatus::ok, std::move(payload));
-        });
+        }
+    }
+
+    bool register_rank_msg(yuan::rpc::Server &server, RankMsgContext &context)
+    {
+        const bool role_update = server.register_handler(game_route::rank_role_update(), std::bind_front(handle_rank_role_update, std::ref(context)));
+        const bool role_get = server.register_handler(game_route::rank_role_get(), std::bind_front(handle_rank_role_get, std::ref(context)));
+        const bool score_update = server.register_handler(game_route::rank_score_update(), std::bind_front(handle_rank_score_update, std::ref(context)));
+        const bool score_remove = server.register_handler(game_route::rank_score_remove(), std::bind_front(handle_rank_score_remove, std::ref(context)));
+        const bool score_get = server.register_handler(game_route::rank_score_get(), std::bind_front(handle_rank_score_get, std::ref(context)));
+        const bool top_get = server.register_handler(game_route::rank_top_get(), std::bind_front(handle_rank_top_get, std::ref(context)));
 
         return role_update && role_get && score_update && score_remove && score_get && top_get;
     }

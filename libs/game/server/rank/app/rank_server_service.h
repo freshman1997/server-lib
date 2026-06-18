@@ -3,7 +3,8 @@
 
 #include "application.h"
 #include "common/rpc_network.h"
-#include "messaging/process_message_manager.h"
+#include "common/service_config.h"
+#include "messaging/tunnel_client_manager.h"
 #include "rank/rpc/rank_msg.h"
 
 #include "redis_client.h"
@@ -18,18 +19,7 @@ namespace yuan::game::server
     class RankServerService final : public yuan::app::Service, public yuan::app::RuntimeContextAwareService
     {
     public:
-        RankServerService(GameServiceId service_id,
-                          std::string listen_host,
-                          std::uint16_t port,
-                          std::vector<rpc_network::RpcEndpoint> tunnel_endpoints,
-                          std::string redis_host,
-                          std::uint16_t redis_port,
-                          std::uint16_t redis_db,
-                          std::string redis_username,
-                          std::string redis_password,
-                          std::uint16_t redis_connect_timeout_ms,
-                          std::uint16_t redis_command_timeout_ms,
-                          std::uint64_t tunnel_heartbeat_interval_ms);
+        explicit RankServerService(ServiceServerConfig config);
 
         void set_runtime_context(const yuan::app::RuntimeContext &context) override;
         bool init() override;
@@ -38,9 +28,6 @@ namespace yuan::game::server
         [[nodiscard]] bool ok() const;
 
     private:
-        bool register_to_tunnel();
-        void register_loop(std::stop_token stop_token);
-
         yuan::app::RuntimeContext context_;
         std::string listen_host_;
         std::uint16_t port_ = 0;
@@ -57,8 +44,7 @@ namespace yuan::game::server
         RankMsgContext rank_context_;
         yuan::rpc::Server rank_rpc_;
         rpc_network::RpcNetworkServer rpc_server_;
-        ProcessMessageManager messaging_;
-        std::jthread register_thread_;
+        TunnelClientManager tunnel_client_manager_;
         bool ok_ = false;
     };
 }

@@ -31,11 +31,13 @@ start_service() {
   echo "started $name pid=$(<"$RUN_DIR/$name.pid") log=$LOG_DIR/$name.log"
 }
 
+# Startup order matters: tunnel first, db proxies second, business services last.
 start_service tunnel game_tunnel_server tunnel.json
 sleep 0.2
 start_service player_db_proxy game_player_db_proxy_server player_db_proxy.json
 start_service world_db_proxy game_world_db_proxy_server world_db_proxy.json
 start_service global_db_proxy game_global_db_proxy_server global_db_proxy.json
+sleep 0.2
 start_service global game_global_server global.json
 start_service world game_world_server world.json
 sleep 0.2

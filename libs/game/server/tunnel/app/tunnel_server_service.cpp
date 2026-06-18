@@ -1,14 +1,31 @@
 #include "tunnel/app/tunnel_server_service.h"
 
 #include <cstdlib>
+#include <functional>
 #include <string>
 
 namespace yuan::game::server
 {
-    TunnelServerService::TunnelServerService(GameServiceId service_id, std::string listen_host, std::uint16_t listen_port)
-        : listen_host_(std::move(listen_host)),
-          listen_port_(listen_port),
-          tunnel_({service_id, 1, yuan::game_base::ServerRole::gateway, service_id.world, "tunnel"})
+    namespace
+    {
+        yuan::rpc::Response handle_registered_network_endpoint(std::string host, std::uint16_t port, yuan::rpc::Message forwarded)
+        {
+            auto endpoint_response = rpc_network::RpcNetworkClient().call(rpc_network::RpcEndpoint{std::move(host), port}, forwarded);
+            if (endpoint_response) {
+                return *endpoint_response;
+            }
+            yuan::rpc::Response error;
+            error.status = yuan::rpc::RpcStatus::unavailable;
+            error.error = "registered endpoint unavailable";
+            return error;
+        }
+
+    }
+
+    TunnelServerService::TunnelServerService(ServiceServerConfig config)
+        : listen_host_(std::move(config.listen_host)),
+          listen_port_(config.listen_port),
+          tunnel_({config.service_id, 1, yuan::game_base::ServerRole::gateway, config.service_id.world, "tunnel"})
     {
     }
 
@@ -19,41 +36,7 @@ namespace yuan::game::server
 
     bool TunnelServerService::init()
     {
-        (void)tunnel_.rpc_server().register_handler(game_route::tunnel_register(), [this](const yuan::rpc::Message &message) {
-            auto registration = decode_tunnel_registration(message.payload);
-            yuan::rpc::Response response;
-            if (!registration || registration->service_id == 0) {
-                response.status = yuan::rpc::RpcStatus::bad_request;
-                response.error = "invalid tunnel registration";
-                return response;
-            }
-            if (registration->port != 0) {
-                const auto service_id = registration->service_id;
-                const auto host = registration->host;
-                const auto port = registration->port;
-                if (host.empty()) {
-                    response.status = yuan::rpc::RpcStatus::bad_request;
-                    response.error = "registered endpoint host is required";
-                    return response;
-                }
-                if (!tunnel_.register_endpoint_handler(service_id, [host, port](yuan::rpc::Message forwarded) {
-                        auto endpoint_response = rpc_network::RpcNetworkClient().call(rpc_network::RpcEndpoint{host, port}, forwarded);
-                        if (endpoint_response) {
-                            return *endpoint_response;
-                        }
-                        yuan::rpc::Response error;
-                        error.status = yuan::rpc::RpcStatus::unavailable;
-                        error.error = "registered endpoint unavailable";
-                        return error;
-                    })) {
-                    response.status = yuan::rpc::RpcStatus::internal_error;
-                    response.error = "failed to register endpoint";
-                    return response;
-                }
-            }
-            response.status = yuan::rpc::RpcStatus::ok;
-            return response;
-        });
+        (void)tunnel_.rpc_server().register_handler(game_route::tunnel_register(), std::bind_front(&TunnelServerService::handle_tunnel_register, this));
 
         if (!register_deferred_route(game_route::tunnel_register()) ||
             !register_deferred_route(game_route::tunnel_forward()) ||
@@ -90,9 +73,35 @@ namespace yuan::game::server
 
     bool TunnelServerService::register_deferred_route(yuan::rpc::Route route)
     {
-        return exposed_rpc_.register_handler(route, [this](const yuan::rpc::Message &message) {
-            return enqueue_tunnel_message(message);
-        });
+        return exposed_rpc_.register_handler(route, std::bind_front(&TunnelServerService::enqueue_tunnel_message, this));
+    }
+
+    yuan::rpc::Response TunnelServerService::handle_tunnel_register(const yuan::rpc::Message &message)
+    {
+        auto registration = decode_tunnel_registration(message.payload);
+        yuan::rpc::Response response;
+        if (!registration || registration->service_id == 0) {
+            response.status = yuan::rpc::RpcStatus::bad_request;
+            response.error = "invalid tunnel registration";
+            return response;
+        }
+        if (registration->port != 0) {
+            const auto service_id = registration->service_id;
+            const auto host = registration->host;
+            const auto port = registration->port;
+            if (host.empty()) {
+                response.status = yuan::rpc::RpcStatus::bad_request;
+                response.error = "registered endpoint host is required";
+                return response;
+            }
+            if (!tunnel_.register_endpoint_handler(service_id, std::bind_front(handle_registered_network_endpoint, host, port))) {
+                response.status = yuan::rpc::RpcStatus::internal_error;
+                response.error = "failed to register endpoint";
+                return response;
+            }
+        }
+        response.status = yuan::rpc::RpcStatus::ok;
+        return response;
     }
 
     yuan::rpc::Response TunnelServerService::enqueue_tunnel_message(yuan::rpc::Message message)

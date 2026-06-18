@@ -38,6 +38,30 @@ namespace yuan::game::server
                 return std::nullopt;
             }
         }
+
+        std::optional<WebCreateRoleRequest> parse_create_role_body(yuan::net::http::HttpRequest *request)
+        {
+            const auto *body = request->body_begin();
+            const std::string text = body ? std::string(body, request->get_body_length()) : std::string();
+            try {
+                const auto root = nlohmann::json::parse(text);
+                WebCreateRoleRequest create;
+                create.player_uid = root.value("player_uid", static_cast<PlayerUid>(0));
+                create.name = root.value("name", std::string{});
+                return create;
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+
+        std::string create_role_json(const WebCreateRoleResponse &create)
+        {
+            return nlohmann::json{{"ok", create.ok},
+                                  {"player_uid", create.player_uid},
+                                  {"role_id", create.role_id},
+                                  {"message", create.message}}
+                .dump();
+        }
     }
 
     bool register_web_http_handlers(yuan::net::http::HttpServer &server, WebHandlerContext &context)
@@ -100,8 +124,27 @@ namespace yuan::game::server
         });
 
         server.on("/login", [auth_handler](yuan::net::http::HttpRequest *request,
-                                            yuan::net::http::HttpResponse *response) {
+                                             yuan::net::http::HttpResponse *response) {
             auth_handler(false, request, response);
+        });
+
+        server.on("/create_role", [&context](yuan::net::http::HttpRequest *request,
+                                             yuan::net::http::HttpResponse *response) {
+            if (!request->is_post()) {
+                response->json(error_json("method not allowed"), yuan::net::http::ResponseCode::method_not_allowed);
+                return;
+            }
+            const auto create_request = parse_create_role_body(request);
+            if (!create_request) {
+                response->json(error_json("invalid create role request"), yuan::net::http::ResponseCode::bad_request);
+                return;
+            }
+            if (!context.create_role_handler) {
+                response->json(error_json("create role handler is not configured"), yuan::net::http::ResponseCode::internal_server_error);
+                return;
+            }
+            const auto create = context.create_role_handler(*create_request);
+            response->json(create_role_json(create), create.ok ? yuan::net::http::ResponseCode::ok_ : yuan::net::http::ResponseCode::bad_request);
         });
 
         return true;

@@ -1,11 +1,47 @@
 #include "world/rpc/world_msg.h"
 
 #include "base/time.h"
+#include "common/metadata_keys.h"
 
+#include <functional>
 #include <utility>
 
-namespace yuan::game::server
-{
+    namespace yuan::game::server
+    {
+    namespace
+    {
+        std::uint64_t message_connection_id(const yuan::rpc::Message &message)
+        {
+            const auto it = message.metadata.find(game_metadata_key::rpc_connection_id);
+            if (it == message.metadata.end()) {
+                return 0;
+            }
+            try {
+                return static_cast<std::uint64_t>(std::stoull(it->second));
+            } catch (...) {
+                return 0;
+            }
+        }
+
+        yuan::rpc::Response deferred_response_for(const yuan::rpc::Message &message)
+        {
+            yuan::rpc::Response response;
+            response.request_id = message.request_id;
+            response.set_continuation_id(message.continuation_id());
+            response.status = yuan::rpc::RpcStatus::ok;
+            response.metadata[game_metadata_key::rpc_defer_response] = "1";
+            return response;
+        }
+
+        yuan::rpc::Response make_response_for(const yuan::rpc::Message &message)
+        {
+            yuan::rpc::Response response;
+            response.request_id = message.request_id;
+            response.set_continuation_id(message.continuation_id());
+            return response;
+        }
+    }
+
     void world_add_role(WorldMsgContext &context, PlayerUid player_uid, SSPlayerRoleInfo role)
     {
         if (role.zone_service_id == 0) {
@@ -262,17 +298,31 @@ namespace yuan::game::server
         return response;
     }
 
-    bool register_world_msg(yuan::rpc::Server &server, WorldMsgContext &context)
+    namespace
     {
-        const bool login_registered = server.register_handler(game_route::world_login_options(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_world_login_options(WorldMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto request = decode_binary<LoginOptionsRequest>(message.payload);
-            yuan::rpc::Response response;
-            response.request_id = message.request_id;
-            response.set_continuation_id(message.continuation_id());
+            auto response = make_response_for(message);
             if (!request) {
                 response.status = yuan::rpc::RpcStatus::bad_request;
                 response.error = "invalid login options request";
                 return response;
+            }
+            const auto connection_id = message_connection_id(message);
+            if (context.before_login_options_async && context.write_deferred_response && connection_id != 0) {
+                const auto player_uid = request->player_uid;
+                const auto request_id = message.request_id;
+                const auto continuation_id = message.continuation_id();
+                context.before_login_options_async(player_uid, [&context, player_uid, request_id, continuation_id, connection_id] {
+                    yuan::rpc::Response async_response;
+                    async_response.request_id = request_id;
+                    async_response.set_continuation_id(continuation_id);
+                    async_response.status = yuan::rpc::RpcStatus::ok;
+                    (void)encode_binary(world_login_options(context, player_uid), async_response.payload);
+                    context.write_deferred_response(connection_id, std::move(async_response));
+                });
+                return deferred_response_for(message);
             }
             if (context.before_login_options) {
                 context.before_login_options(request->player_uid);
@@ -280,13 +330,12 @@ namespace yuan::game::server
             response.status = yuan::rpc::RpcStatus::ok;
             (void)encode_binary(world_login_options(context, request->player_uid), response.payload);
             return response;
-        });
+        }
 
-        const bool gateway_registered = server.register_handler(game_route::world_gateway_register(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_world_gateway_register(WorldMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto gateway = decode_binary<SSGatewayInfo>(message.payload);
-            yuan::rpc::Response response;
-            response.request_id = message.request_id;
-            response.set_continuation_id(message.continuation_id());
+            auto response = make_response_for(message);
             if (!gateway) {
                 response.status = yuan::rpc::RpcStatus::bad_request;
                 response.error = "invalid gateway info";
@@ -295,13 +344,12 @@ namespace yuan::game::server
             world_register_gateway(context, *gateway);
             response.status = yuan::rpc::RpcStatus::ok;
             return response;
-        });
+        }
 
-        const bool zone_register_registered = server.register_handler(game_route::world_zone_register(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_world_zone_register(WorldMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto zone = decode_binary<SSZoneInfo>(message.payload);
-            yuan::rpc::Response response;
-            response.request_id = message.request_id;
-            response.set_continuation_id(message.continuation_id());
+            auto response = make_response_for(message);
             if (!zone) {
                 response.status = yuan::rpc::RpcStatus::bad_request;
                 response.error = "invalid zone info";
@@ -310,13 +358,12 @@ namespace yuan::game::server
             world_register_zone(context, *zone);
             response.status = yuan::rpc::RpcStatus::ok;
             return response;
-        });
+        }
 
-        const bool zone_select_registered = server.register_handler(game_route::world_zone_select(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_world_zone_select(WorldMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto request = decode_binary<SSZoneSelectRequest>(message.payload);
-            yuan::rpc::Response response;
-            response.request_id = message.request_id;
-            response.set_continuation_id(message.continuation_id());
+            auto response = make_response_for(message);
             if (!request) {
                 response.status = yuan::rpc::RpcStatus::bad_request;
                 response.error = "invalid zone select request";
@@ -329,13 +376,12 @@ namespace yuan::game::server
                 response.error = "no available zone";
             }
             return response;
-        });
+        }
 
-        const bool zone_get_registered = server.register_handler(game_route::world_player_zone_get(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_world_player_zone_get(WorldMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto query = decode_binary<SSPlayerZoneQuery>(message.payload);
-            yuan::rpc::Response response;
-            response.request_id = message.request_id;
-            response.set_continuation_id(message.continuation_id());
+            auto response = make_response_for(message);
             if (!query) {
                 response.status = yuan::rpc::RpcStatus::bad_request;
                 response.error = "invalid player zone query";
@@ -345,13 +391,12 @@ namespace yuan::game::server
             (void)encode_binary(SSPlayerZoneUpdate{0, query->player_id, zone, 0, 0}, response.payload);
             response.status = yuan::rpc::RpcStatus::ok;
             return response;
-        });
+        }
 
-        const bool zone_set_registered = server.register_handler(game_route::world_player_zone_set(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_world_player_zone_set(WorldMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto update = decode_player_zone_update(message.payload);
-            yuan::rpc::Response response;
-            response.request_id = message.request_id;
-            response.set_continuation_id(message.continuation_id());
+            auto response = make_response_for(message);
             if (!update) {
                 response.status = yuan::rpc::RpcStatus::bad_request;
                 response.error = "invalid player zone update";
@@ -360,13 +405,12 @@ namespace yuan::game::server
             world_set_player_zone(context, update->player_id, update->zone_service_id, update->source_zone_service_id, update->gateway_session_id);
             response.status = yuan::rpc::RpcStatus::ok;
             return response;
-        });
+        }
 
-        const bool gm_registered = server.register_handler(game_route::world_gm_forward(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_world_gm_forward(WorldMsgContext &context, const yuan::rpc::Message &message)
+        {
             const auto request = decode_binary<SSGmCommandRequest>(message.payload);
-            yuan::rpc::Response response;
-            response.request_id = message.request_id;
-            response.set_continuation_id(message.continuation_id());
+            auto response = make_response_for(message);
             if (!request) {
                 response.status = yuan::rpc::RpcStatus::bad_request;
                 response.error = "invalid gm command request";
@@ -386,7 +430,18 @@ namespace yuan::game::server
             response.status = result->ok ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::bad_request;
             (void)encode_binary(*result, response.payload);
             return response;
-        });
+        }
+    }
+
+    bool register_world_msg(yuan::rpc::Server &server, WorldMsgContext &context)
+    {
+        const bool login_registered = server.register_handler(game_route::world_login_options(), std::bind_front(handle_world_login_options, std::ref(context)));
+        const bool gateway_registered = server.register_handler(game_route::world_gateway_register(), std::bind_front(handle_world_gateway_register, std::ref(context)));
+        const bool zone_register_registered = server.register_handler(game_route::world_zone_register(), std::bind_front(handle_world_zone_register, std::ref(context)));
+        const bool zone_select_registered = server.register_handler(game_route::world_zone_select(), std::bind_front(handle_world_zone_select, std::ref(context)));
+        const bool zone_get_registered = server.register_handler(game_route::world_player_zone_get(), std::bind_front(handle_world_player_zone_get, std::ref(context)));
+        const bool zone_set_registered = server.register_handler(game_route::world_player_zone_set(), std::bind_front(handle_world_player_zone_set, std::ref(context)));
+        const bool gm_registered = server.register_handler(game_route::world_gm_forward(), std::bind_front(handle_world_gm_forward, std::ref(context)));
 
         return login_registered && gateway_registered && zone_register_registered && zone_select_registered &&
                zone_get_registered && zone_set_registered && gm_registered;

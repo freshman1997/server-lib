@@ -22,9 +22,7 @@ int main(int argc, char **argv)
     }
 
     yuan::app::Application app(yuan::game::server::make_game_runtime_context("game.tunnel"));
-    auto service = std::make_shared<yuan::game::server::TunnelServerService>(config->service_id,
-                                                                              config->listen_host,
-                                                                              config->listen_port);
+    auto service = std::make_shared<yuan::game::server::TunnelServerService>(*config);
     if (!app.add_service("tunnel", service) || !app.start()) {
         LOG_ERROR("tunnel server failed to start");
         app.stop();

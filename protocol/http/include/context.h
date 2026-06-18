@@ -99,7 +99,7 @@ namespace yuan::net::http
             mode_ = mode;
         }
 
-        inline HttpPacket *get_packet() const;
+        HttpPacket *get_packet() const;
 
         bool is_downloading() const;
 

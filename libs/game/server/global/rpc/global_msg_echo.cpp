@@ -2,11 +2,14 @@
 
 #include "common/metadata_keys.h"
 
+#include <functional>
+
 namespace yuan::game::server
 {
-    bool register_global_msg_echo(yuan::rpc::Server &server, GlobalMsgEchoContext &context)
+    namespace
     {
-        return server.register_handler(game_route::global_echo(), [&context](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_global_echo(GlobalMsgEchoContext &context, const yuan::rpc::Message &message)
+        {
             context.request_count++;
             yuan::rpc::Response response;
             response.request_id = message.request_id;
@@ -19,6 +22,11 @@ namespace yuan::game::server
                 context.after_echo(message);
             }
             return response;
-        });
+        }
+    }
+
+    bool register_global_msg_echo(yuan::rpc::Server &server, GlobalMsgEchoContext &context)
+    {
+        return server.register_handler(game_route::global_echo(), std::bind_front(handle_global_echo, std::ref(context)));
     }
 }

@@ -43,6 +43,7 @@ namespace yuan::game::server
         std::uint16_t redis_connect_timeout_ms = 1000;
         std::uint16_t redis_command_timeout_ms = 1000;
         std::uint16_t redis_flush_interval_ms = 5000;
+        std::uint16_t redis_pool_size = 4;
         std::string world_ownership_store = "memory";
         std::uint16_t zone_load_sync_interval_ms = 1000;
         std::uint32_t zone_max_players = 0;
@@ -57,6 +58,7 @@ namespace yuan::game::server
         std::uint64_t rpc_max_buffered_bytes = 1024 * 1024;
         std::uint64_t rpc_idle_timeout_ms = 0;
         std::uint64_t gateway_drain_timeout_ms = 3000;
+        std::uint64_t gateway_handler_queue_limit = 4096;
         GameServiceId target_world_id;
         GameServiceId target_player_db_proxy_id;
         DbProxyRoutingConfig player_db_proxy_routing;
@@ -272,6 +274,8 @@ namespace yuan::game::server
                         endpoint.service_id = item.value("service_id", static_cast<PackedGameServiceId>(0));
                         endpoint.shard = item.value("shard", static_cast<std::uint32_t>(0));
                         endpoint.state = item.value("state", std::string{"open"});
+                        endpoint.host = item.value("host", std::string{});
+                        endpoint.port = item.value("port", static_cast<std::uint16_t>(0));
                         if (endpoint.service_id == 0) {
                             routing.endpoints.clear();
                             return routing;
@@ -328,6 +332,7 @@ namespace yuan::game::server
             config.redis_connect_timeout_ms = get_u16_json("redis_connect_timeout_ms", 1000);
             config.redis_command_timeout_ms = get_u16_json("redis_command_timeout_ms", 1000);
             config.redis_flush_interval_ms = get_u16_json("redis_flush_interval_ms", 5000);
+            config.redis_pool_size = get_u16_json("redis_pool_size", 4);
             config.world_ownership_store = get_string("world_ownership_store", "memory");
             config.zone_load_sync_interval_ms = get_u16_json("zone_load_sync_interval_ms", 1000);
             config.zone_max_players = static_cast<std::uint32_t>(get_u64_json("zone_max_players", 0));
@@ -344,6 +349,7 @@ namespace yuan::game::server
             config.rpc_max_buffered_bytes = get_u64_json("rpc_max_buffered_bytes", 1024 * 1024);
             config.rpc_idle_timeout_ms = get_u64_json("rpc_idle_timeout_ms", 0);
             config.gateway_drain_timeout_ms = get_u64_json("gateway_drain_timeout_ms", config.gateway_drain_timeout_ms);
+            config.gateway_handler_queue_limit = get_u64_json("gateway_handler_queue_limit", config.gateway_handler_queue_limit);
             config.target_world_id.region = get_u16_json("target_world_region", config.service_id.region);
             config.target_world_id.world = get_u16_json("target_world_world", config.service_id.world);
             config.target_world_id.type = GameServiceType::world;
@@ -601,6 +607,7 @@ namespace yuan::game::server
             config.redis_connect_timeout_ms = get_u16("redis_connect_timeout_ms", 1000);
             config.redis_command_timeout_ms = get_u16("redis_command_timeout_ms", 1000);
             config.redis_flush_interval_ms = get_u16("redis_flush_interval_ms", 5000);
+            config.redis_pool_size = get_u16("redis_pool_size", 4);
             if (const auto world_ownership_store = get("world_ownership_store")) {
                 config.world_ownership_store = *world_ownership_store;
             }
@@ -621,6 +628,7 @@ namespace yuan::game::server
         config.rpc_max_buffered_bytes = get_u64("rpc_max_buffered_bytes", 1024 * 1024);
         config.rpc_idle_timeout_ms = get_u64("rpc_idle_timeout_ms", 0);
         config.gateway_drain_timeout_ms = get_u64("gateway_drain_timeout_ms", config.gateway_drain_timeout_ms);
+        config.gateway_handler_queue_limit = get_u64("gateway_handler_queue_limit", config.gateway_handler_queue_limit);
 
         config.target_world_id.region = get_u16("target_world_region", config.service_id.region);
         config.target_world_id.world = get_u16("target_world_world", config.service_id.world);

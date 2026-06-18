@@ -170,6 +170,7 @@ namespace yuan::net::http
 
     public:
         void on(const std::string &url, request_function func, bool is_prefix = false);
+        void on_async(const std::string &url, async_request_function func);
         void on(const std::string &url, request_function func,
                 std::shared_ptr<MiddlewarePipeline> pipeline, bool is_prefix = false);
         void use(std::shared_ptr<HttpMiddleware> middleware);
@@ -236,6 +237,7 @@ namespace yuan::net::http
         void increment_reject_counter(std::string route_key, RejectReason reason);
         bool dispatch_h2_context(HttpSessionContext *context);
         bool dispatch_request(HttpSessionContext *context);
+        coroutine::Task<bool> dispatch_request_async(HttpSessionContext *context);
         void finalize_request(uint64_t session_id, HttpSession *session, HttpSessionContext *context);
         void store_session(uint64_t session_id, std::unique_ptr<HttpSession> session);
         bool has_session(uint64_t session_id) const;
@@ -323,6 +325,7 @@ namespace yuan::net::http
         std::unordered_map<uint64_t, std::unique_ptr<HttpSession> > sessions_;
         mutable std::mutex sessions_mutex_;
         HttpRequestDispatcher dispatcher_;
+        std::unordered_map<std::string, async_request_function> async_mappings_;
         base::CompressTrie static_mount_trie_;
         std::unordered_map<std::string, StaticMount> static_mounts_;
         std::unordered_set<std::string> static_exact_mounts_;

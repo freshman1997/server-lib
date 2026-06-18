@@ -3,14 +3,15 @@
 #include "common/metadata_keys.h"
 
 #include <algorithm>
+#include <functional>
 #include <utility>
 
 namespace yuan::game::server
 {
-    TunnelService::TunnelService(ServiceAddress address)
-        : ServiceNode(std::move(address))
+    namespace
     {
-        (void)rpc_server().register_handler(game_route::tunnel_forward(), [this](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_tunnel_forward(TunnelService &service, const yuan::rpc::Message &message)
+        {
             const auto envelope = decode_tunnel_envelope(message.payload);
             if (!envelope) {
                 yuan::rpc::Response response;
@@ -25,13 +26,14 @@ namespace yuan::game::server
             if (forwarded.continuation_id == 0) {
                 forwarded.continuation_id = message.continuation_id();
             }
-            auto response = forward(std::move(forwarded));
+            auto response = service.forward(std::move(forwarded));
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
             return response;
-        });
+        }
 
-        (void)rpc_server().register_handler(game_route::tunnel_reply(), [this](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_tunnel_reply(TunnelService &service, const yuan::rpc::Message &message)
+        {
             const auto reply = decode_tunnel_reply(message.payload);
             if (!reply) {
                 yuan::rpc::Response response;
@@ -39,17 +41,31 @@ namespace yuan::game::server
                 response.error = "invalid tunnel reply";
                 return response;
             }
-            return handle_reply(*reply);
-        });
+            return service.handle_reply(*reply);
+        }
 
-        (void)rpc_server().register_handler(game_route::tunnel_heartbeat(), [](const yuan::rpc::Message &message) {
+        yuan::rpc::Response handle_tunnel_heartbeat(const yuan::rpc::Message &message)
+        {
             yuan::rpc::Response response;
             response.status = yuan::rpc::RpcStatus::ok;
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
             response.metadata[game_metadata_key::tunnel_heartbeat] = "pong";
             return response;
-        });
+        }
+
+        yuan::rpc::Response handle_registered_local_endpoint(yuan::rpc::Server &server, yuan::rpc::Message message)
+        {
+            return server.handle(message);
+        }
+    }
+
+    TunnelService::TunnelService(ServiceAddress address)
+        : ServiceNode(std::move(address))
+    {
+        (void)rpc_server().register_handler(game_route::tunnel_forward(), std::bind_front(handle_tunnel_forward, std::ref(*this)));
+        (void)rpc_server().register_handler(game_route::tunnel_reply(), std::bind_front(handle_tunnel_reply, std::ref(*this)));
+        (void)rpc_server().register_handler(game_route::tunnel_heartbeat(), handle_tunnel_heartbeat);
     }
 
     bool TunnelService::register_endpoint(ServiceAddress address, yuan::rpc::Server &server)
@@ -60,9 +76,7 @@ namespace yuan::game::server
         }
         std::lock_guard<std::mutex> lock(mutex_);
         auto endpoint_address = address;
-        endpoints_[key] = Endpoint{std::move(address), [&server](yuan::rpc::Message message) {
-                                       return server.handle(message);
-                                   }};
+        endpoints_[key] = Endpoint{std::move(address), std::bind_front(handle_registered_local_endpoint, std::ref(server))};
         type_index_[static_cast<ServiceTypeId>(endpoint_address.service.type)].push_back(key);
         return true;
     }

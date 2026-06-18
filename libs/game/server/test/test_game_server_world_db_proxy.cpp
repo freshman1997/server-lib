@@ -104,6 +104,45 @@ int main()
         return 6;
     }
 
+    const RoleId ownership_role_id = role_id + 1000000;
+    const PackedGameServiceId zone_b = pack_game_service_id(1, 1, GameServiceType::zone, 2);
+    payload.clear();
+    (void)encode_binary(SSWorldDbOwnershipCompareAndSetRequest{ownership_role_id, 0, 0, zone_service_id, 10}, payload);
+    response = rpc.handle(make_message(game_route::world_db_ownership_compare_and_set(), payload));
+    auto ownership_response = decode_binary<SSWorldDbOwnershipCompareAndSetResponse>(response.payload);
+    if (!require(response.status == yuan::rpc::RpcStatus::ok && ownership_response && ownership_response->applied && ownership_response->has_owner,
+                 "world ownership initial CAS should set owner")) {
+        return 7;
+    }
+
+    payload.clear();
+    (void)encode_binary(SSWorldDbOwnershipCompareAndSetRequest{ownership_role_id, zone_service_id, 10, zone_b, 20}, payload);
+    response = rpc.handle(make_message(game_route::world_db_ownership_compare_and_set(), payload));
+    ownership_response = decode_binary<SSWorldDbOwnershipCompareAndSetResponse>(response.payload);
+    if (!require(ownership_response && ownership_response->applied && ownership_response->zone_service_id == zone_b && ownership_response->gateway_session_id == 20,
+                 "world ownership newer login should replace owner")) {
+        return 8;
+    }
+
+    payload.clear();
+    (void)encode_binary(SSWorldDbOwnershipCompareAndSetRequest{ownership_role_id, zone_service_id, 10, 0, 0}, payload);
+    response = rpc.handle(make_message(game_route::world_db_ownership_compare_and_set(), payload));
+    ownership_response = decode_binary<SSWorldDbOwnershipCompareAndSetResponse>(response.payload);
+    if (!require(ownership_response && !ownership_response->applied && ownership_response->has_owner && ownership_response->zone_service_id == zone_b,
+                 "world ownership stale logout should be rejected")) {
+        return 9;
+    }
+
+    payload.clear();
+    (void)encode_binary(SSWorldDbOwnershipCompareAndSetRequest{ownership_role_id, zone_b, 20, 0, 0}, payload);
+    response = rpc.handle(make_message(game_route::world_db_ownership_compare_and_set(), payload));
+    ownership_response = decode_binary<SSWorldDbOwnershipCompareAndSetResponse>(response.payload);
+    if (!require(ownership_response && ownership_response->applied && !ownership_response->has_owner,
+                 "world ownership current logout should clear owner")) {
+        return 10;
+    }
+
     (void)redis->command("DEL", {"game:world_db:role_location:" + std::to_string(role_id)});
+    (void)redis->command("DEL", {"game:world_db:ownership:" + std::to_string(ownership_role_id)});
     return 0;
 }

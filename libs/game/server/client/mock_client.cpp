@@ -10,6 +10,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <string>
 
 #ifndef _WIN32
@@ -61,7 +62,8 @@ namespace
                 if (!yuan::rpc::wire::encode_message(message, request_frame)) {
                     co_return std::nullopt;
                 }
-                const auto read_result = co_await client_.request_async(to_buffer(request_frame), 1000);
+                const auto request_buffer = to_buffer(request_frame);
+                const auto read_result = co_await client_.request_async(request_buffer, 1000);
                 if (read_result.status != yuan::coroutine::IoStatus::success) {
                     co_return std::nullopt;
                 }
@@ -111,6 +113,60 @@ namespace
         std::cout << "logout ok role=" << logout->role_id << "\n";
         return EXIT_SUCCESS;
     }
+
+    std::optional<yuan::game::server::LoginOptionsResponse> fetch_login_options(std::uint16_t world_http_port,
+                                                                                yuan::game::server::PlayerUid player_uid)
+    {
+        yuan::net::NetworkRuntime runtime;
+        yuan::net::http::HttpClient http_client;
+        if (!http_client.query("http://127.0.0.1:" + std::to_string(world_http_port))) {
+            std::cerr << "failed to initialize world http client\n";
+            return std::nullopt;
+        }
+        auto *http_response = yuan::coroutine::sync_wait(runtime.runtime_view(), http_client.connect_async(runtime.runtime_view(), [player_uid](yuan::net::http::HttpRequest *request) {
+            request->set_method(yuan::net::http::HttpMethod::get_);
+            request->set_raw_url("/game/login_options?player_uid=" + std::to_string(player_uid));
+            request->add_header("Connection", "close");
+            request->add_header("Host", "127.0.0.1");
+            request->send();
+        }));
+        if (!http_response || !http_response->good() || http_response->get_response_code() != yuan::net::http::ResponseCode::ok_) {
+            std::cerr << "world http login options failed response=" << (http_response != nullptr)
+                      << " good=" << (http_response ? http_response->good() : false)
+                      << " code=" << (http_response ? static_cast<int>(http_response->get_response_code()) : -1) << "\n";
+            return std::nullopt;
+        }
+        const auto *body_begin = http_response->body_begin();
+        const std::string body = body_begin ? std::string(body_begin, http_response->get_body_length()) : std::string();
+        return yuan::game::server::decode_login_options_response_json(body);
+    }
+
+    bool create_role(std::uint16_t world_http_port, yuan::game::server::PlayerUid player_uid)
+    {
+        yuan::net::NetworkRuntime runtime;
+        yuan::net::http::HttpClient http_client;
+        if (!http_client.query("http://127.0.0.1:" + std::to_string(world_http_port))) {
+            std::cerr << "failed to initialize world create role client\n";
+            return false;
+        }
+        auto *http_response = yuan::coroutine::sync_wait(runtime.runtime_view(), http_client.connect_async(runtime.runtime_view(), [player_uid](yuan::net::http::HttpRequest *request) {
+            request->set_method(yuan::net::http::HttpMethod::get_);
+            request->set_raw_url("/game/create_role?player_uid=" + std::to_string(player_uid) + "&name=SmokeRole");
+            request->add_header("Connection", "close");
+            request->add_header("Host", "127.0.0.1");
+            request->send();
+        }));
+        if (!http_response || !http_response->good() || http_response->get_response_code() != yuan::net::http::ResponseCode::ok_) {
+            const auto *body_begin = http_response ? http_response->body_begin() : nullptr;
+            const std::string body = body_begin ? std::string(body_begin, http_response->get_body_length()) : std::string();
+            std::cerr << "world create role failed response=" << (http_response != nullptr)
+                      << " good=" << (http_response ? http_response->good() : false)
+                      << " code=" << (http_response ? static_cast<int>(http_response->get_response_code()) : -1)
+                      << " body=" << body << "\n";
+            return false;
+        }
+        return true;
+    }
 }
 
 int main(int argc, char **argv)
@@ -124,31 +180,21 @@ int main(int argc, char **argv)
     const auto world_rpc_port = static_cast<std::uint16_t>(std::stoul(argv[2]));
     const auto player_uid = static_cast<yuan::game::server::PlayerUid>(std::stoull(argv[3]));
 
-    yuan::net::http::HttpClient http_client;
-    if (!http_client.query("http://127.0.0.1:" + std::to_string(world_http_port))) {
-        std::cerr << "failed to initialize world http client\n";
-        return 3;
-    }
-    yuan::net::NetworkRuntime runtime;
-    auto *http_response = yuan::coroutine::sync_wait(runtime.runtime_view(), http_client.connect_async(runtime.runtime_view(), [player_uid](yuan::net::http::HttpRequest *request) {
-        request->set_method(yuan::net::http::HttpMethod::get_);
-        request->set_raw_url("/game/login_options?player_uid=" + std::to_string(player_uid));
-        request->add_header("Connection", "close");
-        request->add_header("Host", "127.0.0.1");
-        request->send();
-    }));
-    if (!http_response || !http_response->good() || http_response->get_response_code() != yuan::net::http::ResponseCode::ok_) {
-        std::cerr << "world http login options failed response=" << (http_response != nullptr)
-                  << " good=" << (http_response ? http_response->good() : false)
-                  << " code=" << (http_response ? static_cast<int>(http_response->get_response_code()) : -1) << "\n";
-        return 4;
-    }
-    const auto *body_begin = http_response->body_begin();
-    const std::string body = body_begin ? std::string(body_begin, http_response->get_body_length()) : std::string();
-    const auto options = yuan::game::server::decode_login_options_response_json(body);
+    auto options = fetch_login_options(world_http_port, player_uid);
     if (!options) {
         std::cerr << "failed to decode world login options\n";
         return 5;
+    }
+    if (options->roles.empty()) {
+        std::cout << "world options initially have no roles; creating role\n";
+        if (!create_role(world_http_port, player_uid)) {
+            return 4;
+        }
+        options = fetch_login_options(world_http_port, player_uid);
+        if (!options) {
+            std::cerr << "failed to decode world login options after create role\n";
+            return 5;
+        }
     }
 
     std::cout << "world options ok uid=" << player_uid << " gateways=" << options->gateways.size() << " roles=" << options->roles.size() << " zones=" << options->zones.size() << "\n";
@@ -181,7 +227,8 @@ int main(int argc, char **argv)
     login_message.payload = std::move(login_payload);
     const auto login_response = gateway_client.call(login_message);
     if (!login_response || login_response->status != yuan::rpc::RpcStatus::ok) {
-        std::cerr << "gateway login failed\n";
+        std::cerr << "gateway login failed status=" << (login_response ? static_cast<int>(login_response->status) : -1)
+                  << " error=" << (login_response ? login_response->error : "missing response") << "\n";
         return 8;
     }
     const auto login = yuan::game::server::decode_binary<yuan::game::server::CSLoginResponse>(login_response->payload);

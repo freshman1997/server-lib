@@ -18,6 +18,7 @@ namespace yuan::game::server
         std::function<std::optional<LoginOptionsResponse>(LoginOptionsRequest)> bootstrap_provider;
         std::function<WebAuthResponse(WebAuthRequest)> register_handler;
         std::function<WebAuthResponse(WebAuthRequest)> login_handler;
+        std::function<WebCreateRoleResponse(WebCreateRoleRequest)> create_role_handler;
     };
 
     bool register_web_http_handlers(yuan::net::http::HttpServer &server, WebHandlerContext &context);

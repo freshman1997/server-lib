@@ -3,10 +3,13 @@
 
 #include "application.h"
 #include "common/rpc_network.h"
+#include "common/service_config.h"
 #include "global_db_proxy/rpc/global_db_msg.h"
-#include "messaging/process_message_manager.h"
+#include "messaging/tunnel_client_manager.h"
 
 #include "redis_client.h"
+#include "redis_async_executor.h"
+#include "redis_client_pool.h"
 
 #include <memory>
 #include <string>
@@ -17,18 +20,7 @@ namespace yuan::game::server
     class GlobalDbProxyServerService final : public yuan::app::Service, public yuan::app::RuntimeContextAwareService
     {
     public:
-        GlobalDbProxyServerService(GameServiceId service_id,
-                                   std::string listen_host,
-                                   std::uint16_t port,
-                                   std::vector<rpc_network::RpcEndpoint> tunnel_endpoints,
-                                   std::string redis_host,
-                                   std::uint16_t redis_port,
-                                   std::uint16_t redis_db,
-                                   std::string redis_username,
-                                   std::string redis_password,
-                                   std::uint16_t redis_connect_timeout_ms,
-                                   std::uint16_t redis_command_timeout_ms,
-                                   std::uint64_t tunnel_heartbeat_interval_ms);
+        explicit GlobalDbProxyServerService(ServiceServerConfig config);
 
         void set_runtime_context(const yuan::app::RuntimeContext &context) override;
         bool init() override;
@@ -37,9 +29,6 @@ namespace yuan::game::server
         [[nodiscard]] bool ok() const;
 
     private:
-        bool register_to_tunnel();
-        void register_loop(std::stop_token stop_token);
-
         yuan::app::RuntimeContext context_;
         GameServiceId service_id_;
         std::string listen_host_;
@@ -51,13 +40,15 @@ namespace yuan::game::server
         std::string redis_password_;
         std::uint16_t redis_connect_timeout_ms_ = 1000;
         std::uint16_t redis_command_timeout_ms_ = 1000;
+        std::uint16_t redis_pool_size_ = 4;
         std::uint64_t tunnel_heartbeat_interval_ms_ = 5000;
         std::shared_ptr<yuan::redis::RedisClient> redis_;
+        std::shared_ptr<yuan::redis::RedisClientPool> redis_pool_;
+        std::unique_ptr<yuan::redis::RedisAsyncExecutor> redis_executor_;
         GlobalDbMsgContext global_db_context_;
         yuan::rpc::Server global_db_rpc_;
         rpc_network::RpcNetworkServer rpc_server_;
-        ProcessMessageManager messaging_;
-        std::jthread register_thread_;
+        TunnelClientManager tunnel_client_manager_;
         bool ok_ = false;
     };
 }

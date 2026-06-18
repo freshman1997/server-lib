@@ -4,7 +4,7 @@ target_compile_features(GameServerZone PUBLIC cxx_std_20)
 target_include_directories(GameServerZone PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/..>"
     "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
-target_link_libraries(GameServerZone PUBLIC GameServerCommon GameServerMessaging redisCli)
+target_link_libraries(GameServerZone PUBLIC GameServerCommon GameServerMessaging)
 
 file(GLOB GAME_ZONE_SERVER_SOURCES CONFIGURE_DEPENDS "app/*_server.cpp")
 add_executable(game_zone_server ${GAME_ZONE_SERVER_SOURCES})
