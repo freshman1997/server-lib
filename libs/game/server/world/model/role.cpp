@@ -49,7 +49,7 @@ namespace yuan::game::server
             return std::nullopt;
         }
 
-        std::string encode_role_json(const PlayerRoleInfo &role)
+        std::string encode_role_json(const SSPlayerRoleInfo &role)
         {
             nlohmann::json root;
             root["role_id"] = role.role_id;
@@ -60,11 +60,11 @@ namespace yuan::game::server
             return root.dump();
         }
 
-        std::optional<PlayerRoleInfo> decode_role_json(const std::string &text)
+        std::optional<SSPlayerRoleInfo> decode_role_json(const std::string &text)
         {
             try {
                 const auto root = nlohmann::json::parse(text);
-                PlayerRoleInfo role;
+                SSPlayerRoleInfo role;
                 role.role_id = root.value("role_id", static_cast<RoleId>(0));
                 role.name = root.value("name", std::string{});
                 role.level = root.value("level", static_cast<std::uint32_t>(1));
@@ -87,7 +87,7 @@ namespace yuan::game::server
     void RoleCache::ensure_player_roles(PlayerUid player_uid,
                                              yuan::redis::RedisClient *redis,
                                              PackedGameServiceId world_service_id,
-                                             std::function<void(PlayerUid, const PlayerRoleInfo &)> add_role)
+                                             std::function<void(PlayerUid, const SSPlayerRoleInfo &)> add_role)
     {
         if (player_uid == 0 || !redis || !redis->ensure_connected()) {
             return;
@@ -101,7 +101,7 @@ namespace yuan::game::server
 
         const auto roles_key = "game:player:" + std::to_string(player_uid) + ":roles";
         const auto role_list = redis->get(roles_key);
-        std::vector<PlayerRoleInfo> loaded_roles;
+        std::vector<SSPlayerRoleInfo> loaded_roles;
         if (role_list && role_list->get_type() != yuan::redis::resp_null) {
             auto role_ids = decode_role_ids_json(role_list->to_string());
             const auto legacy_role_ids = role_ids ? std::vector<std::string>{} : split_lines(role_list->to_string());
@@ -165,7 +165,7 @@ namespace yuan::game::server
         std::unordered_set<PlayerUid> dirty_players;
         std::unordered_set<RoleId> dirty_roles;
         std::unordered_map<PlayerUid, std::vector<RoleId>> role_ids_by_player_uid;
-        std::unordered_map<RoleId, PlayerRoleInfo> roles_by_id;
+        std::unordered_map<RoleId, SSPlayerRoleInfo> roles_by_id;
         {
             std::scoped_lock lock(mutex_);
             dirty_players.swap(dirty_players_);
@@ -221,7 +221,7 @@ namespace yuan::game::server
         return dirty_roles_.size();
     }
 
-    std::optional<PlayerRoleInfo> RoleCache::load_role(RoleId role_id, yuan::redis::RedisClient *redis) const
+    std::optional<SSPlayerRoleInfo> RoleCache::load_role(RoleId role_id, yuan::redis::RedisClient *redis) const
     {
         if (!redis) {
             return std::nullopt;
@@ -237,18 +237,18 @@ namespace yuan::game::server
         if (fields.size() < 5) {
             return std::nullopt;
         }
-        return PlayerRoleInfo{static_cast<RoleId>(std::stoull(fields[0])),
+        return SSPlayerRoleInfo{static_cast<RoleId>(std::stoull(fields[0])),
                               fields[1],
                               static_cast<std::uint32_t>(std::stoul(fields[2])),
                               static_cast<PackedGameServiceId>(std::stoull(fields[3])),
                               static_cast<PackedGameServiceId>(std::stoull(fields[4]))};
     }
 
-    PlayerRoleInfo RoleCache::create_role(PlayerUid player_uid, yuan::redis::RedisClient *redis, PackedGameServiceId world_service_id) const
+    SSPlayerRoleInfo RoleCache::create_role(PlayerUid player_uid, yuan::redis::RedisClient *redis, PackedGameServiceId world_service_id) const
     {
         const auto allocated = redis ? redis->incr("game:role:next_id") : nullptr;
         const auto role_id = allocated ? static_cast<RoleId>(std::stoull(allocated->to_string())) : static_cast<RoleId>(player_uid * 100 + 1);
-        return PlayerRoleInfo{role_id, random_role_name(), 1, world_service_id, 0};
+        return SSPlayerRoleInfo{role_id, random_role_name(), 1, world_service_id, 0};
     }
 
     std::string RoleCache::random_role_name() const

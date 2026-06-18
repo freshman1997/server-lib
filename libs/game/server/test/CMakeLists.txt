@@ -1,11 +1,26 @@
 find_package(Threads REQUIRED)
 
+add_library(GameServerTestDeps INTERFACE)
+target_link_libraries(GameServerTestDeps INTERFACE
+    GameServerCommon
+    GameServerMessaging
+    GameServerTunnel
+    GameServerGlobal
+    GameServerZone
+    GameServerWorld
+    GameServerGateway
+    GameServerWeb
+    GameServerRank
+    GameServerChatWeb
+    GameServerPlayerDbProxy)
+target_link_libraries(GameServerTestDeps INTERFACE GameServerWorldDbProxy)
+
 file(GLOB GAME_SERVER_TEST_SOURCES CONFIGURE_DEPENDS "test_*.cpp")
 foreach(GAME_SERVER_TEST_SOURCE IN LISTS GAME_SERVER_TEST_SOURCES)
     get_filename_component(GAME_SERVER_TEST_TARGET "${GAME_SERVER_TEST_SOURCE}" NAME_WE)
     string(REPLACE "test_" "" GAME_SERVER_TEST_NAME "${GAME_SERVER_TEST_TARGET}")
     add_executable(${GAME_SERVER_TEST_TARGET} "${GAME_SERVER_TEST_SOURCE}")
-    target_link_libraries(${GAME_SERVER_TEST_TARGET} PUBLIC GameServerLib Threads::Threads)
+    target_link_libraries(${GAME_SERVER_TEST_TARGET} PUBLIC GameServerTestDeps Threads::Threads)
     if(BUILD_TESTING AND NOT GAME_SERVER_TEST_TARGET STREQUAL "test_game_server_smoke")
         add_test(NAME ${GAME_SERVER_TEST_NAME} COMMAND ${GAME_SERVER_TEST_TARGET})
     endif()
@@ -19,6 +34,8 @@ add_dependencies(test_game_server_smoke
     game_zone_server
     game_world_server
     game_gateway_server
+    game_player_db_proxy_server
+    game_world_db_proxy_server
     game_mock_client
     copy_game_server_configs)
 if(BUILD_TESTING)
@@ -29,5 +46,7 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:game_zone_server>
                 $<TARGET_FILE:game_world_server>
                 $<TARGET_FILE:game_gateway_server>
+                $<TARGET_FILE:game_player_db_proxy_server>
+                $<TARGET_FILE:game_world_db_proxy_server>
                 $<TARGET_FILE:game_mock_client>)
 endif()

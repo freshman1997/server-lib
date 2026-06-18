@@ -1,6 +1,12 @@
-#include "game_server.h"
-
+#include "common/codec/game_binary_codec.h"
+#include "common/game_rpc_protocol.h"
+#include "common/metadata_keys.h"
+#include "common/proto/client_proto.h"
+#include "global/rpc/global_msg_echo.h"
+#include "global/rpc/global_msg_gm.h"
 #include "messaging/process_message_manager.h"
+#include "tunnel/rpc/tunnel_service.h"
+#include "zone/rpc/zone_msg_echo.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -86,13 +92,13 @@ int main()
     if (!require(yuan::rpc::Codec<std::string>::decode(response.payload) == "hello-global", "global echo payload mismatch")) {
         return 7;
     }
-    if (!require(response.metadata.find("global.node") != response.metadata.end(), "global metadata should be present")) {
+    if (!require(response.metadata.find(game_metadata_key::global_node) != response.metadata.end(), "global metadata should be present")) {
         return 8;
     }
-    if (!require(response.metadata["tunnel.source"] == service_key(zone_1_address), "global should know tunnel source")) {
+    if (!require(response.metadata[game_metadata_key::tunnel_source] == service_key(zone_1_address), "global should know tunnel source")) {
         return 13;
     }
-    if (!require(response.metadata["tunnel.target"] == service_key(global_address), "global should know tunnel target")) {
+    if (!require(response.metadata[game_metadata_key::tunnel_target] == service_key(global_address), "global should know tunnel target")) {
         return 14;
     }
 
@@ -105,21 +111,22 @@ int main()
     zone_to_zone.request_id = 77;
     zone_to_zone.continuation_id = 8801;
     zone_to_zone.route = zone_route;
-    zone_to_zone.payload = yuan::rpc::Codec<std::string>::encode("hello-zone");
+    (void)encode_binary(CSGameRequest{1, 10001, 0, yuan::rpc::Codec<std::string>::encode("hello-zone")}, zone_to_zone.payload);
+    zone_to_zone.metadata[game_metadata_key::gateway_session_id] = "1";
     response = tunnels.forward(std::move(zone_to_zone));
     if (!require(response.status == yuan::rpc::RpcStatus::ok, "zone to zone through tunnel should succeed")) {
         return 9;
     }
-    if (!require(response.metadata.find("zone.node") != response.metadata.end(), "zone metadata should be present")) {
+    if (!require(response.metadata.find(game_metadata_key::zone_node) != response.metadata.end(), "zone metadata should be present")) {
         return 10;
     }
-    if (!require(response.metadata["tunnel.source"] == service_key(zone_2_address), "target zone should know source zone")) {
+    if (!require(response.metadata[game_metadata_key::tunnel_source] == service_key(zone_2_address), "target zone should know source zone")) {
         return 15;
     }
-    if (!require(response.metadata["tunnel.origin.request_id"] == "77", "target zone should receive origin request id")) {
+    if (!require(response.metadata[game_metadata_key::tunnel_origin_request_id] == "77", "target zone should receive origin request id")) {
         return 16;
     }
-    if (!require(response.metadata["tunnel.origin.continuation_id"] == "8801", "target zone should receive origin continuation id")) {
+    if (!require(response.metadata[game_metadata_key::tunnel_origin_continuation_id] == "8801", "target zone should receive origin continuation id")) {
         return 17;
     }
     if (!require(response.request_id == 77, "response should preserve origin request id")) {
@@ -137,12 +144,13 @@ int main()
     random_zone_envelope.request_id = 301;
     random_zone_envelope.continuation_id = 9301;
     random_zone_envelope.route = zone_route;
-    random_zone_envelope.payload = yuan::rpc::Codec<std::string>::encode("random-zone");
+    (void)encode_binary(CSGameRequest{1, 10001, 0, yuan::rpc::Codec<std::string>::encode("random-zone")}, random_zone_envelope.payload);
+    random_zone_envelope.metadata[game_metadata_key::gateway_session_id] = "1";
     auto random_response = tunnel_a->forward(random_zone_envelope);
     if (!require(random_response.status == yuan::rpc::RpcStatus::ok, "random zone forward should succeed")) {
         return 35;
     }
-    if (!require(random_response.metadata.find("zone.node") != random_response.metadata.end(), "random zone should hit a zone")) {
+    if (!require(random_response.metadata.find(game_metadata_key::zone_node) != random_response.metadata.end(), "random zone should hit a zone")) {
         return 36;
     }
 
@@ -154,12 +162,13 @@ int main()
     broadcast_zone_envelope.request_id = 302;
     broadcast_zone_envelope.continuation_id = 9302;
     broadcast_zone_envelope.route = zone_route;
-    broadcast_zone_envelope.payload = yuan::rpc::Codec<std::string>::encode("broadcast-zone");
+    (void)encode_binary(CSGameRequest{1, 10001, 0, yuan::rpc::Codec<std::string>::encode("broadcast-zone")}, broadcast_zone_envelope.payload);
+    broadcast_zone_envelope.metadata[game_metadata_key::gateway_session_id] = "1";
     auto broadcast_response = tunnel_a->forward(broadcast_zone_envelope);
     if (!require(broadcast_response.status == yuan::rpc::RpcStatus::ok, "broadcast zone forward should succeed")) {
         return 37;
     }
-    if (!require(broadcast_response.metadata["tunnel.broadcast.count"] == "2" && broadcast_response.metadata["tunnel.broadcast.ok"] == "2",
+    if (!require(broadcast_response.metadata[game_metadata_key::tunnel_broadcast_count] == "2" && broadcast_response.metadata[game_metadata_key::tunnel_broadcast_ok] == "2",
                  "broadcast should reach all zone instances")) {
         return 38;
     }
@@ -202,7 +211,7 @@ int main()
                  "async target should receive request and continuation ids")) {
         return 23;
     }
-    if (!require(captured_async_message.metadata["tunnel.source"] == service_key(zone_1_address), "async target should know source")) {
+    if (!require(captured_async_message.metadata[game_metadata_key::tunnel_source] == service_key(zone_1_address), "async target should know source")) {
         return 24;
     }
 

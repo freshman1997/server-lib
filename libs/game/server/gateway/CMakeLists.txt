@@ -6,10 +6,6 @@ target_include_directories(GameServerGateway PUBLIC
     "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 target_link_libraries(GameServerGateway PUBLIC GameServerCommon GameServerMessaging)
 
-if(YUAN_BUILD_TESTS OR BUILD_TESTING)
-    file(GLOB GAME_GATEWAY_SERVER_SOURCES CONFIGURE_DEPENDS "app/*_server.cpp")
-    if(GAME_GATEWAY_SERVER_SOURCES)
-        add_executable(game_gateway_server ${GAME_GATEWAY_SERVER_SOURCES})
-        target_link_libraries(game_gateway_server PUBLIC GameServerGateway)
-    endif()
-endif()
+file(GLOB GAME_GATEWAY_SERVER_SOURCES CONFIGURE_DEPENDS "app/*_server.cpp")
+add_executable(game_gateway_server ${GAME_GATEWAY_SERVER_SOURCES})
+target_link_libraries(game_gateway_server PUBLIC GameServerGateway)

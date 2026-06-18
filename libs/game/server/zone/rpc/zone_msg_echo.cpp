@@ -1,5 +1,7 @@
 #include "zone/rpc/zone_msg_echo.h"
 
+#include "common/metadata_keys.h"
+
 namespace yuan::game::server
 {
     bool register_zone_msg_echo(yuan::rpc::Server &server, ServiceAddress address)
@@ -8,10 +10,16 @@ namespace yuan::game::server
             yuan::rpc::Response response;
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
-            response.status = yuan::rpc::RpcStatus::ok;
-            response.payload = message.payload;
             response.metadata = message.metadata;
-            response.metadata["zone.node"] = service_key(address);
+            const auto request = decode_binary<CSGameRequest>(message.payload);
+            if (!request || request->role_id == 0 || message.metadata.find(game_metadata_key::gateway_session_id) == message.metadata.end()) {
+                response.status = yuan::rpc::RpcStatus::bad_request;
+                response.error = "invalid zone game request";
+                return response;
+            }
+            response.status = yuan::rpc::RpcStatus::ok;
+            (void)encode_binary(CSGameResponse{true, request->role_id, 0, request->payload, "zone game ok"}, response.payload);
+            response.metadata[game_metadata_key::zone_node] = service_key(address);
             return response;
         });
     }

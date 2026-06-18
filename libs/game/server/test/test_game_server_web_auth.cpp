@@ -49,6 +49,11 @@ int main()
         return 3;
     }
 
+    const auto wrong_password = web.login_handler(WebAuthRequest{"alice", "bad"});
+    if (!require(!wrong_password.ok, "login should reject wrong password")) {
+        return 5;
+    }
+
     yuan::net::http::HttpServer http_server;
     if (!require(register_web_http_handlers(http_server, web), "web http handlers should register")) {
         return 4;

@@ -6,10 +6,6 @@ target_include_directories(GameServerWorld PUBLIC
     "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 target_link_libraries(GameServerWorld PUBLIC GameServerCommon GameServerMessaging redisCli HttpProto)
 
-if(YUAN_BUILD_TESTS OR BUILD_TESTING)
-    file(GLOB GAME_WORLD_SERVER_SOURCES CONFIGURE_DEPENDS "app/*_server.cpp")
-    if(GAME_WORLD_SERVER_SOURCES)
-        add_executable(game_world_server ${GAME_WORLD_SERVER_SOURCES})
-        target_link_libraries(game_world_server PUBLIC GameServerWorld)
-    endif()
-endif()
+file(GLOB GAME_WORLD_SERVER_SOURCES CONFIGURE_DEPENDS "app/*_server.cpp")
+add_executable(game_world_server ${GAME_WORLD_SERVER_SOURCES})
+target_link_libraries(game_world_server PUBLIC GameServerWorld)

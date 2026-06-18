@@ -21,9 +21,9 @@ namespace yuan::game::server
         return root.dump();
     }
 
-    Player Player::from_login(ClientLoginRequest request)
+    Player Player::from_login(SSGatewayLoginRequest request)
     {
-        return Player{request.player_uid, request.role_id, 1, 0};
+        return Player{request.player_uid, request.role_id, request.gateway_session_id, 1, 0};
     }
 
     std::optional<Player> Player::from_json(const std::string &text)

@@ -1,13 +1,28 @@
 #include "global/app/global_server_service.h"
 
+#include "common/metadata_keys.h"
 #include "logger.h"
 
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <string>
 #include <utility>
 
 namespace yuan::game::server
 {
+    namespace
+    {
+        bool wait_for_stop(std::stop_token stop_token, std::chrono::milliseconds delay)
+        {
+            std::mutex mutex;
+            std::condition_variable_any cv;
+            std::unique_lock<std::mutex> lock(mutex);
+            (void)cv.wait_for(lock, stop_token, delay, [] { return false; });
+            return stop_token.stop_requested();
+        }
+    }
+
     GlobalServerService::GlobalServerService(GameServiceId service_id,
                                              std::string listen_host,
                                              std::uint16_t port,
@@ -80,23 +95,23 @@ namespace yuan::game::server
     {
         while (!stop_token.stop_requested()) {
             if (register_to_tunnel()) {
-                std::this_thread::sleep_for(std::chrono::seconds{5});
+                (void)wait_for_stop(stop_token, std::chrono::seconds{5});
             } else {
                 LOG_ERROR("global failed to register to tunnel service_id={}", service_id_.pack());
-                std::this_thread::sleep_for(std::chrono::milliseconds{500});
+                (void)wait_for_stop(stop_token, std::chrono::milliseconds{500});
             }
         }
     }
 
     bool GlobalServerService::call_source_zone(const yuan::rpc::Message &message)
     {
-        const auto it = message.metadata.find("tunnel.source_service_id");
+        const auto it = message.metadata.find(game_metadata_key::tunnel_source_service_id);
         if (it == message.metadata.end()) {
             return false;
         }
         const auto source_service_id = static_cast<PackedGameServiceId>(std::stoull(it->second));
         yuan::rpc::Metadata metadata;
-        metadata["tunnel.source"] = service_id_key(service_id_);
+        metadata[game_metadata_key::tunnel_source] = service_id_key(service_id_);
         auto response = messaging_.send_to_service(service_id_.pack(),
                                                    source_service_id,
                                                    game_route::zone_echo(),
@@ -104,6 +119,6 @@ namespace yuan::game::server
                                                    std::move(metadata));
         return response && response->status == yuan::rpc::RpcStatus::ok &&
                yuan::rpc::Codec<std::string>::decode(response->payload) == "hello-server-zone" &&
-               response->metadata.find("zone.node") != response->metadata.end();
+               response->metadata.find(game_metadata_key::zone_node) != response->metadata.end();
     }
 }

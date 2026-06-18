@@ -1,5 +1,7 @@
 #include "tunnel/rpc/tunnel_service.h"
 
+#include "common/metadata_keys.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -45,7 +47,7 @@ namespace yuan::game::server
             response.status = yuan::rpc::RpcStatus::ok;
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
-            response.metadata["tunnel.heartbeat"] = "pong";
+            response.metadata[game_metadata_key::tunnel_heartbeat] = "pong";
             return response;
         });
     }
@@ -115,7 +117,7 @@ namespace yuan::game::server
 
         auto message = make_forward_message(envelope);
         auto response = selected->handler(std::move(message));
-        response.metadata["tunnel.instance"] = service_key(address());
+        response.metadata[game_metadata_key::tunnel_instance] = service_key(address());
         return response;
     }
 
@@ -152,9 +154,9 @@ namespace yuan::game::server
             last_response = std::move(response);
         }
         last_response.status = ok_count == endpoints.size() ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::internal_error;
-        last_response.metadata["tunnel.broadcast.count"] = std::to_string(endpoints.size());
-        last_response.metadata["tunnel.broadcast.ok"] = std::to_string(ok_count);
-        last_response.metadata["tunnel.instance"] = service_key(address());
+        last_response.metadata[game_metadata_key::tunnel_broadcast_count] = std::to_string(endpoints.size());
+        last_response.metadata[game_metadata_key::tunnel_broadcast_ok] = std::to_string(ok_count);
+        last_response.metadata[game_metadata_key::tunnel_instance] = service_key(address());
         return last_response;
     }
 
@@ -166,12 +168,12 @@ namespace yuan::game::server
         message.set_continuation_id(envelope.continuation_id);
         message.route = envelope.route;
         message.metadata = envelope.metadata;
-        message.metadata["tunnel.source"] = envelope.source;
-        message.metadata["tunnel.target"] = envelope.target;
-        message.metadata["tunnel.source_service_id"] = std::to_string(envelope.source_service_id);
-        message.metadata["tunnel.target_service_id"] = std::to_string(envelope.target_service_id);
-        message.metadata["tunnel.origin.request_id"] = std::to_string(envelope.request_id);
-        message.metadata["tunnel.origin.continuation_id"] = std::to_string(envelope.continuation_id);
+        message.metadata[game_metadata_key::tunnel_source] = envelope.source;
+        message.metadata[game_metadata_key::tunnel_target] = envelope.target;
+        message.metadata[game_metadata_key::tunnel_source_service_id] = std::to_string(envelope.source_service_id);
+        message.metadata[game_metadata_key::tunnel_target_service_id] = std::to_string(envelope.target_service_id);
+        message.metadata[game_metadata_key::tunnel_origin_request_id] = std::to_string(envelope.request_id);
+        message.metadata[game_metadata_key::tunnel_origin_continuation_id] = std::to_string(envelope.continuation_id);
         message.payload = envelope.payload;
         return message;
     }
@@ -229,10 +231,10 @@ namespace yuan::game::server
         forwarded.status = reply.status;
         forwarded.error = std::move(reply.error);
         forwarded.metadata = std::move(reply.metadata);
-        forwarded.metadata["tunnel.reply.source"] = std::move(reply.source);
-        forwarded.metadata["tunnel.reply.target"] = std::move(reply.target);
-        forwarded.metadata["tunnel.reply.source_service_id"] = std::to_string(reply.source_service_id);
-        forwarded.metadata["tunnel.reply.target_service_id"] = std::to_string(reply.target_service_id);
+        forwarded.metadata[game_metadata_key::tunnel_reply_source] = std::move(reply.source);
+        forwarded.metadata[game_metadata_key::tunnel_reply_target] = std::move(reply.target);
+        forwarded.metadata[game_metadata_key::tunnel_reply_source_service_id] = std::to_string(reply.source_service_id);
+        forwarded.metadata[game_metadata_key::tunnel_reply_target_service_id] = std::to_string(reply.target_service_id);
         forwarded.payload = std::move(reply.payload);
         handler(forwarded);
 

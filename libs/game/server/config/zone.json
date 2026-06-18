@@ -11,6 +11,17 @@
   "gateway_endpoints": [
     { "service_id": 2252349813686273, "host": "127.0.0.1", "port": 25004, "name": "gateway" }
   ],
+  "target_player_db_proxy_region": 1,
+  "target_player_db_proxy_world": 1,
+  "target_player_db_proxy_instance": 1,
+  "player_db_proxies": {
+    "strategy": "modulo",
+    "version": 1,
+    "shard_count": 1,
+    "endpoints": [
+      { "service_id": 4504702360223745, "shard": 0, "state": "open" }
+    ]
+  },
   "redis_host": "127.0.0.1",
   "redis_port": 6379,
   "redis_db": 0,
@@ -21,6 +32,7 @@
   "redis_flush_interval_ms": 5000,
   "zone_load_sync_interval_ms": 1000,
   "zone_max_players": 0,
-  "target_global_world": 1,
-  "target_global_instance": 1
+  "world_routing_strategy": "modulo",
+  "world_routing_version": 1,
+  "world_count": 1
 }

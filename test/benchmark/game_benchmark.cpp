@@ -41,6 +41,7 @@ namespace
 
     constexpr std::uint32_t kMagic = 0x59474d45U; // YGME
     constexpr std::size_t kHeaderSize = sizeof(std::uint32_t) + sizeof(std::uint32_t) + sizeof(std::uint64_t);
+    constexpr std::size_t kMaxFrameSize = static_cast<std::size_t>((std::numeric_limits<int>::max)());
     constexpr std::array<std::uint32_t, 13> kLatencyBucketsUs{
         50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 250000,
         std::numeric_limits<std::uint32_t>::max()
@@ -295,7 +296,7 @@ namespace
         std::uint32_t sequence = 0;
     };
 
-    bool initialize_client(ClientConn &conn, std::uint16_t port, std::size_t frame_size)
+    bool initialize_client(ClientConn &conn, std::uint16_t port, std::uint32_t frame_size)
     {
         conn.fd = connect_loopback(port);
         if (conn.fd == kInvalidSocket) {
@@ -314,7 +315,7 @@ namespace
                                  std::size_t end,
                                  std::chrono::seconds duration,
                                  std::size_t packets_per_second,
-                                 std::size_t frame_size)
+                                 std::uint32_t frame_size)
     {
         ClientStats stats;
         std::vector<ClientConn> clients(end - begin);
@@ -474,6 +475,13 @@ int main(int argc, char **argv)
         std::cerr << "connections and client_threads must be greater than zero\n";
         return 1;
     }
+    if (frame_size > kMaxFrameSize) {
+        std::cerr << "frame_size must be less than or equal to " << kMaxFrameSize << "\n";
+        return 1;
+    }
+
+    const auto effective_frame_size = (std::max)(frame_size, kHeaderSize);
+    const auto effective_client_frame_size = static_cast<std::uint32_t>(effective_frame_size);
 
     std::uint16_t port = 0;
     GameServer server;
@@ -482,7 +490,7 @@ int main(int argc, char **argv)
         if (port != 0 && server.start(port,
                                       worker_count,
                                       completion_batch_size,
-                                      frame_size,
+                                      effective_frame_size,
                                       use_iocp,
                                       use_affinity)) {
             break;
@@ -496,7 +504,6 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    const auto effective_frame_size = (std::max)(frame_size, kHeaderSize);
     const auto effective_client_threads = (std::min)(client_threads, connections);
     const char *backend_label = use_iocp
         ? (use_affinity ? "iocp_affinity" : "iocp")
@@ -518,7 +525,7 @@ int main(int argc, char **argv)
         const auto begin = i * connections / effective_client_threads;
         const auto end = (i + 1) * connections / effective_client_threads;
         threads.emplace_back([&, i, begin, end]() {
-            per_thread[i] = run_client_group(port, begin, end, duration, packets_per_second, effective_frame_size);
+            per_thread[i] = run_client_group(port, begin, end, duration, packets_per_second, effective_client_frame_size);
         });
     }
     for (auto &thread : threads) {

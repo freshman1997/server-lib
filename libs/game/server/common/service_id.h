@@ -35,7 +35,10 @@ namespace yuan::game::server
         battle = 7,
         chat = 8,
         world = 9,
-        web = 10
+        web = 10,
+        rank = 11,
+        player_db_proxy = 12,
+        world_db_proxy = 13
     };
 
     struct GameServiceId
@@ -106,6 +109,12 @@ namespace yuan::game::server
                 return "world";
             case GameServiceType::web:
                 return "web";
+            case GameServiceType::rank:
+                return "rank";
+            case GameServiceType::player_db_proxy:
+                return "player_db_proxy";
+            case GameServiceType::world_db_proxy:
+                return "world_db_proxy";
         }
         return "unknown";
     }

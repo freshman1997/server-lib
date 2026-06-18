@@ -2,9 +2,23 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 
 namespace yuan::game::server
 {
+    namespace
+    {
+        bool wait_for_stop(std::stop_token stop_token, std::chrono::milliseconds delay)
+        {
+            std::mutex mutex;
+            std::condition_variable_any cv;
+            std::unique_lock<std::mutex> lock(mutex);
+            (void)cv.wait_for(lock, stop_token, delay, [] { return false; });
+            return stop_token.stop_requested();
+        }
+    }
+
     ProcessMessageManager::ProcessMessageManager() = default;
 
     ProcessMessageManager::ProcessMessageManager(std::vector<rpc_network::RpcEndpoint> tunnel_endpoints)
@@ -258,7 +272,6 @@ namespace yuan::game::server
             ++attempt;
             if (attempt < static_cast<int>(order.size())) {
                 tunnel_call_retries_.fetch_add(1, std::memory_order_relaxed);
-                std::this_thread::sleep_for(std::chrono::milliseconds{10 * attempt});
             }
         }
         tunnel_call_failures_.fetch_add(1, std::memory_order_relaxed);
@@ -281,8 +294,7 @@ namespace yuan::game::server
                 std::scoped_lock lock(mutex_);
                 interval = heartbeat_interval_;
             }
-            std::this_thread::sleep_for(interval);
-            if (stop_token.stop_requested()) {
+            if (wait_for_stop(stop_token, interval)) {
                 break;
             }
             std::vector<std::shared_ptr<TunnelConnection>> tunnels;

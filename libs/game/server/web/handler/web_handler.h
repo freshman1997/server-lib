@@ -1,7 +1,8 @@
 #ifndef YUAN_GAME_SERVER_WEB_HANDLER_WEB_HANDLER_H
 #define YUAN_GAME_SERVER_WEB_HANDLER_WEB_HANDLER_H
 
-#include "common/game_messages.h"
+#include "common/codec/game_binary_codec.h"
+#include "web/service/web_auth_types.h"
 
 #include <functional>
 

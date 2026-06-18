@@ -1,6 +1,7 @@
 #include "world/app/world_server_service.h"
 
 #include "common/gm_command_registry.h"
+#include "common/proto/world_db_proto.h"
 #include "content_type.h"
 #include "header_key.h"
 #include "http_headers.h"
@@ -16,12 +17,23 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <vector>
 
 namespace yuan::game::server
 {
     namespace
     {
+        bool wait_for_stop(std::stop_token stop_token, std::chrono::milliseconds delay)
+        {
+            std::mutex mutex;
+            std::condition_variable_any cv;
+            std::unique_lock<std::mutex> lock(mutex);
+            (void)cv.wait_for(lock, stop_token, delay, [] { return false; });
+            return stop_token.stop_requested();
+        }
+
         std::string encode_http_error_json(std::string_view error)
         {
             nlohmann::json root;
@@ -45,10 +57,13 @@ namespace yuan::game::server
                                               std::uint16_t redis_command_timeout_ms,
                                               std::uint16_t redis_flush_interval_ms,
                                               std::string world_ownership_store,
-                                              std::uint64_t login_reservation_ttl_ms,
-                                              std::uint64_t zone_report_ttl_ms,
-                                              std::uint64_t tunnel_heartbeat_interval_ms,
-                                              std::uint64_t metrics_log_interval_ms)
+                                               std::uint64_t login_reservation_ttl_ms,
+                                               std::uint64_t zone_report_ttl_ms,
+                                                std::uint64_t tunnel_heartbeat_interval_ms,
+                                                std::uint64_t login_token_secret,
+                                                WorldRoutingConfig world_routing,
+                                                DbProxyRoutingConfig world_db_proxy_routing,
+                                                std::uint64_t metrics_log_interval_ms)
         : listen_host_(std::move(listen_host)),
           port_(port),
           http_port_(http_port),
@@ -63,11 +78,14 @@ namespace yuan::game::server
           redis_flush_interval_ms_(redis_flush_interval_ms),
           world_ownership_store_(std::move(world_ownership_store)),
           metrics_log_interval_ms_(metrics_log_interval_ms),
+          world_db_proxy_routing_(std::move(world_db_proxy_routing)),
           world_context_({ServiceAddress{service_id, 400, yuan::game_base::ServerRole::world, service_id.world, "world"}}),
           messaging_(std::move(tunnel_endpoints))
     {
         world_context_.login_reservation_ttl_ms = login_reservation_ttl_ms == 0 ? 3000 : login_reservation_ttl_ms;
         world_context_.zone_report_ttl_ms = zone_report_ttl_ms == 0 ? 3000 : zone_report_ttl_ms;
+        world_context_.login_token_secret = login_token_secret == 0 ? kDefaultLoginTokenSecret : login_token_secret;
+        world_context_.world_routing = std::move(world_routing);
         messaging_.set_heartbeat_interval_ms(tunnel_heartbeat_interval_ms);
     }
 
@@ -104,7 +122,7 @@ namespace yuan::game::server
         world_context_.after_player_zone_set = [this](PlayerId player_id, PackedGameServiceId zone_service_id) {
             mark_role_dirty(player_id, zone_service_id);
         };
-        world_context_.gm_forward_handler = [this](GmCommandRequest request) {
+        world_context_.gm_forward_handler = [this](SSGmCommandRequest request) {
             return forward_gm(std::move(request));
         };
         if (!register_world_msg(world_rpc_, world_context_)) {
@@ -197,10 +215,10 @@ namespace yuan::game::server
     {
         while (!stop_token.stop_requested()) {
             if (register_to_tunnel()) {
-                std::this_thread::sleep_for(std::chrono::seconds{5});
+                (void)wait_for_stop(stop_token, std::chrono::seconds{5});
             } else {
                 LOG_ERROR("world failed to register to tunnel service_id={}", service_id_.pack());
-                std::this_thread::sleep_for(std::chrono::milliseconds{500});
+                (void)wait_for_stop(stop_token, std::chrono::milliseconds{500});
             }
         }
     }
@@ -243,7 +261,7 @@ namespace yuan::game::server
 
     void WorldServerService::ensure_player_roles(PlayerUid player_uid)
     {
-        roles_.ensure_player_roles(player_uid, redis_.get(), service_id_.pack(), [this](PlayerUid uid, const PlayerRoleInfo &role) {
+        roles_.ensure_player_roles(player_uid, redis_.get(), service_id_.pack(), [this](PlayerUid uid, const SSPlayerRoleInfo &role) {
             world_add_role(world_context_, uid, role);
         });
     }
@@ -251,13 +269,59 @@ namespace yuan::game::server
     void WorldServerService::mark_role_dirty(PlayerId player_id, PackedGameServiceId zone_service_id)
     {
         roles_.mark_role_zone(player_id, zone_service_id);
+        if (!world_db_proxy_routing_.endpoints.empty()) {
+            std::scoped_lock lock(pending_role_locations_mutex_);
+            pending_role_locations_[player_id] = zone_service_id;
+        }
     }
 
-    std::optional<GmCommandResponse> WorldServerService::forward_gm(GmCommandRequest request) const
+    bool WorldServerService::save_role_location_to_db(PlayerId player_id, PackedGameServiceId zone_service_id) const
+    {
+        const auto target_proxy = select_db_proxy(player_id, world_db_proxy_routing_);
+        if (!target_proxy) {
+            return true;
+        }
+        const auto online_it = world_context_.online_by_role.find(player_id);
+        const auto player_uid = online_it != world_context_.online_by_role.end() ? online_it->second.player_uid : player_uid_for_role(player_id);
+        const auto gateway_session_id = online_it != world_context_.online_by_role.end() ? online_it->second.gateway_session_id : 0;
+        yuan::rpc::Bytes payload;
+        SSWorldDbRoleLocationSetRequest request;
+        request.player_uid = player_uid;
+        request.role_id = player_id;
+        request.zone_service_id = zone_service_id;
+        request.gateway_session_id = gateway_session_id;
+        request.data_version = 0;
+        if (!encode_binary(request, payload)) {
+            return false;
+        }
+        auto response = messaging_.send_to_service(service_id_.pack(), *target_proxy, game_route::world_db_role_location_set(), std::move(payload));
+        const bool ok = response && response->status == yuan::rpc::RpcStatus::ok;
+        if (!ok) {
+            LOG_ERROR("world role location save via world_db_proxy failed role_id={} proxy_service={} status={}",
+                      player_id,
+                      *target_proxy,
+                      response ? static_cast<int>(response->status) : -1);
+        }
+        return ok;
+    }
+
+    PlayerUid WorldServerService::player_uid_for_role(PlayerId player_id) const
+    {
+        for (const auto &[uid, roles] : world_context_.roles_by_player_uid) {
+            for (const auto &role : roles) {
+                if (role.role_id == player_id) {
+                    return uid;
+                }
+            }
+        }
+        return 0;
+    }
+
+    std::optional<SSGmCommandResponse> WorldServerService::forward_gm(SSGmCommandRequest request) const
     {
         const auto definition = GmCommandRegistry::instance().find(request.command);
         if (!definition) {
-            return GmCommandResponse{false, "unknown gm command: " + request.command};
+            return SSGmCommandResponse{false, "unknown gm command: " + request.command};
         }
         if (request.target_service_id == 0) {
             request.target_service_id = pack_game_service_id(service_id_.region, service_id_.world, definition->executor_type, 1);
@@ -265,12 +329,12 @@ namespace yuan::game::server
 
         const auto route = gm_execute_route_for(definition->executor_type);
         if (!route) {
-            return GmCommandResponse{false, "gm executor type is not routable"};
+            return SSGmCommandResponse{false, "gm executor type is not routable"};
         }
 
         yuan::rpc::Bytes gm_payload;
-        if (!encode_gm_command_request(request, gm_payload)) {
-            return GmCommandResponse{false, "failed to encode gm command"};
+        if (!encode_binary(request, gm_payload)) {
+            return SSGmCommandResponse{false, "failed to encode gm command"};
         }
 
         auto response = messaging_.send_to_service(service_id_.pack(),
@@ -280,9 +344,9 @@ namespace yuan::game::server
         if (!response) {
             return std::nullopt;
         }
-        const auto result = decode_gm_command_response(response->payload);
+        const auto result = decode_binary<SSGmCommandResponse>(response->payload);
         if (!result) {
-            return GmCommandResponse{false, response->error.empty() ? "gm response decode failed" : response->error};
+            return SSGmCommandResponse{false, response->error.empty() ? "gm response decode failed" : response->error};
         }
         return result;
     }
@@ -290,14 +354,24 @@ namespace yuan::game::server
     void WorldServerService::flush_dirty_roles()
     {
         roles_.flush_dirty(redis_.get(), service_id_.pack());
+        std::unordered_map<PlayerId, PackedGameServiceId> pending_locations;
+        {
+            std::scoped_lock lock(pending_role_locations_mutex_);
+            pending_locations.swap(pending_role_locations_);
+        }
+        for (const auto &[player_id, zone_service_id] : pending_locations) {
+            if (!save_role_location_to_db(player_id, zone_service_id)) {
+                std::scoped_lock lock(pending_role_locations_mutex_);
+                pending_role_locations_[player_id] = zone_service_id;
+            }
+        }
     }
 
     void WorldServerService::flush_loop(std::stop_token stop_token)
     {
         const auto interval = std::chrono::milliseconds(redis_flush_interval_ms_ == 0 ? 5000 : redis_flush_interval_ms_);
         while (!stop_token.stop_requested()) {
-            std::this_thread::sleep_for(interval);
-            if (stop_token.stop_requested()) {
+            if (wait_for_stop(stop_token, interval)) {
                 break;
             }
             flush_dirty_roles();
@@ -308,8 +382,7 @@ namespace yuan::game::server
     {
         const auto interval = std::chrono::milliseconds(metrics_log_interval_ms_);
         while (!stop_token.stop_requested()) {
-            std::this_thread::sleep_for(interval);
-            if (stop_token.stop_requested()) {
+            if (wait_for_stop(stop_token, interval)) {
                 break;
             }
             const auto metrics = messaging_.metrics();

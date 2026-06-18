@@ -10,7 +10,7 @@ namespace yuan::game::server
     {
         constexpr std::uint32_t client_frame_magic = 0x43534631; // CSF1
         constexpr std::uint32_t client_frame_version = 1;
-        constexpr std::size_t client_frame_header_size = sizeof(std::uint32_t) * 5 + sizeof(std::uint64_t) * 5;
+        constexpr std::size_t client_frame_header_size = sizeof(std::uint32_t) * 5 + sizeof(std::uint64_t) * 3;
 
         void append_u32(yuan::rpc::Bytes &out, std::uint32_t value)
         {
@@ -73,8 +73,6 @@ namespace yuan::game::server
         append_u32(out, client_frame_version);
         append_u64(out, frame.header.player_uid);
         append_u64(out, frame.header.role_id);
-        append_u64(out, frame.header.zone_service_id);
-        append_u64(out, frame.header.gateway_session_id);
         append_u64(out, frame.header.sequence);
         append_u32(out, frame.header.route_service);
         append_u32(out, frame.header.route_method);
@@ -94,8 +92,6 @@ namespace yuan::game::server
             !read_u32(in, offset, version) || version != client_frame_version ||
             !read_u64(in, offset, frame.header.player_uid) ||
             !read_u64(in, offset, frame.header.role_id) ||
-            !read_u64(in, offset, frame.header.zone_service_id) ||
-            !read_u64(in, offset, frame.header.gateway_session_id) ||
             !read_u64(in, offset, frame.header.sequence) ||
             !read_u32(in, offset, frame.header.route_service) ||
             !read_u32(in, offset, frame.header.route_method) ||
@@ -153,8 +149,6 @@ namespace yuan::game::server
         if (!read_u32(buffer_, offset, version) || version != client_frame_version ||
             !read_u64(buffer_, offset, header.player_uid) ||
             !read_u64(buffer_, offset, header.role_id) ||
-            !read_u64(buffer_, offset, header.zone_service_id) ||
-            !read_u64(buffer_, offset, header.gateway_session_id) ||
             !read_u64(buffer_, offset, header.sequence) ||
             !read_u32(buffer_, offset, header.route_service) ||
             !read_u32(buffer_, offset, header.route_method) ||
@@ -192,9 +186,6 @@ namespace yuan::game::server
     ClientFrameValidationResult ClientFrameReplayGuard::validate(const ClientFrame &frame, const ClientFrameValidationOptions &options)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (frame.header.gateway_session_id == 0) {
-            return {false, "missing gateway session id"};
-        }
         if (frame.header.sequence == 0) {
             return {false, "missing client frame sequence"};
         }
@@ -202,7 +193,7 @@ namespace yuan::game::server
             return {false, "client frame payload too large"};
         }
         if (options.max_frames_per_window != 0) {
-            auto &rate = rate_by_session_[frame.header.gateway_session_id];
+            auto &rate = rate_by_session_[frame.header.role_id];
             const auto now_ms = yuan::base::time::steady_now_ms();
             const auto window_ms = options.rate_window_ms == 0 ? 1000 : options.rate_window_ms;
             if (rate.window_start_ms == 0 || rate.window_start_ms + window_ms <= now_ms) {
@@ -214,7 +205,7 @@ namespace yuan::game::server
             }
             ++rate.count;
         }
-        const auto last = last_sequence_by_session_.find(frame.header.gateway_session_id);
+        const auto last = last_sequence_by_session_.find(frame.header.role_id);
         if (last != last_sequence_by_session_.end()) {
             const auto expected = last->second + 1;
             if ((options.require_strict_sequence && frame.header.sequence != expected) ||
@@ -222,7 +213,7 @@ namespace yuan::game::server
                 return {false, "client frame sequence replay or gap"};
             }
         }
-        last_sequence_by_session_[frame.header.gateway_session_id] = frame.header.sequence;
+        last_sequence_by_session_[frame.header.role_id] = frame.header.sequence;
         return {true, {}};
     }
 

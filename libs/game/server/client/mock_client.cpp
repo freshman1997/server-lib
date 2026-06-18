@@ -1,6 +1,5 @@
 #include "common/rpc_network.h"
-#include "common/game_messages.h"
-#include "common/client_frame.h"
+#include "common/codec/game_binary_codec.h"
 
 #include "base/time.h"
 #include "coroutine/sync_wait.h"
@@ -85,32 +84,18 @@ namespace
         yuan::net::AsyncRequestClient client_;
     };
 
-    yuan::rpc::Bytes frame_payload(yuan::rpc::Route route,
-                                   yuan::game::server::PlayerUid player_uid,
-                                   yuan::game::server::RoleId role_id,
-                                   yuan::game::server::PackedGameServiceId zone_service_id,
-                                   std::uint64_t gateway_session_id,
-                                   std::uint64_t sequence,
-                                   yuan::rpc::Bytes payload)
-    {
-        return yuan::game::server::encode_framed_client_payload(
-            yuan::game::server::ClientFrameHeader{player_uid, role_id, zone_service_id, gateway_session_id, sequence, route.service, route.method},
-            std::move(payload));
-    }
-
     int run_logout(PersistentRpcClient &gateway_client,
                    yuan::game::server::PlayerUid player_uid,
-                   yuan::game::server::RoleId role_id,
-                   std::uint64_t gateway_session_id)
+                   yuan::game::server::RoleId role_id)
     {
         yuan::rpc::Bytes logout_payload;
-        if (!yuan::game::server::encode_client_login_request({player_uid, role_id, 0, gateway_session_id}, logout_payload)) {
+    if (!yuan::game::server::encode_binary(yuan::game::server::CSLoginRequest{player_uid, role_id, {}, 0}, logout_payload)) {
             std::cerr << "failed to encode logout request\n";
             return 16;
         }
         yuan::rpc::Message logout_message;
         logout_message.route = yuan::game::server::game_route::gateway_logout();
-        logout_message.payload = frame_payload(logout_message.route, player_uid, role_id, 0, gateway_session_id, 3, std::move(logout_payload));
+        logout_message.payload = std::move(logout_payload);
         const auto logout_response = gateway_client.call(logout_message);
         if (!logout_response || logout_response->status != yuan::rpc::RpcStatus::ok) {
             std::cerr << "gateway logout failed status="
@@ -118,8 +103,8 @@ namespace
                       << " error=" << (logout_response ? logout_response->error : "no response") << "\n";
             return 17;
         }
-        const auto logout = yuan::game::server::decode_client_login_response(logout_response->payload);
-        if (!logout || !logout->ok || logout->zone_service_id != 0) {
+        const auto logout = yuan::game::server::decode_binary<yuan::game::server::CSLoginResponse>(logout_response->payload);
+        if (!logout || !logout->ok) {
             std::cerr << "invalid logout response\n";
             return 18;
         }
@@ -187,33 +172,33 @@ int main(int argc, char **argv)
     }
 
     yuan::rpc::Bytes login_payload;
-    if (!yuan::game::server::encode_client_login_request({player_uid, options->roles.front().role_id, options->roles.front().zone_service_id, 0}, login_payload)) {
+    if (!yuan::game::server::encode_binary(yuan::game::server::CSLoginRequest{player_uid, options->roles.front().role_id, options->roles.front().login_token_id, 0}, login_payload)) {
         std::cerr << "failed to encode login request\n";
         return 7;
     }
     yuan::rpc::Message login_message;
     login_message.route = yuan::game::server::game_route::gateway_login();
-    login_message.payload = frame_payload(login_message.route, player_uid, options->roles.front().role_id, options->roles.front().zone_service_id, 0, 0, std::move(login_payload));
+    login_message.payload = std::move(login_payload);
     const auto login_response = gateway_client.call(login_message);
     if (!login_response || login_response->status != yuan::rpc::RpcStatus::ok) {
         std::cerr << "gateway login failed\n";
         return 8;
     }
-    const auto login = yuan::game::server::decode_client_login_response(login_response->payload);
+    const auto login = yuan::game::server::decode_binary<yuan::game::server::CSLoginResponse>(login_response->payload);
     if (!login || !login->ok) {
         std::cerr << "login rejected status=" << static_cast<int>(login_response->status)
                   << " error=" << login_response->error
                   << " message=" << (login ? login->message : "decode failed")
-                  << " zone=" << (login ? login->zone_service_id : 0) << "\n";
+                  << "\n";
         return 9;
     }
-    std::cout << "login ok role=" << login->role_id << " zone=" << login->zone_service_id << " gateway_session=" << login->gateway_session_id << " message=" << login->message << "\n";
+    std::cout << "login ok role=" << login->role_id << " message=" << login->message << "\n";
 
     yuan::rpc::Bytes gm_payload;
-    if (!yuan::game::server::encode_gm_command_request(
-            yuan::game::server::GmCommandRequest{login->zone_service_id,
-                                                 "set_player_level",
-                                                 {std::to_string(login->role_id), "9"}},
+    if (!yuan::game::server::encode_binary(
+            yuan::game::server::SSGmCommandRequest{0,
+                                                  "set_player_level",
+                                                  {std::to_string(login->role_id), "9"}},
             gm_payload)) {
         std::cerr << "failed to encode gm request\n";
         return 19;
@@ -229,7 +214,7 @@ int main(int argc, char **argv)
                   << " error=" << (gm_response ? gm_response->error : "no response") << "\n";
         return 20;
     }
-    const auto gm = yuan::game::server::decode_gm_command_response(gm_response->payload);
+    const auto gm = yuan::game::server::decode_binary<yuan::game::server::SSGmCommandResponse>(gm_response->payload);
     if (!gm || !gm->ok) {
         std::cerr << "gm set player level failed message=" << (gm ? gm->message : "decode failed") << "\n";
         return 21;
@@ -237,10 +222,10 @@ int main(int argc, char **argv)
     std::cout << "gm ok " << gm->message << "\n";
 
     yuan::rpc::Bytes game_payload;
-    if (!yuan::game::server::encode_client_game_request(
-            yuan::game::server::ClientGameRequest{player_uid,
+    if (!yuan::game::server::encode_binary(
+            yuan::game::server::CSGameRequest{player_uid,
                                                     login->role_id,
-                                                    login->gateway_session_id,
+                                                    0,
                                                     yuan::rpc::Codec<std::string>::encode("move:1,2")},
             game_payload)) {
         std::cerr << "failed to encode game request\n";
@@ -248,13 +233,13 @@ int main(int argc, char **argv)
     }
     yuan::rpc::Message game_message;
     game_message.route = yuan::game::server::game_route::gateway_game_forward();
-    game_message.payload = frame_payload(game_message.route, player_uid, login->role_id, login->zone_service_id, login->gateway_session_id, 1, std::move(game_payload));
+    game_message.payload = std::move(game_payload);
     const auto game_response = gateway_client.call(game_message);
     if (!game_response || game_response->status != yuan::rpc::RpcStatus::ok) {
         std::cerr << "gateway game forward failed\n";
         return 11;
     }
-    const auto game = yuan::game::server::decode_client_game_response(game_response->payload);
+    const auto game = yuan::game::server::decode_binary<yuan::game::server::CSGameResponse>(game_response->payload);
     if (!game || !game->ok || yuan::rpc::Codec<std::string>::decode(game->payload) != "move:1,2") {
         std::cerr << "game response mismatch\n";
         return 12;
@@ -263,19 +248,19 @@ int main(int argc, char **argv)
 
     const auto client_time_seconds = yuan::base::time::system_now_sec();
     yuan::rpc::Bytes time_sync_payload;
-    if (!yuan::game::server::encode_client_time_sync_request({player_uid, login->role_id, login->gateway_session_id, client_time_seconds}, time_sync_payload)) {
+    if (!yuan::game::server::encode_binary(yuan::game::server::CSTimeSyncRequest{player_uid, login->role_id, 0, client_time_seconds}, time_sync_payload)) {
         std::cerr << "failed to encode time sync request\n";
         return 13;
     }
     yuan::rpc::Message time_sync_message;
     time_sync_message.route = yuan::game::server::game_route::gateway_time_sync();
-    time_sync_message.payload = frame_payload(time_sync_message.route, player_uid, login->role_id, login->zone_service_id, login->gateway_session_id, 2, std::move(time_sync_payload));
+    time_sync_message.payload = std::move(time_sync_payload);
     const auto time_sync_response = gateway_client.call(time_sync_message);
     if (!time_sync_response || time_sync_response->status != yuan::rpc::RpcStatus::ok) {
         std::cerr << "gateway time sync failed\n";
         return 14;
     }
-    const auto time_sync = yuan::game::server::decode_client_time_sync_response(time_sync_response->payload);
+    const auto time_sync = yuan::game::server::decode_binary<yuan::game::server::CSTimeSyncResponse>(time_sync_response->payload);
     if (!time_sync || !time_sync->ok || time_sync->client_time_seconds != client_time_seconds || time_sync->server_receive_time_seconds == 0 ||
         time_sync->server_send_time_seconds < time_sync->server_receive_time_seconds) {
         std::cerr << "invalid time sync response\n";
@@ -283,7 +268,7 @@ int main(int argc, char **argv)
     }
     std::cout << "time sync ok server_recv=" << time_sync->server_receive_time_seconds << " server_send=" << time_sync->server_send_time_seconds << "\n";
 
-    const auto logout_status = run_logout(gateway_client, player_uid, login->role_id, login->gateway_session_id);
+    const auto logout_status = run_logout(gateway_client, player_uid, login->role_id);
     if (logout_status != EXIT_SUCCESS) {
         return logout_status;
     }

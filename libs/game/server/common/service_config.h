@@ -1,13 +1,16 @@
 #ifndef YUAN_GAME_SERVER_COMMON_SERVICE_CONFIG_H
 #define YUAN_GAME_SERVER_COMMON_SERVICE_CONFIG_H
 
-#include "common/game_messages.h"
+#include "common/codec/game_binary_codec.h"
+#include "common/db_proxy_routing.h"
 #include "common/rpc_network.h"
 #include "common/service_id.h"
+#include "common/world_routing.h"
 
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -31,6 +34,7 @@ namespace yuan::game::server
         std::string target_world_host;
         std::uint16_t target_world_port = 0;
         std::vector<std::uint16_t> target_world_ports;
+        std::vector<WorldEndpointConfig> world_endpoints;
         std::string redis_host = "127.0.0.1";
         std::uint16_t redis_port = 6379;
         std::uint16_t redis_db = 0;
@@ -46,16 +50,20 @@ namespace yuan::game::server
         std::uint64_t zone_report_ttl_ms = 3000;
         std::uint64_t tunnel_heartbeat_interval_ms = 5000;
         std::uint64_t metrics_log_interval_ms = 0;
-        std::uint64_t client_frame_max_bytes = 64 * 1024;
-        std::uint32_t client_frame_max_per_window = 0;
-        std::uint64_t client_frame_rate_window_ms = 1000;
+        std::uint64_t login_token_secret = kDefaultLoginTokenSecret;
+        std::uint64_t gateway_internal_secret = kDefaultLoginTokenSecret;
+        WorldRoutingConfig world_routing;
         std::uint64_t rpc_max_connections = 0;
         std::uint64_t rpc_max_buffered_bytes = 1024 * 1024;
         std::uint64_t rpc_idle_timeout_ms = 0;
-        GameServiceId target_global_id;
+        std::uint64_t gateway_drain_timeout_ms = 3000;
         GameServiceId target_world_id;
+        GameServiceId target_player_db_proxy_id;
+        DbProxyRoutingConfig player_db_proxy_routing;
+        DbProxyRoutingConfig world_db_proxy_routing;
+        DbProxyRoutingConfig global_db_proxy_routing;
         std::vector<std::pair<PackedGameServiceId, std::string>> zone_endpoints;
-        std::vector<GatewayInfo> gateway_endpoints;
+        std::vector<SSGatewayInfo> gateway_endpoints;
     };
 
     inline std::optional<GameServiceType> parse_service_type(const std::string &value)
@@ -90,6 +98,15 @@ namespace yuan::game::server
         if (value == "web" || value == "10") {
             return GameServiceType::web;
         }
+        if (value == "rank" || value == "11") {
+            return GameServiceType::rank;
+        }
+        if (value == "player_db_proxy" || value == "12") {
+            return GameServiceType::player_db_proxy;
+        }
+        if (value == "world_db_proxy" || value == "13") {
+            return GameServiceType::world_db_proxy;
+        }
         return std::nullopt;
     }
 
@@ -101,6 +118,23 @@ namespace yuan::game::server
         }
         const auto last = value.find_last_not_of(" \t\r\n");
         return value.substr(first, last - first + 1);
+    }
+
+    inline void apply_secret_env_overrides(ServiceServerConfig &config)
+    {
+        try {
+            if (const char *value = std::getenv("GAME_LOGIN_TOKEN_SECRET")) {
+                if (*value != '\0') {
+                    config.login_token_secret = static_cast<std::uint64_t>(std::stoull(value));
+                }
+            }
+            if (const char *value = std::getenv("GAME_GATEWAY_INTERNAL_SECRET")) {
+                if (*value != '\0') {
+                    config.gateway_internal_secret = static_cast<std::uint64_t>(std::stoull(value));
+                }
+            }
+        } catch (...) {
+        }
     }
 
     inline std::optional<ServiceServerConfig> load_service_server_config(const std::string &path)
@@ -170,8 +204,8 @@ namespace yuan::game::server
                 }
                 return result;
             };
-            auto get_gateway_endpoints_json = [&]() -> std::vector<GatewayInfo> {
-                std::vector<GatewayInfo> result;
+            auto get_gateway_endpoints_json = [&]() -> std::vector<SSGatewayInfo> {
+                std::vector<SSGatewayInfo> result;
                 if (!root.contains("gateway_endpoints") || !root["gateway_endpoints"].is_array()) {
                     return result;
                 }
@@ -180,7 +214,7 @@ namespace yuan::game::server
                         result.clear();
                         return result;
                     }
-                    GatewayInfo gateway;
+                    SSGatewayInfo gateway;
                     gateway.service_id = item.value("service_id", static_cast<PackedGameServiceId>(0));
                     gateway.host = item.value("host", std::string{});
                     gateway.port = item.value("port", static_cast<std::uint16_t>(0));
@@ -192,6 +226,57 @@ namespace yuan::game::server
                     result.push_back(std::move(gateway));
                 }
                 return result;
+            };
+            auto get_world_endpoints_json = [&]() -> std::vector<WorldEndpointConfig> {
+                std::vector<WorldEndpointConfig> result;
+                if (!root.contains("world_endpoints") || !root["world_endpoints"].is_array()) {
+                    return result;
+                }
+                for (const auto &item : root["world_endpoints"]) {
+                    if (!item.is_object()) {
+                        result.clear();
+                        return result;
+                    }
+                    WorldEndpointConfig endpoint;
+                    endpoint.world = item.value("world", static_cast<std::uint16_t>(0));
+                    endpoint.host = item.value("host", std::string{});
+                    endpoint.port = item.value("port", static_cast<std::uint16_t>(0));
+                    endpoint.state = item.value("state", std::string{"open"});
+                    if (endpoint.world == 0 || endpoint.host.empty() || endpoint.port == 0) {
+                        result.clear();
+                        return result;
+                    }
+                    result.push_back(std::move(endpoint));
+                }
+                return result;
+            };
+            auto get_db_proxy_routing_json = [&](const char *key) -> DbProxyRoutingConfig {
+                DbProxyRoutingConfig routing;
+                if (!root.contains(key) || !root[key].is_object()) {
+                    return routing;
+                }
+                const auto &node = root[key];
+                routing.strategy = node.value("strategy", routing.strategy);
+                routing.version = node.value("version", routing.version);
+                routing.shard_count = node.value("shard_count", routing.shard_count);
+                if (node.contains("endpoints") && node["endpoints"].is_array()) {
+                    for (const auto &item : node["endpoints"]) {
+                        if (!item.is_object()) {
+                            routing.endpoints.clear();
+                            return routing;
+                        }
+                        DbProxyEndpointConfig endpoint;
+                        endpoint.service_id = item.value("service_id", static_cast<PackedGameServiceId>(0));
+                        endpoint.shard = item.value("shard", static_cast<std::uint32_t>(0));
+                        endpoint.state = item.value("state", std::string{"open"});
+                        if (endpoint.service_id == 0) {
+                            routing.endpoints.clear();
+                            return routing;
+                        }
+                        routing.endpoints.push_back(std::move(endpoint));
+                    }
+                }
+                return routing;
             };
 
             const auto type_value = root.contains("type") ? (root["type"].is_string() ? root["type"].get<std::string>() : std::to_string(root["type"].get<std::uint64_t>())) : std::string{"web"};
@@ -228,6 +313,10 @@ namespace yuan::game::server
             if (config.target_world_ports.empty() && config.target_world_port != 0) {
                 config.target_world_ports.push_back(config.target_world_port);
             }
+            config.world_endpoints = get_world_endpoints_json();
+            config.player_db_proxy_routing = get_db_proxy_routing_json("player_db_proxies");
+            config.world_db_proxy_routing = get_db_proxy_routing_json("world_db_proxies");
+            config.global_db_proxy_routing = get_db_proxy_routing_json("global_db_proxies");
             config.redis_host = get_string("redis_host", "127.0.0.1");
             config.redis_port = get_u16_json("redis_port", 6379);
             config.redis_db = get_u16_json("redis_db", 0);
@@ -243,29 +332,32 @@ namespace yuan::game::server
             config.zone_report_ttl_ms = get_u64_json("zone_report_ttl_ms", 3000);
             config.tunnel_heartbeat_interval_ms = get_u64_json("tunnel_heartbeat_interval_ms", 5000);
             config.metrics_log_interval_ms = get_u64_json("metrics_log_interval_ms", 0);
-            config.client_frame_max_bytes = get_u64_json("client_frame_max_bytes", 64 * 1024);
-            config.client_frame_max_per_window = static_cast<std::uint32_t>(get_u64_json("client_frame_max_per_window", 0));
-            config.client_frame_rate_window_ms = get_u64_json("client_frame_rate_window_ms", 1000);
+            config.login_token_secret = get_u64_json("login_token_secret", kDefaultLoginTokenSecret);
+            config.gateway_internal_secret = get_u64_json("gateway_internal_secret", kDefaultLoginTokenSecret);
+            config.world_routing.strategy = get_string("world_routing_strategy", config.world_routing.strategy);
+            config.world_routing.version = get_u64_json("world_routing_version", config.world_routing.version);
+            config.world_routing.world_count = get_u16_json("world_count", config.world_routing.world_count);
             config.rpc_max_connections = get_u64_json("rpc_max_connections", 0);
             config.rpc_max_buffered_bytes = get_u64_json("rpc_max_buffered_bytes", 1024 * 1024);
             config.rpc_idle_timeout_ms = get_u64_json("rpc_idle_timeout_ms", 0);
-            config.target_global_id.region = get_u16_json("target_global_region", config.service_id.region);
-            config.target_global_id.world = get_u16_json("target_global_world", config.service_id.world);
-            config.target_global_id.type = GameServiceType::global;
-            config.target_global_id.shard = config.target_global_id.world;
-            config.target_global_id.instance = get_u64_json("target_global_instance", 1);
+            config.gateway_drain_timeout_ms = get_u64_json("gateway_drain_timeout_ms", config.gateway_drain_timeout_ms);
             config.target_world_id.region = get_u16_json("target_world_region", config.service_id.region);
             config.target_world_id.world = get_u16_json("target_world_world", config.service_id.world);
             config.target_world_id.type = GameServiceType::world;
             config.target_world_id.shard = config.target_world_id.world;
             config.target_world_id.instance = get_u64_json("target_world_instance", 1);
+            config.target_player_db_proxy_id.region = get_u16_json("target_player_db_proxy_region", config.service_id.region);
+            config.target_player_db_proxy_id.world = get_u16_json("target_player_db_proxy_world", config.service_id.world);
+            config.target_player_db_proxy_id.type = GameServiceType::player_db_proxy;
+            config.target_player_db_proxy_id.shard = config.target_player_db_proxy_id.world;
+            config.target_player_db_proxy_id.instance = get_u64_json("target_player_db_proxy_instance", 0);
             config.zone_endpoints = get_zone_endpoints_json();
             config.gateway_endpoints = get_gateway_endpoints_json();
 
             if (config.listen_host.empty() || config.listen_port == 0) {
                 return std::nullopt;
             }
-            if (*type == GameServiceType::global || *type == GameServiceType::zone || *type == GameServiceType::world) {
+            if (*type == GameServiceType::global || *type == GameServiceType::zone || *type == GameServiceType::world || *type == GameServiceType::rank || *type == GameServiceType::player_db_proxy || *type == GameServiceType::world_db_proxy) {
                 if (config.tunnel_endpoints.empty()) {
                     return std::nullopt;
                 }
@@ -279,9 +371,34 @@ namespace yuan::game::server
             if (*type == GameServiceType::gateway && (config.public_host.empty() || config.zone_endpoints.empty())) {
                 return std::nullopt;
             }
-            if (*type == GameServiceType::web && (config.target_world_host.empty() || config.target_world_ports.empty())) {
+            if (*type == GameServiceType::web && config.world_endpoints.empty() && (config.target_world_host.empty() || config.target_world_ports.empty())) {
                 return std::nullopt;
             }
+            if (config.world_routing.strategy != "fixed" && config.world_routing.strategy != "modulo") {
+                return std::nullopt;
+            }
+            if (config.world_routing.world_count == 0) {
+                return std::nullopt;
+            }
+            if (*type == GameServiceType::web && config.world_endpoints.empty() && config.target_world_ports.size() < config.world_routing.world_count) {
+                return std::nullopt;
+            }
+            if (*type == GameServiceType::web && !config.world_endpoints.empty()) {
+                for (std::uint16_t index = 0; index < config.world_routing.world_count; ++index) {
+                    const auto expected_world = static_cast<std::uint16_t>(1 + index);
+                    bool found = false;
+                    for (const auto &endpoint : config.world_endpoints) {
+                        if (endpoint.world == expected_world && !endpoint.host.empty() && endpoint.port != 0) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        return std::nullopt;
+                    }
+                }
+            }
+            apply_secret_env_overrides(config);
             return config;
         }
 
@@ -358,8 +475,8 @@ namespace yuan::game::server
             }
             return result;
         };
-        auto get_gateway_endpoints = [&](const std::string &key) -> std::vector<GatewayInfo> {
-            std::vector<GatewayInfo> result;
+        auto get_gateway_endpoints = [&](const std::string &key) -> std::vector<SSGatewayInfo> {
+            std::vector<SSGatewayInfo> result;
             const auto value = get(key);
             if (!value) {
                 return result;
@@ -377,7 +494,7 @@ namespace yuan::game::server
                     result.clear();
                     return result;
                 }
-                GatewayInfo gateway;
+                SSGatewayInfo gateway;
                 gateway.service_id = static_cast<PackedGameServiceId>(std::stoull(item.substr(0, at)));
                 gateway.host = trim_config_value(item.substr(at + 1, colon - at - 1));
                 gateway.port = static_cast<std::uint16_t>(std::stoul(item.substr(colon + 1)));
@@ -387,6 +504,43 @@ namespace yuan::game::server
                     return result;
                 }
                 result.push_back(std::move(gateway));
+            }
+            return result;
+        };
+        auto get_world_endpoints = [&]() -> std::vector<WorldEndpointConfig> {
+            std::vector<WorldEndpointConfig> result;
+            const auto value = get("world_endpoints");
+            if (!value) {
+                return result;
+            }
+            std::stringstream stream(*value);
+            std::string item;
+            while (std::getline(stream, item, ';')) {
+                std::stringstream endpoint_stream(item);
+                std::string world;
+                std::string host;
+                std::string port;
+                std::string state;
+                if (!std::getline(endpoint_stream, world, ',') || !std::getline(endpoint_stream, host, ',') || !std::getline(endpoint_stream, port, ',')) {
+                    result.clear();
+                    return result;
+                }
+                std::getline(endpoint_stream, state, ',');
+                try {
+                    WorldEndpointConfig endpoint;
+                    endpoint.world = static_cast<std::uint16_t>(std::stoul(trim_config_value(world)));
+                    endpoint.host = trim_config_value(host);
+                    endpoint.port = static_cast<std::uint16_t>(std::stoul(trim_config_value(port)));
+                    endpoint.state = state.empty() ? std::string{"open"} : trim_config_value(state);
+                    if (endpoint.world == 0 || endpoint.host.empty() || endpoint.port == 0) {
+                        result.clear();
+                        return result;
+                    }
+                    result.push_back(std::move(endpoint));
+                } catch (...) {
+                    result.clear();
+                    return result;
+                }
             }
             return result;
         };
@@ -429,6 +583,7 @@ namespace yuan::game::server
         if (config.target_world_ports.empty() && config.target_world_port != 0) {
             config.target_world_ports.push_back(config.target_world_port);
         }
+        config.world_endpoints = get_world_endpoints();
         if (const auto redis_host = get("redis_host")) {
             config.redis_host = *redis_host;
         }
@@ -452,30 +607,35 @@ namespace yuan::game::server
         config.zone_report_ttl_ms = get_u64("zone_report_ttl_ms", 3000);
         config.tunnel_heartbeat_interval_ms = get_u64("tunnel_heartbeat_interval_ms", 5000);
         config.metrics_log_interval_ms = get_u64("metrics_log_interval_ms", 0);
-        config.client_frame_max_bytes = get_u64("client_frame_max_bytes", 64 * 1024);
-        config.client_frame_max_per_window = static_cast<std::uint32_t>(get_u64("client_frame_max_per_window", 0));
-        config.client_frame_rate_window_ms = get_u64("client_frame_rate_window_ms", 1000);
+        config.login_token_secret = get_u64("login_token_secret", kDefaultLoginTokenSecret);
+        config.gateway_internal_secret = get_u64("gateway_internal_secret", kDefaultLoginTokenSecret);
+        if (const auto strategy = get("world_routing_strategy")) {
+            config.world_routing.strategy = *strategy;
+        }
+        config.world_routing.version = get_u64("world_routing_version", config.world_routing.version);
+        config.world_routing.world_count = get_u16("world_count", config.world_routing.world_count);
         config.rpc_max_connections = get_u64("rpc_max_connections", 0);
         config.rpc_max_buffered_bytes = get_u64("rpc_max_buffered_bytes", 1024 * 1024);
         config.rpc_idle_timeout_ms = get_u64("rpc_idle_timeout_ms", 0);
+        config.gateway_drain_timeout_ms = get_u64("gateway_drain_timeout_ms", config.gateway_drain_timeout_ms);
 
-        config.target_global_id.region = get_u16("target_global_region", config.service_id.region);
-        config.target_global_id.world = get_u16("target_global_world", config.service_id.world);
-        config.target_global_id.type = GameServiceType::global;
-        config.target_global_id.shard = config.target_global_id.world;
-        config.target_global_id.instance = get_u64("target_global_instance", 1);
         config.target_world_id.region = get_u16("target_world_region", config.service_id.region);
         config.target_world_id.world = get_u16("target_world_world", config.service_id.world);
         config.target_world_id.type = GameServiceType::world;
         config.target_world_id.shard = config.target_world_id.world;
         config.target_world_id.instance = get_u64("target_world_instance", 1);
+        config.target_player_db_proxy_id.region = get_u16("target_player_db_proxy_region", config.service_id.region);
+        config.target_player_db_proxy_id.world = get_u16("target_player_db_proxy_world", config.service_id.world);
+        config.target_player_db_proxy_id.type = GameServiceType::player_db_proxy;
+        config.target_player_db_proxy_id.shard = config.target_player_db_proxy_id.world;
+        config.target_player_db_proxy_id.instance = get_u64("target_player_db_proxy_instance", 0);
         config.zone_endpoints = get_zone_endpoints("zone_endpoints");
         config.gateway_endpoints = get_gateway_endpoints("gateway_endpoints");
 
         if (config.listen_host.empty() || config.listen_port == 0) {
             return std::nullopt;
         }
-        if (*type == GameServiceType::global || *type == GameServiceType::zone || *type == GameServiceType::world) {
+        if (*type == GameServiceType::global || *type == GameServiceType::zone || *type == GameServiceType::world || *type == GameServiceType::rank || *type == GameServiceType::player_db_proxy || *type == GameServiceType::world_db_proxy) {
             if (config.tunnel_endpoints.empty()) {
                 return std::nullopt;
             }
@@ -493,15 +653,40 @@ namespace yuan::game::server
             return std::nullopt;
         }
         if (*type == GameServiceType::web) {
-            if (config.target_world_host.empty() || config.target_world_ports.empty()) {
+            if (config.world_endpoints.empty() && (config.target_world_host.empty() || config.target_world_ports.empty())) {
                 return std::nullopt;
             }
-            for (const auto port : config.target_world_ports) {
-                if (port == 0) {
-                    return std::nullopt;
+            if (config.world_endpoints.empty() && config.target_world_ports.size() < config.world_routing.world_count) {
+                return std::nullopt;
+            }
+            if (config.world_endpoints.empty()) {
+                for (const auto port : config.target_world_ports) {
+                    if (port == 0) {
+                        return std::nullopt;
+                    }
+                }
+            } else {
+                std::unordered_map<std::uint16_t, bool> worlds;
+                for (const auto &endpoint : config.world_endpoints) {
+                    if (endpoint.world == 0 || endpoint.host.empty() || endpoint.port == 0) {
+                        return std::nullopt;
+                    }
+                    worlds[endpoint.world] = true;
+                }
+                for (std::uint16_t i = 0; i < config.world_routing.world_count; ++i) {
+                    if (!worlds.contains(static_cast<std::uint16_t>(1 + i))) {
+                        return std::nullopt;
+                    }
                 }
             }
         }
+        if (config.world_routing.strategy != "fixed" && config.world_routing.strategy != "modulo") {
+            return std::nullopt;
+        }
+        if (config.world_routing.world_count == 0) {
+            return std::nullopt;
+        }
+        apply_secret_env_overrides(config);
         return config;
     }
 }

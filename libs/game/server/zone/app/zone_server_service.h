@@ -2,7 +2,9 @@
 #define YUAN_GAME_SERVER_ZONE_ZONE_SERVER_SERVICE_H
 
 #include "application.h"
+#include "common/db_proxy_routing.h"
 #include "common/rpc_network.h"
+#include "common/world_routing.h"
 #include "messaging/process_message_manager.h"
 #include "zone/model/player_manager.h"
 #include "zone/rpc/zone_msg_echo.h"
@@ -10,6 +12,7 @@
 #include "zone/rpc/zone_msg_player.h"
 
 #include <cstdint>
+#include <optional>
 #include <thread>
 
 namespace yuan::redis
@@ -23,8 +26,9 @@ namespace yuan::game::server
     {
     public:
         ZoneServerService(GameServiceId service_id,
-                            GameServiceId global_service_id,
-                              GameServiceId world_service_id,
+                               GameServiceId world_service_id,
+                               GameServiceId player_db_proxy_service_id,
+                               DbProxyRoutingConfig player_db_proxy_routing,
                               std::string listen_host,
                               std::vector<rpc_network::RpcEndpoint> tunnel_endpoints,
                              std::uint16_t listen_port,
@@ -39,7 +43,8 @@ namespace yuan::game::server
                                std::uint16_t zone_load_sync_interval_ms,
                                std::uint32_t zone_max_players,
                                std::uint64_t tunnel_heartbeat_interval_ms,
-                               std::vector<GatewayInfo> gateway_endpoints);
+                               WorldRoutingConfig world_routing,
+                               std::vector<SSGatewayInfo> gateway_endpoints);
 
         void set_runtime_context(const yuan::app::RuntimeContext &context) override;
 
@@ -57,8 +62,9 @@ namespace yuan::game::server
         bool ok_ = false;
         yuan::app::RuntimeContext context_;
         GameServiceId service_id_;
-        GameServiceId global_service_id_;
         GameServiceId world_service_id_;
+        GameServiceId player_db_proxy_service_id_;
+        DbProxyRoutingConfig player_db_proxy_routing_;
         mutable ProcessMessageManager messaging_;
         ServiceAddress zone_address_;
         yuan::rpc::Server zone_rpc_;
@@ -74,7 +80,8 @@ namespace yuan::game::server
         std::uint16_t redis_flush_interval_ms_ = 5000;
         std::uint16_t zone_load_sync_interval_ms_ = 1000;
         std::uint32_t zone_max_players_ = 0;
-        std::vector<GatewayInfo> gateway_endpoints_;
+        WorldRoutingConfig world_routing_;
+        std::vector<SSGatewayInfo> gateway_endpoints_;
         std::shared_ptr<yuan::redis::RedisClient> redis_;
         PlayerManager players_;
         std::jthread flush_thread_;
@@ -85,10 +92,14 @@ namespace yuan::game::server
         void register_loop(std::stop_token stop_token);
         bool register_to_world();
         bool report_zone_load() const;
-        bool update_world_player_zone(PlayerZoneUpdate update) const;
-        bool player_enter(ClientLoginRequest request);
-        bool player_leave(ClientLoginRequest request);
-        GmCommandResponse execute_gm(GmCommandRequest request);
+        bool update_world_player_zone(SSPlayerZoneUpdate update) const;
+        std::optional<Player> load_player_from_db(SSGatewayLoginRequest request) const;
+        bool save_player_to_db(const Player &player) const;
+        std::optional<Player> load_player_from_redis(SSGatewayLoginRequest request) const;
+        bool save_player_to_redis(const Player &player) const;
+        bool player_enter(SSGatewayLoginRequest request);
+        bool player_leave(SSGatewayLoginRequest request);
+        SSGmCommandResponse execute_gm(SSGmCommandRequest request);
         void flush_dirty_players();
         void flush_loop(std::stop_token stop_token);
         void load_sync_loop(std::stop_token stop_token);

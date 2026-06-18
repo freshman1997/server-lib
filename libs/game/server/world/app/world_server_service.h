@@ -2,6 +2,7 @@
 #define YUAN_GAME_SERVER_WORLD_WORLD_SERVER_SERVICE_H
 
 #include "application.h"
+#include "common/db_proxy_routing.h"
 #include "common/rpc_network.h"
 #include "http_server.h"
 #include "messaging/process_message_manager.h"
@@ -10,6 +11,8 @@
 
 #include <thread>
 #include <atomic>
+#include <mutex>
+#include <unordered_map>
 
 namespace yuan::redis
 {
@@ -35,10 +38,13 @@ namespace yuan::game::server
                                std::uint16_t redis_command_timeout_ms,
                                std::uint16_t redis_flush_interval_ms,
                                std::string world_ownership_store,
-                               std::uint64_t login_reservation_ttl_ms,
-                               std::uint64_t zone_report_ttl_ms,
-                               std::uint64_t tunnel_heartbeat_interval_ms,
-                               std::uint64_t metrics_log_interval_ms = 0);
+                                std::uint64_t login_reservation_ttl_ms,
+                                std::uint64_t zone_report_ttl_ms,
+                                 std::uint64_t tunnel_heartbeat_interval_ms,
+                                  std::uint64_t login_token_secret,
+                                  WorldRoutingConfig world_routing,
+                                  DbProxyRoutingConfig world_db_proxy_routing,
+                                  std::uint64_t metrics_log_interval_ms = 0);
 
         void set_runtime_context(const yuan::app::RuntimeContext &context) override;
         bool init() override;
@@ -53,7 +59,9 @@ namespace yuan::game::server
         void register_http_routes();
         void ensure_player_roles(PlayerUid player_uid);
         void mark_role_dirty(PlayerId player_id, PackedGameServiceId zone_service_id);
-        [[nodiscard]] std::optional<GmCommandResponse> forward_gm(GmCommandRequest request) const;
+        bool save_role_location_to_db(PlayerId player_id, PackedGameServiceId zone_service_id) const;
+        [[nodiscard]] PlayerUid player_uid_for_role(PlayerId player_id) const;
+        [[nodiscard]] std::optional<SSGmCommandResponse> forward_gm(SSGmCommandRequest request) const;
         void flush_dirty_roles();
         void flush_loop(std::stop_token stop_token);
         void metrics_loop(std::stop_token stop_token) const;
@@ -75,6 +83,9 @@ namespace yuan::game::server
         std::string world_ownership_store_ = "memory";
         std::atomic<bool> draining_{false};
         std::uint64_t metrics_log_interval_ms_ = 0;
+        DbProxyRoutingConfig world_db_proxy_routing_;
+        mutable std::mutex pending_role_locations_mutex_;
+        std::unordered_map<PlayerId, PackedGameServiceId> pending_role_locations_;
         WorldMsgContext world_context_;
         yuan::rpc::Server world_rpc_;
         RoleCache roles_;

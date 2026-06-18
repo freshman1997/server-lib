@@ -1,7 +1,7 @@
 #ifndef YUAN_GAME_SERVER_WORLD_MODEL_WORLD_OWNERSHIP_STORE_H
 #define YUAN_GAME_SERVER_WORLD_MODEL_WORLD_OWNERSHIP_STORE_H
 
-#include "common/game_messages.h"
+#include "common/codec/game_binary_codec.h"
 
 #include "redis_client.h"
 

@@ -24,7 +24,7 @@ int main()
 
     const auto route = game_route::gateway_game_forward();
     const auto payload = yuan::rpc::Codec<std::string>::encode("move:1,2");
-    const ClientFrame frame{ClientFrameHeader{90001, 10001, 4504699675869185ULL, 77, 1, route.service, route.method}, payload};
+    const ClientFrame frame{ClientFrameHeader{90001, 10001, 1, route.service, route.method}, payload};
 
     yuan::rpc::Bytes encoded;
     if (!require(encode_client_frame(frame, encoded), "client frame should encode")) {
@@ -35,7 +35,7 @@ int main()
         return 2;
     }
     if (!require(decoded->header.player_uid == frame.header.player_uid && decoded->header.role_id == frame.header.role_id &&
-                     decoded->header.zone_service_id == frame.header.zone_service_id && decoded->header.gateway_session_id == frame.header.gateway_session_id,
+                     decoded->header.sequence == frame.header.sequence,
                  "client frame header should roundtrip")) {
         return 3;
     }
@@ -66,7 +66,6 @@ int main()
     rate_options.max_frames_per_window = 2;
     rate_options.rate_window_ms = 1000;
     auto rate_frame = *decoded;
-    rate_frame.header.gateway_session_id = 88;
     rate_frame.header.sequence = 1;
     if (!require(rate_guard.validate(rate_frame, rate_options).ok, "first frame in rate window should pass")) {
         return 10;

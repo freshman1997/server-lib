@@ -1,9 +1,12 @@
 {
   "listen_host": "127.0.0.1",
   "listen_port": 25005,
-  "target_world_host": "127.0.0.1",
-  "target_world_port": 25103,
-  "target_world_ports": [25103],
+  "world_routing_strategy": "modulo",
+  "world_routing_version": 1,
+  "world_count": 1,
+  "world_endpoints": [
+    { "world": 1, "host": "127.0.0.1", "port": 25103, "state": "open" }
+  ],
   "redis_host": "127.0.0.1",
   "redis_port": 6379,
   "redis_db": 0,

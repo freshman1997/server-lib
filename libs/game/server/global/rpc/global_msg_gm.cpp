@@ -13,11 +13,11 @@ namespace yuan::game::server
         register_builtin_gm_commands();
         context.executors["set_time_offset_seconds"] = [](const std::vector<std::string> &args) {
             if (args.size() != 1) {
-                return GmCommandResponse{false, "usage: set_time_offset_seconds <seconds>"};
+                return SSGmCommandResponse{false, "usage: set_time_offset_seconds <seconds>"};
             }
             const auto offset_seconds = static_cast<std::int64_t>(std::stoll(args.front()));
             yuan::base::time::set_system_time_offset_seconds(offset_seconds);
-            return GmCommandResponse{true, "time offset seconds set to " + std::to_string(offset_seconds)};
+            return SSGmCommandResponse{true, "time offset seconds set to " + std::to_string(offset_seconds)};
         };
     }
 
@@ -27,7 +27,7 @@ namespace yuan::game::server
             yuan::rpc::Response response;
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
-            const auto request = decode_gm_command_request(message.payload);
+            const auto request = decode_binary<SSGmCommandRequest>(message.payload);
             if (!request) {
                 response.status = yuan::rpc::RpcStatus::bad_request;
                 response.error = "invalid gm command request";
@@ -36,12 +36,12 @@ namespace yuan::game::server
             const auto it = context.executors.find(request->command);
             if (it == context.executors.end()) {
                 response.status = yuan::rpc::RpcStatus::not_found;
-                (void)encode_gm_command_response(GmCommandResponse{false, "unknown gm command: " + request->command}, response.payload);
+                (void)encode_binary(SSGmCommandResponse{false, "unknown gm command: " + request->command}, response.payload);
                 return response;
             }
             const auto result = it->second(request->args);
             response.status = result.ok ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::bad_request;
-            (void)encode_gm_command_response(result, response.payload);
+            (void)encode_binary(result, response.payload);
             return response;
         });
     }

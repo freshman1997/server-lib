@@ -1,4 +1,8 @@
-#include "game_server.h"
+#include "common/codec/game_binary_codec.h"
+#include "common/metadata_keys.h"
+#include "common/rpc_network.h"
+#include "global/rpc/global_msg_echo.h"
+#include "tunnel/rpc/tunnel_service.h"
 
 #include "coroutine/sync_wait.h"
 #include "net/async/async_request_client.h"
@@ -120,7 +124,7 @@ int main()
                 const auto response = yuan::rpc::wire::to_response(decoded.frame);
                 if (response.request_id != request_id || response.status != yuan::rpc::RpcStatus::ok ||
                     yuan::rpc::Codec<std::string>::decode(response.payload) != "hello-core-global" ||
-                    response.metadata.find("global.node") == response.metadata.end()) {
+                    response.metadata.find(game_metadata_key::global_node) == response.metadata.end()) {
                     co_return false;
                 }
             }
@@ -138,6 +142,39 @@ int main()
     server_thread.join();
     if (!require(server_ok.load(), "Core network server should complete successfully")) {
         return 8;
+    }
+
+    const auto async_port = rpc_network::reserve_loopback_port();
+    if (!require(async_port != 0, "async server should reserve a loopback port")) {
+        return 13;
+    }
+    std::atomic_bool async_server_ok{true};
+    std::thread async_server_thread([&] {
+        try {
+            rpc_network::RpcNetworkServer server;
+            async_server_ok = server.bind_loopback(async_port, tunnel.rpc_server(), 2) && server.run();
+        } catch (...) {
+            async_server_ok = false;
+        }
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    rpc_network::RpcNetworkPersistentAsyncClient async_client;
+    message.request_id = 0;
+    auto first = async_client.call_async(rpc_network::RpcEndpoint{"127.0.0.1", async_port}, message);
+    auto second = async_client.call_async(rpc_network::RpcEndpoint{"127.0.0.1", async_port}, message);
+    const auto first_response = first.get();
+    const auto second_response = second.get();
+    async_client.close();
+    async_server_thread.join();
+    if (!require(first_response && second_response && first_response->request_id != 0 && second_response->request_id != 0 &&
+                     first_response->request_id != second_response->request_id &&
+                     first_response->status == yuan::rpc::RpcStatus::ok && second_response->status == yuan::rpc::RpcStatus::ok,
+                 "persistent async RPC client should demux concurrent responses")) {
+        return 14;
+    }
+    if (!require(async_server_ok.load(), "async Core network server should complete successfully")) {
+        return 15;
     }
 
     const auto drain_port = rpc_network::reserve_loopback_port();

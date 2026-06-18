@@ -10,15 +10,15 @@ namespace yuan::game::server
             yuan::rpc::Response response;
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
-            const auto request = decode_gm_command_request(message.payload);
+            const auto request = decode_binary<SSGmCommandRequest>(message.payload);
             if (!request) {
                 response.status = yuan::rpc::RpcStatus::bad_request;
                 response.error = "invalid zone gm request";
                 return response;
             }
-            const auto result = handler ? handler(*request) : GmCommandResponse{false, "zone gm handler is not configured"};
+            const auto result = handler ? handler(*request) : SSGmCommandResponse{false, "zone gm handler is not configured"};
             response.status = result.ok ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::bad_request;
-            (void)encode_gm_command_response(result, response.payload);
+            (void)encode_binary(result, response.payload);
             return response;
         });
     }

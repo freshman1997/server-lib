@@ -6,7 +6,7 @@
 
 namespace yuan::game::server
 {
-    void world_add_role(WorldMsgContext &context, PlayerUid player_uid, PlayerRoleInfo role)
+    void world_add_role(WorldMsgContext &context, PlayerUid player_uid, SSPlayerRoleInfo role)
     {
         if (role.zone_service_id == 0) {
             const auto zone = world_player_zone(context, role.role_id);
@@ -27,7 +27,7 @@ namespace yuan::game::server
         roles.push_back(std::move(role));
     }
 
-    void world_register_gateway(WorldMsgContext &context, GatewayInfo gateway)
+    void world_register_gateway(WorldMsgContext &context, SSGatewayInfo gateway)
     {
         for (auto &existing : context.gateways) {
             if (existing.service_id == gateway.service_id) {
@@ -38,9 +38,14 @@ namespace yuan::game::server
         context.gateways.push_back(std::move(gateway));
     }
 
-    void world_register_zone(WorldMsgContext &context, ZoneInfo zone)
+    void world_register_zone(WorldMsgContext &context, SSZoneInfo zone)
     {
         if (zone.service_id == 0) {
+            return;
+        }
+        if (zone.world_routing_strategy != context.world_routing.strategy ||
+            zone.world_routing_version != context.world_routing.version ||
+            zone.world_count != context.world_routing.world_count) {
             return;
         }
         zone.available = zone.available && !zone.gateways.empty();
@@ -75,10 +80,26 @@ namespace yuan::game::server
         if (player_id == 0) {
             return false;
         }
+        PlayerUid player_uid = 0;
+        for (const auto &[uid, roles] : context.roles_by_player_uid) {
+            for (const auto &role : roles) {
+                if (role.role_id == player_id) {
+                    player_uid = uid;
+                    break;
+                }
+            }
+            if (player_uid != 0) {
+                break;
+            }
+        }
         const auto next = WorldOwnershipRecord{zone_service_id, gateway_session_id};
         bool stale_update = false;
+        const auto current_online_role = context.online_by_role.find(player_id);
+        if (zone_service_id == 0 && gateway_session_id != 0 && current_online_role != context.online_by_role.end() && current_online_role->second.gateway_session_id != gateway_session_id) {
+            stale_update = true;
+        }
         if (context.ownership_store) {
-            stale_update = !context.ownership_store->compare_and_set(player_id, source_zone_service_id, gateway_session_id, next);
+            stale_update = stale_update || !context.ownership_store->compare_and_set(player_id, source_zone_service_id, gateway_session_id, next);
         } else {
             const auto current_zone = world_player_zone(context, player_id).value_or(0);
             if (zone_service_id == 0 && source_zone_service_id != 0 && current_zone != 0 && current_zone != source_zone_service_id) {
@@ -95,7 +116,30 @@ namespace yuan::game::server
         if (zone_service_id == 0) {
             context.zone_by_player.erase(player_id);
             context.session_by_player.erase(player_id);
+            if (current_online_role != context.online_by_role.end()) {
+                const auto uid = current_online_role->second.player_uid;
+                context.online_by_role.erase(current_online_role);
+                const auto uid_it = context.online_by_uid.find(uid);
+                if (uid_it != context.online_by_uid.end() && uid_it->second.role_id == player_id) {
+                    context.online_by_uid.erase(uid_it);
+                }
+            }
         } else {
+            if (player_uid != 0) {
+                const WorldOnlineSession next_session{player_uid, player_id, zone_service_id, gateway_session_id};
+                const auto old_uid_session = context.online_by_uid.find(player_uid);
+                if (old_uid_session != context.online_by_uid.end() && old_uid_session->second.role_id != player_id) {
+                    const auto old_role_id = old_uid_session->second.role_id;
+                    context.zone_by_player.erase(old_role_id);
+                    context.session_by_player.erase(old_role_id);
+                    context.online_by_role.erase(old_role_id);
+                    if (context.after_player_zone_set) {
+                        context.after_player_zone_set(old_role_id, 0);
+                    }
+                }
+                context.online_by_uid[player_uid] = next_session;
+                context.online_by_role[player_id] = next_session;
+            }
             context.zone_by_player[player_id] = zone_service_id;
             if (gateway_session_id != 0) {
                 context.session_by_player[player_id] = gateway_session_id;
@@ -148,7 +192,7 @@ namespace yuan::game::server
             }
         }
 
-        const ZoneInfo *best = nullptr;
+        const SSZoneInfo *best = nullptr;
         for (const auto &[_, zone] : context.zones) {
             std::uint32_t pending = 0;
             for (const auto &[_, reservation] : context.pending_login_by_role) {
@@ -204,6 +248,7 @@ namespace yuan::game::server
                 }
                 if (selected_zone) {
                     role.zone_service_id = *selected_zone;
+                    role.login_token_id = encode_login_token_id(*selected_zone, now_ms + context.login_reservation_ttl_ms, context.login_token_secret);
                     if (world_player_zone(context, role.role_id).value_or(0) == 0) {
                         context.pending_login_by_role[role.role_id] = ZoneLoginReservation{*selected_zone, now_ms + context.login_reservation_ttl_ms};
                     }
@@ -220,7 +265,7 @@ namespace yuan::game::server
     bool register_world_msg(yuan::rpc::Server &server, WorldMsgContext &context)
     {
         const bool login_registered = server.register_handler(game_route::world_login_options(), [&context](const yuan::rpc::Message &message) {
-            const auto request = decode_login_options_request(message.payload);
+            const auto request = decode_binary<LoginOptionsRequest>(message.payload);
             yuan::rpc::Response response;
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
@@ -233,12 +278,12 @@ namespace yuan::game::server
                 context.before_login_options(request->player_uid);
             }
             response.status = yuan::rpc::RpcStatus::ok;
-            (void)encode_login_options_response(world_login_options(context, request->player_uid), response.payload);
+            (void)encode_binary(world_login_options(context, request->player_uid), response.payload);
             return response;
         });
 
         const bool gateway_registered = server.register_handler(game_route::world_gateway_register(), [&context](const yuan::rpc::Message &message) {
-            const auto gateway = decode_gateway_info(message.payload);
+            const auto gateway = decode_binary<SSGatewayInfo>(message.payload);
             yuan::rpc::Response response;
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
@@ -253,7 +298,7 @@ namespace yuan::game::server
         });
 
         const bool zone_register_registered = server.register_handler(game_route::world_zone_register(), [&context](const yuan::rpc::Message &message) {
-            const auto zone = decode_zone_info(message.payload);
+            const auto zone = decode_binary<SSZoneInfo>(message.payload);
             yuan::rpc::Response response;
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
@@ -268,7 +313,7 @@ namespace yuan::game::server
         });
 
         const bool zone_select_registered = server.register_handler(game_route::world_zone_select(), [&context](const yuan::rpc::Message &message) {
-            const auto request = decode_zone_select_request(message.payload);
+            const auto request = decode_binary<SSZoneSelectRequest>(message.payload);
             yuan::rpc::Response response;
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
@@ -278,7 +323,7 @@ namespace yuan::game::server
                 return response;
             }
             const auto zone = world_select_zone(context, request->player_uid, request->role_id).value_or(0);
-            (void)encode_player_zone_update(PlayerZoneUpdate{request->role_id, zone, 0}, response.payload);
+            (void)encode_binary(SSPlayerZoneUpdate{request->player_uid, request->role_id, zone, 0, 0}, response.payload);
             response.status = zone != 0 ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::not_found;
             if (zone == 0) {
                 response.error = "no available zone";
@@ -287,7 +332,7 @@ namespace yuan::game::server
         });
 
         const bool zone_get_registered = server.register_handler(game_route::world_player_zone_get(), [&context](const yuan::rpc::Message &message) {
-            const auto query = decode_player_zone_query(message.payload);
+            const auto query = decode_binary<SSPlayerZoneQuery>(message.payload);
             yuan::rpc::Response response;
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
@@ -297,7 +342,7 @@ namespace yuan::game::server
                 return response;
             }
             const auto zone = world_player_zone(context, query->player_id).value_or(0);
-            (void)encode_player_zone_update(PlayerZoneUpdate{query->player_id, zone, 0}, response.payload);
+            (void)encode_binary(SSPlayerZoneUpdate{0, query->player_id, zone, 0, 0}, response.payload);
             response.status = yuan::rpc::RpcStatus::ok;
             return response;
         });
@@ -318,7 +363,7 @@ namespace yuan::game::server
         });
 
         const bool gm_registered = server.register_handler(game_route::world_gm_forward(), [&context](const yuan::rpc::Message &message) {
-            const auto request = decode_gm_command_request(message.payload);
+            const auto request = decode_binary<SSGmCommandRequest>(message.payload);
             yuan::rpc::Response response;
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
@@ -339,7 +384,7 @@ namespace yuan::game::server
                 return response;
             }
             response.status = result->ok ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::bad_request;
-            (void)encode_gm_command_response(*result, response.payload);
+            (void)encode_binary(*result, response.payload);
             return response;
         });
 

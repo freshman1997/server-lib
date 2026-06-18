@@ -10,10 +10,10 @@
     { "service_id": 4504699675869185, "host": "127.0.0.1", "port": 25002 }
   ],
   "metrics_log_interval_ms": 0,
+  "login_token_secret": 11400714819323198485,
+  "gateway_internal_secret": 11400714819323198485,
   "rpc_max_connections": 0,
   "rpc_max_buffered_bytes": 1048576,
-  "rpc_idle_timeout_ms": 0,
-  "client_frame_max_bytes": 65536,
-  "client_frame_max_per_window": 0,
-  "client_frame_rate_window_ms": 1000
+  "rpc_idle_timeout_ms": 600000,
+  "gateway_drain_timeout_ms": 3000
 }

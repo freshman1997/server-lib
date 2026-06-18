@@ -1,6 +1,11 @@
-#include "game_server.h"
-
 #include "base/time.h"
+#include "common/codec/game_binary_codec.h"
+#include "common/game_rpc_protocol.h"
+#include "common/gm_command_registry.h"
+#include "global/rpc/global_msg_echo.h"
+#include "global/rpc/global_msg_gm.h"
+#include "tunnel/rpc/tunnel_service.h"
+#include "world/rpc/world_msg.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -41,10 +46,10 @@ int main()
     }
     WorldMsgContext world{ServiceAddress{{1, 1, GameServiceType::world, 1, 1}, 400, yuan::game_base::ServerRole::world, 1, "world"}};
     yuan::rpc::Server world_rpc;
-    world.gm_forward_handler = [&](GmCommandRequest request) -> std::optional<GmCommandResponse> {
+    world.gm_forward_handler = [&](SSGmCommandRequest request) -> std::optional<SSGmCommandResponse> {
         const auto definition = GmCommandRegistry::instance().find(request.command);
         if (!definition) {
-            return GmCommandResponse{false, "unknown gm command: " + request.command};
+            return SSGmCommandResponse{false, "unknown gm command: " + request.command};
         }
         if (request.target_service_id == 0) {
             request.target_service_id = pack_game_service_id(1, 1, definition->executor_type, 1);
@@ -52,12 +57,12 @@ int main()
 
         const auto route = gm_execute_route_for(definition->executor_type);
         if (!route) {
-            return GmCommandResponse{false, "gm executor type is not routable"};
+            return SSGmCommandResponse{false, "gm executor type is not routable"};
         }
 
         yuan::rpc::Bytes gm_payload;
-        if (!encode_gm_command_request(request, gm_payload)) {
-            return GmCommandResponse{false, "failed to encode gm command"};
+        if (!encode_binary(request, gm_payload)) {
+            return SSGmCommandResponse{false, "failed to encode gm command"};
         }
         TunnelEnvelope envelope;
         envelope.source_service_id = world.address.service.pack();
@@ -68,9 +73,9 @@ int main()
         envelope.payload = std::move(gm_payload);
         auto response = tunnels.forward(std::move(envelope));
         if (response.status != yuan::rpc::RpcStatus::ok) {
-            return GmCommandResponse{false, response.error.empty() ? "gm target failed" : response.error};
+            return SSGmCommandResponse{false, response.error.empty() ? "gm target failed" : response.error};
         }
-        return decode_gm_command_response(response.payload);
+        return decode_binary<SSGmCommandResponse>(response.payload);
     };
     if (!require(register_world_msg(world_rpc, world), "world handlers should register")) {
         return 9;
@@ -84,7 +89,7 @@ int main()
     }
 
     yuan::rpc::Bytes payload;
-    if (!require(encode_gm_command_request(GmCommandRequest{0, "set_time_offset_seconds", {"123"}}, payload),
+    if (!require(encode_binary(SSGmCommandRequest{0, "set_time_offset_seconds", {"123"}}, payload),
                  "gm request should encode")) {
         return 4;
     }
@@ -97,7 +102,7 @@ int main()
         return 5;
     }
 
-    const auto gm_response = decode_gm_command_response(response.payload);
+    const auto gm_response = decode_binary<SSGmCommandResponse>(response.payload);
     if (!require(gm_response && gm_response->ok, "gm response should be ok")) {
         return 6;
     }

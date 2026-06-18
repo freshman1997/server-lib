@@ -1,7 +1,7 @@
 #ifndef YUAN_GAME_SERVER_COMMON_CLIENT_FRAME_H
 #define YUAN_GAME_SERVER_COMMON_CLIENT_FRAME_H
 
-#include "common/game_messages.h"
+#include "common/codec/game_binary_codec.h"
 
 #include <optional>
 #include <mutex>
@@ -14,8 +14,6 @@ namespace yuan::game::server
     {
         PlayerUid player_uid = 0;
         RoleId role_id = 0;
-        PackedGameServiceId zone_service_id = 0;
-        std::uint64_t gateway_session_id = 0;
         std::uint64_t sequence = 0;
         std::uint32_t route_service = 0;
         std::uint32_t route_method = 0;

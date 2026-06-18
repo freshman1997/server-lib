@@ -1,5 +1,7 @@
 #include "global/rpc/global_msg_echo.h"
 
+#include "common/metadata_keys.h"
+
 namespace yuan::game::server
 {
     bool register_global_msg_echo(yuan::rpc::Server &server, GlobalMsgEchoContext &context)
@@ -12,7 +14,7 @@ namespace yuan::game::server
             response.status = yuan::rpc::RpcStatus::ok;
             response.payload = message.payload;
             response.metadata = message.metadata;
-            response.metadata["global.node"] = service_key(context.address);
+            response.metadata[game_metadata_key::global_node] = service_key(context.address);
             if (context.after_echo) {
                 context.after_echo(message);
             }

@@ -1,7 +1,7 @@
 #ifndef YUAN_GAME_SERVER_COMMON_GM_COMMAND_REGISTRY_H
 #define YUAN_GAME_SERVER_COMMON_GM_COMMAND_REGISTRY_H
 
-#include "common/game_messages.h"
+#include "common/codec/game_binary_codec.h"
 
 #include <optional>
 #include <string>

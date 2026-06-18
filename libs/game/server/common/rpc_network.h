@@ -4,13 +4,18 @@
 #include "yuan/rpc/rpc.h"
 #include "yuan/rpc/frame_stream.h"
 
+#include "common/metadata_keys.h"
+
 #include "buffer/byte_buffer.h"
 #include "net/runtime/network_runtime.h"
+#include "net/async/async_request_client.h"
 #include "net/session/stream_server_session.h"
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <deque>
+#include <future>
 #include <mutex>
 #include <optional>
 #include <condition_variable>
@@ -44,8 +49,9 @@ namespace yuan::game::server::rpc_network
 
     namespace metadata_key
     {
-        inline constexpr const char *connection_id = "rpc.connection_id";
-        inline constexpr const char *close_connection = "rpc.close_connection";
+        inline constexpr const char *connection_id = game_metadata_key::rpc_connection_id;
+        inline constexpr const char *close_connection = game_metadata_key::rpc_close_connection;
+        inline constexpr const char *defer_response = game_metadata_key::rpc_defer_response;
     }
 
     class RpcNetworkServer
@@ -61,6 +67,8 @@ namespace yuan::game::server::rpc_network
         bool bind_loopback(std::uint16_t port, yuan::rpc::Server &server, std::size_t expected_requests = 1);
         void set_connection_closed_callback(std::function<void(std::uint64_t)> callback);
         [[nodiscard]] bool write_message_to_connection(std::uint64_t connection_id, const yuan::rpc::Message &message);
+        [[nodiscard]] bool write_response_to_connection(std::uint64_t connection_id, yuan::rpc::Response response);
+        [[nodiscard]] bool close_connection(std::uint64_t connection_id);
         void close_all_connections();
         [[nodiscard]] std::size_t active_connection_count() const;
         bool run();
@@ -88,10 +96,7 @@ namespace yuan::game::server::rpc_network
         std::size_t max_connections_ = 0;
         std::size_t max_buffered_bytes_ = 1024 * 1024;
         std::uint64_t idle_timeout_ms_ = 0;
-        std::mutex workers_mutex_;
-        std::condition_variable workers_idle_;
         std::unordered_map<std::uintptr_t, yuan::rpc::wire::FrameStreamDecoder> decoders_;
-        std::size_t active_workers_ = 0;
         std::atomic_size_t handled_{0};
         std::size_t expected_requests_ = 1;
         bool stop_after_expected_requests_ = false;
@@ -110,6 +115,67 @@ namespace yuan::game::server::rpc_network
 
     private:
         RpcNetworkClientConfig config_;
+    };
+
+    class RpcNetworkPersistentClient
+    {
+    public:
+        explicit RpcNetworkPersistentClient(RpcNetworkClientConfig config = {});
+        ~RpcNetworkPersistentClient();
+
+        RpcNetworkPersistentClient(const RpcNetworkPersistentClient &) = delete;
+        RpcNetworkPersistentClient &operator=(const RpcNetworkPersistentClient &) = delete;
+
+        std::optional<yuan::rpc::Response> call(const RpcEndpoint &endpoint, const yuan::rpc::Message &message);
+        void close();
+
+    private:
+        RpcNetworkClientConfig config_;
+        yuan::net::NetworkRuntime runtime_;
+        yuan::net::AsyncRequestClient client_;
+        std::optional<RpcEndpoint> connected_endpoint_;
+        std::mutex mutex_;
+    };
+
+    class RpcNetworkPersistentAsyncClient
+    {
+    public:
+        explicit RpcNetworkPersistentAsyncClient(RpcNetworkClientConfig config = {}, std::size_t max_pending = 1024);
+        ~RpcNetworkPersistentAsyncClient();
+
+        RpcNetworkPersistentAsyncClient(const RpcNetworkPersistentAsyncClient &) = delete;
+        RpcNetworkPersistentAsyncClient &operator=(const RpcNetworkPersistentAsyncClient &) = delete;
+
+        std::future<std::optional<yuan::rpc::Response>> call_async(const RpcEndpoint &endpoint, yuan::rpc::Message message);
+        std::optional<yuan::rpc::Response> call(const RpcEndpoint &endpoint, yuan::rpc::Message message);
+        void close();
+        [[nodiscard]] std::size_t queued_size() const;
+        [[nodiscard]] std::size_t pending_size() const;
+
+    private:
+        struct QueuedCall
+        {
+            RpcEndpoint endpoint;
+            yuan::rpc::Message message;
+            std::shared_ptr<std::promise<std::optional<yuan::rpc::Response>>> promise;
+        };
+
+        void worker_loop(std::stop_token stop_token);
+        bool ensure_connected(const RpcEndpoint &endpoint);
+        void fail_all(std::deque<QueuedCall> &calls);
+
+        RpcNetworkClientConfig config_;
+        std::size_t max_pending_ = 1024;
+        yuan::net::NetworkRuntime runtime_;
+        yuan::net::AsyncRequestClient client_;
+        std::optional<RpcEndpoint> connected_endpoint_;
+        yuan::rpc::wire::FrameStreamDecoder decoder_;
+        std::atomic<yuan::rpc::RequestId> next_request_id_{1};
+        std::atomic_size_t pending_count_{0};
+        mutable std::mutex mutex_;
+        std::condition_variable_any cv_;
+        std::deque<QueuedCall> queue_;
+        std::jthread worker_;
     };
 
     std::optional<yuan::rpc::Response> call(std::uint16_t port,

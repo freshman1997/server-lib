@@ -6,8 +6,6 @@ target_include_directories(GameServerTunnel PUBLIC
     "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 target_link_libraries(GameServerTunnel PUBLIC GameServerCommon GameServerMessaging)
 
-if(YUAN_BUILD_TESTS OR BUILD_TESTING)
-    file(GLOB GAME_TUNNEL_SERVER_SOURCES CONFIGURE_DEPENDS "app/*_server.cpp")
-    add_executable(game_tunnel_server ${GAME_TUNNEL_SERVER_SOURCES})
-    target_link_libraries(game_tunnel_server PUBLIC GameServerTunnel)
-endif()
+file(GLOB GAME_TUNNEL_SERVER_SOURCES CONFIGURE_DEPENDS "app/*_server.cpp")
+add_executable(game_tunnel_server ${GAME_TUNNEL_SERVER_SOURCES})
+target_link_libraries(game_tunnel_server PUBLIC GameServerTunnel)

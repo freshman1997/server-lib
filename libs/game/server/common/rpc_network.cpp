@@ -7,7 +7,9 @@
 #include "yuan/rpc/frame_stream.h"
 
 #include <algorithm>
-#include <thread>
+#include <condition_variable>
+#include <mutex>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -15,6 +17,15 @@ namespace yuan::game::server::rpc_network
 {
     namespace
     {
+        bool wait_for_stop(std::stop_token stop_token, std::chrono::milliseconds delay)
+        {
+            std::mutex mutex;
+            std::condition_variable_any cv;
+            std::unique_lock<std::mutex> lock(mutex);
+            (void)cv.wait_for(lock, stop_token, delay, [] { return false; });
+            return stop_token.stop_requested();
+        }
+
         yuan::buffer::ByteBuffer to_buffer(const yuan::rpc::Bytes &bytes)
         {
             yuan::buffer::ByteBuffer buffer(bytes.size());
@@ -88,39 +99,28 @@ namespace yuan::game::server::rpc_network
                     break;
                 }
 
-                {
-                    std::lock_guard<std::mutex> lock(workers_mutex_);
-                    ++active_workers_;
-                }
-
-                std::thread([this, connection_context, connection_id, frame = std::move(decoded.frame)]() mutable {
-                auto finish_worker = [this] {
-                    std::lock_guard<std::mutex> lock(workers_mutex_);
-                    if (active_workers_ > 0) {
-                        --active_workers_;
-                    }
-                    workers_idle_.notify_all();
-                };
-
-                auto message = yuan::rpc::wire::to_message(std::move(frame));
+                // Game RPC handlers are intentionally executed on the network runtime
+                // thread. Do not add per-request threads or an implicit worker pool here:
+                // upper game state is designed around a single-threaded handler model.
+                // Blocking/heavy work must be explicitly offloaded by the owning service.
+                auto message = yuan::rpc::wire::to_message(std::move(decoded.frame));
                 message.metadata[metadata_key::connection_id] = std::to_string(connection_id);
                 auto response = server_->handle(std::move(message));
+                if (response.metadata.erase(metadata_key::defer_response) != 0) {
+                    continue;
+                }
                 const bool close_after_response = response.metadata.erase(metadata_key::close_connection) != 0;
                 yuan::rpc::Bytes response_frame;
                 const bool encoded = yuan::rpc::wire::encode_response(response, response_frame);
-                session_.dispatch([this, connection_context, encoded, close_after_response, response_frame = std::move(response_frame), finish_worker]() mutable {
-                    if (encoded) {
-                        connection_context.write_and_flush(to_buffer(response_frame));
-                    }
-                    if (!encoded || close_after_response) {
-                        connection_context.close();
-                    }
-                    if (stop_after_expected_requests_ && ++handled_ >= expected_requests_) {
-                        runtime_.stop();
-                    }
-                    finish_worker();
-                });
-                }).detach();
+                if (encoded) {
+                    connection_context.write_and_flush(to_buffer(response_frame));
+                }
+                if (!encoded || close_after_response) {
+                    connection_context.close();
+                }
+                if (stop_after_expected_requests_ && ++handled_ >= expected_requests_) {
+                    runtime_.stop();
+                }
             }
         });
         session_.set_close_callback([this](yuan::net::ConnectionContext &context) {
@@ -148,8 +148,7 @@ namespace yuan::game::server::rpc_network
     {
         const auto sleep_for = std::chrono::milliseconds(std::max<std::uint64_t>(100, std::min<std::uint64_t>(idle_timeout_ms_, 1000)));
         while (!stop_token.stop_requested()) {
-            std::this_thread::sleep_for(sleep_for);
-            if (stop_token.stop_requested()) {
+            if (wait_for_stop(stop_token, sleep_for)) {
                 break;
             }
             const auto now = yuan::base::time::steady_now_ms();
@@ -194,6 +193,56 @@ namespace yuan::game::server::rpc_network
             if (connection.is_connected()) {
                 connection.write_and_flush(to_buffer(frame));
             }
+        });
+        return true;
+    }
+
+    bool RpcNetworkServer::write_response_to_connection(std::uint64_t connection_id, yuan::rpc::Response response)
+    {
+        const bool close_after_response = response.metadata.erase(metadata_key::close_connection) != 0;
+        yuan::rpc::Bytes frame;
+        if (!yuan::rpc::wire::encode_response(response, frame)) {
+            if (close_after_response) {
+                (void)close_connection(connection_id);
+            }
+            return false;
+        }
+
+        yuan::net::ConnectionContext connection;
+        {
+            std::lock_guard<std::mutex> lock(connections_mutex_);
+            const auto it = connections_.find(connection_id);
+            if (it == connections_.end()) {
+                return false;
+            }
+            connection = it->second.context;
+        }
+
+        session_.dispatch([this, connection, frame = std::move(frame), close_after_response]() mutable {
+            if (connection.is_connected()) {
+                connection.write_and_flush(to_buffer(frame));
+                if (close_after_response) {
+                    connection.close();
+                }
+            }
+        });
+        return true;
+    }
+
+    bool RpcNetworkServer::close_connection(std::uint64_t connection_id)
+    {
+        yuan::net::ConnectionContext connection;
+        {
+            std::lock_guard<std::mutex> lock(connections_mutex_);
+            const auto it = connections_.find(connection_id);
+            if (it == connections_.end()) {
+                return false;
+            }
+            connection = it->second.context;
+        }
+
+        session_.dispatch([connection]() mutable {
+            connection.close();
         });
         return true;
     }
@@ -243,10 +292,6 @@ namespace yuan::game::server::rpc_network
             idle_monitor_thread_.join();
         }
         runtime_.stop();
-        std::unique_lock<std::mutex> lock(workers_mutex_);
-        workers_idle_.wait(lock, [this] {
-            return active_workers_ == 0;
-        });
     }
 
     bool RpcNetworkServer::ok() const
@@ -292,6 +337,264 @@ namespace yuan::game::server::rpc_network
         };
 
         return yuan::coroutine::sync_wait(rv, task(rv));
+    }
+
+    RpcNetworkPersistentClient::RpcNetworkPersistentClient(RpcNetworkClientConfig config)
+        : config_(config),
+          client_(runtime_.runtime_view())
+    {
+    }
+
+    RpcNetworkPersistentClient::~RpcNetworkPersistentClient()
+    {
+        close();
+    }
+
+    void RpcNetworkPersistentClient::close()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        client_.disconnect();
+        connected_endpoint_.reset();
+    }
+
+    std::optional<yuan::rpc::Response> RpcNetworkPersistentClient::call(const RpcEndpoint &endpoint, const yuan::rpc::Message &message)
+    {
+        yuan::rpc::Bytes request_frame;
+        if (!yuan::rpc::wire::encode_message(message, request_frame)) {
+            return std::nullopt;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto rv = runtime_.runtime_view();
+        if (!client_.is_connected() || !connected_endpoint_ || connected_endpoint_->host != endpoint.host || connected_endpoint_->port != endpoint.port) {
+            client_.disconnect();
+            const bool connected = yuan::coroutine::sync_wait(rv, client_.connect_async(endpoint.host, endpoint.port, static_cast<std::uint32_t>(config_.connect_timeout.count())));
+            if (!connected) {
+                connected_endpoint_.reset();
+                return std::nullopt;
+            }
+            connected_endpoint_ = endpoint;
+        }
+        auto read_result = yuan::coroutine::sync_wait(rv, client_.request_async(to_buffer(request_frame), static_cast<std::uint32_t>(config_.read_timeout.count())));
+        if (read_result.status != yuan::coroutine::IoStatus::success) {
+            client_.disconnect();
+            connected_endpoint_.reset();
+            return std::nullopt;
+        }
+        auto decoded = yuan::rpc::wire::decode_frame(to_bytes(read_result.data));
+        if (!decoded.ok) {
+            client_.disconnect();
+            connected_endpoint_.reset();
+            return std::nullopt;
+        }
+        return yuan::rpc::wire::to_response(std::move(decoded.frame));
+    }
+
+    RpcNetworkPersistentAsyncClient::RpcNetworkPersistentAsyncClient(RpcNetworkClientConfig config, std::size_t max_pending)
+        : config_(config),
+          max_pending_(max_pending == 0 ? 1024 : max_pending),
+          client_(runtime_.runtime_view()),
+          worker_([this](std::stop_token stop_token) { worker_loop(stop_token); })
+    {
+    }
+
+    RpcNetworkPersistentAsyncClient::~RpcNetworkPersistentAsyncClient()
+    {
+        close();
+    }
+
+    std::future<std::optional<yuan::rpc::Response>> RpcNetworkPersistentAsyncClient::call_async(const RpcEndpoint &endpoint, yuan::rpc::Message message)
+    {
+        auto promise = std::make_shared<std::promise<std::optional<yuan::rpc::Response>>>();
+        auto future = promise->get_future();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (queue_.size() >= max_pending_) {
+                promise->set_value(std::nullopt);
+                return future;
+            }
+            queue_.push_back(QueuedCall{endpoint, std::move(message), promise});
+        }
+        cv_.notify_one();
+        return future;
+    }
+
+    std::optional<yuan::rpc::Response> RpcNetworkPersistentAsyncClient::call(const RpcEndpoint &endpoint, yuan::rpc::Message message)
+    {
+        return call_async(endpoint, std::move(message)).get();
+    }
+
+    void RpcNetworkPersistentAsyncClient::close()
+    {
+        worker_.request_stop();
+        cv_.notify_all();
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+        client_.disconnect();
+        connected_endpoint_.reset();
+    }
+
+    std::size_t RpcNetworkPersistentAsyncClient::queued_size() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return queue_.size();
+    }
+
+    std::size_t RpcNetworkPersistentAsyncClient::pending_size() const
+    {
+        return pending_count_.load(std::memory_order_relaxed);
+    }
+
+    void RpcNetworkPersistentAsyncClient::fail_all(std::deque<QueuedCall> &calls)
+    {
+        for (auto &call : calls) {
+            call.promise->set_value(std::nullopt);
+        }
+        calls.clear();
+    }
+
+    bool RpcNetworkPersistentAsyncClient::ensure_connected(const RpcEndpoint &endpoint)
+    {
+        auto rv = runtime_.runtime_view();
+        if (client_.is_connected() && connected_endpoint_ && connected_endpoint_->host == endpoint.host && connected_endpoint_->port == endpoint.port) {
+            return true;
+        }
+        client_.disconnect();
+        connected_endpoint_.reset();
+        decoder_.clear();
+        const bool connected = yuan::coroutine::sync_wait(rv, client_.connect_async(endpoint.host, endpoint.port, static_cast<std::uint32_t>(config_.connect_timeout.count())));
+        if (!connected) {
+            return false;
+        }
+        connected_endpoint_ = endpoint;
+        return true;
+    }
+
+    void RpcNetworkPersistentAsyncClient::worker_loop(std::stop_token stop_token)
+    {
+        while (!stop_token.stop_requested()) {
+            std::deque<QueuedCall> calls;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, stop_token, [this] { return !queue_.empty(); });
+                if (stop_token.stop_requested()) {
+                    break;
+                }
+                calls.swap(queue_);
+            }
+
+            if (calls.empty()) {
+                continue;
+            }
+
+            const auto endpoint = calls.front().endpoint;
+            bool same_endpoint = true;
+            for (const auto &call : calls) {
+                if (call.endpoint.host != endpoint.host || call.endpoint.port != endpoint.port) {
+                    same_endpoint = false;
+                    break;
+                }
+            }
+            if (!same_endpoint || !ensure_connected(endpoint)) {
+                fail_all(calls);
+                continue;
+            }
+
+            std::unordered_map<yuan::rpc::RequestId, std::shared_ptr<std::promise<std::optional<yuan::rpc::Response>>>> pending;
+            bool write_failed = false;
+            auto rv = runtime_.runtime_view();
+            for (auto &call : calls) {
+                if (write_failed) {
+                    call.promise->set_value(std::nullopt);
+                    continue;
+                }
+                call.message.kind = yuan::rpc::MessageKind::request;
+                if (call.message.request_id == 0) {
+                    call.message.request_id = next_request_id_.fetch_add(1, std::memory_order_relaxed);
+                    if (call.message.request_id == 0) {
+                        call.message.request_id = next_request_id_.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+                yuan::rpc::Bytes frame;
+                if (!yuan::rpc::wire::encode_message(call.message, frame)) {
+                    call.promise->set_value(std::nullopt);
+                    continue;
+                }
+                const auto write_result = yuan::coroutine::sync_wait(rv, client_.session().write_async(to_buffer(frame), static_cast<std::uint32_t>(config_.connect_timeout.count())));
+                if (write_result.status != yuan::coroutine::IoStatus::success) {
+                    call.promise->set_value(std::nullopt);
+                    write_failed = true;
+                    continue;
+                }
+                pending[call.message.request_id] = call.promise;
+                pending_count_.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            if (write_failed) {
+                for (const auto &[request_id, promise] : pending) {
+                    promise->set_value(std::nullopt);
+                }
+                pending_count_.fetch_sub(pending.size(), std::memory_order_relaxed);
+                client_.disconnect();
+                connected_endpoint_.reset();
+                decoder_.clear();
+                continue;
+            }
+
+            while (!pending.empty() && !stop_token.stop_requested()) {
+                const auto read_result = yuan::coroutine::sync_wait(rv, client_.session().read_async(static_cast<std::uint32_t>(config_.read_timeout.count())));
+                if (read_result.status != yuan::coroutine::IoStatus::success) {
+                    for (const auto &[request_id, promise] : pending) {
+                        promise->set_value(std::nullopt);
+                    }
+                    pending_count_.fetch_sub(pending.size(), std::memory_order_relaxed);
+                    pending.clear();
+                    client_.disconnect();
+                    connected_endpoint_.reset();
+                    decoder_.clear();
+                    break;
+                }
+                const auto bytes = to_bytes(read_result.data);
+                decoder_.append(bytes);
+                for (;;) {
+                    auto decoded = decoder_.next();
+                    if (!decoded.ok) {
+                        if (decoded.error != yuan::rpc::wire::DecodeError::need_more) {
+                            for (const auto &[request_id, promise] : pending) {
+                                promise->set_value(std::nullopt);
+                            }
+                            pending_count_.fetch_sub(pending.size(), std::memory_order_relaxed);
+                            pending.clear();
+                            client_.disconnect();
+                            connected_endpoint_.reset();
+                            decoder_.clear();
+                        }
+                        break;
+                    }
+                    auto response = yuan::rpc::wire::to_response(std::move(decoded.frame));
+                    const auto it = pending.find(response.request_id);
+                    if (it != pending.end()) {
+                        it->second->set_value(std::move(response));
+                        pending.erase(it);
+                        pending_count_.fetch_sub(1, std::memory_order_relaxed);
+                    }
+                }
+            }
+            if (!pending.empty()) {
+                for (const auto &[request_id, promise] : pending) {
+                    promise->set_value(std::nullopt);
+                }
+                pending_count_.fetch_sub(pending.size(), std::memory_order_relaxed);
+            }
+        }
+
+        std::deque<QueuedCall> remaining;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            remaining.swap(queue_);
+        }
+        fail_all(remaining);
     }
 
     std::optional<yuan::rpc::Response> call(std::uint16_t port, const yuan::rpc::Message &message, std::chrono::milliseconds timeout)

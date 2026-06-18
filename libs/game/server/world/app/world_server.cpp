@@ -34,10 +34,13 @@ int main(int argc, char **argv)
                                                                                    config->redis_command_timeout_ms,
                                                                                    config->redis_flush_interval_ms,
                                                                                    config->world_ownership_store,
-                                                                                   config->login_reservation_ttl_ms,
-                                                                                   config->zone_report_ttl_ms,
-                                                                                   config->tunnel_heartbeat_interval_ms,
-                                                                                   config->metrics_log_interval_ms);
+                                                                                    config->login_reservation_ttl_ms,
+                                                                                    config->zone_report_ttl_ms,
+                                                                                     config->tunnel_heartbeat_interval_ms,
+                                                                                  config->login_token_secret,
+                                                                                  config->world_routing,
+                                                                                  config->world_db_proxy_routing,
+                                                                                  config->metrics_log_interval_ms);
     if (!app.add_service("world", service) || !app.start()) {
         LOG_ERROR("world server failed to start");
         app.stop();
