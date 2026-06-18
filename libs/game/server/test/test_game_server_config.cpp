@@ -302,5 +302,28 @@ world_endpoints=1,127.0.0.1,25103,open;2,127.0.0.1,25104,open
                  "world db proxy config should parse")) {
         return 18;
     }
+    const auto global_db_path = fs::temp_directory_path() / "game_server_global_db_proxy_config_test.json";
+    {
+        std::ofstream out(global_db_path);
+        out << R"json({
+  "type": "global_db_proxy",
+  "region": 1,
+  "world": 1,
+  "instance": 1,
+  "listen_host": "127.0.0.1",
+  "listen_port": 25010,
+  "tunnel_endpoints": [
+    { "host": "127.0.0.1", "port": 25000 }
+  ],
+  "redis_host": "127.0.0.1",
+  "redis_port": 6379
+})json";
+    }
+    const auto global_db_config = load_service_server_config(global_db_path.string());
+    fs::remove(global_db_path, ignored);
+    if (!require(global_db_config.has_value() && global_db_config->service_id.type == GameServiceType::global_db_proxy,
+                 "global db proxy config should parse")) {
+        return 19;
+    }
     return EXIT_SUCCESS;
 }

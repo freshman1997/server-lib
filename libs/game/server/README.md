@@ -93,6 +93,7 @@ flowchart LR
 | `game_chat_web_server` | 外部聊天 HTTP API、频道订阅、消息、撤回、Redis pub/sub 事件 | 连接 Redis，不经过游戏服 |
 | `game_player_db_proxy_server` | 玩家数据持久化代理 | 注册到 tunnel，隔离 zone 对玩家 Redis/MySQL schema 的直接访问 |
 | `game_world_db_proxy_server` | world 域轻量数据代理 | 注册到 tunnel，隔离 role location/online/session 等 world read model 存储 |
+| `game_global_db_proxy_server` | global 域持久化代理 | 注册到 tunnel，保存全局配置、审计、封禁等跨 world 数据 |
 | `game_mock_client` | 本地 smoke 客户端 | 模拟 web/world/gateway/zone 完整路径 |
 
 ## Service Id
@@ -509,16 +510,16 @@ rank.top.get       SSRankTopGetRequest      -> SSRankTopResponse
 
 榜单 member 建议使用 `role:<role_id>`；`rank.top.get` 和 `rank.score.get` 会在返回中附带已保存的角色简要信息。
 
-player db proxy 是玩家强持久化数据的领域代理。zone 保留玩家运行态 cache，但 load/save/flush 优先通过 `player_db_proxy`，未配置时才回退旧 Redis key。当前第一阶段接口：
+player db proxy 是玩家强持久化数据的领域代理。zone 保留玩家运行态 cache，但 load/save/flush 优先通过 `player_db_proxy`，未配置时才回退旧 Redis key。proxy 支持多实例部署，业务服通过 `player_db_proxies` group 按 owner id 路由；`target_player_db_proxy_instance` 只作为旧式 fallback。当前第一阶段接口：
 
 ```text
 player_db.load_role  SSPlayerDbLoadRoleRequest -> SSPlayerDbRoleResponse
 player_db.save_role  SSPlayerDbSaveRoleRequest -> SSPlayerDbRoleResponse
 ```
 
-当前 Redis key 仅在 proxy 内部使用：`game:player_db:role:<role_id>`。后续接 MySQL 或分库分表时，应继续保持 zone 只调用领域 RPC，不暴露库表/key 规则。
+当前 Redis key 仅在 proxy 内部使用：`game:player_db:player_role:<role_id>`。后续接 MySQL 或分库分表时，应继续保持 zone 只调用领域 RPC，不暴露库表/key 规则。
 
-world db proxy 是 world 域轻量持久化代理，当前第一阶段接口：
+world db proxy 是 world 域轻量持久化代理。world 通过 `world_db_proxies` group 选择 proxy；role location 持久化不在登录链路同步等待，而是进入 world dirty flush/retry 队列，避免嵌套 tunnel RPC 阻塞登录。当前第一阶段接口：
 
 ```text
 world_db.role_location.get  SSWorldDbRoleLocationGetRequest -> SSWorldDbRoleLocationResponse
@@ -527,7 +528,36 @@ world_db.role_location.set  SSWorldDbRoleLocationSetRequest -> SSWorldDbRoleLoca
 
 当前 Redis key 仅在 proxy 内部使用：`game:world_db:role_location:<role_id>`。该服务只保存 role location / online session 这类 world read model，不保存玩家完整对象。
 
-db proxy 共享一套 ORM-style 本地 API，放在 `common/storage`，提供 `query/insert/update/delete_/batch` 和 Redis-backed `RedisOrmStore`。这套 API 给 proxy 内部复用；业务服仍优先调用领域 RPC，例如 `player_db.save_role`、`world_db.role_location.set`，不要直接把 SQL/Redis 命令透传给业务服。
+global db proxy 是 global 域持久化代理。初始领域用于全局配置项，后续可扩展 GM audit、封禁状态、全局 ID、配置版本等跨 world 数据：
+
+```text
+global_db.config.get  SSGlobalDbConfigGetRequest -> SSGlobalDbConfigResponse
+global_db.config.set  SSGlobalDbConfigSetRequest -> SSGlobalDbConfigResponse
+```
+
+当前 Redis key 仅在 proxy 内部使用：`game:global_db:config:<key>`。
+
+db proxy group 配置形态统一，例如：
+
+```json
+{
+  "player_db_proxies": {
+    "strategy": "modulo",
+    "version": 1,
+    "shard_count": 2,
+    "endpoints": [
+      { "service_id": 4504702360223745, "shard": 0, "state": "open" },
+      { "service_id": 4504702360223746, "shard": 1, "state": "open" }
+    ]
+  }
+}
+```
+
+`select_db_proxy(owner_id, routing)` 当前支持 `modulo`。`version` 和 `shard_count` 是配置一致性边界；扩缩容应按停服/迁移计划调整，不应让业务代码散写 modulo。
+
+db proxy 共享一套 ORM-style 本地 API，放在 `common/storage`，提供 `query/insert/update/delete_/batch` 和 Redis-backed `RedisOrmStore`。这套 API 给 proxy 内部复用；业务服仍优先调用领域 RPC，例如 `player_db.save_role`、`world_db.role_location.set`、`global_db.config.set`，不要直接把 SQL/Redis 命令透传给业务服。
+
+在 ORM 之上还有 entity 层：`EntityRecord{table,key,fields,version}` 和 `EntityStore::load/save/remove/save_batch`。新增领域数据时先定义 table/key/fields/version 映射，再在 proxy handler 内调用 entity store；避免每个新结构重复写 Redis key 拼接、JSON 编解码和版本字段处理。
 
 chat web 是独立外部 HTTP 服务，不经过游戏服；频道订阅状态、消息存储和频道事件都在 Redis。当前 HTTP API 提供 durable subscription 和消息历史，实时推送侧可直接订阅 Redis channel `game:chat:pubsub:<channel>`，后续也可以在该进程接 WebSocket/SSE：
 

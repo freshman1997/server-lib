@@ -14,6 +14,7 @@ target_link_libraries(GameServerTestDeps INTERFACE
     GameServerChatWeb
     GameServerPlayerDbProxy)
 target_link_libraries(GameServerTestDeps INTERFACE GameServerWorldDbProxy)
+target_link_libraries(GameServerTestDeps INTERFACE GameServerGlobalDbProxy)
 
 file(GLOB GAME_SERVER_TEST_SOURCES CONFIGURE_DEPENDS "test_*.cpp")
 foreach(GAME_SERVER_TEST_SOURCE IN LISTS GAME_SERVER_TEST_SOURCES)

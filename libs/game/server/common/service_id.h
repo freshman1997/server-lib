@@ -38,7 +38,8 @@ namespace yuan::game::server
         web = 10,
         rank = 11,
         player_db_proxy = 12,
-        world_db_proxy = 13
+        world_db_proxy = 13,
+        global_db_proxy = 14
     };
 
     struct GameServiceId
@@ -115,6 +116,8 @@ namespace yuan::game::server
                 return "player_db_proxy";
             case GameServiceType::world_db_proxy:
                 return "world_db_proxy";
+            case GameServiceType::global_db_proxy:
+                return "global_db_proxy";
         }
         return "unknown";
     }

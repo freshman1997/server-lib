@@ -107,6 +107,9 @@ namespace yuan::game::server
         if (value == "world_db_proxy" || value == "13") {
             return GameServiceType::world_db_proxy;
         }
+        if (value == "global_db_proxy" || value == "14") {
+            return GameServiceType::global_db_proxy;
+        }
         return std::nullopt;
     }
 
@@ -357,7 +360,7 @@ namespace yuan::game::server
             if (config.listen_host.empty() || config.listen_port == 0) {
                 return std::nullopt;
             }
-            if (*type == GameServiceType::global || *type == GameServiceType::zone || *type == GameServiceType::world || *type == GameServiceType::rank || *type == GameServiceType::player_db_proxy || *type == GameServiceType::world_db_proxy) {
+            if (*type == GameServiceType::global || *type == GameServiceType::zone || *type == GameServiceType::world || *type == GameServiceType::rank || *type == GameServiceType::player_db_proxy || *type == GameServiceType::world_db_proxy || *type == GameServiceType::global_db_proxy) {
                 if (config.tunnel_endpoints.empty()) {
                     return std::nullopt;
                 }
@@ -635,7 +638,7 @@ namespace yuan::game::server
         if (config.listen_host.empty() || config.listen_port == 0) {
             return std::nullopt;
         }
-        if (*type == GameServiceType::global || *type == GameServiceType::zone || *type == GameServiceType::world || *type == GameServiceType::rank || *type == GameServiceType::player_db_proxy || *type == GameServiceType::world_db_proxy) {
+        if (*type == GameServiceType::global || *type == GameServiceType::zone || *type == GameServiceType::world || *type == GameServiceType::rank || *type == GameServiceType::player_db_proxy || *type == GameServiceType::world_db_proxy || *type == GameServiceType::global_db_proxy) {
             if (config.tunnel_endpoints.empty()) {
                 return std::nullopt;
             }

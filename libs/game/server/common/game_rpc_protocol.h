@@ -19,7 +19,8 @@ namespace yuan::game::server
         web = 6,
         rank = 7,
         player_db = 8,
-        world_db = 9
+        world_db = 9,
+        global_db = 10
     };
 
     enum class GameRpcMethod : std::uint32_t
@@ -65,7 +66,10 @@ namespace yuan::game::server
         player_db_save_role = 601,
 
         world_db_role_location_get = 700,
-        world_db_role_location_set = 701
+        world_db_role_location_set = 701,
+
+        global_db_config_get = 800,
+        global_db_config_set = 801
     };
 
     inline yuan::rpc::Route make_game_route(GameRpcService service, GameRpcMethod method, std::string_view debug_name = {})
@@ -247,6 +251,16 @@ namespace yuan::game::server
         inline yuan::rpc::Route world_db_role_location_set()
         {
             return make_game_route(GameRpcService::world_db, GameRpcMethod::world_db_role_location_set, "world_db.role_location.set");
+        }
+
+        inline yuan::rpc::Route global_db_config_get()
+        {
+            return make_game_route(GameRpcService::global_db, GameRpcMethod::global_db_config_get, "global_db.config.get");
+        }
+
+        inline yuan::rpc::Route global_db_config_set()
+        {
+            return make_game_route(GameRpcService::global_db, GameRpcMethod::global_db_config_set, "global_db.config.set");
         }
 
     }

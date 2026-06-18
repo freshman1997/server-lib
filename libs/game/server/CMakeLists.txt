@@ -13,6 +13,7 @@ add_subdirectory(rank)
 add_subdirectory(chat_web)
 add_subdirectory(player_db_proxy)
 add_subdirectory(world_db_proxy)
+add_subdirectory(global_db_proxy)
 
 if(YUAN_BUILD_TESTS OR BUILD_TESTING)
     add_subdirectory(client)

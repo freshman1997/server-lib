@@ -36,6 +36,7 @@ stop_service gateway
 stop_service zone
 stop_service world
 stop_service global
+stop_service global_db_proxy
 stop_service world_db_proxy
 stop_service player_db_proxy
 stop_service tunnel
