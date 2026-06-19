@@ -50,6 +50,24 @@ int main()
   "instance": 1,
   "listen_host": "127.0.0.1",
   "listen_port": 25003,
+  "websocket_port": 25013,
+  "kcp_port": 25023,
+  "kcp_update_interval_ms": 20,
+  "kcp_cleanup_interval_ms": 2000,
+  "kcp_idle_timeout_ms": 70000,
+  "kcp_mtu": 1300,
+  "kcp_send_window": 64,
+  "kcp_receive_window": 96,
+  "kcp_resend": 2,
+  "kcp_nodelay": false,
+  "kcp_no_congestion_control": false,
+  "kcp_max_sessions": 100,
+  "kcp_max_sessions_per_ip": 3,
+  "kcp_allow_migration": true,
+  "kcp_max_handshakes_per_address_per_window": 5,
+  "kcp_handshake_rate_window_ms": 3000,
+  "kcp_max_malformed_packets_per_address": 4,
+  "kcp_require_login_token": true,
   "http_port": 25103,
   "tunnel_endpoints": [
     { "host": "127.0.0.1", "port": 25000 }
@@ -83,6 +101,21 @@ int main()
     if (!require(config->rpc_max_connections == 2000 && config->rpc_max_buffered_bytes == 131072 && config->rpc_idle_timeout_ms == 30000,
                  "rpc lifecycle policy should parse")) {
         return 4;
+    }
+    if (!require(config->websocket_port == 25013 && config->kcp_port == 25023,
+                 "gateway transport ports should parse")) {
+        return 13;
+    }
+    if (!require(config->kcp_update_interval_ms == 20 && config->kcp_cleanup_interval_ms == 2000 &&
+                     config->kcp_idle_timeout_ms == 70000 && config->kcp_mtu == 1300 &&
+                     config->kcp_send_window == 64 && config->kcp_receive_window == 96 &&
+                     config->kcp_resend == 2 && !config->kcp_nodelay && !config->kcp_no_congestion_control &&
+                     config->kcp_max_sessions == 100 && config->kcp_max_sessions_per_ip == 3 && config->kcp_allow_migration &&
+                     config->kcp_max_handshakes_per_address_per_window == 5 &&
+                     config->kcp_handshake_rate_window_ms == 3000 && config->kcp_max_malformed_packets_per_address == 4 &&
+                     config->kcp_require_login_token,
+                 "gateway kcp config should parse")) {
+        return 14;
     }
     if (!require(config->gateway_drain_timeout_ms == 4000, "gateway drain timeout should parse")) {
         return 12;

@@ -27,6 +27,13 @@ namespace yuan::net
 
         virtual bool listen();
 
+        void set_udp_options(UdpConnectionOptions options)
+        {
+            udp_options_ = options;
+        }
+
+        [[nodiscard]] UdpConnectionMetrics metrics() const;
+
         virtual void close();
 
         virtual Channel *endpoint_channel() const override
@@ -96,6 +103,7 @@ namespace yuan::net
         EventHandler *handler_;
         std::shared_ptr<ConnectionHandler> conn_handler_owner_;
         timer::TimerManager *timer_manager_;
+        UdpConnectionOptions udp_options_;
         std::unique_ptr<UdpInstance> instance_;
     };
 }

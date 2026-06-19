@@ -6,6 +6,7 @@
 #include <memory>
 #include "buffer/byte_buffer.h"
 #include "net/connection/connection.h"
+#include "net/connection/udp_connection.h"
 #include "net/socket/inet_address.h"
 #include "timer/timer_manager.h"
 
@@ -44,6 +45,26 @@ namespace yuan::net
         void send();
         std::pair<bool, std::shared_ptr<Connection>> on_recv(const InetAddress &address);
         int on_send(Connection *conn, const ::yuan::buffer::ByteBuffer &buff);
+        void account_read(std::size_t bytes);
+        void account_drop(std::size_t bytes);
+        void account_send(std::size_t bytes);
+        void account_send_error();
+        void account_receive_error();
+
+        [[nodiscard]] UdpConnectionMetrics metrics() const;
+
+        void set_options(UdpConnectionOptions options)
+        {
+            options_ = options;
+            if (options_.max_datagram_size == 0) {
+                options_.max_datagram_size = UDP_DATA_LIMIT;
+            }
+        }
+
+        [[nodiscard]] const UdpConnectionOptions &options() const noexcept
+        {
+            return options_;
+        }
 
         void set_input_packet(::yuan::buffer::ByteBuffer packet)
         {
@@ -59,11 +80,10 @@ namespace yuan::net
 
         void on_connection_close(Connection *conn)
         {
-            if (conn) {
-                on_connection_close(conn->shared_from_this());
-            }
+            on_connection_close_raw(conn);
         }
         void on_connection_close(const std::shared_ptr<Connection> &conn);
+        void on_connection_close_raw(Connection *conn);
 
         void set_acceptor(DatagramEndpoint *acceptor);
 
@@ -91,6 +111,8 @@ namespace yuan::net
         bool is_closing_;
         UdpAdapterType adapter_type_;
         DatagramEndpoint *acceptor_;
+        UdpConnectionOptions options_;
+        UdpConnectionMetrics metrics_;
         ::yuan::buffer::ByteBuffer input_packet_;
         std::unordered_map<InetAddress, std::shared_ptr<Connection>> conns_;
         std::deque<InetAddress> pending_write_addrs_;

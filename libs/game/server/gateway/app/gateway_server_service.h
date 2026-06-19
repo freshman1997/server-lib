@@ -4,6 +4,8 @@
 #include "application.h"
 #include "common/rpc_network.h"
 #include "common/service_config.h"
+#include "gateway/app/gateway_kcp_transport.h"
+#include "gateway/app/gateway_websocket_transport.h"
 #include "gateway/rpc/gateway_msg_client.h"
 #include "timer/timer_handle.h"
 
@@ -29,6 +31,11 @@ namespace yuan::game::server
             std::uint64_t active_connections = 0;
             std::uint64_t active_sessions = 0;
             std::uint64_t handler_queue_size = 0;
+            std::uint64_t kcp_handshakes_accepted = 0;
+            std::uint64_t kcp_handshakes_rejected = 0;
+            std::uint64_t kcp_handshakes_rate_limited = 0;
+            std::uint64_t kcp_malformed_packets = 0;
+            std::uint64_t kcp_active_sessions = 0;
         };
 
         explicit GatewayServerService(ServiceServerConfig config);
@@ -69,6 +76,10 @@ namespace yuan::game::server
 
         std::string listen_host_;
         std::uint16_t port_ = 0;
+        std::uint16_t websocket_port_ = 0;
+        std::uint16_t kcp_port_ = 0;
+        yuan::net::KcpServerSession::Config kcp_config_;
+        bool kcp_require_login_token_ = false;
         bool ok_ = false;
         std::atomic<bool> draining_{false};
         std::uint64_t metrics_log_interval_ms_ = 0;
@@ -83,6 +94,8 @@ namespace yuan::game::server
         yuan::rpc::Server gateway_rpc_;
         yuan::rpc::Server gateway_handler_rpc_;
         rpc_network::RpcNetworkServer rpc_server_;
+        std::unique_ptr<GatewayWebSocketTransport> websocket_transport_;
+        std::unique_ptr<GatewayKcpTransport> kcp_transport_;
         yuan::timer::TimerHandle metrics_timer_;
         std::jthread gateway_handler_thread_;
         std::uint64_t gateway_handler_queue_limit_ = 4096;

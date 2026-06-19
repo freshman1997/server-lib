@@ -5,6 +5,17 @@
   "instance": 1,
   "listen_host": "127.0.0.1",
   "listen_port": 25004,
+  "websocket_port": 25014,
+  "kcp_port": 25024,
+  "kcp_require_login_token": true,
+  "kcp_max_handshakes_per_address_per_window": 20,
+  "kcp_handshake_rate_window_ms": 1000,
+  "kcp_max_malformed_packets_per_address": 8,
+  "kcp_allow_migration": true,
+  "kcp_max_sessions_per_ip": 1000,
+  "kcp_mtu": 1400,
+  "kcp_send_window": 128,
+  "kcp_receive_window": 128,
   "public_host": "127.0.0.1",
   "zone_endpoints": [
     { "service_id": 4504699675869185, "host": "127.0.0.1", "port": 25002 }

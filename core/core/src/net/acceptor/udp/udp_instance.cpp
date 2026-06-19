@@ -51,6 +51,8 @@ namespace yuan::net
                 datagram->attach_datagram_instance(this);
             }
             conns_[address] = udpConn;
+            metrics_.created_connections++;
+            metrics_.active_connections = conns_.size();
             return std::make_pair(true, udpConn);
         } else {
             return std::make_pair(true, it->second);
@@ -61,6 +63,41 @@ namespace yuan::net
     {
         assert(acceptor_);
         return acceptor_->send_datagram(conn ? conn->shared_from_this() : nullptr, buff);
+    }
+
+    void UdpInstance::account_read(std::size_t bytes)
+    {
+        metrics_.datagrams_read++;
+        metrics_.bytes_read += bytes;
+    }
+
+    void UdpInstance::account_drop(std::size_t bytes)
+    {
+        metrics_.datagrams_dropped++;
+        metrics_.bytes_dropped += bytes;
+    }
+
+    void UdpInstance::account_send(std::size_t bytes)
+    {
+        metrics_.datagrams_written++;
+        metrics_.bytes_written += bytes;
+    }
+
+    void UdpInstance::account_send_error()
+    {
+        metrics_.send_errors++;
+    }
+
+    void UdpInstance::account_receive_error()
+    {
+        metrics_.receive_errors++;
+    }
+
+    UdpConnectionMetrics UdpInstance::metrics() const
+    {
+        auto metrics = metrics_;
+        metrics.active_connections = conns_.size();
+        return metrics;
     }
 
     void UdpInstance::send()
@@ -99,6 +136,11 @@ namespace yuan::net
 
     void UdpInstance::on_connection_close(const std::shared_ptr<Connection> &conn)
     {
+        on_connection_close_raw(conn.get());
+    }
+
+    void UdpInstance::on_connection_close_raw(Connection *conn)
+    {
         if (is_closing_ || !conn) {
             return;
         }
@@ -107,6 +149,8 @@ namespace yuan::net
         if (it != conns_.end()) {
             pending_write_set_.erase(it->first);
             conns_.erase(it);
+            metrics_.closed_connections++;
+            metrics_.active_connections = conns_.size();
         }
     }
 

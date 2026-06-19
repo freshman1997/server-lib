@@ -20,7 +20,7 @@
 namespace yuan::net
 {
     UdpConnection::UdpConnection(const InetAddress & addr)
-        : address_(std::move(addr)), Connection()
+        : remote_address_(addr), local_address_(), Connection()
     {
         set_max_packet_size(UDP_DATA_LIMIT);
         active_ = true;
@@ -60,7 +60,7 @@ namespace yuan::net
 
         if (connectionHandlerOwner_ && !close_notified_) {
             LOG_WARN("udp connection destroyed without close notification, ip: {}, port: {}",
-                     address_.get_ip(), address_.get_port());
+                     remote_address_.get_ip(), remote_address_.get_port());
         }
         connectionHandlerOwner_.reset();
     }
@@ -77,17 +77,17 @@ namespace yuan::net
 
     const InetAddress &UdpConnection::get_remote_address() const
     {
-        return address_;
+        return remote_address_;
     }
 
     const InetAddress &UdpConnection::get_local_address() const
     {
-        return address_;
+        return local_address_;
     }
 
     const InetAddress &UdpConnection::peer_address() const
     {
-        return address_;
+        return remote_address_;
     }
 
     void UdpConnection::write(const ::yuan::buffer::ByteBuffer & buffer)
@@ -103,10 +103,7 @@ namespace yuan::net
                 return;
             }
         } else {
-            auto chunk = std::make_unique< ::yuan::buffer::ByteBuffer>(buffer.copy_readable());
-            if (!chunk->empty()) {
-                output_buffer_.push_back(std::move(chunk));
-            }
+            (void)enqueue_output(std::make_unique< ::yuan::buffer::ByteBuffer>(buffer.copy_readable()));
         }
 
         active_ = true;
@@ -125,7 +122,7 @@ namespace yuan::net
                 return;
             }
         } else {
-            output_buffer_.push_back(std::make_unique<::yuan::buffer::ByteBuffer>(std::move(buffer)));
+            (void)enqueue_output(std::make_unique<::yuan::buffer::ByteBuffer>(std::move(buffer)));
         }
 
         active_ = true;
@@ -152,7 +149,11 @@ namespace yuan::net
     }
     void UdpConnection::flush()
     {
-        assert(connectionHandlerOwner_);
+        if (!connectionHandlerOwner_ || !instance_) {
+            account_send_error();
+            abort();
+            return;
+        }
 
         // Adapter mode: flush pending encoded data first
         if (adapter_) {
@@ -171,8 +172,10 @@ namespace yuan::net
                 }
                 int sent = instance_->on_send(this, *front);
                 if (sent > 0) {
+                    account_send(static_cast<std::size_t>(sent));
                     front->consume(static_cast<std::size_t>(sent));
                     if (front->empty()) {
+                        pending_output_bytes_ = pending_output_bytes_ >= static_cast<std::size_t>(sent) ? pending_output_bytes_ - static_cast<std::size_t>(sent) : 0;
                         output_buffer_.pop_front();
                     } else {
                         instance_->request_write(this);
@@ -187,6 +190,7 @@ namespace yuan::net
                     int err = platform::GetLastNativeError();
                     if (!platform::IsNativeRetryableError(err)) {
 #endif
+                        account_send_error();
                         abort();
                         return;
                     }
@@ -216,6 +220,7 @@ namespace yuan::net
         state_ = ConnectionState::closed;
         output_buffer_.clear();
         pending_output_buffer_.clear();
+        pending_output_bytes_ = 0;
         do_close();
     }
 
@@ -282,7 +287,7 @@ namespace yuan::net
     void UdpConnection::set_event_handler(EventHandler * eventHandler)
     {
         if (eventHandler_ && eventHandler_ != eventHandler) {
-            LOG_WARN("udp connection event handler switched, ip: {}, port: {}", address_.get_ip(), address_.get_port());
+            LOG_WARN("udp connection event handler switched, ip: {}, port: {}", remote_address_.get_ip(), remote_address_.get_port());
         }
         eventHandler_ = eventHandler;
         set_owner_event_handler(eventHandler_);
@@ -327,8 +332,8 @@ namespace yuan::net
         state_ = state;
         if (state_ == ConnectionState::connected) {
             notify_connected_event();
-            if (instance_ && instance_->get_timer_manager()) {
-                alive_timer_ = instance_->get_timer_manager()->every(0, 10 * 1000, this);
+            if (instance_ && instance_->get_timer_manager() && instance_->options().idle_check_interval_ms != 0) {
+                alive_timer_ = instance_->get_timer_manager()->every(0, instance_->options().idle_check_interval_ms, this);
             }
         }
     }
@@ -349,8 +354,8 @@ namespace yuan::net
             ++idle_cnt_;
         }
 
-        // 第三次释�?
-        if (idle_cnt_ >= 2) {
+        const auto timeout_checks = instance_ ? instance_->options().idle_timeout_checks : 2;
+        if (timeout_checks != 0 && idle_cnt_ >= static_cast<int>(timeout_checks)) {
             active_ = false;
         }
     }
@@ -370,9 +375,74 @@ namespace yuan::net
         if (ret < static_cast<int>(buffer.readable_bytes())) {
             auto remaining = buffer.copy_readable();
             remaining.consume(static_cast<std::size_t>(ret));
-            pending_output_buffer_.push_back(std::make_unique< ::yuan::buffer::ByteBuffer>(std::move(remaining)));
+            auto chunk = std::make_unique< ::yuan::buffer::ByteBuffer>(std::move(remaining));
+            const auto bytes = chunk->readable_bytes();
+            if (!can_enqueue_output(bytes)) {
+                account_drop(bytes);
+                output_over_limit_ = true;
+                return false;
+            }
+            pending_output_bytes_ += bytes;
+            pending_output_buffer_.push_back(std::move(chunk));
         }
         return true;
+    }
+
+    std::size_t UdpConnection::pending_output_datagrams() const noexcept
+    {
+        return output_buffer_.size() + pending_output_buffer_.size();
+    }
+
+    bool UdpConnection::enqueue_output(std::unique_ptr<::yuan::buffer::ByteBuffer> buffer)
+    {
+        if (!buffer || buffer->empty()) {
+            return true;
+        }
+        const auto bytes = buffer->readable_bytes();
+        if (!can_enqueue_output(bytes)) {
+            output_over_limit_ = true;
+            account_drop(bytes);
+            return false;
+        }
+        pending_output_bytes_ += bytes;
+        output_buffer_.push_back(std::move(buffer));
+        return true;
+    }
+
+    bool UdpConnection::can_enqueue_output(std::size_t bytes) const
+    {
+        if (!instance_) {
+            return true;
+        }
+        const auto &options = instance_->options();
+        if (options.max_pending_output_bytes != 0 && pending_output_bytes_ + bytes > options.max_pending_output_bytes) {
+            return false;
+        }
+        if (options.max_pending_output_datagrams != 0 && pending_output_datagrams() + 1 > options.max_pending_output_datagrams) {
+            return false;
+        }
+        return true;
+    }
+
+    void UdpConnection::account_drop(std::size_t bytes)
+    {
+        if (instance_) {
+            instance_->account_drop(bytes);
+        }
+    }
+
+    void UdpConnection::account_send(std::size_t bytes)
+    {
+        if (instance_) {
+            instance_->account_send(bytes);
+        }
+    }
+
+    void UdpConnection::account_send_error()
+    {
+        if (instance_) {
+            instance_->account_send_error();
+        }
     }
 
     void UdpConnection::process_pending_output_buffer()
@@ -395,6 +465,7 @@ namespace yuan::net
                 return;
             }
 
+            pending_output_bytes_ = pending_output_bytes_ >= front->readable_bytes() ? pending_output_bytes_ - front->readable_bytes() : 0;
             pending_output_buffer_.pop_front();
         }
     }

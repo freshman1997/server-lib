@@ -1,5 +1,6 @@
 #include "gateway/app/gateway_server_service.h"
 
+#include "base/time.h"
 #include "common/metadata_keys.h"
 #include "logger.h"
 
@@ -15,6 +16,8 @@ namespace yuan::game::server
     GatewayServerService::GatewayServerService(ServiceServerConfig config)
         : listen_host_(std::move(config.listen_host)),
           port_(config.listen_port),
+          websocket_port_(config.websocket_port),
+          kcp_port_(config.kcp_port),
           metrics_log_interval_ms_(config.metrics_log_interval_ms),
           drain_timeout_ms_(config.gateway_drain_timeout_ms == 0 ? 3000 : config.gateway_drain_timeout_ms),
           gateway_handler_queue_limit_(config.gateway_handler_queue_limit == 0 ? 4096 : config.gateway_handler_queue_limit),
@@ -23,6 +26,24 @@ namespace yuan::game::server
         rpc_server_config_.max_connections = static_cast<std::size_t>(config.rpc_max_connections);
         rpc_server_config_.max_buffered_bytes = static_cast<std::size_t>(config.rpc_max_buffered_bytes);
         rpc_server_config_.idle_timeout_ms = config.rpc_idle_timeout_ms == 0 ? 10 * 60 * 1000 : config.rpc_idle_timeout_ms;
+        kcp_config_.host = listen_host_;
+        kcp_config_.port = kcp_port_;
+        kcp_config_.update_interval_ms = config.kcp_update_interval_ms;
+        kcp_config_.cleanup_interval_ms = config.kcp_cleanup_interval_ms;
+        kcp_config_.idle_timeout_ms = config.kcp_idle_timeout_ms;
+        kcp_config_.mtu = config.kcp_mtu;
+        kcp_config_.send_window = config.kcp_send_window;
+        kcp_config_.receive_window = config.kcp_receive_window;
+        kcp_config_.resend = config.kcp_resend;
+        kcp_config_.nodelay = config.kcp_nodelay;
+        kcp_config_.no_congestion_control = config.kcp_no_congestion_control;
+        kcp_config_.max_sessions = static_cast<std::size_t>(config.kcp_max_sessions);
+        kcp_config_.max_sessions_per_ip = static_cast<std::size_t>(config.kcp_max_sessions_per_ip);
+        kcp_config_.allow_migration = config.kcp_allow_migration;
+        kcp_config_.max_handshakes_per_address_per_window = static_cast<std::size_t>(config.kcp_max_handshakes_per_address_per_window);
+        kcp_config_.handshake_rate_window_ms = config.kcp_handshake_rate_window_ms;
+        kcp_config_.max_malformed_packets_per_address = static_cast<std::size_t>(config.kcp_max_malformed_packets_per_address);
+        kcp_require_login_token_ = config.kcp_require_login_token;
         gateway_context_.address = ServiceAddress{service_id_, 500, yuan::game_base::ServerRole::gateway, service_id_.world, "gateway"};
         gateway_context_.public_host = std::move(config.public_host);
         gateway_context_.public_port = port_;
@@ -83,11 +104,49 @@ namespace yuan::game::server
         rpc_server_.set_connection_closed_callback([this](std::uint64_t connection_id) {
             enqueue_client_connection_closed(connection_id);
         });
+        if (websocket_port_ != 0) {
+            websocket_transport_ = std::make_unique<GatewayWebSocketTransport>(gateway_rpc_, rpc_server_.runtime());
+            websocket_transport_->set_connection_closed_callback([this](std::uint64_t connection_id) {
+                enqueue_client_connection_closed(connection_id);
+            });
+        }
+        if (kcp_port_ != 0) {
+            kcp_transport_ = std::make_unique<GatewayKcpTransport>(gateway_rpc_, rpc_server_.runtime());
+            kcp_transport_->set_connection_closed_callback([this](std::uint64_t connection_id) {
+                enqueue_client_connection_closed(connection_id);
+            });
+            if (kcp_require_login_token_) {
+                kcp_transport_->set_handshake_validator([this](const yuan::net::InetAddress &, const std::vector<std::uint8_t> &payload) {
+                    const std::string text(payload.begin(), payload.end());
+                    const auto separator = text.find('|');
+                    const auto token = separator == std::string::npos ? text : text.substr(0, separator);
+                    const auto decoded = decode_login_token_id(token, yuan::base::time::steady_now_ms(), gateway_context_.login_token_secret);
+                    if (!decoded) {
+                        return yuan::net::KcpServerSession::HandshakeDecision{};
+                    }
+                    std::uint32_t conv = 0;
+                    if (separator != std::string::npos && separator + 1 < text.size()) {
+                        try {
+                            conv = static_cast<std::uint32_t>(std::stoul(text.substr(separator + 1)));
+                        } catch (...) {
+                            return yuan::net::KcpServerSession::HandshakeDecision{};
+                        }
+                    }
+                    return yuan::net::KcpServerSession::HandshakeDecision{true, conv};
+                });
+            }
+        }
 
         rpc_server_config_.host = listen_host_;
         rpc_server_config_.port = port_;
 
         ok_ = rpc_server_.start(rpc_server_config_, gateway_rpc_);
+        if (ok_ && websocket_transport_) {
+            ok_ = websocket_transport_->start(websocket_port_, rpc_server_config_.max_buffered_bytes);
+        }
+        if (ok_ && kcp_transport_) {
+            ok_ = kcp_transport_->start(kcp_config_, rpc_server_config_.max_buffered_bytes);
+        }
 
         return ok_;
     }
@@ -105,6 +164,10 @@ namespace yuan::game::server
         gateway_handler_thread_ = std::jthread([this](std::stop_token stop_token) {
             gateway_handler_loop(stop_token);
         });
+
+        if (websocket_transport_) {
+            websocket_transport_->serve();
+        }
 
         ok_ = ok_ && rpc_server_.run();
     }
@@ -124,18 +187,35 @@ namespace yuan::game::server
         }
 
         rpc_server_.close_all_connections();
+        if (websocket_transport_) {
+            websocket_transport_->close_all_connections();
+        }
+        if (kcp_transport_) {
+            kcp_transport_->close_all_connections();
+        }
 
         const auto current_metrics = metrics();
-        LOG_INFO("gateway zone metrics attempts={} retries={} recoveries={} failures={} active_connections={} active_sessions={} handler_queue_size={}",
+        LOG_INFO("gateway zone metrics attempts={} retries={} recoveries={} failures={} active_connections={} active_sessions={} handler_queue_size={} kcp_handshakes_accepted={} kcp_handshakes_rejected={} kcp_handshakes_rate_limited={} kcp_malformed_packets={} kcp_active_sessions={}",
                  current_metrics.zone_call_attempts,
                  current_metrics.zone_call_retries,
                  current_metrics.zone_call_recoveries,
                  current_metrics.zone_call_failures,
                  current_metrics.active_connections,
                  current_metrics.active_sessions,
-                 current_metrics.handler_queue_size);
+                 current_metrics.handler_queue_size,
+                 current_metrics.kcp_handshakes_accepted,
+                 current_metrics.kcp_handshakes_rejected,
+                 current_metrics.kcp_handshakes_rate_limited,
+                 current_metrics.kcp_malformed_packets,
+                 current_metrics.kcp_active_sessions);
         
         rpc_server_.stop();
+        if (websocket_transport_) {
+            websocket_transport_->stop();
+        }
+        if (kcp_transport_) {
+            kcp_transport_->stop();
+        }
     }
 
     bool GatewayServerService::ok() const
@@ -150,13 +230,24 @@ namespace yuan::game::server
             std::lock_guard<std::mutex> lock(gateway_handler_mutex_);
             handler_queue_size = gateway_handler_queue_.size();
         }
-        return Metrics{zone_call_attempts_.load(std::memory_order_relaxed),
+        Metrics result{zone_call_attempts_.load(std::memory_order_relaxed),
                        zone_call_retries_.load(std::memory_order_relaxed),
                        zone_call_recoveries_.load(std::memory_order_relaxed),
                        zone_call_failures_.load(std::memory_order_relaxed),
-                       static_cast<std::uint64_t>(rpc_server_.active_connection_count()),
+                       static_cast<std::uint64_t>(rpc_server_.active_connection_count() +
+                                                  (websocket_transport_ ? websocket_transport_->active_connection_count() : 0) +
+                                                  (kcp_transport_ ? kcp_transport_->active_connection_count() : 0)),
                        static_cast<std::uint64_t>(gateway_context_.sessions.session_count()),
                        handler_queue_size};
+        if (kcp_transport_) {
+            const auto kcp = kcp_transport_->metrics();
+            result.kcp_handshakes_accepted = kcp.handshakes_accepted;
+            result.kcp_handshakes_rejected = kcp.handshakes_rejected;
+            result.kcp_handshakes_rate_limited = kcp.handshakes_rate_limited;
+            result.kcp_malformed_packets = kcp.malformed_packets;
+            result.kcp_active_sessions = kcp.active_sessions;
+        }
+        return result;
     }
 
     std::string GatewayServerService::prometheus_metrics() const
@@ -176,7 +267,17 @@ namespace yuan::game::server
             << "# TYPE game_gateway_active_sessions gauge\n"
             << "game_gateway_active_sessions " << current.active_sessions << "\n"
             << "# TYPE game_gateway_handler_queue_size gauge\n"
-            << "game_gateway_handler_queue_size " << current.handler_queue_size << "\n";
+            << "game_gateway_handler_queue_size " << current.handler_queue_size << "\n"
+            << "# TYPE game_gateway_kcp_handshakes_accepted counter\n"
+            << "game_gateway_kcp_handshakes_accepted " << current.kcp_handshakes_accepted << "\n"
+            << "# TYPE game_gateway_kcp_handshakes_rejected counter\n"
+            << "game_gateway_kcp_handshakes_rejected " << current.kcp_handshakes_rejected << "\n"
+            << "# TYPE game_gateway_kcp_handshakes_rate_limited counter\n"
+            << "game_gateway_kcp_handshakes_rate_limited " << current.kcp_handshakes_rate_limited << "\n"
+            << "# TYPE game_gateway_kcp_malformed_packets counter\n"
+            << "game_gateway_kcp_malformed_packets " << current.kcp_malformed_packets << "\n"
+            << "# TYPE game_gateway_kcp_active_sessions gauge\n"
+            << "game_gateway_kcp_active_sessions " << current.kcp_active_sessions << "\n";
 
         return out.str();
     }
@@ -223,6 +324,12 @@ namespace yuan::game::server
         message.kind = yuan::rpc::MessageKind::push;
         message.route = game_route::gateway_push();
         message.payload = std::move(payload);
+        if (kcp_transport_ && session->connection_id >= 20'000'000) {
+            return kcp_transport_->write_message_to_connection(session->connection_id, message);
+        }
+        if (websocket_transport_ && session->connection_id >= 10'000'000) {
+            return websocket_transport_->write_message_to_connection(session->connection_id, message);
+        }
         return rpc_server_.write_message_to_connection(session->connection_id, message);
     }
 
@@ -233,6 +340,12 @@ namespace yuan::game::server
             return false;
         }
         gateway_context_.sessions.logout_session(gateway_session_id);
+        if (kcp_transport_ && session->connection_id >= 20'000'000) {
+            return kcp_transport_->close_connection(session->connection_id);
+        }
+        if (websocket_transport_ && session->connection_id >= 10'000'000) {
+            return websocket_transport_->close_connection(session->connection_id);
+        }
         return rpc_server_.close_connection(session->connection_id);
     }
 
@@ -377,7 +490,13 @@ namespace yuan::game::server
             for (auto &message : pending) {
                 const auto connection_id = static_cast<std::uint64_t>(std::strtoull(message.metadata[rpc_network::metadata_key::connection_id].c_str(), nullptr, 10));
                 auto response = gateway_handler_rpc_.handle(std::move(message));
-                (void)rpc_server_.write_response_to_connection(connection_id, std::move(response));
+                if (kcp_transport_ && connection_id >= 20'000'000) {
+                    (void)kcp_transport_->write_response_to_connection(connection_id, std::move(response));
+                } else if (websocket_transport_ && connection_id >= 10'000'000) {
+                    (void)websocket_transport_->write_response_to_connection(connection_id, std::move(response));
+                } else {
+                    (void)rpc_server_.write_response_to_connection(connection_id, std::move(response));
+                }
             }
             for (const auto &task : cleanup_pending) {
                 if (task.connection_id != 0) {

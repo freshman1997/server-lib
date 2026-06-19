@@ -57,6 +57,7 @@ namespace yuan::net
         }
 
         instance_ = std::make_unique<UdpInstance>(this);
+        instance_->set_options(udp_options_);
         //instance_->set_adapter_type(adapterType);
         channel_ = std::make_unique<Channel>();
         channel_->enable_read();
@@ -64,6 +65,11 @@ namespace yuan::net
         channel_->set_fd(sock_->get_fd());
 
         return true;
+    }
+
+    UdpConnectionMetrics UdpAcceptor::metrics() const
+    {
+        return instance_ ? instance_->metrics() : UdpConnectionMetrics{};
     }
 
     void UdpAcceptor::close()
@@ -106,7 +112,8 @@ namespace yuan::net
             size = sizeof(peer_addr);
 #endif
 
-            ::yuan::buffer::ByteBuffer packet(UDP_DATA_LIMIT);
+            const auto max_datagram_size = instance_ ? instance_->options().max_datagram_size : static_cast<std::size_t>(UDP_DATA_LIMIT);
+            ::yuan::buffer::ByteBuffer packet(max_datagram_size);
 
 #ifdef __linux__
             bytes = ::recvfrom(sock_->get_fd(), packet.write_ptr(), static_cast<int>(packet.writable_bytes()), MSG_DONTWAIT, (struct sockaddr *)&peer_addr, &size);
@@ -127,6 +134,9 @@ namespace yuan::net
                 int err = platform::GetLastNativeError();
                 if (!platform::IsNativeRetryableError(err)) {
 #endif
+                    if (instance_) {
+                        instance_->account_receive_error();
+                    }
                     break;
                 }
 
@@ -136,6 +146,9 @@ namespace yuan::net
             }
 
             packet.commit(static_cast<std::size_t>(bytes));
+            if (instance_) {
+                instance_->account_read(static_cast<std::size_t>(bytes));
+            }
             InetAddress addr(peer_addr);
 
             // Dispatch this datagram to the correct peer connection immediately
@@ -189,8 +202,12 @@ namespace yuan::net
         sockaddr_storage addr_storage = address.to_sockaddr();
         socklen_t addr_len = address.is_ipv6() ? sizeof(::sockaddr_in6) : sizeof(::sockaddr_in);
         const auto send_size = (std::min)(buff.readable_bytes(), static_cast<std::size_t>(UDP_DATA_LIMIT));
-        return ::sendto(sock_->get_fd(), buff.read_ptr(), static_cast<int>(send_size),
-                        0, (struct sockaddr *)&addr_storage, addr_len);
+        const auto rc = ::sendto(sock_->get_fd(), buff.read_ptr(), static_cast<int>(send_size),
+                                 0, (struct sockaddr *)&addr_storage, addr_len);
+        if (rc < 0 && instance_) {
+            instance_->account_send_error();
+        }
+        return rc;
     }
 
     int UdpAcceptor::send_datagram(const InetAddress & address, const ::yuan::buffer::ByteBuffer & buff)

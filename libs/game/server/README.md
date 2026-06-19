@@ -513,7 +513,13 @@ sequenceDiagram
 
 ## Gateway 长连接与会话
 
-gateway 当前对客户端暴露的是 Core TCP 上的 YuanRpc frame stream。也就是说，网络层是长连接 framed RPC：同一 TCP 连接可以连续发送多个 YuanRpc request frame，server 按 frame 完整性解包后再调用 gateway handler。
+gateway 当前对客户端暴露三种 transport：TCP、WebSocket、UDP+KCP。三者都只承载同一套 YuanRpc frame，业务 route、payload、login/session 语义一致；客户端可以按平台或网络状况选择入口，切换 transport 不改变业务协议。
+
+入口选择建议：
+
+- TCP：native/PC 默认长连接入口，延迟低，实现最简单。
+- WebSocket：微信小游戏和 H5 的正式入口，使用 binary WebSocket frame 承载完整 YuanRpc frame。
+- UDP+KCP：native/PC 弱网优化入口，KCP payload 承载完整 YuanRpc frame；微信小游戏/H5 不走 KCP。
 
 当前 gateway 收包链路：
 
@@ -527,13 +533,35 @@ TCP bytes
   -> direct RPC to zone with original payload + internal metadata
 ```
 
+WebSocket 收包链路：
+
+```text
+WebSocket binary frame
+  -> RpcFrameConnectionDispatcher per-connection FrameStreamDecoder
+  -> complete YuanRpc request frame
+  -> rpc::Server route dispatch
+  -> gateway handler
+```
+
+KCP 收包链路：
+
+```text
+UDP datagram
+  -> Core KcpServerSession handshake/session by conv + address
+  -> ikcp_input / ikcp_recv
+  -> RpcFrameConnectionDispatcher per-connection FrameStreamDecoder
+  -> complete YuanRpc request frame
+  -> rpc::Server route dispatch
+  -> gateway handler
+```
+
 `RpcNetworkServer` 的关键语义：
 
 - 支持半包：`DecodeError::need_more` 时保留 buffer，等待后续 read。
 - 支持粘包：一次 read 中有多个完整 YuanRpc frame 时循环处理。
-- 支持同一 TCP 连接多次 request/response，不在每次 response 后主动 close。
+- 支持同一 TCP/WebSocket/KCP session 多次 request/response，不在每次 response 后主动 close。
 - 协议错误会关闭当前连接并清理该 connection 的 decoder state。
-- 每个 request 会带内部 metadata `rpc.connection_id` 进入 handler，用于绑定 gateway session 到真实 TCP connection。
+- 每个 request 会带内部 metadata `rpc.connection_id` 进入 handler，用于绑定 gateway session 到真实 transport connection/session。
 - handler 可以返回内部 metadata `rpc.close_connection=1`，adapter 会先写 response 再关闭连接。
 - handler 可以返回内部 metadata `rpc.defer_response=1`，adapter 不立即写 response；业务随后调用 `write_response_to_connection()` 写回。gateway 用这个机制把 zone 网络转发放到自己的串行 handler worker，避免网络 runtime 线程等待 zone timeout。
 - gateway handler worker 维持单线程 session 状态模型，不默认按连接分片加线程。客户端请求转发和断线 cleanup/retry 共用这个 worker，不再为 cleanup 单独启动线程。为了避免 zone 慢时无限积压，gateway handler queue 是有界队列，配置项 `gateway_handler_queue_limit` 默认 `4096`；队列满时直接返回 `RpcStatus::unavailable`。
@@ -542,7 +570,7 @@ TCP bytes
 - gateway/world 的周期 metrics 日志使用 Core timer，不再为 metrics 单独启动线程。
 - `RpcNetworkServerConfig` 支持连接生命周期控制：`max_connections`、`max_buffered_bytes`、`idle_timeout_ms`。
 - `idle_timeout_ms` 检查使用 Core timer，不再为 idle monitor 单独启动线程。
-- `close_all_connections()` 用于 drain 时主动关闭当前 active connections。
+- `close_all_connections()` 用于 drain 时主动关闭当前 active connections/sessions。
 - `active_connection_count()` 提供结构化 metrics accessor。
 - `stop_after_requests` 只用于测试里让 server run loop 退出，不代表生产连接生命周期。
 - handler 默认在网络 runtime 线程串行执行。不要在 `RpcNetworkServer` 内部为每个请求创建线程，也不要隐式引入 worker pool；GameServer 上层状态默认按单线程模型编写。
@@ -550,11 +578,28 @@ TCP bytes
 - world 的 HTTP `/game/login_options` 和常规 RPC 绑定到同一个 `RpcNetworkServer` runtime，不再为 world HTTP 单独启动线程。world 状态更新仍回到同一 event loop 执行，避免给 `WorldMsgContext` 引入默认多线程访问模型。
 - world HTTP `/game/login_options` 需要角色 read model 时通过 `world_db_proxy` 领域 RPC 获取；world 进程不直接连接 Redis，也不理解 Redis schema。
 
-当前 smoke/mock client 已验证同一个 gateway TCP 连接上连续完成 login、game、time sync、logout。gateway 客户端入口不会在网络 runtime 线程等待 zone 网络 timeout；内部 world/zone/tunnel 的后台或非客户端入口路径仍可继续使用短连接 `RpcNetworkClient::call(...)`。
+当前 smoke/mock client 已验证同一个 gateway TCP 连接上连续完成 login、game、time sync、logout；focused transport tests 已验证 WebSocket binary frame 和 UDP+KCP 都能承载 YuanRpc request/response roundtrip。gateway 客户端入口不会在网络 runtime 线程等待 zone 网络 timeout；内部 world/zone/tunnel 的后台或非客户端入口路径仍可继续使用短连接 `RpcNetworkClient::call(...)`。
 
 如果后续要接“非 YuanRpc 包裹”的 raw CS socket，已有 `ClientFrameStreamDecoder` 可以直接复用在 socket read callback 上，实现 CS frame 自身的半包/粘包处理。
 
-客户端到 gateway 的正式 CS 包使用 YuanRpc route + 业务 payload。当前 gateway 客户端入口不要求额外的 `ClientFrameHeader`。客户端 payload 是业务协议 bytes，gateway 不解；gateway 只使用 `RpcNetworkServer` 注入的 `rpc.connection_id` 找连接上下文。
+客户端到 gateway 的正式 CS 包使用 YuanRpc route + 业务 payload。当前 gateway 客户端入口不要求额外的 `ClientFrameHeader`。客户端 payload 是业务协议 bytes，gateway 不解；gateway 只使用 transport adapter 注入的 `rpc.connection_id` 找连接上下文。
+
+gateway 配置中 `listen_port` 是 TCP 入口，`websocket_port` 是 WebSocket 入口，`kcp_port` 是 UDP+KCP 入口；`websocket_port` 或 `kcp_port` 为 `0` 时对应入口不启动。KCP 多客户端会话管理已经下沉到 Core 的 `KcpServerSession`，gateway 的 `GatewayKcpTransport` 只是薄 YuanRpc adapter。Core 默认 handshake 支持 UDP packet type `1` + magic `YKCP1`，服务端返回 packet type `2` + 4-byte big-endian conv；后续 KCP segment 外层 UDP packet type 为 `3`，KCP 自身 conv 用于 session lookup。gateway 正式模式可配置 `kcp_require_login_token=true`，此时新建 session 的 handshake payload 直接使用 web/world 返回给客户端的 `login_token_id`，gateway 用 `login_token_secret` 解码并校验过期/MAC，客户端不需要额外配置 KCP secret 或单独获取 KCP token。
+
+KCP NAT migration 由 Core 在握手层完成，gateway 只负责校验 payload。开启 `kcp_allow_migration=true` 后，客户端地址变化时可向新 UDP 地址发送 handshake payload `login_token_id|conv`；`login_token_id` 仍按 TTL/MAC 校验，`conv` 是首次 handshake ack 返回的 4-byte conv 值。校验通过后 Core 会把该 KCP session 的地址从旧 `ip:port` 更新为新 `ip:port`，并返回同一个 conv。没有合法 token 的地址不能劫持现有 conv；迁移到已绑定其他 session 的地址会被拒绝。
+
+KCP 相关 gateway 配置包括：`kcp_update_interval_ms`、`kcp_cleanup_interval_ms`、`kcp_idle_timeout_ms`、`kcp_mtu`、`kcp_send_window`、`kcp_receive_window`、`kcp_resend`、`kcp_nodelay`、`kcp_no_congestion_control`、`kcp_max_sessions`、`kcp_max_sessions_per_ip`、`kcp_allow_migration`、`kcp_max_handshakes_per_address_per_window`、`kcp_handshake_rate_window_ms`、`kcp_max_malformed_packets_per_address`、`kcp_require_login_token`。这些配置会直接传给 Core `KcpServerSession`，不是 gateway 私有实现。
+
+压测调参建议：先固定业务 payload 和 RTT/loss profile，再按目标平台调整 `kcp_mtu`、`kcp_send_window`、`kcp_receive_window`、`kcp_update_interval_ms`、`kcp_resend` 和 `kcp_no_congestion_control`。高并发压测要同时设置 `kcp_max_sessions`、`kcp_max_sessions_per_ip`、`kcp_max_handshakes_per_address_per_window`、`kcp_handshake_rate_window_ms` 和 `kcp_max_malformed_packets_per_address`，避免单机压测或攻击流量把 session table 和 handshake path 打满。
+
+Core UDP 底座的生产化边界：
+
+- `UdpConnection` 只负责 UDP datagram connection 抽象，不承载 KCP handshake/conv/session table 语义。
+- `UdpConnection` 明确 `remote_address` / `peer_address` 为客户端地址，`local_address` 不再错误复用 peer address。
+- `UdpConnectionOptions` 支持 `max_datagram_size`、pending output bytes/datagrams、idle check interval、idle timeout checks。
+- `UdpConnectionMetrics` 统计 read/write datagrams、bytes、drop、send/receive errors、created/closed/active connections。
+- `DatagramServerSession` 暴露 UDP options、metrics、read/error/close callback、`send_datagram(address, buffer)`。
+- `KcpServerSession` 复用 `DatagramServerSession`，并在 Core 层管理 KCP 多客户端会话；上层服务只消费 `connection_id + bytes` callback。
 
 登录时 gateway 只从 `CSLoginRequest` 读取 `login_token_id` 并验签还原目标 zone，然后为连接 reserve 一个内部 `gateway_session_id`，把原始 login payload 和 metadata 转发给 zone。zone 解 `CSLoginRequest` 后把 `zone_service_id/gateway_session_id` 通过 response metadata 回给 gateway，gateway 再绑定：
 
@@ -592,7 +637,7 @@ sequenceDiagram
 
 - `gateway.push` 从 metadata 读取 `gateway.session_id`，不解 push payload。
 - gateway 校验 `gateway_session_id` 是否仍是当前连接 session。
-- `GatewayServerService` 默认 push 能力会把 payload 原样写成 YuanRpc `push` frame 给该 session 对应的 TCP connection。
+- `GatewayServerService` 默认 push 能力会把 payload 原样写成 YuanRpc `push` frame 给该 session 对应的 TCP/WebSocket/KCP connection/session。
 - 如果 session 不存在、role 不匹配或 connection 已断开，返回 `RpcStatus::unavailable`。
 
 ## Zone 玩家模型与持久化

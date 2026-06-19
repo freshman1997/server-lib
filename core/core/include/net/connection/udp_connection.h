@@ -7,12 +7,38 @@
 #include "timer/timer.h"
 #include "timer/timer_handle.h"
 #include "timer/timer_task.h"
+#include <atomic>
+#include <cstdint>
 #include <memory>
 
 namespace yuan::net
 {
     class UdpInstance;
     class UdpAdapter;
+
+    struct UdpConnectionOptions
+    {
+        std::size_t max_datagram_size = 1472;
+        std::size_t max_pending_output_bytes = 256 * 1024;
+        std::size_t max_pending_output_datagrams = 1024;
+        std::uint32_t idle_check_interval_ms = 10000;
+        std::uint32_t idle_timeout_checks = 2;
+    };
+
+    struct UdpConnectionMetrics
+    {
+        std::uint64_t datagrams_read = 0;
+        std::uint64_t bytes_read = 0;
+        std::uint64_t datagrams_written = 0;
+        std::uint64_t bytes_written = 0;
+        std::uint64_t datagrams_dropped = 0;
+        std::uint64_t bytes_dropped = 0;
+        std::uint64_t send_errors = 0;
+        std::uint64_t receive_errors = 0;
+        std::uint64_t active_connections = 0;
+        std::uint64_t created_connections = 0;
+        std::uint64_t closed_connections = 0;
+    };
 
     class UdpConnection : public Connection, public DatagramTransport, public timer::TimerTask
     {
@@ -46,6 +72,10 @@ namespace yuan::net
         virtual void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer);
 
         virtual void write_owned_and_flush(::yuan::buffer::ByteBuffer buffer) override;
+
+        [[nodiscard]] std::size_t pending_output_bytes() const noexcept { return pending_output_bytes_; }
+        [[nodiscard]] std::size_t pending_output_datagrams() const noexcept;
+        [[nodiscard]] bool output_over_limit() const noexcept { return output_over_limit_; }
 
         virtual void flush();
 
@@ -89,6 +119,11 @@ namespace yuan::net
         void process_pending_output_buffer();
 
         bool proc_one_buffer(const ::yuan::buffer::ByteBuffer &buffer);
+        bool enqueue_output(std::unique_ptr<::yuan::buffer::ByteBuffer> buffer);
+        bool can_enqueue_output(std::size_t bytes) const;
+        void account_drop(std::size_t bytes);
+        void account_send(std::size_t bytes);
+        void account_send_error();
 
     private:
         bool active_;
@@ -96,7 +131,8 @@ namespace yuan::net
         bool is_closing_;
         ConnectionState state_;
         int idle_cnt_;
-        InetAddress address_;
+        InetAddress remote_address_;
+        InetAddress local_address_;
         std::unique_ptr<UdpAdapter> adapter_;
         std::shared_ptr<ConnectionHandler> connectionHandlerOwner_;
         EventHandler *eventHandler_;
@@ -105,6 +141,8 @@ namespace yuan::net
         bool cleanup_done_ = false;
         bool close_notified_ = false;
         ::yuan::buffer::BufferChain pending_output_buffer_;
+        std::size_t pending_output_bytes_ = 0;
+        bool output_over_limit_ = false;
     };
 }
 

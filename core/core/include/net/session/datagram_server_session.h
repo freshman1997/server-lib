@@ -6,10 +6,13 @@
 
 #include "net/acceptor/acceptor_factory.h"
 #include "net/acceptor/datagram_acceptor.h"
+#include "net/acceptor/udp_acceptor.h"
 #include "net/connection/connection.h"
+#include "net/connection/udp_connection.h"
 #include "net/handler/connection_handler.h"
 #include "net/runtime/network_runtime.h"
 #include "net/session/connection_context.h"
+#include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
 #include "timer/timer_handle.h"
 #include "timer/timer_manager.h"
@@ -21,6 +24,8 @@ namespace yuan::net
     {
     public:
         using ReadCallback = std::function<void(ConnectionContext &conn)>;
+        using ErrorCallback = std::function<void(ConnectionContext &conn)>;
+        using CloseCallback = std::function<void(ConnectionContext &conn)>;
 
         DatagramServerSession() = default;
 
@@ -66,6 +71,29 @@ namespace yuan::net
             read_callback_ = std::move(callback);
         }
 
+        void set_error_callback(ErrorCallback callback)
+        {
+            error_callback_ = std::move(callback);
+        }
+
+        void set_close_callback(CloseCallback callback)
+        {
+            close_callback_ = std::move(callback);
+        }
+
+        void set_udp_options(UdpConnectionOptions options)
+        {
+            udp_options_ = options;
+        }
+
+        [[nodiscard]] UdpConnectionMetrics metrics() const
+        {
+            if (auto *udp = dynamic_cast<UdpAcceptor *>(acceptor_.get())) {
+                return udp->metrics();
+            }
+            return {};
+        }
+
         NetworkRuntime *runtime() const noexcept
         {
             return runtime_;
@@ -90,6 +118,11 @@ namespace yuan::net
             }
         }
 
+        int send_datagram(const InetAddress &address, const ::yuan::buffer::ByteBuffer &buffer)
+        {
+            return acceptor_ ? acceptor_->send_datagram(address, buffer) : -1;
+        }
+
         void on_connected(Connection &conn) override
         {
             conn.set_connection_handler(self_handler_holder_);
@@ -105,7 +138,10 @@ namespace yuan::net
 
         void on_error(Connection &conn) override
         {
-            (void)conn;
+            if (error_callback_) {
+                ConnectionContext ctx(&conn);
+                error_callback_(ctx);
+            }
         }
 
         void on_write(Connection &conn) override
@@ -115,7 +151,10 @@ namespace yuan::net
 
         void on_close(Connection &conn) override
         {
-            (void)conn;
+            if (close_callback_) {
+                ConnectionContext ctx(&conn);
+                close_callback_(ctx);
+            }
         }
 
     private:
@@ -142,6 +181,9 @@ namespace yuan::net
             }
 
             acceptor_.reset(create_datagram_acceptor(sock.release(), tm));
+            if (auto *udp = dynamic_cast<UdpAcceptor *>(acceptor_.get())) {
+                udp->set_udp_options(udp_options_);
+            }
             if (!acceptor_->listen()) {
                 acceptor_.reset();
                 return false;
@@ -155,7 +197,10 @@ namespace yuan::net
 
         NetworkRuntime *runtime_ = nullptr;
         std::unique_ptr<DatagramAcceptor> acceptor_;
+        UdpConnectionOptions udp_options_;
         ReadCallback read_callback_;
+        ErrorCallback error_callback_;
+        CloseCallback close_callback_;
         std::shared_ptr<ConnectionHandler> self_handler_holder_{ make_non_owning_handler(*this) };
     };
 

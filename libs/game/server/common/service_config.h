@@ -26,6 +26,24 @@ namespace yuan::game::server
         GameServiceId service_id;
         std::string listen_host;
         std::uint16_t listen_port = 0;
+        std::uint16_t websocket_port = 0;
+        std::uint16_t kcp_port = 0;
+        std::uint32_t kcp_update_interval_ms = 10;
+        std::uint32_t kcp_cleanup_interval_ms = 1000;
+        std::uint64_t kcp_idle_timeout_ms = 60000;
+        std::uint32_t kcp_mtu = 1400;
+        std::uint32_t kcp_send_window = 128;
+        std::uint32_t kcp_receive_window = 128;
+        std::uint32_t kcp_resend = 1;
+        bool kcp_nodelay = true;
+        bool kcp_no_congestion_control = true;
+        std::uint64_t kcp_max_sessions = 0;
+        std::uint64_t kcp_max_sessions_per_ip = 0;
+        bool kcp_allow_migration = false;
+        std::uint64_t kcp_max_handshakes_per_address_per_window = 0;
+        std::uint64_t kcp_handshake_rate_window_ms = 1000;
+        std::uint64_t kcp_max_malformed_packets_per_address = 0;
+        bool kcp_require_login_token = false;
         std::uint16_t http_port = 0;
         std::string tunnel_host;
         std::uint16_t tunnel_port = 0;
@@ -168,6 +186,9 @@ namespace yuan::game::server
             auto get_u64_json = [&](const char *key, std::uint64_t fallback = 0) -> std::uint64_t {
                 return root.contains(key) && root[key].is_number_unsigned() ? root[key].get<std::uint64_t>() : fallback;
             };
+            auto get_bool_json = [&](const char *key, bool fallback = false) -> bool {
+                return root.contains(key) && root[key].is_boolean() ? root[key].get<bool>() : fallback;
+            };
             auto get_tunnel_endpoints_json = [&]() -> std::vector<rpc_network::RpcEndpoint> {
                 std::vector<rpc_network::RpcEndpoint> result;
                 if (!root.contains("tunnel_endpoints") || !root["tunnel_endpoints"].is_array()) {
@@ -300,6 +321,24 @@ namespace yuan::game::server
             config.service_id.instance = get_u64_json("instance");
             config.listen_host = get_string("listen_host");
             config.listen_port = get_u16_json("listen_port");
+            config.websocket_port = get_u16_json("websocket_port");
+            config.kcp_port = get_u16_json("kcp_port");
+            config.kcp_update_interval_ms = static_cast<std::uint32_t>(get_u64_json("kcp_update_interval_ms", config.kcp_update_interval_ms));
+            config.kcp_cleanup_interval_ms = static_cast<std::uint32_t>(get_u64_json("kcp_cleanup_interval_ms", config.kcp_cleanup_interval_ms));
+            config.kcp_idle_timeout_ms = get_u64_json("kcp_idle_timeout_ms", config.kcp_idle_timeout_ms);
+            config.kcp_mtu = static_cast<std::uint32_t>(get_u64_json("kcp_mtu", config.kcp_mtu));
+            config.kcp_send_window = static_cast<std::uint32_t>(get_u64_json("kcp_send_window", config.kcp_send_window));
+            config.kcp_receive_window = static_cast<std::uint32_t>(get_u64_json("kcp_receive_window", config.kcp_receive_window));
+            config.kcp_resend = static_cast<std::uint32_t>(get_u64_json("kcp_resend", config.kcp_resend));
+            config.kcp_nodelay = get_bool_json("kcp_nodelay", config.kcp_nodelay);
+            config.kcp_no_congestion_control = get_bool_json("kcp_no_congestion_control", config.kcp_no_congestion_control);
+            config.kcp_max_sessions = get_u64_json("kcp_max_sessions", config.kcp_max_sessions);
+            config.kcp_max_sessions_per_ip = get_u64_json("kcp_max_sessions_per_ip", config.kcp_max_sessions_per_ip);
+            config.kcp_allow_migration = get_bool_json("kcp_allow_migration", config.kcp_allow_migration);
+            config.kcp_max_handshakes_per_address_per_window = get_u64_json("kcp_max_handshakes_per_address_per_window", config.kcp_max_handshakes_per_address_per_window);
+            config.kcp_handshake_rate_window_ms = get_u64_json("kcp_handshake_rate_window_ms", config.kcp_handshake_rate_window_ms);
+            config.kcp_max_malformed_packets_per_address = get_u64_json("kcp_max_malformed_packets_per_address", config.kcp_max_malformed_packets_per_address);
+            config.kcp_require_login_token = get_bool_json("kcp_require_login_token", config.kcp_require_login_token);
             config.http_port = get_u16_json("http_port");
             config.tunnel_host = get_string("tunnel_host");
             config.tunnel_port = get_u16_json("tunnel_port");

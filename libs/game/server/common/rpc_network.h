@@ -56,6 +56,8 @@ namespace yuan::game::server::rpc_network
         inline constexpr const char *defer_response = game_metadata_key::rpc_defer_response;
     }
 
+    class RpcFrameConnectionDispatcher;
+
     class RpcNetworkServer
     {
     public:
@@ -115,6 +117,33 @@ namespace yuan::game::server::rpc_network
         bool stop_after_expected_requests_ = false;
         bool ok_ = false;
         std::uint16_t port_ = 0;
+    };
+
+    class RpcFrameConnectionDispatcher
+    {
+    public:
+        struct Callbacks
+        {
+            std::function<bool(std::uint64_t, yuan::rpc::Bytes)> write_frame;
+            std::function<void(std::uint64_t)> close_connection;
+            std::function<void(std::uint64_t)> connection_closed;
+        };
+
+        explicit RpcFrameConnectionDispatcher(yuan::rpc::Server &server);
+
+        void set_callbacks(Callbacks callbacks);
+        void set_max_buffered_bytes(std::size_t max_buffered_bytes);
+        bool on_bytes(std::uint64_t connection_id, yuan::rpc::Bytes bytes);
+        bool write_message(std::uint64_t connection_id, const yuan::rpc::Message &message);
+        bool write_response(std::uint64_t connection_id, yuan::rpc::Response response);
+        void close(std::uint64_t connection_id);
+        void erase(std::uint64_t connection_id);
+
+    private:
+        yuan::rpc::Server &server_;
+        Callbacks callbacks_;
+        std::size_t max_buffered_bytes_ = 1024 * 1024;
+        std::unordered_map<std::uint64_t, yuan::rpc::wire::FrameStreamDecoder> decoders_;
     };
 
     using CoreRpcServer = RpcNetworkServer;

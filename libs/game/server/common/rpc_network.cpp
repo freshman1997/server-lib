@@ -40,6 +40,92 @@ namespace yuan::game::server::rpc_network
         stop();
     }
 
+    RpcFrameConnectionDispatcher::RpcFrameConnectionDispatcher(yuan::rpc::Server &server)
+        : server_(server)
+    {
+    }
+
+    void RpcFrameConnectionDispatcher::set_callbacks(Callbacks callbacks)
+    {
+        callbacks_ = std::move(callbacks);
+    }
+
+    void RpcFrameConnectionDispatcher::set_max_buffered_bytes(std::size_t max_buffered_bytes)
+    {
+        max_buffered_bytes_ = max_buffered_bytes == 0 ? 1024 * 1024 : max_buffered_bytes;
+    }
+
+    bool RpcFrameConnectionDispatcher::on_bytes(std::uint64_t connection_id, yuan::rpc::Bytes bytes)
+    {
+        auto &decoder = decoders_[connection_id];
+        decoder.append(std::move(bytes));
+        if (decoder.buffered_size() > max_buffered_bytes_) {
+            close(connection_id);
+            return false;
+        }
+        for (;;) {
+            auto decoded = decoder.next();
+            if (!decoded.ok) {
+                if (decoded.error != yuan::rpc::wire::DecodeError::need_more) {
+                    close(connection_id);
+                    return false;
+                }
+                return true;
+            }
+            auto message = yuan::rpc::wire::to_message(std::move(decoded.frame));
+            message.metadata[metadata_key::connection_id] = std::to_string(connection_id);
+            auto response = server_.handle(std::move(message));
+            if (response.metadata.erase(metadata_key::defer_response) != 0) {
+                continue;
+            }
+            if (!write_response(connection_id, std::move(response))) {
+                return false;
+            }
+        }
+    }
+
+    bool RpcFrameConnectionDispatcher::write_message(std::uint64_t connection_id, const yuan::rpc::Message &message)
+    {
+        yuan::rpc::Bytes frame;
+        if (!yuan::rpc::wire::encode_message(message, frame) || !callbacks_.write_frame) {
+            return false;
+        }
+        return callbacks_.write_frame(connection_id, std::move(frame));
+    }
+
+    bool RpcFrameConnectionDispatcher::write_response(std::uint64_t connection_id, yuan::rpc::Response response)
+    {
+        const bool close_after_response = response.metadata.erase(metadata_key::close_connection) != 0;
+        yuan::rpc::Bytes frame;
+        if (!yuan::rpc::wire::encode_response(response, frame) || !callbacks_.write_frame) {
+            if (close_after_response) {
+                close(connection_id);
+            }
+            return false;
+        }
+        const bool written = callbacks_.write_frame(connection_id, std::move(frame));
+        if (close_after_response) {
+            close(connection_id);
+        }
+        return written;
+    }
+
+    void RpcFrameConnectionDispatcher::close(std::uint64_t connection_id)
+    {
+        decoders_.erase(connection_id);
+        if (callbacks_.close_connection) {
+            callbacks_.close_connection(connection_id);
+        }
+    }
+
+    void RpcFrameConnectionDispatcher::erase(std::uint64_t connection_id)
+    {
+        decoders_.erase(connection_id);
+        if (callbacks_.connection_closed) {
+            callbacks_.connection_closed(connection_id);
+        }
+    }
+
     bool RpcNetworkServer::start(const RpcNetworkServerConfig &config, yuan::rpc::Server &server)
     {
         server_ = &server;
