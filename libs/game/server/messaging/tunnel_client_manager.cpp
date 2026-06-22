@@ -34,6 +34,7 @@ namespace yuan::game::server
             const auto exists = std::find_if(tunnels_.begin(), tunnels_.end(), [&endpoint](const auto &connection) {
                 return connection->endpoint().host == endpoint.host && connection->endpoint().port == endpoint.port;
             });
+            
             if (!endpoint.host.empty() && endpoint.port != 0 && exists == tunnels_.end()) {
                 tunnels_.push_back(std::make_shared<TunnelClient>(std::move(endpoint)));
             }
@@ -55,10 +56,12 @@ namespace yuan::game::server
         if (tunnel_endpoint.host.empty() || tunnel_endpoint.port == 0) {
             return;
         }
+
         std::scoped_lock lock(mutex_);
         const auto exists = std::find_if(tunnels_.begin(), tunnels_.end(), [&tunnel_endpoint](const auto &connection) {
             return connection->endpoint().host == tunnel_endpoint.host && connection->endpoint().port == tunnel_endpoint.port;
         });
+
         if (exists == tunnels_.end()) {
             tunnels_.push_back(std::make_shared<TunnelClient>(std::move(tunnel_endpoint)));
         }
@@ -101,6 +104,7 @@ namespace yuan::game::server
             registration = configured_registration_;
             service_name = configured_registration_name_;
         }
+
         if (registration) {
             start_registered_service(rpc_server, std::move(*registration), std::move(service_name));
         }
@@ -112,6 +116,7 @@ namespace yuan::game::server
         if (service_name.empty()) {
             service_name = registration.name.empty() ? "service" : registration.name;
         }
+
         {
             std::scoped_lock lock(mutex_);
             configured_registration_ = std::move(registration);
@@ -119,14 +124,17 @@ namespace yuan::game::server
             timer_owner_ = &rpc_server;
             next_registration_due_ms_ = 0;
         }
+
         auto first_response = register_service(*configured_registration_);
         if (!first_response || first_response->status != yuan::rpc::RpcStatus::ok) {
             LOG_ERROR("{} failed to register to tunnel service_id={}", configured_registration_name_, configured_registration_->service_id);
         }
+
         const auto heartbeat_ms = static_cast<std::uint32_t>(heartbeat_interval_.count() <= 0 ? 5000 : heartbeat_interval_.count());
         heartbeat_timer_ = rpc_server.schedule_periodic(heartbeat_ms, heartbeat_ms, [this] {
             heartbeat_tick();
         });
+
         registered_service_timer_ = rpc_server.schedule_periodic(1, 500, [this] {
             registered_service_tick();
         });
@@ -137,6 +145,7 @@ namespace yuan::game::server
         rpc_network::RpcNetworkServer *timer_owner = nullptr;
         yuan::timer::TimerHandle heartbeat_timer;
         yuan::timer::TimerHandle registered_service_timer;
+
         {
             std::scoped_lock lock(mutex_);
             timer_owner = timer_owner_;
@@ -146,6 +155,7 @@ namespace yuan::game::server
             heartbeat_timer_.reset();
             registered_service_timer_.reset();
         }
+
         if (timer_owner) {
             timer_owner->cancel_timer(heartbeat_timer);
             timer_owner->cancel_timer(registered_service_timer);
@@ -184,6 +194,7 @@ namespace yuan::game::server
                     dead.push_back(index);
                 }
             }
+
             if (mode == TunnelSelectMode::random) {
                 std::shuffle(live.begin(), live.end(), random);
                 std::shuffle(dead.begin(), dead.end(), random);
@@ -196,6 +207,7 @@ namespace yuan::game::server
                     next_tunnel_index = (next_tunnel_index + 1) % primary.size();
                 }
             }
+
             live.insert(live.end(), dead.begin(), dead.end());
             return live;
         }
@@ -209,6 +221,7 @@ namespace yuan::game::server
         if (!encode_tunnel_registration(registration, payload)) {
             return std::nullopt;
         }
+
         yuan::rpc::Message message;
         message.route = game_route::tunnel_register();
         message.payload = std::move(payload);
@@ -228,11 +241,13 @@ namespace yuan::game::server
             registration = configured_registration_;
             service_name = configured_registration_name_.empty() ? "service" : configured_registration_name_;
         }
+
         auto response = register_service(*registration);
         const auto delay_ms = response && response->status == yuan::rpc::RpcStatus::ok ? 5000ULL : 500ULL;
         if (!response || response->status != yuan::rpc::RpcStatus::ok) {
             LOG_ERROR("{} failed to register to tunnel service_id={}", service_name, registration->service_id);
         }
+
         {
             std::scoped_lock lock(mutex_);
             next_registration_due_ms_ = yuan::base::time::steady_now_ms() + delay_ms;
@@ -246,6 +261,7 @@ namespace yuan::game::server
         if (!encode_tunnel_envelope(envelope, payload)) {
             return std::nullopt;
         }
+
         yuan::rpc::Message message;
         message.request_id = envelope.request_id;
         message.set_continuation_id(envelope.continuation_id);
@@ -316,6 +332,7 @@ namespace yuan::game::server
     {
         std::vector<std::shared_ptr<TunnelClient>> tunnels;
         std::vector<std::size_t> order;
+
         {
             std::scoped_lock lock(mutex_);
             if (tunnels_.empty()) {
@@ -324,6 +341,7 @@ namespace yuan::game::server
             tunnels = tunnels_;
             order = tunnel_attempt_order(tunnels_, route_key, mode, random_, next_tunnel_index_);
         }
+
         std::optional<yuan::rpc::Response> last_response;
         int attempt = 0;
         for (const auto index : order) {
@@ -335,11 +353,13 @@ namespace yuan::game::server
                 }
                 return last_response;
             }
+
             ++attempt;
             if (attempt < static_cast<int>(order.size())) {
                 tunnel_call_retries_.fetch_add(1, std::memory_order_relaxed);
             }
         }
+
         tunnel_call_failures_.fetch_add(1, std::memory_order_relaxed);
         return last_response;
     }
@@ -359,6 +379,7 @@ namespace yuan::game::server
             std::scoped_lock lock(mutex_);
             tunnels = tunnels_;
         }
+
         for (auto &tunnel : tunnels) {
             (void)tunnel->heartbeat();
         }

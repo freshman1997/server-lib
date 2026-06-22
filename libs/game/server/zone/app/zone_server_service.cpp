@@ -63,6 +63,7 @@ namespace yuan::game::server
         if (!registered) {
             return false;
         }
+
         ok_ = !tunnel_client_manager_.empty() && rpc_server_.start(rpc_network::RpcNetworkServerConfig{listen_host_, listen_port_, 0}, zone_rpc_);
         return ok_;
     }
@@ -92,6 +93,7 @@ namespace yuan::game::server
         if (flush_thread_.joinable()) {
             flush_thread_.join();
         }
+
         for (;;) {
             const auto before = players_.dirty_count();
             const auto remaining = flush_dirty_players();
@@ -132,6 +134,7 @@ namespace yuan::game::server
         if (!encode_binary(zone_info, world_payload)) {
             return false;
         }
+
         bool ok = true;
         for (std::uint16_t index = 0; index < world_routing_.world_count; ++index) {
             auto target_world = world_service_id_;
@@ -156,10 +159,12 @@ namespace yuan::game::server
         if (!target_world) {
             return false;
         }
+
         yuan::rpc::Bytes world_payload;
         if (!encode_binary(update, world_payload)) {
             return false;
         }
+
         auto response = tunnel_client_manager_.send_to_service(service_id_.pack(),
                                                    target_world->pack(),
                                                    game_route::world_player_zone_set(),
@@ -177,9 +182,11 @@ namespace yuan::game::server
                       zone_max_players_);
             return false;
         }
+
         if (!players_.online(request, [this](SSGatewayLoginRequest load_request) { return load_player_from_db(load_request); })) {
             return false;
         }
+
         return true;
     }
 
@@ -188,9 +195,11 @@ namespace yuan::game::server
         if (request.role_id == 0 && request.gateway_session_id != 0) {
             request.role_id = players_.role_for_gateway_session(request.gateway_session_id);
         }
+
         if (!players_.offline(request)) {
             return false;
         }
+
         return true;
     }
 
@@ -200,13 +209,16 @@ namespace yuan::game::server
             if (request.args.size() != 2) {
                 return SSGmCommandResponse{false, "usage: set_player_level <role_id> <level>"};
             }
+
             const auto role_id = static_cast<RoleId>(std::stoull(request.args[0]));
             const auto level = static_cast<std::uint32_t>(std::stoul(request.args[1]));
             if (!players_.set_level(role_id, level)) {
                 return SSGmCommandResponse{false, "role is not online or level is invalid"};
             }
+
             return SSGmCommandResponse{true, "player level set role=" + std::to_string(role_id) + " level=" + std::to_string(level)};
         }
+
         return SSGmCommandResponse{false, "unknown zone gm command: " + request.command};
     }
 
@@ -222,10 +234,12 @@ namespace yuan::game::server
             LOG_ERROR("zone player load failed: player_db_proxy unavailable role_id={}", request.role_id);
             return std::nullopt;
         }
+
         yuan::rpc::Bytes payload;
         if (!encode_binary(SSPlayerDbLoadRoleRequest{request.player_uid, request.role_id}, payload)) {
             return std::nullopt;
         }
+
         auto response = tunnel_client_manager_.send_to_service(service_id_.pack(),
                                                    target_proxy,
                                                    game_route::player_db_load_role(),
@@ -239,10 +253,12 @@ namespace yuan::game::server
                 return std::nullopt;
             }
         }
+
         LOG_ERROR("zone player load via player_db_proxy failed role_id={} proxy_service={} status={}",
                   request.role_id,
                   target_proxy,
                   response ? static_cast<int>(response->status) : -1);
+        
         return std::nullopt;
     }
 
@@ -253,6 +269,7 @@ namespace yuan::game::server
             LOG_ERROR("zone player save failed: player_db_proxy unavailable role_id={}", player.role_id);
             return false;
         }
+
         yuan::rpc::Bytes payload;
         SSPlayerDbSaveRoleRequest request;
         request.role = SSPlayerRoleData{player.player_uid, player.role_id, player.level, player.exp};
@@ -260,6 +277,7 @@ namespace yuan::game::server
         if (!encode_binary(request, payload)) {
             return false;
         }
+
         auto response = tunnel_client_manager_.send_to_service(service_id_.pack(),
                                                    target_proxy,
                                                    game_route::player_db_save_role(),
@@ -267,10 +285,12 @@ namespace yuan::game::server
         if (response && response->status == yuan::rpc::RpcStatus::ok) {
             return true;
         }
+
         LOG_ERROR("zone player save via player_db_proxy failed role_id={} proxy_service={} status={}",
                   player.role_id,
                   target_proxy,
                   response ? static_cast<int>(response->status) : -1);
+
         return false;
     }
 

@@ -13,6 +13,7 @@ namespace yuan::game::server::storage
         if (!result.ok || result.rows.empty()) {
             return std::nullopt;
         }
+        
         EntityRecord record;
         record.table = std::move(table);
         record.key = std::move(key);
@@ -20,6 +21,7 @@ namespace yuan::game::server::storage
         if (auto it = record.fields.find("object_blob"); it != record.fields.end()) {
             record.object_blob = field_to_bytes(it->second);
         }
+
         record.version = field_u64(record.fields, "data_version", 0);
         return record;
     }
@@ -29,9 +31,11 @@ namespace yuan::game::server::storage
         if (record.version == 0) {
             record.version = 1;
         }
+
         if (!record.object_blob.empty()) {
             record.fields["object_blob"] = bytes_to_field(record.object_blob);
         }
+
         record.fields["data_version"] = std::to_string(record.version);
         return orm_.insert(std::move(record.table), std::move(record.key), std::move(record.fields));
     }
@@ -41,9 +45,11 @@ namespace yuan::game::server::storage
         if (record.version == 0) {
             record.version = 1;
         }
+
         if (!record.object_blob.empty()) {
             record.fields["object_blob"] = bytes_to_field(record.object_blob);
         }
+
         record.fields["data_version"] = std::to_string(record.version);
         return orm_.upsert(std::move(record.table), std::move(record.key), std::move(record.fields));
     }
@@ -53,9 +59,11 @@ namespace yuan::game::server::storage
         if (record.version == 0) {
             record.version = expected_version + 1;
         }
+
         if (!record.object_blob.empty()) {
             record.fields["object_blob"] = bytes_to_field(record.object_blob);
         }
+
         record.fields["data_version"] = std::to_string(record.version);
         return orm_.compare_and_update(std::move(record.table), std::move(record.key), "data_version", expected_version, std::move(record.fields));
     }
@@ -73,9 +81,11 @@ namespace yuan::game::server::storage
             if (record.version == 0) {
                 record.version = 1;
             }
+
             if (!record.object_blob.empty()) {
                 record.fields["object_blob"] = bytes_to_field(record.object_blob);
             }
+
             record.fields["data_version"] = std::to_string(record.version);
             operations.push_back(DbOrmOperation{static_cast<std::uint32_t>(DbOrmOpType::update),
                                                 std::move(record.table),
@@ -83,6 +93,7 @@ namespace yuan::game::server::storage
                                                 fields_to_proto(record.fields),
                                                 0});
         }
+
         return orm_.batch(operations, transactional);
     }
 
@@ -92,6 +103,7 @@ namespace yuan::game::server::storage
         if (it == fields.end()) {
             return fallback;
         }
+
         try {
             return static_cast<std::uint64_t>(std::stoull(it->second));
         } catch (...) {

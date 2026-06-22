@@ -46,6 +46,7 @@ namespace yuan::game::server
         if (!redis_pool_->init(option, redis_pool_size_)) {
             return false;
         }
+        
         redis_executor_ = std::make_unique<yuan::redis::RedisAsyncExecutor>(option);
         global_db_context_.redis_pool = redis_pool_;
         global_db_context_.redis_executor = redis_executor_.get();
@@ -53,9 +54,11 @@ namespace yuan::game::server
         global_db_context_.write_deferred_response = [this](std::uint64_t connection_id, yuan::rpc::Response response) {
             (void)rpc_server_.write_response_to_connection(connection_id, std::move(response));
         };
+
         if (!register_global_db_msg(global_db_rpc_, global_db_context_)) {
             return false;
         }
+
         ok_ = rpc_server_.start(rpc_network::RpcNetworkServerConfig{listen_host_, port_, 0}, global_db_rpc_);
         return ok_;
     }

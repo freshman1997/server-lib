@@ -24,14 +24,17 @@ namespace yuan::game::server
         if (next.zone_service_id == 0 && source_zone_service_id != 0 && current.zone_service_id != 0 && current.zone_service_id != source_zone_service_id) {
             return false;
         }
+
         if (next.zone_service_id == 0 && expected_gateway_session_id != 0 && current.gateway_session_id != 0 && current.gateway_session_id != expected_gateway_session_id) {
             return false;
         }
+
         if (next.zone_service_id == 0) {
             records_.erase(player_id);
         } else {
             records_[player_id] = next;
         }
+        
         return true;
     }
 

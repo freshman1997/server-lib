@@ -1,10 +1,7 @@
 #include "common/storage/redis_orm_store.h"
 
 #include "value/array_value.h"
-#include "value/null_value.h"
-
 #include <charconv>
-#include <limits>
 
 namespace yuan::game::server::storage
 {
@@ -15,10 +12,12 @@ namespace yuan::game::server::storage
             std::uint64_t parsed = 0;
             const auto *begin = value.data();
             const auto *end = value.data() + value.size();
+
             const auto [ptr, ec] = std::from_chars(begin, end, parsed);
             if (ec != std::errc{} || ptr != end) {
                 return std::nullopt;
             }
+
             return parsed;
         }
 
@@ -27,10 +26,12 @@ namespace yuan::game::server::storage
             std::vector<std::string> args;
             args.reserve(1 + fields.size() * 2);
             args.push_back(std::move(key));
+
             for (const auto &[field, value] : fields) {
                 args.push_back(field);
                 args.push_back(value);
             }
+
             return args;
         }
 
@@ -41,10 +42,12 @@ namespace yuan::game::server::storage
             args.push_back(std::move(script));
             args.push_back("1");
             args.push_back(std::move(key));
+
             for (const auto &[field, value] : fields) {
                 args.push_back(field);
                 args.push_back(value);
             }
+
             return args;
         }
 
@@ -53,18 +56,22 @@ namespace yuan::game::server::storage
             if (!value || value->get_type() == yuan::redis::resp_null) {
                 return OrmResult{true, "ok"};
             }
+
             if (value->get_type() != yuan::redis::resp_array) {
                 return OrmResult{false, "unexpected redis response"};
             }
+
             const auto *array = dynamic_cast<yuan::redis::ArrayValue *>(value.get());
             OrmRow row;
             const auto &values = array->get_values();
             for (std::size_t index = 0; index + 1 < values.size(); index += 2) {
                 row.fields[values[index]->to_string()] = values[index + 1]->to_string();
             }
+
             if (row.fields.empty()) {
                 return OrmResult{true, "ok"};
             }
+
             return OrmResult{true, "ok", {std::move(row)}, 0};
         }
 
@@ -73,6 +80,7 @@ namespace yuan::game::server::storage
             if (!value) {
                 return OrmResult{false, error};
             }
+
             const auto parsed = parse_u64(value->to_string());
             return parsed ? OrmResult{true, "ok", {}, *parsed} : OrmResult{false, "unexpected redis integer response"};
         }
@@ -95,6 +103,7 @@ namespace yuan::game::server::storage
         if (!redis) {
             return OrmResult{false, "redis unavailable"};
         }
+
         return row_from_hgetall(redis->command("HGETALL", {redis_key(table, key)}));
     }
 
@@ -104,16 +113,20 @@ namespace yuan::game::server::storage
         if (!redis) {
             return OrmResult{false, "redis unavailable"};
         }
+
         if (fields.empty()) {
             return OrmResult{false, "fields are required"};
         }
+
         static constexpr const char *kInsertIfAbsentScript =
             "if redis.call('EXISTS', KEYS[1]) ~= 0 then return 0 end "
             "redis.call('HSET', KEYS[1], unpack(ARGV)) return 1";
+        
         const auto saved = redis->command("EVAL", eval_hset_args(kInsertIfAbsentScript, redis_key(table, key), fields));
         if (!saved) {
             return OrmResult{false, "redis insert failed"};
         }
+
         const auto inserted = parse_u64(saved->to_string()).value_or(0);
         return inserted == 1 ? OrmResult{true, "ok", {}, 1} : OrmResult{false, "row already exists"};
     }
@@ -124,9 +137,11 @@ namespace yuan::game::server::storage
         if (!redis) {
             return OrmResult{false, "redis unavailable"};
         }
+
         if (fields.empty()) {
             return OrmResult{false, "fields are required"};
         }
+
         return affected_result(redis->command("HSET", hset_args(redis_key(table, key), fields)), "redis hset failed");
     }
 
@@ -136,6 +151,7 @@ namespace yuan::game::server::storage
         if (!redis) {
             return OrmResult{false, "redis unavailable"};
         }
+
         return affected_result(redis->command("DEL", {redis_key(table, key)}), "redis del failed");
     }
 
@@ -145,6 +161,7 @@ namespace yuan::game::server::storage
         if (!redis) {
             return OrmResult{false, "redis unavailable"};
         }
+
         return affected_result(redis->command("EXISTS", {redis_key(table, key)}), "redis exists failed");
     }
 
@@ -159,14 +176,17 @@ namespace yuan::game::server::storage
         if (!redis) {
             return OrmResult{false, "redis unavailable"};
         }
+
         if (fields.empty() || version_field.empty()) {
             return OrmResult{false, "fields and version_field are required"};
         }
+
         static constexpr const char *kCompareAndUpdateScript =
             "local current = redis.call('HGET', KEYS[1], ARGV[1]) "
             "if not current then return -1 end "
             "if tostring(current) ~= tostring(ARGV[2]) then return 0 end "
             "redis.call('HSET', KEYS[1], unpack(ARGV, 3)) return 1";
+
         std::vector<std::string> args;
         args.reserve(5 + fields.size() * 2);
         args.push_back(kCompareAndUpdateScript);
@@ -178,17 +198,21 @@ namespace yuan::game::server::storage
             args.push_back(field);
             args.push_back(value);
         }
+
         const auto result = redis->command("EVAL", args);
         if (!result) {
             return OrmResult{false, "redis compare_and_update failed"};
         }
+
         const auto status = result->to_string();
         if (status == "1") {
             return OrmResult{true, "ok", {}, 1};
         }
+
         if (status == "0") {
             return OrmResult{false, "version mismatch"};
         }
+
         return OrmResult{false, "row not found"};
     }
 
@@ -197,10 +221,12 @@ namespace yuan::game::server::storage
         if (transactional) {
             return {OrmResult{false, "redis orm transactional batch is not supported"}};
         }
+
         auto redis = redis_client();
         if (!redis) {
             return {OrmResult{false, "redis unavailable"}};
         }
+
         std::vector<yuan::redis::PipelineCommand> commands;
         commands.reserve(operations.size());
         for (const auto &operation : operations) {
@@ -220,6 +246,7 @@ namespace yuan::game::server::storage
                     break;
             }
         }
+
         const auto value = redis->pipeline(commands);
         std::vector<OrmResult> results;
         results.reserve(operations.size());
@@ -227,6 +254,7 @@ namespace yuan::game::server::storage
             results.push_back(OrmResult{false, "redis pipeline failed"});
             return results;
         }
+
         const auto *array = dynamic_cast<yuan::redis::ArrayValue *>(value.get());
         const auto &values = array->get_values();
         for (std::size_t index = 0; index < operations.size(); ++index) {
@@ -234,6 +262,7 @@ namespace yuan::game::server::storage
                 results.push_back(OrmResult{false, "missing redis pipeline response"});
                 continue;
             }
+            
             switch (static_cast<DbOrmOpType>(operations[index].op_type)) {
                 case DbOrmOpType::query:
                     results.push_back(row_from_hgetall(values[index]));
@@ -249,6 +278,7 @@ namespace yuan::game::server::storage
                     break;
             }
         }
+
         return results;
     }
 
@@ -262,9 +292,11 @@ namespace yuan::game::server::storage
         if (redis_pool_) {
             return redis_pool_->get_client_with_wait(50);
         }
+
         if (redis_ && redis_->ensure_connected()) {
             return redis_;
         }
+
         return nullptr;
     }
 }

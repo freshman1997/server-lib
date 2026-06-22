@@ -156,6 +156,7 @@ namespace yuan::game::server::cache
             if (!store_) {
                 return std::nullopt;
             }
+
             if (!reserve_for_new_entry(limits_.default_entry_bytes)) {
                 ++stats_.rejected;
                 return std::nullopt;
@@ -166,6 +167,7 @@ namespace yuan::game::server::cache
                 return std::nullopt;
             }
             ++stats_.loads;
+
             return insert_loaded(key, std::move(*loaded.value), now);
         }
 
@@ -190,6 +192,7 @@ namespace yuan::game::server::cache
                     } else if (entry->state != CacheEntryState::dirty && dirty) {
                         ++stats_.dirty_entries;
                     }
+
                     entry->value = std::move(value);
                     entry->estimated_bytes = bytes;
                     entry->state = dirty ? CacheEntryState::dirty : CacheEntryState::ready;
@@ -240,6 +243,7 @@ namespace yuan::game::server::cache
                 if (it == entries_.end() || it->second->state != CacheEntryState::dirty) {
                     return false;
                 }
+
                 entry = it->second;
                 entry->state = CacheEntryState::flushing;
             }
@@ -252,6 +256,7 @@ namespace yuan::game::server::cache
                 if (stats_.dirty_entries > 0) {
                     --stats_.dirty_entries;
                 }
+
                 ++stats_.saves;
                 return true;
             }
@@ -278,6 +283,7 @@ namespace yuan::game::server::cache
                     ++flushed;
                 }
             }
+
             return flushed;
         }
 
@@ -292,9 +298,11 @@ namespace yuan::game::server::cache
                 }
                 entry = it->second;
             }
+
             if (entry->state == CacheEntryState::dirty && limits_.flush_dirty_on_evict && !flush(key)) {
                 return false;
             }
+
             return erase_clean(key);
         }
 
@@ -317,6 +325,7 @@ namespace yuan::game::server::cache
                     ++evicted;
                 }
             }
+
             return evicted;
         }
 
@@ -331,6 +340,7 @@ namespace yuan::game::server::cache
                     }
                 }
             }
+
             std::sort(candidates.begin(), candidates.end(), [](const auto &lhs, const auto &rhs) {
                 return lhs->last_access < rhs->last_access;
             });
@@ -344,6 +354,7 @@ namespace yuan::game::server::cache
                     ++evicted;
                 }
             }
+
             return evicted;
         }
 
@@ -354,10 +365,12 @@ namespace yuan::game::server::cache
             if (!handle) {
                 return false;
             }
+
             std::forward<Fn>(fn)((*handle).get());
             if (dirty) {
                 handle->mark_dirty();
             }
+
             return true;
         }
 
@@ -389,6 +402,7 @@ namespace yuan::game::server::cache
             if (it == entries_.end()) {
                 return std::nullopt;
             }
+
             it->second->last_access = now;
             return it->second;
         }
@@ -419,6 +433,7 @@ namespace yuan::game::server::cache
                 }
                 pin_locked(*entry);
             }
+            
             return Handle(this, entry);
         }
 
@@ -430,6 +445,7 @@ namespace yuan::game::server::cache
                     return true;
                 }
             }
+
             evict_to_low_watermark();
             std::lock_guard<std::mutex> lock(mutex_);
             return can_admit_locked(incoming_bytes);
@@ -440,12 +456,15 @@ namespace yuan::game::server::cache
             if (stats_.entries + 1 > limits_.max_entries) {
                 return false;
             }
+
             if (stats_.estimated_bytes + incoming_bytes > limits_.max_estimated_bytes) {
                 return false;
             }
+
             if (stats_.dirty_entries >= limits_.max_dirty_entries) {
                 return false;
             }
+
             return true;
         }
 
@@ -469,6 +488,7 @@ namespace yuan::game::server::cache
             if (entry->pin_count == 0) {
                 return;
             }
+
             --entry->pin_count;
             if (entry->pin_count == 0 && stats_.pinned_entries > 0) {
                 --stats_.pinned_entries;
@@ -491,9 +511,11 @@ namespace yuan::game::server::cache
             if (entry.state == CacheEntryState::dirty) {
                 return true;
             }
+
             if (stats_.dirty_entries >= limits_.max_dirty_entries) {
                 return false;
             }
+
             entry.state = CacheEntryState::dirty;
             entry.last_mutation = std::chrono::steady_clock::now();
             ++stats_.dirty_entries;
@@ -507,6 +529,7 @@ namespace yuan::game::server::cache
             if (it == entries_.end() || it->second->pin_count != 0 || it->second->state != CacheEntryState::ready) {
                 return false;
             }
+
             stats_.estimated_bytes -= std::min(stats_.estimated_bytes, it->second->estimated_bytes);
             --stats_.entries;
             ++stats_.evictions;
@@ -548,12 +571,15 @@ namespace yuan::game::server::cache
             if (ratio >= 1.0) {
                 return CachePressure::critical;
             }
+
             if (ratio >= limits_.high_watermark) {
                 return CachePressure::high;
             }
+
             if (ratio >= limits_.low_watermark) {
                 return CachePressure::elevated;
             }
+
             return CachePressure::normal;
         }
 

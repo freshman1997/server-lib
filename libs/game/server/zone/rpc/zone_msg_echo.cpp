@@ -20,6 +20,7 @@ namespace yuan::game::server
                 response.error = "invalid zone game request";
                 return response;
             }
+            
             response.status = yuan::rpc::RpcStatus::ok;
             (void)encode_binary(CSGameResponse{true, request->role_id, 0, request->payload, "zone game ok"}, response.payload);
             response.metadata[game_metadata_key::zone_node] = service_key(address);

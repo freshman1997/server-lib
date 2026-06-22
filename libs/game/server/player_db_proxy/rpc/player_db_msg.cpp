@@ -162,16 +162,19 @@ namespace yuan::game::server
                     response.role = *role;
                 }
             }
+
             if (response.role.role_id == 0) {
                 response.role.player_uid = storage::field_u64(record.fields, "player_uid", 0);
                 response.role.role_id = storage::field_u64(record.fields, "role_id", 0);
                 response.role.level = storage::field_u32(record.fields, "level", 1);
                 response.role.exp = storage::field_u64(record.fields, "exp", 0);
             }
+
             response.data_version = record.version;
             if (response.role.player_uid == 0 || response.role.role_id == 0) {
                 return std::nullopt;
             }
+
             return response;
         }
 
@@ -231,6 +234,7 @@ namespace yuan::game::server
             SSPlayerDbRoleResponse payload_response;
             payload_response.ok = true;
             payload_response.message = "ok";
+
             storage::EntityStore entities(orm);
             if (auto record = entities.load(kRoleTable, role_key(request.role_id))) {
                 if (auto decoded = decode_role_record(*record)) {
@@ -240,6 +244,7 @@ namespace yuan::game::server
                     }
                 }
             }
+
             yuan::rpc::Bytes payload;
             (void)encode_binary(payload_response, payload);
             return response_for(message, yuan::rpc::RpcStatus::ok, std::move(payload));
@@ -255,6 +260,7 @@ namespace yuan::game::server
             if (!saved.ok) {
                 return response_for(message, yuan::rpc::RpcStatus::unavailable, {}, "failed to save role");
             }
+
             SSPlayerDbRoleResponse payload_response{true, "ok", true, request.role, next_version};
             yuan::rpc::Bytes payload;
             (void)encode_binary(payload_response, payload);
@@ -269,11 +275,13 @@ namespace yuan::game::server
             if (entities.load(kRoleTable, role_key(request.role_id))) {
                 return response_for(message, yuan::rpc::RpcStatus::bad_request, {}, "role already exists");
             }
+
             SSPlayerRoleData role{request.player_uid, request.role_id, 1, 0};
             const auto saved = entities.insert(role_record(role, 1));
             if (!saved.ok) {
                 return response_for(message, yuan::rpc::RpcStatus::unavailable, {}, "failed to create role");
             }
+
             SSPlayerDbRoleResponse payload_response{true, "ok", true, role, 1};
             yuan::rpc::Bytes payload;
             (void)encode_binary(payload_response, payload);
@@ -287,6 +295,7 @@ namespace yuan::game::server
             if (request.player_uid == 0 || request.role_id == 0 || request.title.empty()) {
                 return response_for(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid player mail create request");
             }
+
             storage::EntityStore entities(orm);
             if (!request.dedupe_key.empty()) {
                 if (auto dedupe = entities.load(kMailDedupeTable, mail_dedupe_key(request.player_uid, request.role_id, request.dedupe_key))) {
@@ -313,21 +322,25 @@ namespace yuan::game::server
             mail.expires_at_ms = request.expires_at_ms;
             mail.dedupe_key = request.dedupe_key;
             mail.data_version = 1;
+
             const auto saved = entities.insert(mail_record(mail));
             if (!saved.ok) {
                 return response_for(message, yuan::rpc::RpcStatus::unavailable, {}, "failed to save player mail");
             }
+
             auto index = load_mail_index(entities, request.player_uid, request.role_id);
             index.mail_ids.push_back(mail_id);
             if (!save_mail_index(entities, request.player_uid, request.role_id, std::move(index))) {
                 return response_for(message, yuan::rpc::RpcStatus::unavailable, {}, "failed to save player mail index");
             }
+
             if (!request.dedupe_key.empty()) {
                 (void)entities.insert(storage::EntityRecord{kMailDedupeTable,
                                                              mail_dedupe_key(request.player_uid, request.role_id, request.dedupe_key),
                                                              {{"mail_id", std::to_string(mail_id)}},
                                                              1});
             }
+
             SSPlayerDbMailCreateResponse payload_response{true, "ok", mail_id, false, 1};
             yuan::rpc::Bytes payload;
             (void)encode_binary(payload_response, payload);
@@ -341,6 +354,7 @@ namespace yuan::game::server
             if (request.player_uid == 0 || request.role_id == 0) {
                 return response_for(message, yuan::rpc::RpcStatus::bad_request, {}, "player_uid and role_id are required");
             }
+
             storage::EntityStore entities(orm);
             auto ids = load_mail_index(entities, request.player_uid, request.role_id).mail_ids;
             std::sort(ids.begin(), ids.end(), std::greater<>());
@@ -354,16 +368,19 @@ namespace yuan::game::server
                 if (payload_response.mails.size() >= limit) {
                     break;
                 }
+
                 auto record = entities.load(kMailTable, mail_key(id));
                 if (!record) {
                     continue;
                 }
+
                 auto mail = decode_mail_record(*record);
                 if (!mail || mail->player_uid != request.player_uid || mail->role_id != request.role_id || !mail_visible_at(*mail, current_ms)) {
                     continue;
                 }
                 payload_response.mails.push_back(mail_box_item(entities, *mail));
             }
+
             yuan::rpc::Bytes payload;
             (void)encode_binary(payload_response, payload);
             return response_for(message, yuan::rpc::RpcStatus::ok, std::move(payload));
@@ -376,6 +393,7 @@ namespace yuan::game::server
             if (request.player_uid == 0 || request.role_id == 0 || request.mail_id == 0) {
                 return response_for(message, yuan::rpc::RpcStatus::bad_request, {}, "player_uid role_id and mail_id are required");
             }
+
             storage::EntityStore entities(orm);
             SSPlayerDbMailGetResponse payload_response;
             payload_response.ok = true;
@@ -387,6 +405,7 @@ namespace yuan::game::server
                     payload_response.mail = mail_box_item(entities, *mail);
                 }
             }
+
             yuan::rpc::Bytes payload;
             (void)encode_binary(payload_response, payload);
             return response_for(message, yuan::rpc::RpcStatus::ok, std::move(payload));
@@ -399,6 +418,7 @@ namespace yuan::game::server
             if (request.player_uid == 0 || request.role_id == 0 || request.mail_id == 0) {
                 return response_for(message, yuan::rpc::RpcStatus::bad_request, {}, "player_uid role_id and mail_id are required");
             }
+
             storage::EntityStore entities(orm);
             const auto current_ms = request.now_ms == 0 ? now_ms() : request.now_ms;
             const auto record = entities.load(kMailTable, mail_key(request.mail_id));
@@ -408,6 +428,7 @@ namespace yuan::game::server
                 (void)encode_binary(payload_response, payload);
                 return response_for(message, yuan::rpc::RpcStatus::ok, std::move(payload));
             }
+
             auto mail = decode_mail_record(*record);
             if (!mail || mail->player_uid != request.player_uid || mail->role_id != request.role_id || !mail_visible_at(*mail, current_ms)) {
                 SSPlayerDbMailClaimAttachmentResponse payload_response{false, "mail not available", false, request.mail_id, {}, 0};
@@ -415,12 +436,14 @@ namespace yuan::game::server
                 (void)encode_binary(payload_response, payload);
                 return response_for(message, yuan::rpc::RpcStatus::ok, std::move(payload));
             }
+
             if (mail->attachments.empty()) {
                 SSPlayerDbMailClaimAttachmentResponse payload_response{false, "mail has no attachments", false, request.mail_id, {}, 0};
                 yuan::rpc::Bytes payload;
                 (void)encode_binary(payload_response, payload);
                 return response_for(message, yuan::rpc::RpcStatus::ok, std::move(payload));
             }
+
             auto state = load_mail_state(entities, request.player_uid, request.role_id, request.mail_id);
             if (state.attachment_claimed) {
                 SSPlayerDbMailClaimAttachmentResponse payload_response{true, "already claimed", false, request.mail_id, {}, state.claimed_at_ms};
@@ -428,12 +451,14 @@ namespace yuan::game::server
                 (void)encode_binary(payload_response, payload);
                 return response_for(message, yuan::rpc::RpcStatus::ok, std::move(payload));
             }
+
             state.attachment_claimed = true;
             state.state = mail_state::attachment_claimed;
             state.claimed_at_ms = current_ms;
             if (!save_mail_state(entities, request.player_uid, request.role_id, request.mail_id, state)) {
                 return response_for(message, yuan::rpc::RpcStatus::unavailable, {}, "failed to save player mail state");
             }
+
             SSPlayerDbMailClaimAttachmentResponse payload_response{true, "ok", true, request.mail_id, mail->attachments, state.claimed_at_ms};
             yuan::rpc::Bytes payload;
             (void)encode_binary(payload_response, payload);
@@ -447,6 +472,7 @@ namespace yuan::game::server
             if (!context.redis_executor || !context.write_deferred_response || connection_id == 0) {
                 return false;
             }
+
             const auto request_id = message.request_id;
             const auto continuation_id = message.continuation_id();
             context.redis_executor->submit_callback(context.resume_runtime,
@@ -472,14 +498,17 @@ namespace yuan::game::server
             if (!request || request->player_uid == 0 || request->role_id == 0) {
                 return response_for(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid player db load role request");
             }
+
             if (!ensure_redis(context)) {
                 return response_for(message, yuan::rpc::RpcStatus::unavailable, {}, "redis unavailable");
             }
+
             if (submit_deferred(context, message, [message, request = *request](yuan::redis::RedisClient &redis) {
                     return load_role_response(message, request, make_store(redis));
                 })) {
                 return deferred_response_for(message);
             }
+
             return load_role_response(message, *request, make_store(context));
         }
 
@@ -489,14 +518,17 @@ namespace yuan::game::server
             if (!request || request->role.player_uid == 0 || request->role.role_id == 0) {
                 return response_for(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid player db save role request");
             }
+
             if (!ensure_redis(context)) {
                 return response_for(message, yuan::rpc::RpcStatus::unavailable, {}, "redis unavailable");
             }
+
             if (submit_deferred(context, message, [message, request = *request](yuan::redis::RedisClient &redis) {
                     return save_role_response(message, request, make_store(redis));
                 })) {
                 return deferred_response_for(message);
             }
+
             return save_role_response(message, *request, make_store(context));
         }
 
@@ -506,14 +538,17 @@ namespace yuan::game::server
             if (!request || request->player_uid == 0 || request->role_id == 0 || request->name.empty()) {
                 return response_for(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid player db create role request");
             }
+
             if (!ensure_redis(context)) {
                 return response_for(message, yuan::rpc::RpcStatus::unavailable, {}, "redis unavailable");
             }
+
             if (submit_deferred(context, message, [message, request = *request](yuan::redis::RedisClient &redis) {
                     return create_role_response(message, request, make_store(redis));
                 })) {
                 return deferred_response_for(message);
             }
+
             return create_role_response(message, *request, make_store(context));
         }
 
@@ -523,14 +558,17 @@ namespace yuan::game::server
             if (!request) {
                 return response_for(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid player mail create payload");
             }
+
             if (!ensure_redis(context)) {
                 return response_for(message, yuan::rpc::RpcStatus::unavailable, {}, "redis unavailable");
             }
+
             if (submit_deferred(context, message, [message, request = *request](yuan::redis::RedisClient &redis) {
                     return mail_create_response(message, request, make_store(redis));
                 })) {
                 return deferred_response_for(message);
             }
+
             return mail_create_response(message, *request, make_store(context));
         }
 
@@ -540,14 +578,17 @@ namespace yuan::game::server
             if (!request) {
                 return response_for(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid player mail list payload");
             }
+
             if (!ensure_redis(context)) {
                 return response_for(message, yuan::rpc::RpcStatus::unavailable, {}, "redis unavailable");
             }
+
             if (submit_deferred(context, message, [message, request = *request](yuan::redis::RedisClient &redis) {
                     return mail_list_response(message, request, make_store(redis));
                 })) {
                 return deferred_response_for(message);
             }
+
             return mail_list_response(message, *request, make_store(context));
         }
 
@@ -557,14 +598,17 @@ namespace yuan::game::server
             if (!request) {
                 return response_for(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid player mail get payload");
             }
+
             if (!ensure_redis(context)) {
                 return response_for(message, yuan::rpc::RpcStatus::unavailable, {}, "redis unavailable");
             }
+
             if (submit_deferred(context, message, [message, request = *request](yuan::redis::RedisClient &redis) {
                     return mail_get_response(message, request, make_store(redis));
                 })) {
                 return deferred_response_for(message);
             }
+
             return mail_get_response(message, *request, make_store(context));
         }
 
@@ -574,14 +618,17 @@ namespace yuan::game::server
             if (!request) {
                 return response_for(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid player mail claim payload");
             }
+
             if (!ensure_redis(context)) {
                 return response_for(message, yuan::rpc::RpcStatus::unavailable, {}, "redis unavailable");
             }
+
             if (submit_deferred(context, message, [message, request = *request](yuan::redis::RedisClient &redis) {
                     return mail_claim_attachment_response(message, request, make_store(redis));
                 })) {
                 return deferred_response_for(message);
             }
+            
             return mail_claim_attachment_response(message, *request, make_store(context));
         }
     }

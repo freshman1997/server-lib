@@ -85,6 +85,7 @@ namespace yuan::game::server
             response.error = "invalid tunnel registration";
             return response;
         }
+        
         if (registration->port != 0) {
             const auto service_id = registration->service_id;
             const auto host = registration->host;
@@ -94,12 +95,14 @@ namespace yuan::game::server
                 response.error = "registered endpoint host is required";
                 return response;
             }
+
             if (!tunnel_.register_endpoint_handler(service_id, std::bind_front(handle_registered_network_endpoint, host, port))) {
                 response.status = yuan::rpc::RpcStatus::internal_error;
                 response.error = "failed to register endpoint";
                 return response;
             }
         }
+
         response.status = yuan::rpc::RpcStatus::ok;
         return response;
     }

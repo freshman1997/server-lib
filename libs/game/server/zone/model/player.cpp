@@ -51,15 +51,19 @@ namespace yuan::game::server
         if (std::getline(stream, field, '\n')) {
             player.player_uid = static_cast<PlayerUid>(std::stoull(field));
         }
+
         if (std::getline(stream, field, '\n')) {
             player.role_id = static_cast<RoleId>(std::stoull(field));
         }
+
         if (std::getline(stream, field, '\n')) {
             player.level = static_cast<std::uint32_t>(std::stoul(field));
         }
+
         if (std::getline(stream, field, '\n')) {
             player.exp = static_cast<std::uint64_t>(std::stoull(field));
         }
+        
         if (player.valid()) {
             return player;
         }

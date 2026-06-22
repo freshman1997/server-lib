@@ -13,11 +13,13 @@ namespace yuan::game::server
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
             const auto request = decode_binary<SSGmCommandRequest>(message.payload);
+            
             if (!request) {
                 response.status = yuan::rpc::RpcStatus::bad_request;
                 response.error = "invalid zone gm request";
                 return response;
             }
+
             const auto result = handler ? handler(*request) : SSGmCommandResponse{false, "zone gm handler is not configured"};
             response.status = result.ok ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::bad_request;
             (void)encode_binary(result, response.payload);

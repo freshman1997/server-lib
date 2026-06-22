@@ -18,6 +18,7 @@ int main(int argc, char **argv)
         LOG_ERROR("rank failed to load config path={}", argv[1]);
         return 2;
     }
+    
     yuan::app::Application app(yuan::game::server::make_game_runtime_context("game.rank"));
     auto service = std::make_shared<yuan::game::server::RankServerService>(*config);
     if (!app.add_service("rank", service) || !app.start()) {
@@ -25,6 +26,7 @@ int main(int argc, char **argv)
         app.stop();
         return 3;
     }
+
     const bool ok = service->ok();
     app.stop();
     return ok ? EXIT_SUCCESS : 4;

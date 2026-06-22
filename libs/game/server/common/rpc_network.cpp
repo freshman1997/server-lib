@@ -447,6 +447,7 @@ namespace yuan::game::server::rpc_network
         auto rv = runtime.runtime_view();
         auto task = [&](yuan::coroutine::RuntimeView view) -> yuan::coroutine::Task<std::optional<yuan::rpc::Response>> {
             co_await view.schedule();
+
             yuan::net::AsyncRequestClient client(view);
             const auto request_buffer = to_buffer(request_frame);
             const auto read_result = co_await client.request_async(endpoint.host,
@@ -454,13 +455,16 @@ namespace yuan::game::server::rpc_network
                                                                    request_buffer,
                                                                    static_cast<std::uint32_t>(config_.connect_timeout.count()),
                                                                    static_cast<std::uint32_t>(config_.read_timeout.count()));
+
             if (read_result.status != yuan::coroutine::IoStatus::success) {
                 co_return std::nullopt;
             }
+
             auto decoded = yuan::rpc::wire::decode_frame(to_bytes(read_result.data));
             if (!decoded.ok) {
                 co_return std::nullopt;
             }
+
             co_return yuan::rpc::wire::to_response(std::move(decoded.frame));
         };
 
@@ -503,6 +507,7 @@ namespace yuan::game::server::rpc_network
             }
             connected_endpoint_ = endpoint;
         }
+
         const auto request_buffer = to_buffer(request_frame);
         auto read_result = yuan::coroutine::sync_wait(rv, client_.request_async(request_buffer, static_cast<std::uint32_t>(config_.read_timeout.count())));
         if (read_result.status != yuan::coroutine::IoStatus::success) {
@@ -510,12 +515,14 @@ namespace yuan::game::server::rpc_network
             connected_endpoint_.reset();
             return std::nullopt;
         }
+
         auto decoded = yuan::rpc::wire::decode_frame(to_bytes(read_result.data));
         if (!decoded.ok) {
             client_.disconnect();
             connected_endpoint_.reset();
             return std::nullopt;
         }
+
         return yuan::rpc::wire::to_response(std::move(decoded.frame));
     }
 
@@ -559,6 +566,7 @@ namespace yuan::game::server::rpc_network
         if (worker_.joinable()) {
             worker_.join();
         }
+
         for (auto &[endpoint, state] : clients_) {
             if (state.client) {
                 state.client->disconnect();
@@ -598,15 +606,19 @@ namespace yuan::game::server::rpc_network
         if (!state.client) {
             state.client = std::make_unique<yuan::net::AsyncRequestClient>(rv);
         }
+
         if (state.client->is_connected()) {
             return &state;
         }
+
         state.client->disconnect();
         state.decoder.clear();
+
         const bool connected = yuan::coroutine::sync_wait(rv, state.client->connect_async(endpoint.host, endpoint.port, static_cast<std::uint32_t>(config_.connect_timeout.count())));
         if (!connected) {
             return nullptr;
         }
+
         return &state;
     }
 
@@ -633,6 +645,7 @@ namespace yuan::game::server::rpc_network
                     call.promise->set_value(std::nullopt);
                     continue;
                 }
+
                 auto rv = runtime_.runtime_view();
                 call.message.kind = yuan::rpc::MessageKind::request;
                 if (call.message.request_id == 0) {
@@ -641,11 +654,13 @@ namespace yuan::game::server::rpc_network
                         call.message.request_id = next_request_id_.fetch_add(1, std::memory_order_relaxed);
                     }
                 }
+
                 yuan::rpc::Bytes frame;
                 if (!yuan::rpc::wire::encode_message(call.message, frame)) {
                     call.promise->set_value(std::nullopt);
                     continue;
                 }
+
                 const auto write_buffer = to_buffer(frame);
                 const auto write_result = yuan::coroutine::sync_wait(rv, state->client->session().write_async(write_buffer, static_cast<std::uint32_t>(config_.connect_timeout.count())));
                 if (write_result.status != yuan::coroutine::IoStatus::success) {
@@ -654,6 +669,7 @@ namespace yuan::game::server::rpc_network
                     state->decoder.clear();
                     continue;
                 }
+
                 pending_count_.fetch_add(1, std::memory_order_relaxed);
                 bool completed = false;
                 while (!completed && !stop_token.stop_requested()) {
@@ -665,6 +681,7 @@ namespace yuan::game::server::rpc_network
                         state->decoder.clear();
                         break;
                     }
+
                     const auto bytes = to_bytes(read_result.data);
                     state->decoder.append(bytes);
                     for (;;) {
@@ -679,6 +696,7 @@ namespace yuan::game::server::rpc_network
                             }
                             break;
                         }
+
                         auto response = yuan::rpc::wire::to_response(std::move(decoded.frame));
                         if (response.request_id == call.message.request_id) {
                             call.promise->set_value(std::move(response));
@@ -688,6 +706,7 @@ namespace yuan::game::server::rpc_network
                         }
                     }
                 }
+
                 if (!completed && stop_token.stop_requested()) {
                     call.promise->set_value(std::nullopt);
                     pending_count_.fetch_sub(1, std::memory_order_relaxed);
@@ -717,6 +736,7 @@ namespace yuan::game::server::rpc_network
         if (!socket.valid() || !socket.set_reuse_addr(true) || !socket.bind()) {
             return 0;
         }
+        
         const auto port = static_cast<std::uint16_t>(socket.get_local_address().get_port());
         socket.close();
         return port;

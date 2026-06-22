@@ -70,6 +70,7 @@ namespace yuan::game::server
             if (role.role_id == 0 || !ensure_redis(context)) {
                 return false;
             }
+
             const auto result = context.redis->set(role_key(role.role_id), encode_role_json(role).dump());
             return result && result->to_string() == "OK";
         }
@@ -79,10 +80,12 @@ namespace yuan::game::server
             if (role_id == 0 || !ensure_redis(context)) {
                 return std::nullopt;
             }
+
             const auto value = context.redis->get(role_key(role_id));
             if (!value || value->get_type() == yuan::redis::resp_null) {
                 return std::nullopt;
             }
+
             return decode_role_json(value->to_string());
         }
 
@@ -93,10 +96,12 @@ namespace yuan::game::server
             if (!role_id) {
                 return;
             }
+
             const auto loaded = load_role(context, *role_id);
             if (!loaded) {
                 return;
             }
+
             role = *loaded;
             has_role = true;
         }
@@ -118,10 +123,12 @@ namespace yuan::game::server
             if (!request || request->role.role_id == 0) {
                 return binary_response(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid rank role update");
             }
+
             const bool ok = save_role(context, request->role);
             SSRankRoleResponse response{ok, ok ? "ok" : "redis unavailable", ok, request->role};
             yuan::rpc::Bytes payload;
             (void)encode_binary(response, payload);
+
             return binary_response(message, ok ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::unavailable, std::move(payload));
         }
 
@@ -131,6 +138,7 @@ namespace yuan::game::server
             if (!request || request->role_id == 0) {
                 return binary_response(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid rank role get");
             }
+
             SSRankRoleResponse response;
             response.ok = true;
             response.message = "ok";
@@ -138,6 +146,7 @@ namespace yuan::game::server
                 response.has_role = true;
                 response.role = *role;
             }
+
             yuan::rpc::Bytes payload;
             (void)encode_binary(response, payload);
             return binary_response(message, yuan::rpc::RpcStatus::ok, std::move(payload));
@@ -149,12 +158,15 @@ namespace yuan::game::server
             if (!request || request->board.empty() || request->member.empty()) {
                 return binary_response(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid rank score update");
             }
+
             if (request->has_role) {
                 (void)save_role(context, request->role);
             }
+
             if (!ensure_redis(context)) {
                 return binary_response(message, yuan::rpc::RpcStatus::unavailable, {}, "redis unavailable");
             }
+
             const auto result = context.redis->command("ZADD", {rank_key(request->board), std::to_string(request->score), request->member});
             SSRankScoreResponse response{static_cast<bool>(result), result ? "ok" : "redis unavailable", request->board, request->member, true, request->score};
             attach_role(context, request->member, response.has_role, response.role);
@@ -169,9 +181,11 @@ namespace yuan::game::server
             if (!request || request->board.empty() || request->member.empty()) {
                 return binary_response(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid rank score remove");
             }
+
             if (!ensure_redis(context)) {
                 return binary_response(message, yuan::rpc::RpcStatus::unavailable, {}, "redis unavailable");
             }
+
             const auto result = context.redis->command("ZREM", {rank_key(request->board), request->member});
             SSRankScoreResponse response{static_cast<bool>(result), result ? "ok" : "redis unavailable", request->board, request->member};
             yuan::rpc::Bytes payload;
@@ -185,15 +199,18 @@ namespace yuan::game::server
             if (!request || request->board.empty() || request->member.empty()) {
                 return binary_response(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid rank score get");
             }
+
             if (!ensure_redis(context)) {
                 return binary_response(message, yuan::rpc::RpcStatus::unavailable, {}, "redis unavailable");
             }
+
             SSRankScoreResponse response{true, "ok", request->board, request->member};
             const auto result = context.redis->command("ZSCORE", {rank_key(request->board), request->member});
             if (result && result->get_type() != yuan::redis::resp_null) {
                 response.has_score = true;
                 response.score = static_cast<std::uint64_t>(std::stoull(result->to_string()));
             }
+
             attach_role(context, request->member, response.has_role, response.role);
             yuan::rpc::Bytes payload;
             (void)encode_binary(response, payload);
@@ -206,9 +223,11 @@ namespace yuan::game::server
             if (!request || request->board.empty()) {
                 return binary_response(message, yuan::rpc::RpcStatus::bad_request, {}, "invalid rank top get");
             }
+
             if (!ensure_redis(context)) {
                 return binary_response(message, yuan::rpc::RpcStatus::unavailable, {}, "redis unavailable");
             }
+
             const auto limit = std::clamp<std::uint32_t>(request->limit == 0 ? 10 : request->limit, 1, 100);
             SSRankTopResponse response;
             response.ok = true;
@@ -227,6 +246,7 @@ namespace yuan::game::server
                     response.entries.push_back(std::move(entry));
                 }
             }
+            
             yuan::rpc::Bytes payload;
             (void)encode_binary(response, payload);
             return binary_response(message, yuan::rpc::RpcStatus::ok, std::move(payload));

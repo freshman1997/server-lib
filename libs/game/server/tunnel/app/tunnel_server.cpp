@@ -28,6 +28,7 @@ int main(int argc, char **argv)
         app.stop();
         return 3;
     }
+    
     const bool ok = service->ok();
     app.stop();
     return ok ? EXIT_SUCCESS : 4;

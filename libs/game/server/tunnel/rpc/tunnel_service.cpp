@@ -19,13 +19,16 @@ namespace yuan::game::server
                 response.error = "invalid tunnel envelope";
                 return response;
             }
+
             auto forwarded = *envelope;
             if (forwarded.request_id == 0) {
                 forwarded.request_id = message.request_id;
             }
+
             if (forwarded.continuation_id == 0) {
                 forwarded.continuation_id = message.continuation_id();
             }
+
             auto response = service.forward(std::move(forwarded));
             response.request_id = message.request_id;
             response.set_continuation_id(message.continuation_id());
@@ -74,10 +77,12 @@ namespace yuan::game::server
         if (key.empty()) {
             return false;
         }
+
         std::lock_guard<std::mutex> lock(mutex_);
         auto endpoint_address = address;
         endpoints_[key] = Endpoint{std::move(address), std::bind_front(handle_registered_local_endpoint, std::ref(server))};
         type_index_[static_cast<ServiceTypeId>(endpoint_address.service.type)].push_back(key);
+
         return true;
     }
 
@@ -87,10 +92,12 @@ namespace yuan::game::server
         if (key.empty() || !handler) {
             return false;
         }
+
         std::lock_guard<std::mutex> lock(mutex_);
         auto endpoint_address = address;
         endpoints_[key] = Endpoint{std::move(address), std::move(handler)};
         type_index_[static_cast<ServiceTypeId>(endpoint_address.service.type)].push_back(key);
+
         return true;
     }
 
@@ -99,6 +106,7 @@ namespace yuan::game::server
         if (service_id == 0 || !handler) {
             return false;
         }
+
         ServiceAddress address;
         address.service = unpack_game_service_id(service_id);
         std::lock_guard<std::mutex> lock(mutex_);
@@ -106,6 +114,7 @@ namespace yuan::game::server
         auto endpoint_address = address;
         endpoints_[key] = Endpoint{std::move(address), std::move(handler)};
         type_index_[static_cast<ServiceTypeId>(endpoint_address.service.type)].push_back(key);
+
         return true;
     }
 
@@ -167,6 +176,7 @@ namespace yuan::game::server
             }
             last_response = std::move(response);
         }
+
         last_response.status = ok_count == endpoints.size() ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::internal_error;
         last_response.metadata[game_metadata_key::tunnel_broadcast_count] = std::to_string(endpoints.size());
         last_response.metadata[game_metadata_key::tunnel_broadcast_ok] = std::to_string(ok_count);
@@ -197,6 +207,7 @@ namespace yuan::game::server
         if (!on_reply || envelope.request_id == 0 || envelope.continuation_id == 0) {
             return false;
         }
+
         const auto key = pending_key(envelope.request_id, envelope.continuation_id);
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -217,9 +228,11 @@ namespace yuan::game::server
                 pending_replies_.erase(it);
             }
         }
+
         if (handler) {
             handler(std::move(response));
         }
+
         return false;
     }
 
@@ -279,6 +292,7 @@ namespace yuan::game::server
             if (type_it == type_index_.end() || type_it->second.empty()) {
                 return std::nullopt;
             }
+
             std::uniform_int_distribution<std::size_t> dist(0, type_it->second.size() - 1);
             for (std::size_t tries = 0; tries < type_it->second.size(); ++tries) {
                 const auto &key = type_it->second[dist(random_)];
@@ -287,6 +301,7 @@ namespace yuan::game::server
                     return it->second;
                 }
             }
+
             return std::nullopt;
         }
 
@@ -337,6 +352,7 @@ namespace yuan::game::server
             response.error = "no tunnel instance available";
             return response;
         }
+        
         const std::size_t index = next_++ % tunnels_.size();
         return tunnels_[index]->forward(std::move(envelope));
     }

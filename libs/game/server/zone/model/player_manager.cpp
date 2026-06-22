@@ -10,6 +10,7 @@ namespace yuan::game::server
         if (request.player_uid == 0 || request.role_id == 0) {
             return false;
         }
+        
         auto data = load_or_create(request, loader);
         data.gateway_session_id = request.gateway_session_id;
         std::scoped_lock lock(mutex_);
@@ -18,6 +19,7 @@ namespace yuan::game::server
         if (old_session != gateway_session_by_role_.end()) {
             role_by_gateway_session_.erase(old_session->second);
         }
+
         gateway_session_by_role_[request.role_id] = request.gateway_session_id;
         role_by_gateway_session_[request.gateway_session_id] = request.role_id;
         online_roles_.insert(request.role_id);

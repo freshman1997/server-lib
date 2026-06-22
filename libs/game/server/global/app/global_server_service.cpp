@@ -29,11 +29,14 @@ namespace yuan::game::server
         echo_context_.after_echo = [this](const yuan::rpc::Message &message) {
             (void)call_source_zone(message);
         };
+
         register_global_builtin_gm(gm_context_);
+
         const bool registered = register_global_msg_echo(global_rpc_, echo_context_) && register_global_msg_gm(global_rpc_, gm_context_);
         if (!registered) {
             return false;
         }
+
         ok_ = rpc_server_.start(rpc_network::RpcNetworkServerConfig{listen_host_, port_, 0}, global_rpc_);
         return ok_;
     }
@@ -61,6 +64,7 @@ namespace yuan::game::server
         if (it == message.metadata.end()) {
             return false;
         }
+
         const auto source_service_id = static_cast<PackedGameServiceId>(std::stoull(it->second));
         yuan::rpc::Metadata metadata;
         metadata[game_metadata_key::tunnel_source] = service_id_key(service_id_);
@@ -69,6 +73,7 @@ namespace yuan::game::server
                                                    game_route::zone_echo(),
                                                    yuan::rpc::Codec<std::string>::encode("hello-server-zone"),
                                                    std::move(metadata));
+                                                   
         return response && response->status == yuan::rpc::RpcStatus::ok &&
                yuan::rpc::Codec<std::string>::decode(response->payload) == "hello-server-zone" &&
                response->metadata.find(game_metadata_key::zone_node) != response->metadata.end();

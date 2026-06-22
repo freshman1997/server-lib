@@ -10,6 +10,7 @@ namespace yuan::game::server::storage
         for (const auto &operation : operations) {
             results.push_back(execute_operation(*this, operation));
         }
+
         return results;
     }
 
@@ -19,6 +20,7 @@ namespace yuan::game::server::storage
         if (!result.ok) {
             return result;
         }
+
         result.affected_rows = result.rows.empty() ? 0 : 1;
         result.rows.clear();
         return result;
@@ -35,9 +37,11 @@ namespace yuan::game::server::storage
         if (!current.ok) {
             return current;
         }
+
         if (current.rows.empty()) {
             return OrmResult{false, "row not found"};
         }
+
         const auto it = current.rows.front().fields.find(version_field);
         std::uint64_t actual_version = 0;
         if (it != current.rows.front().fields.end()) {
@@ -47,9 +51,11 @@ namespace yuan::game::server::storage
                 return OrmResult{false, "invalid version field"};
             }
         }
+
         if (actual_version != expected_version) {
             return OrmResult{false, "version mismatch"};
         }
+
         return update(std::move(table), std::move(key), std::move(fields));
     }
 
@@ -66,9 +72,11 @@ namespace yuan::game::server::storage
     {
         std::vector<DbOrmField> result;
         result.reserve(fields.size());
+
         for (const auto &[name, value] : fields) {
             result.push_back(DbOrmField{name, value});
         }
+
         return result;
     }
 
@@ -82,6 +90,7 @@ namespace yuan::game::server::storage
         for (const auto &row : result.rows) {
             proto.rows.push_back(DbOrmRow{fields_to_proto(row.fields)});
         }
+
         return proto;
     }
 

@@ -22,6 +22,7 @@ namespace yuan::game::server
                                          {"port", gateway.port},
                                          {"name", gateway.name}});
         }
+
         root["roles"] = nlohmann::json::array();
         for (const auto &role : response.roles) {
             root["roles"].push_back({{"role_id", role.role_id},
@@ -29,6 +30,7 @@ namespace yuan::game::server
                                       {"level", role.level},
                                       {"login_token_id", role.login_token_id}});
         }
+
         root["zones"] = nlohmann::json::array();
         for (const auto &zone : response.zones) {
             root["zones"].push_back({{"name", zone.name},
@@ -36,6 +38,7 @@ namespace yuan::game::server
                                       {"max_players", zone.max_players},
                                       {"available", zone.available}});
         }
+
         return root.dump();
     }
 
@@ -52,6 +55,7 @@ namespace yuan::game::server
                 gateway.name = item.value("name", std::string());
                 response.gateways.push_back(std::move(gateway));
             }
+
             for (const auto &item : root.value("roles", nlohmann::json::array())) {
                 SSPlayerRoleInfo role;
                 role.role_id = item.value("role_id", static_cast<RoleId>(0));
@@ -62,6 +66,7 @@ namespace yuan::game::server
                 role.login_token_id = item.value("login_token_id", LoginTokenId{});
                 response.roles.push_back(std::move(role));
             }
+
             for (const auto &item : root.value("zones", nlohmann::json::array())) {
                 SSZoneInfo zone;
                 zone.service_id = item.value("service_id", static_cast<PackedGameServiceId>(0));
@@ -84,15 +89,19 @@ namespace yuan::game::server
         if (!binary_codec::read_version(reader) || !reader.fields(update.player_uid, update.player_id, update.zone_service_id)) {
             return std::nullopt;
         }
+
         if (!reader.done() && !reader.fields(update.source_zone_service_id)) {
             return std::nullopt;
         }
+
         if (!reader.done() && !reader.fields(update.gateway_session_id)) {
             return std::nullopt;
         }
+
         if (!reader.done()) {
             return std::nullopt;
         }
+        
         return update;
     }
 

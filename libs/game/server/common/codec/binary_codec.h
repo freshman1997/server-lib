@@ -214,11 +214,13 @@ namespace yuan::game::server::binary_codec
             if (!remaining(sizeof(std::uint32_t))) {
                 return false;
             }
+
             value = (static_cast<std::uint32_t>(in_[offset_]) << 24) |
                     (static_cast<std::uint32_t>(in_[offset_ + 1]) << 16) |
                     (static_cast<std::uint32_t>(in_[offset_ + 2]) << 8) |
                     static_cast<std::uint32_t>(in_[offset_ + 3]);
             offset_ += sizeof(std::uint32_t);
+
             return true;
         }
 
@@ -227,11 +229,13 @@ namespace yuan::game::server::binary_codec
             if (!remaining(sizeof(std::uint64_t))) {
                 return false;
             }
+
             value = 0;
             for (int i = 0; i < 8; ++i) {
                 value = (value << 8) | in_[offset_ + static_cast<std::size_t>(i)];
             }
             offset_ += sizeof(std::uint64_t);
+
             return true;
         }
 
@@ -252,8 +256,10 @@ namespace yuan::game::server::binary_codec
             if (!u32(size) || !remaining(size)) {
                 return false;
             }
+
             value.assign(in_.begin() + static_cast<std::ptrdiff_t>(offset_), in_.begin() + static_cast<std::ptrdiff_t>(offset_ + size));
             offset_ += size;
+
             return true;
         }
 
@@ -264,12 +270,14 @@ namespace yuan::game::server::binary_codec
             if (!u32(count)) {
                 return false;
             }
+
             values.resize(count);
             for (auto &value : values) {
                 if (!decode_element(*this, value)) {
                     return false;
                 }
             }
+            
             return true;
         }
 

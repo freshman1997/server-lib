@@ -16,6 +16,7 @@
             if (it == message.metadata.end()) {
                 return 0;
             }
+
             try {
                 return static_cast<std::uint64_t>(std::stoull(it->second));
             } catch (...) {
@@ -50,9 +51,11 @@
                 role.zone_service_id = *zone;
             }
         }
+
         if (role.world_service_id == 0) {
             role.world_service_id = context.address.service.pack();
         }
+
         auto &roles = context.roles_by_player_uid[player_uid];
         for (auto &existing : roles) {
             if (existing.role_id == role.role_id) {
@@ -79,11 +82,13 @@
         if (zone.service_id == 0) {
             return;
         }
+
         if (zone.world_routing_strategy != context.world_routing.strategy ||
             zone.world_routing_version != context.world_routing.version ||
             zone.world_count != context.world_routing.world_count) {
             return;
         }
+
         zone.available = zone.available && !zone.gateways.empty();
         context.zone_last_report_ms[zone.service_id] = yuan::base::time::steady_now_ms();
         context.zones[zone.service_id] = std::move(zone);
@@ -116,6 +121,7 @@
         if (player_id == 0) {
             return false;
         }
+
         PlayerUid player_uid = 0;
         for (const auto &[uid, roles] : context.roles_by_player_uid) {
             for (const auto &role : roles) {
@@ -124,16 +130,19 @@
                     break;
                 }
             }
+
             if (player_uid != 0) {
                 break;
             }
         }
+
         const auto next = WorldOwnershipRecord{zone_service_id, gateway_session_id};
         bool stale_update = false;
         const auto current_online_role = context.online_by_role.find(player_id);
         if (zone_service_id == 0 && gateway_session_id != 0 && current_online_role != context.online_by_role.end() && current_online_role->second.gateway_session_id != gateway_session_id) {
             stale_update = true;
         }
+
         if (context.ownership_store) {
             stale_update = stale_update || !context.ownership_store->compare_and_set(player_id, source_zone_service_id, gateway_session_id, next);
         } else {
@@ -146,9 +155,11 @@
                 stale_update = true;
             }
         }
+
         if (stale_update) {
             return true;
         }
+
         if (zone_service_id == 0) {
             context.zone_by_player.erase(player_id);
             context.session_by_player.erase(player_id);
@@ -156,6 +167,7 @@
                 const auto uid = current_online_role->second.player_uid;
                 context.online_by_role.erase(current_online_role);
                 const auto uid_it = context.online_by_uid.find(uid);
+
                 if (uid_it != context.online_by_uid.end() && uid_it->second.role_id == player_id) {
                     context.online_by_uid.erase(uid_it);
                 }
@@ -176,14 +188,17 @@
                 context.online_by_uid[player_uid] = next_session;
                 context.online_by_role[player_id] = next_session;
             }
+
             context.zone_by_player[player_id] = zone_service_id;
             if (gateway_session_id != 0) {
                 context.session_by_player[player_id] = gateway_session_id;
             }
         }
+
         if (zone_service_id != 0) {
             context.pending_login_by_role.erase(player_id);
         }
+
         for (auto &[_, roles] : context.roles_by_player_uid) {
             for (auto &role : roles) {
                 if (role.role_id == player_id) {
@@ -191,9 +206,11 @@
                 }
             }
         }
+
         if (context.after_player_zone_set) {
             context.after_player_zone_set(player_id, zone_service_id);
         }
+
         return true;
     }
 
@@ -236,10 +253,12 @@
                     ++pending;
                 }
             }
+
             const auto effective_online = zone.online_players + pending;
             if (!zone.available || (zone.max_players != 0 && effective_online >= zone.max_players)) {
                 continue;
             }
+
             std::uint32_t best_pending = 0;
             if (best) {
                 for (const auto &[_, reservation] : context.pending_login_by_role) {
@@ -248,15 +267,18 @@
                     }
                 }
             }
+
             const auto best_effective_online = best ? best->online_players + best_pending : 0;
             if (!best || effective_online < best_effective_online ||
                 (effective_online == best_effective_online && zone.service_id < best->service_id)) {
                 best = &zone;
             }
         }
+
         if (!best) {
             return std::nullopt;
         }
+
         return best->service_id;
     }
 
@@ -270,6 +292,7 @@
         for (const auto &[_, zone] : context.zones) {
             response.zones.push_back(zone);
         }
+
         const auto it = context.roles_by_player_uid.find(player_uid);
         if (it != context.roles_by_player_uid.end()) {
             response.roles = it->second;
@@ -282,12 +305,14 @@
                 } else {
                     selected_zone = world_select_zone(context, player_uid, role.role_id);
                 }
+
                 if (selected_zone) {
                     role.zone_service_id = *selected_zone;
                     role.login_token_id = encode_login_token_id(*selected_zone, now_ms + context.login_reservation_ttl_ms, context.login_token_secret);
                     if (world_player_zone(context, role.role_id).value_or(0) == 0) {
                         context.pending_login_by_role[role.role_id] = ZoneLoginReservation{*selected_zone, now_ms + context.login_reservation_ttl_ms};
                     }
+
                     const auto zone_it = context.zones.find(*selected_zone);
                     if (zone_it != context.zones.end() && !zone_it->second.gateways.empty() && response.gateways.empty()) {
                         response.gateways.push_back(zone_it->second.gateways.front());
@@ -295,6 +320,7 @@
                 }
             }
         }
+
         return response;
     }
 
@@ -309,6 +335,7 @@
                 response.error = "invalid login options request";
                 return response;
             }
+
             const auto connection_id = message_connection_id(message);
             if (context.before_login_options_async && context.write_deferred_response && connection_id != 0) {
                 const auto player_uid = request->player_uid;
@@ -324,9 +351,11 @@
                 });
                 return deferred_response_for(message);
             }
+
             if (context.before_login_options) {
                 context.before_login_options(request->player_uid);
             }
+
             response.status = yuan::rpc::RpcStatus::ok;
             (void)encode_binary(world_login_options(context, request->player_uid), response.payload);
             return response;
@@ -341,6 +370,7 @@
                 response.error = "invalid gateway info";
                 return response;
             }
+
             world_register_gateway(context, *gateway);
             response.status = yuan::rpc::RpcStatus::ok;
             return response;
@@ -355,6 +385,7 @@
                 response.error = "invalid zone info";
                 return response;
             }
+
             world_register_zone(context, *zone);
             response.status = yuan::rpc::RpcStatus::ok;
             return response;
@@ -369,12 +400,14 @@
                 response.error = "invalid zone select request";
                 return response;
             }
+
             const auto zone = world_select_zone(context, request->player_uid, request->role_id).value_or(0);
             (void)encode_binary(SSPlayerZoneUpdate{request->player_uid, request->role_id, zone, 0, 0}, response.payload);
             response.status = zone != 0 ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::not_found;
             if (zone == 0) {
                 response.error = "no available zone";
             }
+
             return response;
         }
 
@@ -387,6 +420,7 @@
                 response.error = "invalid player zone query";
                 return response;
             }
+
             const auto zone = world_player_zone(context, query->player_id).value_or(0);
             (void)encode_binary(SSPlayerZoneUpdate{0, query->player_id, zone, 0, 0}, response.payload);
             response.status = yuan::rpc::RpcStatus::ok;
@@ -402,6 +436,7 @@
                 response.error = "invalid player zone update";
                 return response;
             }
+
             world_set_player_zone(context, update->player_id, update->zone_service_id, update->source_zone_service_id, update->gateway_session_id);
             response.status = yuan::rpc::RpcStatus::ok;
             return response;
@@ -416,17 +451,20 @@
                 response.error = "invalid gm command request";
                 return response;
             }
+
             if (!context.gm_forward_handler) {
                 response.status = yuan::rpc::RpcStatus::internal_error;
                 response.error = "gm forward handler is not configured";
                 return response;
             }
+
             const auto result = context.gm_forward_handler(*request);
             if (!result) {
                 response.status = yuan::rpc::RpcStatus::unavailable;
                 response.error = "gm target unavailable";
                 return response;
             }
+            
             response.status = result->ok ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::bad_request;
             (void)encode_binary(*result, response.payload);
             return response;

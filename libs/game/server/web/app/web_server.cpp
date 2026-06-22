@@ -19,6 +19,7 @@ int main(int argc, char **argv)
         LOG_ERROR("web failed to load config path={}", argv[1]);
         return 2;
     }
+
     yuan::app::Application app(yuan::game::server::make_game_runtime_context("game.web"));
     auto service = std::make_shared<yuan::game::server::WebServerService>(config->listen_host,
                                                                            config->listen_port,
@@ -39,6 +40,7 @@ int main(int argc, char **argv)
         app.stop();
         return 3;
     }
+
     const bool ok = service->ok();
     app.stop();
     return ok ? EXIT_SUCCESS : 4;

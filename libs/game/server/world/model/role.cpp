@@ -23,18 +23,21 @@ namespace yuan::game::server
         if (loaded_players_.contains(loaded.player_uid)) {
             return;
         }
+
         auto &role_ids = role_ids_by_player_uid_[loaded.player_uid];
         for (const auto &role : loaded.roles) {
             role_ids.push_back(role.role_id);
             roles_by_id_[role.role_id] = role;
             add_role(loaded.player_uid, role);
         }
+
         if (loaded.created_default_role || loaded.missing_role_list) {
             dirty_players_.insert(loaded.player_uid);
             for (const auto &role : loaded.roles) {
                 dirty_roles_.insert(role.role_id);
             }
         }
+
         loaded_players_.insert(loaded.player_uid);
     }
 
@@ -73,6 +76,7 @@ namespace yuan::game::server
             if (role_it == roles_by_id.end()) {
                 continue;
             }
+
             for (const auto &[player_uid, role_ids] : role_ids_by_player_uid) {
                 if (std::find(role_ids.begin(), role_ids.end(), role_id) != role_ids.end()) {
                     dirty_players.insert(player_uid);
@@ -86,6 +90,7 @@ namespace yuan::game::server
             if (it == role_ids_by_player_uid.end()) {
                 continue;
             }
+
             std::vector<SSPlayerRoleInfo> roles;
             roles.reserve(it->second.size());
             for (const auto role_id : it->second) {
@@ -94,6 +99,7 @@ namespace yuan::game::server
                     roles.push_back(role_it->second);
                 }
             }
+
             if (saver(player_uid, roles)) {
                 std::scoped_lock lock(mutex_);
                 dirty_players_.erase(player_uid);
@@ -104,6 +110,7 @@ namespace yuan::game::server
                 LOG_ERROR("world role flush failed player_uid={} world_service={}", player_uid, world_service_id);
             }
         }
+        
         return dirty_player_count() + dirty_role_count();
     }
 

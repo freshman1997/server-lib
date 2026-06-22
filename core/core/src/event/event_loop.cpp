@@ -22,6 +22,8 @@
 #include "net/acceptor/acceptor.h"
 #include "net/acceptor/stream_listener.h"
 
+#include <ranges>
+
 #ifdef _WIN32
 #include <io.h>
 #else
@@ -131,9 +133,9 @@ namespace yuan::net
             data_->has_pending_coroutines_.store(false, std::memory_order_release);
         }
 
-        for (auto &entry : connections) {
-            if (entry.second) {
-                entry.second->abort();
+        for (auto &val : connections | std::views::values) {
+            if (val) {
+                val->abort();
             }
         }
     }
@@ -265,10 +267,12 @@ namespace yuan::net
                         if (event.generation == 0 || it->second->generation() != event.generation) {
                             continue;
                         }
+
                         if (!it->second->has_events() ||
                             (it->second->get_events() & event.revents) == Channel::NONE_EVENT) {
                             continue;
                         }
+
                         active_channels.push_back(event);
                     }
                 }
@@ -281,7 +285,9 @@ namespace yuan::net
                         if (it == data_->channels_.end()) {
                             continue;
                         }
+
                         channel = it->second;
+
                         if (!channel || active_event.generation == 0 ||
                             channel->generation() != active_event.generation ||
                             !channel->has_events() ||
@@ -419,6 +425,7 @@ namespace yuan::net
             data_->pending_callbacks_.push(std::move(cb));
             data_->has_pending_callbacks_.store(true, std::memory_order_release);
         }
+
         if (!is_in_loop_thread()) {
             wakeup();
         }
@@ -435,6 +442,7 @@ namespace yuan::net
             data_->pending_coroutines_.push(handle);
             data_->has_pending_coroutines_.store(true, std::memory_order_release);
         }
+
         if (!is_in_loop_thread()) {
             wakeup();
         }
@@ -486,9 +494,11 @@ namespace yuan::net
         if (events & Channel::READ_EVENT) {
             channel_->enable_read();
         }
+
         if (events & Channel::WRITE_EVENT) {
             channel_->enable_write();
         }
+
         loop_->update_channel(channel_.get());
     }
 
@@ -502,14 +512,17 @@ namespace yuan::net
         if (!active_) {
             return;
         }
+
         active_ = false;
         if (loop_ && channel_) {
             loop_->close_channel(channel_.get());
         }
+
         if (channel_) {
             channel_->disable_all();
             channel_->clear_handler();
         }
+
         handler_.reset();
     }
 

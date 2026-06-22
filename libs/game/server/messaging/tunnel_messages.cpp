@@ -34,11 +34,13 @@ namespace yuan::game::server
             if (in.size() - offset < sizeof(std::uint32_t)) {
                 return false;
             }
+
             value = (static_cast<std::uint32_t>(in[offset]) << 24) |
                     (static_cast<std::uint32_t>(in[offset + 1]) << 16) |
                     (static_cast<std::uint32_t>(in[offset + 2]) << 8) |
                     static_cast<std::uint32_t>(in[offset + 3]);
             offset += sizeof(std::uint32_t);
+            
             return true;
         }
 
@@ -47,6 +49,7 @@ namespace yuan::game::server
             if (in.size() - offset < sizeof(std::uint64_t)) {
                 return false;
             }
+
             value = (static_cast<std::uint64_t>(in[offset]) << 56) |
                     (static_cast<std::uint64_t>(in[offset + 1]) << 48) |
                     (static_cast<std::uint64_t>(in[offset + 2]) << 40) |
@@ -56,6 +59,7 @@ namespace yuan::game::server
                     (static_cast<std::uint64_t>(in[offset + 6]) << 8) |
                     static_cast<std::uint64_t>(in[offset + 7]);
             offset += sizeof(std::uint64_t);
+
             return true;
         }
 
@@ -64,6 +68,7 @@ namespace yuan::game::server
             if (value.size() > std::numeric_limits<std::uint32_t>::max()) {
                 return false;
             }
+
             append_u32(out, static_cast<std::uint32_t>(value.size()));
             out.insert(out.end(), value.begin(), value.end());
             return true;
@@ -74,6 +79,7 @@ namespace yuan::game::server
             if (size == 0) {
                 return;
             }
+
             const auto offset = out.size();
             out.resize(offset + size);
             std::memcpy(out.data() + offset, data, size);
@@ -84,8 +90,10 @@ namespace yuan::game::server
             if (value.size() > std::numeric_limits<std::uint32_t>::max()) {
                 return false;
             }
+
             append_u32(out, static_cast<std::uint32_t>(value.size()));
             append_raw(out, value.data(), value.size());
+
             return true;
         }
 
@@ -95,8 +103,10 @@ namespace yuan::game::server
             if (!read_u32(in, offset, size) || in.size() - offset < size) {
                 return false;
             }
+
             value.assign(in.begin() + static_cast<std::ptrdiff_t>(offset), in.begin() + static_cast<std::ptrdiff_t>(offset + size));
             offset += size;
+
             return true;
         }
 
@@ -106,8 +116,10 @@ namespace yuan::game::server
             if (!read_u32(in, offset, size) || in.size() - offset < size) {
                 return false;
             }
+
             value.assign(reinterpret_cast<const char *>(in.data() + offset), size);
             offset += size;
+
             return true;
         }
     }
@@ -120,6 +132,7 @@ namespace yuan::game::server
         if (!append_string(out, envelope.source) || !append_string(out, envelope.target)) {
             return false;
         }
+
         append_u64(out, envelope.source_service_id);
         append_u64(out, envelope.target_service_id);
         append_u32(out, static_cast<std::uint32_t>(envelope.target_type));
@@ -128,18 +141,22 @@ namespace yuan::game::server
         append_u64(out, envelope.continuation_id);
         append_u32(out, envelope.route.service);
         append_u32(out, envelope.route.method);
+
         if (!append_string(out, envelope.route.name)) {
             return false;
         }
+
         if (envelope.metadata.size() > std::numeric_limits<std::uint32_t>::max()) {
             return false;
         }
+
         append_u32(out, static_cast<std::uint32_t>(envelope.metadata.size()));
         for (const auto &[key, value] : envelope.metadata) {
             if (!append_string(out, key) || !append_string(out, value)) {
                 return false;
             }
         }
+
         return append_bytes(out, envelope.payload);
     }
 
@@ -151,6 +168,7 @@ namespace yuan::game::server
         if (!append_string(out, reply.source) || !append_string(out, reply.target)) {
             return false;
         }
+
         append_u64(out, reply.source_service_id);
         append_u64(out, reply.target_service_id);
         append_u64(out, reply.request_id);
@@ -159,15 +177,18 @@ namespace yuan::game::server
         if (!append_string(out, reply.error)) {
             return false;
         }
+
         if (reply.metadata.size() > std::numeric_limits<std::uint32_t>::max()) {
             return false;
         }
+
         append_u32(out, static_cast<std::uint32_t>(reply.metadata.size()));
         for (const auto &[key, value] : reply.metadata) {
             if (!append_string(out, key) || !append_string(out, value)) {
                 return false;
             }
         }
+
         return append_bytes(out, reply.payload);
     }
 
@@ -180,7 +201,9 @@ namespace yuan::game::server
         if (!append_string(out, registration.host)) {
             return false;
         }
+
         append_u32(out, registration.port);
+
         return append_string(out, registration.name);
     }
 
@@ -207,6 +230,7 @@ namespace yuan::game::server
             !read_u32(in, offset, metadata_size)) {
             return std::nullopt;
         }
+
         envelope.target_type = static_cast<GameServiceType>(target_type);
         envelope.mode = static_cast<TunnelEnvelope::ForwardMode>(mode);
         for (std::uint32_t i = 0; i < metadata_size; ++i) {
@@ -217,9 +241,11 @@ namespace yuan::game::server
             }
             envelope.metadata.emplace(std::move(key), std::move(value));
         }
+
         if (!read_bytes(in, offset, envelope.payload) || offset != in.size()) {
             return std::nullopt;
         }
+
         return envelope;
     }
 
@@ -242,6 +268,7 @@ namespace yuan::game::server
             !read_u32(in, offset, metadata_size)) {
             return std::nullopt;
         }
+
         reply.status = static_cast<yuan::rpc::RpcStatus>(status);
         for (std::uint32_t i = 0; i < metadata_size; ++i) {
             std::string key;
@@ -251,9 +278,11 @@ namespace yuan::game::server
             }
             reply.metadata.emplace(std::move(key), std::move(value));
         }
+
         if (!read_bytes(in, offset, reply.payload) || offset != in.size()) {
             return std::nullopt;
         }
+
         return reply;
     }
 
@@ -267,12 +296,15 @@ namespace yuan::game::server
             !read_u64(in, offset, registration.service_id)) {
             return std::nullopt;
         }
+
         if (version == 2 && !read_string(in, offset, registration.host)) {
             return std::nullopt;
         }
+
         if (!read_u32(in, offset, port) || !read_string(in, offset, registration.name) || offset != in.size()) {
             return std::nullopt;
         }
+
         registration.port = static_cast<std::uint16_t>(port);
         return registration;
     }

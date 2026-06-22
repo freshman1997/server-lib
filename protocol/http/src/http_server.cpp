@@ -1002,9 +1002,8 @@ namespace yuan::net::http
             resp_headers.emplace_back("content-type", content_type);
 
             const std::size_t body_sz = resp->body_buffer_size();
-            std::string len_str;
             if (body_sz > 0) {
-                len_str = std::to_string(body_sz);
+                std::string len_str = std::to_string(body_sz);
                 resp_headers.emplace_back("content-length", len_str);
             }
 
@@ -1035,13 +1034,15 @@ namespace yuan::net::http
                     std::unordered_map<std::string, std::string> trailer_pseudo;
                     std::unordered_map<std::string, std::string> trailer_regular;
                     parse_h2_header_block(raw_headers, trailer_pseudo, trailer_regular);
+
                     for (auto &[k, v] : trailer_regular) {
-                        s.regular_headers[std::move(k)] = std::move(v);
+                        s.regular_headers[k] = std::move(v);
                     }
                 } else {
                     parse_h2_header_block(raw_headers, s.pseudo_headers, s.regular_headers);
                     s.headers_done = true;
                 }
+
                 s.end_stream = s.end_stream || end_stream;
                 maybe_log_h2_stream_complete(stream_id, *h2_streams);
                 if (s.end_stream) {
@@ -1050,16 +1051,18 @@ namespace yuan::net::http
             });
 
             http2_session->set_data_bridge([h2_streams, http2_session, dispatch_fn, conn](std::uint32_t stream_id, const std::vector<std::uint8_t> &data, bool end_stream) {
-                auto it = h2_streams->find(stream_id);
+                const auto it = h2_streams->find(stream_id);
                 if (it == h2_streams->end()) {
                     return;
                 }
+
                 auto &s = it->second;
                 if (!s.body_oversized && s.body.size() + data.size() <= Http2AssembledStream::kMaxBodySize) {
                     s.body.append(reinterpret_cast<const char *>(data.data()), data.size());
                 } else {
                     s.body_oversized = true;
                 }
+
                 s.end_stream = s.end_stream || end_stream;
                 maybe_log_h2_stream_complete(stream_id, *h2_streams);
                 (void)maybe_reply_h2_via_dispatcher(stream_id, *h2_streams, http2_session, conn, dispatch_fn);
@@ -1121,6 +1124,7 @@ namespace yuan::net::http
             if (!resp || encoding.empty()) {
                 return;
             }
+
             resp->add_header(http_header_key::content_encoding, std::string(encoding));
             if (options.gzip_vary) {
                 resp->add_header(http_header_key::vary, "accept-encoding");
@@ -1337,8 +1341,10 @@ namespace yuan::net::http
             if (config_.keep_alive_timeout_ms > 0) {
                 config::connection_idle_timeout = config_.keep_alive_timeout_ms;
             }
+
             load_static_paths();
             register_builtin_routes();
+
             if (!init_proxy_if_needed()) {
                 return false;
             }

@@ -16,6 +16,7 @@ namespace yuan::game::server
             if (args.size() != 1) {
                 return SSGmCommandResponse{false, "usage: set_time_offset_seconds <seconds>"};
             }
+            
             const auto offset_seconds = static_cast<std::int64_t>(std::stoll(args.front()));
             yuan::base::time::set_system_time_offset_seconds(offset_seconds);
             return SSGmCommandResponse{true, "time offset seconds set to " + std::to_string(offset_seconds)};
@@ -32,15 +33,18 @@ namespace yuan::game::server
                 response.error = "invalid gm command request";
                 return response;
             }
+
             const auto it = context.executors.find(request->command);
             if (it == context.executors.end()) {
                 response.status = yuan::rpc::RpcStatus::not_found;
                 (void)encode_binary(SSGmCommandResponse{false, "unknown gm command: " + request->command}, response.payload);
                 return response;
             }
+
             const auto result = it->second(request->args);
             response.status = result.ok ? yuan::rpc::RpcStatus::ok : yuan::rpc::RpcStatus::bad_request;
             (void)encode_binary(result, response.payload);
+
             return response;
         }
     }

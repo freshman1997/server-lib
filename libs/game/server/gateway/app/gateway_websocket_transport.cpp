@@ -74,11 +74,13 @@ namespace yuan::game::server
             }
             connection = it->second;
         }
+        
         runtime_.dispatch([connection] {
             if (connection) {
                 connection->close();
             }
         });
+
         return true;
     }
 
@@ -93,6 +95,7 @@ namespace yuan::game::server
                 connections.push_back(connection);
             }
         }
+
         runtime_.dispatch([connections = std::move(connections)] {
             for (auto *connection : connections) {
                 if (connection) {
@@ -118,6 +121,7 @@ namespace yuan::game::server
         if (!wsConn) {
             return;
         }
+
         const auto id = next_connection_id_.fetch_add(1, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(mutex_);
         ids_by_connection_[wsConn] = id;
@@ -133,6 +137,7 @@ namespace yuan::game::server
             }
             return;
         }
+
         (void)dispatcher_.on_bytes(connection_id, to_bytes(buff));
     }
 
@@ -148,6 +153,7 @@ namespace yuan::game::server
                 connections_by_id_.erase(connection_id);
             }
         }
+
         if (connection_id != 0) {
             dispatcher_.erase(connection_id);
         }
@@ -171,11 +177,13 @@ namespace yuan::game::server
             }
             connection = it->second;
         }
+
         runtime_.dispatch([connection, frame = std::move(frame)] {
             if (connection && connection->connected()) {
                 (void)connection->send(reinterpret_cast<const char *>(frame.data()), frame.size(), yuan::net::websocket::WebSocketConnection::PacketType::binary_);
             }
         });
+
         return true;
     }
 }

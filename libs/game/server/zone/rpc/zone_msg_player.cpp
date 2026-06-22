@@ -42,17 +42,20 @@ namespace yuan::game::server
                 response.error = "invalid zone login request";
                 return response;
             }
+
             if (handlers.player_enter && !handlers.player_enter(login)) {
                 response.status = yuan::rpc::RpcStatus::unavailable;
                 response.error = "zone admission rejected player login";
                 return response;
             }
+
             const SSPlayerZoneUpdate update{login.player_uid, login.role_id, address.service.pack(), address.service.pack(), login.gateway_session_id};
             if (!handlers.world_zone_update || !handlers.world_zone_update(update)) {
                 response.status = yuan::rpc::RpcStatus::internal_error;
                 response.error = "world did not confirm zone login";
                 return response;
             }
+
             response.status = yuan::rpc::RpcStatus::ok;
             response.metadata[game_metadata_key::gateway_zone_service_id] = std::to_string(address.service.pack());
             response.metadata[game_metadata_key::gateway_session_id] = std::to_string(login.gateway_session_id);
@@ -69,6 +72,7 @@ namespace yuan::game::server
             if (role_id == 0 && handlers.role_for_gateway_session) {
                 role_id = handlers.role_for_gateway_session(gateway_session_id);
             }
+
             const auto player_uid = handlers.player_uid_for_role ? handlers.player_uid_for_role(role_id) : 0;
             const SSGatewayLoginRequest logout{0, role_id, address.service.pack(), gateway_session_id};
             if (logout.role_id == 0 || logout.gateway_session_id == 0) {
@@ -76,17 +80,20 @@ namespace yuan::game::server
                 response.error = "invalid zone logout request";
                 return response;
             }
+
             if (handlers.player_leave && !handlers.player_leave(logout)) {
                 response.status = yuan::rpc::RpcStatus::internal_error;
                 response.error = "zone failed to unload player data";
                 return response;
             }
+
             const SSPlayerZoneUpdate update{player_uid, logout.role_id, 0, address.service.pack(), logout.gateway_session_id};
             if (!handlers.world_zone_update || !handlers.world_zone_update(update)) {
                 response.status = yuan::rpc::RpcStatus::internal_error;
                 response.error = "world did not confirm zone logout";
                 return response;
             }
+
             response.status = yuan::rpc::RpcStatus::ok;
             (void)encode_binary(CSLoginResponse{true, logout.role_id, 0, 0, "zone logout ok"}, response.payload);
             return response;
@@ -102,6 +109,7 @@ namespace yuan::game::server
                 response.error = "invalid zone time sync request";
                 return response;
             }
+            
             response.status = yuan::rpc::RpcStatus::ok;
             (void)encode_binary(CSTimeSyncResponse{true, request->role_id, request->client_time_seconds, receive_time_seconds, yuan::base::time::system_now_sec(), "time sync ok"}, response.payload);
             return response;
