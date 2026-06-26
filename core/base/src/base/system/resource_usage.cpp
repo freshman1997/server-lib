@@ -46,8 +46,8 @@ namespace yuan::base::system
 
         NetworkInterfaceUsage *find_mutable_interface(NetworkUsage &usage, const std::string &name)
         {
-            const auto found = std::find_if(usage.interfaces.begin(), usage.interfaces.end(), [&](const auto &interface) {
-                return interface.name == name;
+            const auto found = std::find_if(usage.interfaces.begin(), usage.interfaces.end(), [&](const auto &net_interface) {
+                return net_interface.name == name;
             });
             return found == usage.interfaces.end() ? nullptr : &*found;
         }
@@ -150,8 +150,8 @@ namespace yuan::base::system
                 name.erase(std::remove_if(name.begin(), name.end(), [](const unsigned char ch) { return std::isspace(ch) != 0; }), name.end());
 
                 std::istringstream values(line.substr(separator + 1));
-                NetworkInterfaceUsage interface{};
-                interface.name = name;
+                NetworkInterfaceUsage net_interface{};
+                net_interface.name = name;
                 uint64_t receive_drop = 0;
                 uint64_t receive_fifo = 0;
                 uint64_t receive_frame = 0;
@@ -163,14 +163,14 @@ namespace yuan::base::system
                 uint64_t transmit_carrier = 0;
                 uint64_t transmit_compressed = 0;
 
-                values >> interface.receive_bytes >> interface.receive_packets >> interface.receive_errors >> receive_drop
+                values >> net_interface.receive_bytes >> net_interface.receive_packets >> net_interface.receive_errors >> receive_drop
                     >> receive_fifo >> receive_frame >> receive_compressed >> receive_multicast
-                    >> interface.transmit_bytes >> interface.transmit_packets >> interface.transmit_errors >> transmit_drop
+                    >> net_interface.transmit_bytes >> net_interface.transmit_packets >> net_interface.transmit_errors >> transmit_drop
                     >> transmit_fifo >> transmit_colls >> transmit_carrier >> transmit_compressed;
                 if (!values.fail()) {
-                    interface.loopback = interface.name == "lo";
-                    interface.up = true;
-                    result.interfaces.push_back(std::move(interface));
+                    net_interface.loopback = net_interface.name == "lo";
+                    net_interface.up = true;
+                    result.interfaces.push_back(std::move(net_interface));
                 }
             }
             return result;
@@ -180,29 +180,34 @@ namespace yuan::base::system
         {
             NetworkUsage result{};
             result.timestamp_us = steady_now_us();
-            MIB_IF_TABLE2 *table = nullptr;
-            if (GetIfTable2(&table) != NO_ERROR || table == nullptr) {
+            ULONG table_size = 0;
+            if (GetIfTable(nullptr, &table_size, FALSE) != ERROR_INSUFFICIENT_BUFFER || table_size == 0) {
                 return result;
             }
 
-            for (ULONG i = 0; i < table->NumEntries; ++i) {
-                const auto &row = table->Table[i];
-                NetworkInterfaceUsage interface{};
-                char name[IF_MAX_STRING_SIZE + 1]{};
-                const auto name_size = WideCharToMultiByte(CP_UTF8, 0, row.Alias, -1, name, sizeof(name), nullptr, nullptr);
-                interface.name = name_size > 0 ? name : std::to_string(row.InterfaceIndex);
-                interface.up = row.OperStatus == IfOperStatusUp;
-                interface.loopback = row.Type == IF_TYPE_SOFTWARE_LOOPBACK;
-                interface.receive_bytes = static_cast<uint64_t>(row.InOctets);
-                interface.receive_packets = static_cast<uint64_t>(row.InUcastPkts + row.InNUcastPkts);
-                interface.receive_errors = static_cast<uint64_t>(row.InErrors);
-                interface.transmit_bytes = static_cast<uint64_t>(row.OutOctets);
-                interface.transmit_packets = static_cast<uint64_t>(row.OutUcastPkts + row.OutNUcastPkts);
-                interface.transmit_errors = static_cast<uint64_t>(row.OutErrors);
-                result.interfaces.push_back(std::move(interface));
+            std::vector<unsigned char> buffer(table_size);
+            auto *table = reinterpret_cast<MIB_IFTABLE *>(buffer.data());
+            if (GetIfTable(table, &table_size, FALSE) != NO_ERROR) {
+                return result;
             }
 
-            FreeMibTable(table);
+            for (DWORD i = 0; i < table->dwNumEntries; ++i) {
+                const auto &row = table->table[i];
+                NetworkInterfaceUsage net_interface{};
+                net_interface.name = row.bDescr[0] != '\0'
+                    ? std::string(reinterpret_cast<const char *>(row.bDescr), row.dwDescrLen)
+                    : std::to_string(row.dwIndex);
+                net_interface.up = row.dwOperStatus == MIB_IF_OPER_STATUS_OPERATIONAL;
+                net_interface.loopback = row.dwType == IF_TYPE_SOFTWARE_LOOPBACK;
+                net_interface.receive_bytes = static_cast<uint64_t>(row.dwInOctets);
+                net_interface.receive_packets = static_cast<uint64_t>(row.dwInUcastPkts + row.dwInNUcastPkts);
+                net_interface.receive_errors = static_cast<uint64_t>(row.dwInErrors);
+                net_interface.transmit_bytes = static_cast<uint64_t>(row.dwOutOctets);
+                net_interface.transmit_packets = static_cast<uint64_t>(row.dwOutUcastPkts + row.dwOutNUcastPkts);
+                net_interface.transmit_errors = static_cast<uint64_t>(row.dwOutErrors);
+                result.interfaces.push_back(std::move(net_interface));
+            }
+
             return result;
         }
 #else
@@ -220,25 +225,25 @@ namespace yuan::base::system
                     continue;
                 }
 
-                auto *interface = find_mutable_interface(result, address->ifa_name);
-                if (interface == nullptr) {
+                auto *net_interface = find_mutable_interface(result, address->ifa_name);
+                if (net_interface == nullptr) {
                     NetworkInterfaceUsage created{};
                     created.name = address->ifa_name;
                     created.up = (address->ifa_flags & IFF_UP) != 0;
                     created.loopback = (address->ifa_flags & IFF_LOOPBACK) != 0;
                     result.interfaces.push_back(std::move(created));
-                    interface = &result.interfaces.back();
+                    net_interface = &result.interfaces.back();
                 }
 
 #if defined(__APPLE__)
                 if (address->ifa_addr && address->ifa_addr->sa_family == AF_LINK && address->ifa_data) {
                     const auto *data = static_cast<const if_data *>(address->ifa_data);
-                    interface->receive_bytes = data->ifi_ibytes;
-                    interface->receive_packets = data->ifi_ipackets;
-                    interface->receive_errors = data->ifi_ierrors;
-                    interface->transmit_bytes = data->ifi_obytes;
-                    interface->transmit_packets = data->ifi_opackets;
-                    interface->transmit_errors = data->ifi_oerrors;
+                    net_interface->receive_bytes = data->ifi_ibytes;
+                    net_interface->receive_packets = data->ifi_ipackets;
+                    net_interface->receive_errors = data->ifi_ierrors;
+                    net_interface->transmit_bytes = data->ifi_obytes;
+                    net_interface->transmit_packets = data->ifi_opackets;
+                    net_interface->transmit_errors = data->ifi_oerrors;
                 }
 #endif
             }
@@ -270,8 +275,8 @@ namespace yuan::base::system
 
     const NetworkInterfaceUsage *NetworkUsage::find_interface(const std::string &name) const
     {
-        const auto found = std::find_if(interfaces.begin(), interfaces.end(), [&](const auto &interface) {
-            return interface.name == name;
+        const auto found = std::find_if(interfaces.begin(), interfaces.end(), [&](const auto &net_interface) {
+            return net_interface.name == name;
         });
         return found == interfaces.end() ? nullptr : &*found;
     }
@@ -279,9 +284,9 @@ namespace yuan::base::system
     uint64_t NetworkUsage::total_receive_bytes() const
     {
         uint64_t total = 0;
-        for (const auto &interface : interfaces) {
-            if (!interface.loopback) {
-                total += interface.receive_bytes;
+        for (const auto &net_interface : interfaces) {
+            if (!net_interface.loopback) {
+                total += net_interface.receive_bytes;
             }
         }
         return total;
@@ -290,9 +295,9 @@ namespace yuan::base::system
     uint64_t NetworkUsage::total_transmit_bytes() const
     {
         uint64_t total = 0;
-        for (const auto &interface : interfaces) {
-            if (!interface.loopback) {
-                total += interface.transmit_bytes;
+        for (const auto &net_interface : interfaces) {
+            if (!net_interface.loopback) {
+                total += net_interface.transmit_bytes;
             }
         }
         return total;
