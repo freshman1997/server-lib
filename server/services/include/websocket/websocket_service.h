@@ -21,6 +21,7 @@ namespace yuan::server
         void start() override;
         void stop() override;
         void set_runtime_context(const yuan::app::RuntimeContext &context) override;
+        yuan::timer::TimerManager *resource_usage_timer_manager() override;
 
         yuan::net::websocket::WebSocketServer &server();
         const yuan::net::websocket::WebSocketServer &server() const;

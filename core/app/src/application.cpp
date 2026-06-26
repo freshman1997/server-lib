@@ -3,6 +3,7 @@
 #include "app_events.h"
 #include "eventbus/event_bus.h"
 #include "eventbus/event_type_registry.h"
+#include "metrics/resource_usage_reporter.h"
 
 #include <exception>
 #include <mutex>
@@ -44,6 +45,29 @@ namespace yuan::app
                                    "Service started", EventScope::global);
             registry.register_type(events::service_stopped, "lifecycle", "ServiceEvent",
                                    "Service stopped", EventScope::global);
+        }
+
+        void start_resource_usage_reporter_if_available(const RuntimeContext &context, Service &service)
+        {
+            if (!context.resource_usage_report_enabled || context.resource_usage_report_interval_ms == 0) {
+                return;
+            }
+
+            auto *timer_manager = service.resource_usage_timer_manager();
+            if (!timer_manager) {
+                return;
+            }
+
+            std::string name;
+            if (const auto *report_name = service.resource_usage_report_name()) {
+                name = report_name;
+            }
+            if (name.empty()) {
+                name = context.app_name;
+            }
+            metrics::start_process_resource_usage_reporter(
+                *timer_manager,
+                {true, static_cast<std::uint32_t>(context.resource_usage_report_interval_ms), std::move(name)});
         }
 
     } // namespace
@@ -178,6 +202,7 @@ namespace yuan::app
         for (const auto &entry : service_instances_) {
             if (entry.service) {
                 const auto service_context = make_service_context(context_, entry);
+                start_resource_usage_reporter_if_available(service_context, *entry.service);
                 entry.service->start();
                 context_.event_bus->publish(events::service_started, make_service_event(service_context, entry.descriptor.name));
             }
@@ -208,6 +233,7 @@ namespace yuan::app
             }
 
             try {
+                start_resource_usage_reporter_if_available(service_context, *service);
                 service->start();
                 if (event_bus) {
                     event_bus->publish(events::service_started, make_service_event(service_context, name));

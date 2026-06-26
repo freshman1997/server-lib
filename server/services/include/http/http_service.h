@@ -30,6 +30,8 @@ namespace yuan::server
         void start() override;
         void stop() override;
         void set_runtime_context(const yuan::app::RuntimeContext &context) override;
+        yuan::timer::TimerManager *resource_usage_timer_manager() override;
+        const char *resource_usage_report_name() const override;
         void set_server_configurator(ServerConfigurator configurator);
         void set_admin_dashboard_enabled(bool enabled);
 

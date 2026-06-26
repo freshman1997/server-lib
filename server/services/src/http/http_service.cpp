@@ -338,6 +338,20 @@ namespace yuan::server
         }
     }
 
+    yuan::timer::TimerManager *HttpService::resource_usage_timer_manager()
+    {
+        if (shared_runtime_) {
+            return shared_runtime_->timer_manager();
+        }
+        auto *runtime = server_ ? server_->runtime() : nullptr;
+        return runtime ? runtime->timer_manager() : nullptr;
+    }
+
+    const char *HttpService::resource_usage_report_name() const
+    {
+        return runtime_context_.app_name.empty() ? "http" : runtime_context_.app_name.c_str();
+    }
+
     void HttpService::set_server_configurator(ServerConfigurator configurator)
     {
         server_configurator_ = std::move(configurator);

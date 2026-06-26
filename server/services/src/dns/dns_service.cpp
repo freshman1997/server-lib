@@ -29,6 +29,11 @@ namespace yuan::server
         shared_runtime_ = context.shared_runtime;
     }
 
+    yuan::timer::TimerManager *DnsService::resource_usage_timer_manager()
+    {
+        return shared_runtime_ ? shared_runtime_->timer_manager() : nullptr;
+    }
+
     void DnsService::start()
     {
         if (shared_runtime_) {

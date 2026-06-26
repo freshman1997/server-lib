@@ -60,6 +60,8 @@ namespace yuan::app
         std::size_t supervisor_failure_threshold = 3;
         std::size_t supervisor_failure_window_ms = 10000;
         std::size_t supervisor_circuit_backoff_ms = 3000;
+        bool resource_usage_report_enabled = false;
+        std::size_t resource_usage_report_interval_ms = 60000;
         std::shared_ptr<eventbus::EventBus> event_bus;
         std::shared_ptr<ServiceRegistry> service_registry;
         std::shared_ptr<eventbus::EventTypeRegistry> event_type_registry;

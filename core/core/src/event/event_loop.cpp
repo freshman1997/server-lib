@@ -135,7 +135,7 @@ namespace yuan::net
 
         for (auto &val : connections | std::views::values) {
             if (val) {
-                val->abort();
+                val->detach_owner_event_handler();
             }
         }
     }

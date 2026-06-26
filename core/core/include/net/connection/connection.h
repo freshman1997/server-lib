@@ -199,6 +199,11 @@ namespace yuan::net
             return owner_event_handler_.load(std::memory_order_acquire);
         }
 
+        void detach_owner_event_handler() noexcept
+        {
+            set_owner_event_handler(nullptr);
+        }
+
         bool is_in_owner_loop() const noexcept
         {
             auto *handler = owner_event_handler();
