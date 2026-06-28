@@ -330,6 +330,81 @@ namespace
         close_socket(listener);
     }
 
+    void run_single_http_body_echo_server(uint16_t port, std::atomic_bool &ready)
+    {
+        socket_t listener = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listener == kInvalidSocket) {
+            return;
+        }
+
+        int reuse = 1;
+#ifdef _WIN32
+        ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&reuse), sizeof(reuse));
+#else
+        ::setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#endif
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listener, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) != 0 ||
+            ::listen(listener, 8) != 0) {
+            close_socket(listener);
+            return;
+        }
+
+        ready.store(true);
+        socket_t client = ::accept(listener, nullptr, nullptr);
+        if (client != kInvalidSocket) {
+            std::string request;
+            char buf[1024];
+            while (request.find("\r\n\r\n") == std::string::npos) {
+#ifdef _WIN32
+                const int rc = ::recv(client, buf, static_cast<int>(sizeof(buf)), 0);
+#else
+                const ssize_t rc = ::recv(client, buf, sizeof(buf), 0);
+#endif
+                if (rc <= 0) {
+                    break;
+                }
+                request.append(buf, static_cast<std::size_t>(rc));
+            }
+
+            std::size_t content_length = 0;
+            const auto header_end = request.find("\r\n\r\n");
+            const auto len_pos = request.find("Content-Length:");
+            if (len_pos != std::string::npos) {
+                const auto value_begin = len_pos + std::string("Content-Length:").size();
+                const auto value_end = request.find("\r\n", value_begin);
+                content_length = static_cast<std::size_t>(std::stoul(request.substr(value_begin, value_end - value_begin)));
+            }
+            std::string body = header_end == std::string::npos ? std::string{} : request.substr(header_end + 4);
+            while (body.size() < content_length) {
+#ifdef _WIN32
+                const int rc = ::recv(client, buf, static_cast<int>(sizeof(buf)), 0);
+#else
+                const ssize_t rc = ::recv(client, buf, sizeof(buf), 0);
+#endif
+                if (rc <= 0) {
+                    break;
+                }
+                body.append(buf, static_cast<std::size_t>(rc));
+            }
+
+            const std::string response_body = body.substr(0, content_length);
+            const std::string response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n"
+                "Connection: close\r\n"
+                "Content-Length: " + std::to_string(response_body.size()) + "\r\n\r\n" + response_body;
+            (void)send_all(client, response);
+            close_socket(client);
+        }
+
+        close_socket(listener);
+    }
+
     void run_echo_server_n_connections(uint16_t port,
                                        std::atomic_bool &ready,
                                        int max_connections,
@@ -813,6 +888,7 @@ namespace
         config.listen_host = "127.0.0.1";
         config.port = proxy_port;
         config.header_timeout_ms = 300;
+        config.upstream_first_byte_timeout_ms = 300;
         config.idle_timeout_ms = 3000;
         config.connect_timeout_ms = 1000;
         config.drain_timeout_ms = 500;
@@ -1000,6 +1076,151 @@ namespace
         check(upstream_accepted.load() >= kRounds - 2,
               "upstream should accept most reconnect storm tunnels");
     }
+
+    void test_proxy_rejects_invalid_target_ports()
+    {
+        std::cout << "  [ProxyService] invalid target ports return 400\n";
+
+        const uint16_t proxy_port = reserve_tcp_port();
+        check(proxy_port != 0, "should reserve proxy port for invalid target test");
+
+        yuan::server::ProxyServiceConfig config;
+        config.listen_host = "127.0.0.1";
+        config.port = proxy_port;
+        config.header_timeout_ms = 1000;
+        config.idle_timeout_ms = 1000;
+        config.connect_timeout_ms = 500;
+        config.drain_timeout_ms = 500;
+        config.allow_private_targets = true;
+
+        auto service = std::make_unique<yuan::server::ProxyService>(config);
+        check(service->init(), "proxy service init should succeed for invalid target test");
+        service->start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+
+        socket_t client = connect_loopback(proxy_port);
+        check(client != kInvalidSocket, "client should connect for invalid CONNECT target");
+        if (client != kInvalidSocket) {
+            const std::string request =
+                "CONNECT 127.0.0.1:70000 HTTP/1.1\r\n"
+                "Host: 127.0.0.1:70000\r\n\r\n";
+            check(send_all(client, request), "invalid CONNECT request should send");
+            const std::string response = recv_some(client);
+            check(response.find("400 Bad Request") != std::string::npos,
+                  "invalid CONNECT port should return 400");
+            close_socket(client);
+        }
+
+        client = connect_loopback(proxy_port);
+        check(client != kInvalidSocket, "client should connect for invalid forward target");
+        if (client != kInvalidSocket) {
+            const std::string request =
+                "GET http://127.0.0.1:abc/status HTTP/1.1\r\n"
+                "Host: 127.0.0.1:abc\r\n\r\n";
+            check(send_all(client, request), "invalid forward request should send");
+            const std::string response = recv_some(client);
+            check(response.find("400 Bad Request") != std::string::npos,
+                  "invalid forward port should return 400");
+            close_socket(client);
+        }
+
+        service->stop();
+    }
+
+    void test_proxy_plain_http_post_body_forward()
+    {
+        std::cout << "  [ProxyService] plain HTTP POST body forward\n";
+
+        const uint16_t upstream_port = reserve_tcp_port();
+        const uint16_t proxy_port = reserve_tcp_port();
+        check(upstream_port != 0, "should reserve upstream body echo port");
+        check(proxy_port != 0, "should reserve proxy port for body forward");
+
+        std::atomic_bool upstream_ready{ false };
+        std::thread upstream_thread([&]() {
+            run_single_http_body_echo_server(upstream_port, upstream_ready);
+        });
+        wait_until_ready(upstream_ready);
+        check(upstream_ready.load(), "body echo HTTP server should start");
+
+        yuan::server::ProxyServiceConfig config;
+        config.listen_host = "127.0.0.1";
+        config.port = proxy_port;
+        config.header_timeout_ms = 3000;
+        config.idle_timeout_ms = 3000;
+        config.connect_timeout_ms = 3000;
+        config.drain_timeout_ms = 1000;
+        config.allow_private_targets = true;
+
+        auto service = std::make_unique<yuan::server::ProxyService>(config);
+        check(service->init(), "proxy service init should succeed for body forward");
+        service->start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+
+        socket_t client = connect_loopback(proxy_port);
+        check(client != kInvalidSocket, "client should connect for body forward");
+        if (client != kInvalidSocket) {
+            const std::string body(64 * 1024, 'b');
+            const std::string head =
+                "POST http://127.0.0.1:" + std::to_string(upstream_port) + "/echo HTTP/1.1\r\n"
+                "Host: 127.0.0.1:" + std::to_string(upstream_port) + "\r\n"
+                "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                "Connection: close\r\n\r\n";
+            check(send_all(client, head), "POST headers should send");
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            check(send_all(client, body), "POST body should send after headers");
+            const std::string response = recv_some(client);
+            check(response.find("HTTP/1.1 200 OK") != std::string::npos,
+                  "POST body forward should return 200");
+            check(response.find(body.substr(0, 1024)) != std::string::npos,
+                  "POST body forward should echo body payload");
+            close_socket(client);
+        }
+
+        service->stop();
+        if (upstream_thread.joinable()) {
+            upstream_thread.join();
+        }
+    }
+
+    void test_proxy_rejects_chunked_request_body()
+    {
+        std::cout << "  [ProxyService] chunked request body returns 501\n";
+
+        const uint16_t proxy_port = reserve_tcp_port();
+        check(proxy_port != 0, "should reserve proxy port for chunked reject");
+
+        yuan::server::ProxyServiceConfig config;
+        config.listen_host = "127.0.0.1";
+        config.port = proxy_port;
+        config.header_timeout_ms = 1000;
+        config.idle_timeout_ms = 1000;
+        config.connect_timeout_ms = 500;
+        config.drain_timeout_ms = 500;
+        config.allow_private_targets = true;
+
+        auto service = std::make_unique<yuan::server::ProxyService>(config);
+        check(service->init(), "proxy service init should succeed for chunked reject");
+        service->start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+
+        socket_t client = connect_loopback(proxy_port);
+        check(client != kInvalidSocket, "client should connect for chunked reject");
+        if (client != kInvalidSocket) {
+            const std::string request =
+                "POST http://127.0.0.1:1/chunked HTTP/1.1\r\n"
+                "Host: 127.0.0.1:1\r\n"
+                "Transfer-Encoding: chunked\r\n\r\n"
+                "4\r\ntest\r\n0\r\n\r\n";
+            check(send_all(client, request), "chunked request should send");
+            const std::string response = recv_some(client);
+            check(response.find("501 Not Implemented") != std::string::npos,
+                  "chunked request body should return 501");
+            close_socket(client);
+        }
+
+        service->stop();
+    }
 }
 
 int main()
@@ -1011,6 +1232,9 @@ int main()
     test_proxy_connect_large_tunnel_no_half_close();
     test_proxy_connect_reconnect_storm_smoke();
     test_proxy_plain_http_forward();
+    test_proxy_plain_http_post_body_forward();
+    test_proxy_rejects_invalid_target_ports();
+    test_proxy_rejects_chunked_request_body();
     test_proxy_large_http_forward();
     test_proxy_plain_http_closes_after_upstream_response();
     test_proxy_http_upstream_connect_timeout();

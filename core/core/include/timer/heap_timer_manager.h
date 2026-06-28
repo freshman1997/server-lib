@@ -43,11 +43,12 @@ namespace yuan::timer
 
         Timer *schedule(uint32_t timeout, uint32_t interval, TimerTask *task, int32_t period);
         void push(BasicTimer *timer);
-        void cleanup_cancelled();
+        void cleanup_cancelled(bool force = false);
 
     private:
         uint32_t time_unit_;
         uint64_t sequence_;
+        std::size_t stale_timer_count_ = 0;
         std::priority_queue<Entry, std::vector<Entry>, LaterDeadline> heap_;
         std::vector<std::unique_ptr<BasicTimer> > timers_;
     };

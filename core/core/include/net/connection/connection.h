@@ -405,7 +405,8 @@ namespace yuan::net
                 if (!can_append_output_locked(text.size())) {
                     return;
                 }
-                ensure_output_chunk()->append(text);
+                ensure_output_chunk(text.size())->append(text);
+                output_buffer_.account_append(text.size());
             }
         }
 
@@ -416,7 +417,8 @@ namespace yuan::net
                 if (!can_append_output_locked(size)) {
                     return;
                 }
-                ensure_output_chunk()->append(data, size);
+                ensure_output_chunk(size)->append(data, size);
+                output_buffer_.account_append(size);
             }
         }
 
@@ -428,7 +430,8 @@ namespace yuan::net
                 if (!can_append_output_locked(span.size())) {
                     return;
                 }
-                ensure_output_chunk()->append(span);
+                ensure_output_chunk(span.size())->append(span);
+                output_buffer_.account_append(span.size());
             }
         }
 
@@ -622,8 +625,8 @@ namespace yuan::net
         ::yuan::buffer::ByteBuffer *ensure_output_chunk(std::size_t capacity = ::yuan::buffer::ByteBuffer::kDefaultCapacity)
         {
             auto *chunk = output_buffer_.back();
-            if (!chunk) {
-                chunk = output_buffer_.emplace_back(capacity);
+            if (!chunk || chunk->writable_bytes() < capacity) {
+                chunk = output_buffer_.emplace_back(std::max(capacity, ::yuan::buffer::ByteBuffer::kDefaultCapacity));
             }
             return chunk;
         }

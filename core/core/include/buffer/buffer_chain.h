@@ -2,6 +2,7 @@
 #define __YUAN_BUFFER_BUFFER_CHAIN_H__
 
 #include <cstddef>
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <deque>
@@ -50,13 +51,7 @@ public:
 
     std::size_t readable_bytes() const noexcept
     {
-        std::size_t total = 0;
-        for (const auto &buffer : buffers_) {
-            if (buffer) {
-                total += buffer->readable_bytes();
-            }
-        }
-        return total;
+        return readable_bytes_;
     }
 
     ByteBuffer *emplace_back(std::size_t capacity = ByteBuffer::kDefaultCapacity)
@@ -68,6 +63,7 @@ public:
     void push_back(BufferPtr buffer)
     {
         if (buffer) {
+            readable_bytes_ += buffer->readable_bytes();
             buffers_.push_back(std::move(buffer));
         }
     }
@@ -75,6 +71,7 @@ public:
     void push_front(BufferPtr buffer)
     {
         if (buffer) {
+            readable_bytes_ += buffer->readable_bytes();
             buffers_.push_front(std::move(buffer));
         }
     }
@@ -87,12 +84,33 @@ public:
 
         auto front = std::move(buffers_.front());
         buffers_.pop_front();
+        if (front) {
+            const auto readable = front->readable_bytes();
+            readable_bytes_ = readable_bytes_ >= readable ? readable_bytes_ - readable : 0;
+        }
         return front;
+    }
+
+    void consume_front(std::size_t bytes) noexcept
+    {
+        auto *buffer = front();
+        if (!buffer || bytes == 0) {
+            return;
+        }
+        const auto consumed = std::min(bytes, buffer->readable_bytes());
+        buffer->consume(consumed);
+        readable_bytes_ = readable_bytes_ >= consumed ? readable_bytes_ - consumed : 0;
+    }
+
+    void account_append(std::size_t bytes) noexcept
+    {
+        readable_bytes_ += bytes;
     }
 
     void clear() noexcept
     {
         buffers_.clear();
+        readable_bytes_ = 0;
     }
 
     void for_each_readable(const std::function<bool(const ByteBuffer &)> &visitor) const
@@ -110,6 +128,7 @@ public:
 
 private:
     std::deque<BufferPtr> buffers_;
+    std::size_t readable_bytes_ = 0;
 };
 
 } // namespace yuan::buffer

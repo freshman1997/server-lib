@@ -140,6 +140,28 @@ namespace
         return p == pattern.size();
     }
 
+    bool parse_port(std::string_view text, uint16_t &out)
+    {
+        if (text.empty()) {
+            return false;
+        }
+        uint32_t value = 0;
+        for (char ch : text) {
+            if (!std::isdigit(static_cast<unsigned char>(ch))) {
+                return false;
+            }
+            value = value * 10 + static_cast<uint32_t>(ch - '0');
+            if (value > 65535) {
+                return false;
+            }
+        }
+        if (value == 0) {
+            return false;
+        }
+        out = static_cast<uint16_t>(value);
+        return true;
+    }
+
     bool match_rule(const std::string &rule, const std::string &host, uint16_t port)
     {
         const auto colon = rule.rfind(':');
@@ -150,7 +172,8 @@ namespace
             port_rule = trim(rule.substr(colon + 1));
         }
         const bool host_ok = wildcard_match(host_rule.empty() ? "*" : host_rule, to_lower(host));
-        const bool port_ok = port_rule == "*" || (!port_rule.empty() && static_cast<uint16_t>(std::stoi(port_rule)) == port);
+        uint16_t parsed_port = 0;
+        const bool port_ok = port_rule == "*" || parse_port(port_rule, parsed_port) && parsed_port == port;
         return host_ok && port_ok;
     }
 
@@ -205,6 +228,44 @@ namespace
         return headers;
     }
 
+    bool parse_size_header(const std::unordered_map<std::string, std::string> &headers,
+                           const std::string &name,
+                           uint64_t &out)
+    {
+        const auto it = headers.find(name);
+        if (it == headers.end()) {
+            return false;
+        }
+        const auto value = trim(it->second);
+        if (value.empty()) {
+            return false;
+        }
+        uint64_t parsed = 0;
+        for (char ch : value) {
+            if (!std::isdigit(static_cast<unsigned char>(ch))) {
+                return false;
+            }
+            const uint64_t next = parsed * 10 + static_cast<uint64_t>(ch - '0');
+            if (next < parsed) {
+                return false;
+            }
+            parsed = next;
+        }
+        out = parsed;
+        return true;
+    }
+
+    bool header_contains_token(const std::unordered_map<std::string, std::string> &headers,
+                               const std::string &name,
+                               const std::string &token)
+    {
+        const auto it = headers.find(name);
+        if (it == headers.end()) {
+            return false;
+        }
+        return to_lower(it->second).find(to_lower(token)) != std::string::npos;
+    }
+
     bool verify_basic_proxy_auth(const std::unordered_map<std::string, std::string> &headers,
                                  const yuan::server::ProxyServiceConfig &config)
     {
@@ -251,8 +312,7 @@ namespace
                 return false;
             }
             out.host = target.substr(1, close - 1);
-            out.port = static_cast<uint16_t>(std::stoi(target.substr(close + 2)));
-            return true;
+            return parse_port(std::string_view(target).substr(close + 2), out.port);
         }
 
         const auto colon = target.rfind(':');
@@ -264,8 +324,7 @@ namespace
         }
 
         out.host = target.substr(0, colon);
-        out.port = static_cast<uint16_t>(std::stoi(target.substr(colon + 1)));
-        return true;
+        return !out.host.empty() && parse_port(std::string_view(target).substr(colon + 1), out.port);
     }
 
     bool parse_forward_target(const std::string &target,
@@ -290,7 +349,9 @@ namespace
                     if (host_port[close + 1] != ':' || close + 2 >= host_port.size()) {
                         return false;
                     }
-                    dst.port = static_cast<uint16_t>(std::stoi(host_port.substr(close + 2)));
+                    if (!parse_port(std::string_view(host_port).substr(close + 2), dst.port)) {
+                        return false;
+                    }
                 } else {
                     dst.port = default_port;
                 }
@@ -300,8 +361,7 @@ namespace
             const auto colon = host_port.rfind(':');
             if (colon != std::string::npos && host_port.find(':') == colon) {
                 dst.host = host_port.substr(0, colon);
-                dst.port = static_cast<uint16_t>(std::stoi(host_port.substr(colon + 1)));
-                return !dst.host.empty();
+                return !dst.host.empty() && parse_port(std::string_view(host_port).substr(colon + 1), dst.port);
             }
 
             dst.host = host_port;
@@ -324,6 +384,9 @@ namespace
         }
 
         const std::string scheme = to_lower(target.substr(0, scheme_pos));
+        if (scheme != "http") {
+            return false;
+        }
         const std::size_t authority_start = scheme_pos + 3;
         const std::size_t path_pos = target.find('/', authority_start);
         const std::string authority = path_pos == std::string::npos
@@ -1014,6 +1077,13 @@ namespace
                 co_return;
             }
 
+            if (method != "CONNECT" && header_contains_token(headers, "transfer-encoding", "chunked")) {
+                LOG_WARN("[ProxyService] session #{} {} chunked request bodies are not supported yet", session_id, peer_text);
+                (void)co_await write_http_text_async(ctx, 501, "Not Implemented", "chunked request body is not supported by proxy");
+                ctx.close();
+                co_return;
+            }
+
             if (on_state_change) {
                 on_state_change(ProxySessionState::connecting_upstream, "upstream_connect_started");
             }
@@ -1121,6 +1191,17 @@ namespace
             }
 
         } else {
+            uint64_t content_length = 0;
+            const bool has_content_length = parse_size_header(headers, "content-length", content_length);
+            if (has_content_length && content_length > static_cast<uint64_t>(std::max(config.max_session_buffer_bytes, 1))) {
+                LOG_WARN("[ProxyService] session #{} {} request body too large content_length={} max={}",
+                         session_id, peer_text, content_length, config.max_session_buffer_bytes);
+                (void)co_await write_http_text_async(ctx, 413, "Payload Too Large", "request body too large");
+                upstream_ctx.close();
+                ctx.close();
+                co_return;
+            }
+
             const std::string forward_request = build_forward_request(method, version, connect_target.request_path, request, headers);
             if (!co_await write_text_async(upstream_ctx, forward_request, static_cast<uint32_t>(config.idle_timeout_ms))) {
                 LOG_ERROR("[ProxyService] session #{} {} failed to forward request head", session_id, peer_text);
@@ -1137,6 +1218,34 @@ namespace
                     ctx.close();
                     upstream_ctx.close();
                     co_return;
+                }
+            }
+
+            if (has_content_length) {
+                uint64_t forwarded_body = static_cast<uint64_t>(leftover.size());
+                if (forwarded_body > content_length) {
+                    forwarded_body = content_length;
+                }
+                while (forwarded_body < content_length) {
+                    auto body_chunk = co_await ctx.read_awaiter(static_cast<uint32_t>(config.idle_timeout_ms));
+                    if (body_chunk.status != yuan::coroutine::IoStatus::success || body_chunk.data.readable_bytes() == 0) {
+                        LOG_WARN("[ProxyService] session #{} {} failed to read request body status={} forwarded={} expected={}",
+                                 session_id, peer_text, static_cast<int>(body_chunk.status), forwarded_body, content_length);
+                        upstream_ctx.close();
+                        ctx.close();
+                        co_return;
+                    }
+                    const auto chunk_bytes = static_cast<uint64_t>(body_chunk.data.readable_bytes());
+                    if (forwarded_body + chunk_bytes > content_length) {
+                        body_chunk.data.set_write_offset(static_cast<std::size_t>(content_length - forwarded_body));
+                    }
+                    if (!co_await write_buffer_async(upstream_ctx, body_chunk.data, static_cast<uint32_t>(config.idle_timeout_ms))) {
+                        LOG_ERROR("[ProxyService] session #{} {} failed to forward request body", session_id, peer_text);
+                        upstream_ctx.close();
+                        ctx.close();
+                        co_return;
+                    }
+                    forwarded_body += static_cast<uint64_t>(body_chunk.data.readable_bytes());
                 }
             }
 

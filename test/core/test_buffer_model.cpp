@@ -51,8 +51,10 @@ int main()
     yuan::buffer::BufferChain chain;
     auto *first = chain.emplace_back();
     first->append(std::string_view("one"));
+    chain.account_append(3);
     auto *second = chain.emplace_back();
     second->append(std::string_view("two"));
+    chain.account_append(3);
 
     std::string joined;
     chain.for_each_readable([&joined](const yuan::buffer::ByteBuffer &part) {
@@ -70,15 +72,26 @@ int main()
         return 1;
     }
 
+    chain.consume_front(1);
+    if (chain.readable_bytes() != 5 || std::string(chain.front()->read_ptr(), chain.front()->readable_bytes()) != "ne") {
+        std::cerr << "buffer chain consume_front failed\n";
+        return 1;
+    }
+
     auto front = chain.pop_front();
-    if (!front || std::string(front->read_ptr(), front->readable_bytes()) != "one") {
+    if (!front || std::string(front->read_ptr(), front->readable_bytes()) != "ne") {
         std::cerr << "buffer chain pop_front failed\n";
+        return 1;
+    }
+
+    if (chain.readable_bytes() != 3) {
+        std::cerr << "buffer chain readable byte count after pop failed\n";
         return 1;
     }
 
     yuan::buffer::ByteBuffer copied = second->copy_readable();
     front->append(copied);
-    if (std::string(front->read_ptr(), front->readable_bytes()) != "onetwo") {
+    if (std::string(front->read_ptr(), front->readable_bytes()) != "netwo") {
         std::cerr << "byte buffer append/copy failed\n";
         return 1;
     }

@@ -14,6 +14,7 @@
 
 #include "logger.h"
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <chrono>
 #include <cstddef>
@@ -100,6 +101,14 @@ namespace yuan::net::http
             return std::all_of(upload_id.begin(), upload_id.end(), [](unsigned char ch) {
                 return std::isalnum(ch) != 0 || ch == '_' || ch == '-' || ch == '.';
             });
+        }
+
+        void send_upload_json_error(HttpResponse *resp, ResponseCode code, const char *message)
+        {
+            nlohmann::json err;
+            err["error"] = message ? message : "upload error";
+            resp->json(err.dump(), code);
+            resp->send();
         }
 
         uint64_t file_age_ms(const std::filesystem::path &path)
@@ -418,6 +427,28 @@ namespace yuan::net::http
             return value.substr(begin, end - begin);
         }
 
+        template <typename Int>
+        bool parse_integer_strict(std::string_view text, Int &out)
+        {
+            while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
+                text.remove_prefix(1);
+            }
+            while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) {
+                text.remove_suffix(1);
+            }
+            if (text.empty()) {
+                return false;
+            }
+
+            Int value{};
+            const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+            if (ec != std::errc{} || ptr != text.data() + text.size()) {
+                return false;
+            }
+            out = value;
+            return true;
+        }
+
         std::string remote_ip_from_request(HttpRequest *req)
         {
             auto *ctx = req ? req->get_context() : nullptr;
@@ -487,9 +518,7 @@ namespace yuan::net::http
                     return false;
                 }
                 int prefix = -1;
-                try {
-                    prefix = std::stoi(value.substr(slash + 1));
-                } catch (...) {
+                if (!parse_integer_strict(std::string_view(value).substr(slash + 1), prefix)) {
                     return false;
                 }
                 if (prefix < 0 || prefix > 32) {
@@ -3427,9 +3456,7 @@ namespace yuan::net::http
             int forced_status = 0;
             for (const auto &candidate : mount->options.try_files) {
                 if (!candidate.empty() && candidate.front() == '=') {
-                    try {
-                        forced_status = std::stoi(candidate.substr(1));
-                    } catch (...) {
+                    if (!parse_integer_strict(std::string_view(candidate).substr(1), forced_status)) {
                         forced_status = 0;
                     }
                     break;
@@ -3713,23 +3740,15 @@ namespace yuan::net::http
 
         upload_id = form->get_string("uploadid");
         if (upload_id.empty()) {
-            nlohmann::json err;
-            err["error"] = "missing uploadid";
-            resp->json(err.dump(), ResponseCode::bad_request);
-            resp->send();
+            send_upload_json_error(resp, ResponseCode::bad_request, "missing uploadid");
             return false;
         }
         if (!is_safe_upload_id(upload_id)) {
-            nlohmann::json err;
-            err["error"] = "invalid uploadid";
-            resp->json(err.dump(), ResponseCode::bad_request);
-            resp->send();
+            send_upload_json_error(resp, ResponseCode::bad_request, "invalid uploadid");
             return false;
         }
 
-        try {
-            chunk_index = std::stoi(form->get_string("chunkindex"));
-        } catch (...) {
+        if (!parse_integer_strict(form->get_string("chunkindex"), chunk_index)) {
             chunk_index = -1;
         }
         if (chunk_index < 0) {
@@ -3784,11 +3803,21 @@ namespace yuan::net::http
 
         total_chunks = 0;
         file_size = 0;
-        if (!form->get_string("totalchunks").empty()) {
-            total_chunks = std::atoi(form->get_string("totalchunks").c_str());
+        const std::string total_chunks_text = form->get_string("totalchunks");
+        if (!total_chunks_text.empty() &&
+            (!parse_integer_strict(total_chunks_text, total_chunks) || total_chunks <= 0)) {
+            send_upload_json_error(resp, ResponseCode::bad_request, "invalid totalchunks");
+            return false;
         }
-        if (!form->get_string("filesize").empty()) {
-            file_size = static_cast<uint64_t>(std::atoll(form->get_string("filesize").c_str()));
+        const std::string file_size_text = form->get_string("filesize");
+        if (!file_size_text.empty() &&
+            (!parse_integer_strict(file_size_text, file_size) || file_size == 0)) {
+            send_upload_json_error(resp, ResponseCode::bad_request, "invalid filesize");
+            return false;
+        }
+        if (filename.empty() || total_chunks <= 0 || file_size == 0) {
+            send_upload_json_error(resp, ResponseCode::bad_request, "missing upload metadata");
+            return false;
         }
 
         return true;
@@ -3800,6 +3829,7 @@ namespace yuan::net::http
         const std::string &filename,
         int total_chunks,
         uint64_t file_size,
+        uint64_t chunk_size,
         HttpResponse *resp,
         std::unordered_map<std::string, UploadFileMapping>::iterator &session_it)
     {
@@ -3810,6 +3840,7 @@ namespace yuan::net::http
             session.upload_id = upload_id;
             session.total_chunks = total_chunks > 0 ? total_chunks : 1;
             session.total_size = file_size;
+            session.chunk_size = chunk_size;
             session.touch(yuan::base::time::steady_now_ms());
             uploaded_chunks_[upload_id] = std::move(session);
             upload_session_count_.store(static_cast<uint32_t>(uploaded_chunks_.size()), std::memory_order_relaxed);
@@ -3818,6 +3849,14 @@ namespace yuan::net::http
         }
 
         session_it->second.touch(yuan::base::time::steady_now_ms());
+
+        const auto &session = session_it->second;
+        if ((!filename.empty() && session.filename != filename) ||
+            (total_chunks > 0 && session.total_chunks != total_chunks) ||
+            (file_size > 0 && session.total_size != file_size)) {
+            send_upload_json_error(resp, ResponseCode::conflict, "upload metadata mismatch");
+            return false;
+        }
 
         if (session_it->second.received.contains(chunk_index)) {
             nlohmann::json ok;
@@ -3828,15 +3867,6 @@ namespace yuan::net::http
             return false;
         }
 
-        if (!filename.empty() && session_it->second.filename == "unknown") {
-            session_it->second.filename = filename;
-        }
-        if (total_chunks > 0 && session_it->second.total_chunks == 0) {
-            session_it->second.total_chunks = total_chunks;
-        }
-        if (file_size > 0 && session_it->second.total_size == 0) {
-            session_it->second.total_size = file_size;
-        }
         return true;
     }
 
@@ -3951,12 +3981,13 @@ namespace yuan::net::http
         return true;
     }
 
-    void HttpServer::finalize_upload_chunk(
+    bool HttpServer::finalize_upload_chunk(
         HttpRequest *req,
         int chunk_index,
         FormDataFileItem *file_item,
         const UploadSession &session_snapshot,
-        int received_count)
+        int received_count,
+        std::unique_ptr<SaveUploadTempChunkTask> &merge_task)
     {
         (void)req;
         (void)chunk_index;
@@ -3968,9 +3999,65 @@ namespace yuan::net::http
             task->set_session(std::make_shared<UploadSession>(session_snapshot));
             uploaded_chunks_.erase(session_snapshot.upload_id);
             upload_session_count_.store(static_cast<uint32_t>(uploaded_chunks_.size()), std::memory_order_relaxed);
-            thread_pool_->push_task(std::move(task));
-            LOG_INFO("[Upload] complete: {} size={}", session_snapshot.filename, session_snapshot.total_size);
+            merge_task = std::move(task);
         }
+        return is_complete;
+    }
+
+    bool HttpServer::queue_upload_merge_task(std::unique_ptr<SaveUploadTempChunkTask> task,
+                                             const UploadSession &session_snapshot,
+                                             bool &merge_completed)
+    {
+        merge_completed = false;
+        if (!task) {
+            return true;
+        }
+        if (!thread_pool_) {
+            LOG_ERROR("[Upload] cannot merge {}, thread pool is unavailable", session_snapshot.upload_id);
+            return false;
+        }
+
+        auto shared_task = std::shared_ptr<SaveUploadTempChunkTask>(std::move(task));
+        std::future<void> future;
+        try {
+            future = thread_pool_->submit([shared_task] {
+                shared_task->run();
+            });
+        } catch (const std::exception &e) {
+            LOG_ERROR("[Upload] failed to queue merge task id={} file={} error={}",
+                      session_snapshot.upload_id,
+                      session_snapshot.filename,
+                      e.what());
+            return false;
+        } catch (...) {
+            LOG_ERROR("[Upload] failed to queue merge task id={} file={} unknown error",
+                      session_snapshot.upload_id,
+                      session_snapshot.filename);
+            return false;
+        }
+
+        if (future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+            try {
+                future.get();
+                merge_completed = true;
+                LOG_INFO("[Upload] merge completed inline: {} size={}", session_snapshot.filename, session_snapshot.total_size);
+                return true;
+            } catch (const std::exception &e) {
+                LOG_ERROR("[Upload] merge task rejected/failed id={} file={} error={}",
+                          session_snapshot.upload_id,
+                          session_snapshot.filename,
+                          e.what());
+                return false;
+            } catch (...) {
+                LOG_ERROR("[Upload] merge task rejected/failed id={} file={} unknown error",
+                          session_snapshot.upload_id,
+                          session_snapshot.filename);
+                return false;
+            }
+        }
+
+        LOG_INFO("[Upload] merge queued: {} size={}", session_snapshot.filename, session_snapshot.total_size);
+        return true;
     }
 
     void HttpServer::serve_upload(HttpRequest *req, HttpResponse *resp)
@@ -4004,7 +4091,9 @@ namespace yuan::net::http
 
         std::unordered_map<std::string, UploadFileMapping>::iterator session_it;
         UploadSession session_snapshot;
+        std::unique_ptr<SaveUploadTempChunkTask> merge_task;
         int received_count = 0;
+        bool upload_complete = false;
         {
             std::lock_guard<std::mutex> upload_lock(upload_mutex_);
             if (!find_or_create_upload_session(
@@ -4013,6 +4102,7 @@ namespace yuan::net::http
                     filename,
                     total_chunks,
                     file_size,
+                    chunk_size,
                     resp,
                     session_it)) {
                 return;
@@ -4031,7 +4121,20 @@ namespace yuan::net::http
                 return;
             }
 
-            finalize_upload_chunk(req, chunk_index, file_item, session_snapshot, received_count);
+            upload_complete = finalize_upload_chunk(req, chunk_index, file_item, session_snapshot, received_count, merge_task);
+        }
+
+        bool merge_completed = false;
+        if (merge_task && !queue_upload_merge_task(std::move(merge_task), session_snapshot, merge_completed)) {
+            {
+                std::lock_guard<std::mutex> upload_lock(upload_mutex_);
+                if (!uploaded_chunks_.contains(session_snapshot.upload_id)) {
+                    uploaded_chunks_[session_snapshot.upload_id] = session_snapshot;
+                    upload_session_count_.store(static_cast<uint32_t>(uploaded_chunks_.size()), std::memory_order_relaxed);
+                }
+            }
+            send_upload_json_error(resp, ResponseCode::internal_server_error, "failed to queue upload merge");
+            return;
         }
 
         nlohmann::json result;
@@ -4039,6 +4142,9 @@ namespace yuan::net::http
         result["chunkIdx"] = chunk_index;
         result["received"] = received_count;
         result["total"] = session_snapshot.total_chunks;
+        result["complete"] = upload_complete;
+        result["mergeQueued"] = upload_complete && !merge_completed;
+        result["status"] = upload_complete ? (merge_completed ? "complete" : "processing") : "uploading";
         resp->json(result.dump(), ResponseCode::ok_);
         resp->send();
     }

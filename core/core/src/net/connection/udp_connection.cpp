@@ -173,7 +173,7 @@ namespace yuan::net
                 int sent = instance_->on_send(this, *front);
                 if (sent > 0) {
                     account_send(static_cast<std::size_t>(sent));
-                    front->consume(static_cast<std::size_t>(sent));
+                    output_buffer_.consume_front(static_cast<std::size_t>(sent));
                     if (front->empty()) {
                         pending_output_bytes_ = pending_output_bytes_ >= static_cast<std::size_t>(sent) ? pending_output_bytes_ - static_cast<std::size_t>(sent) : 0;
                         output_buffer_.pop_front();
@@ -251,7 +251,13 @@ namespace yuan::net
     {
         [[maybe_unused]] auto handler_owner = connectionHandlerOwner_;
         auto *handler = yuan::base::owner_ptr(handler_owner);
-        assert(state_ == ConnectionState::connected && handler);
+        if (state_ != ConnectionState::connected || !handler || !instance_) {
+            LOG_WARN("udp read event ignored for invalid state, state: {}, has_handler: {}, has_instance: {}, ip: {}, port: {}",
+                     static_cast<int>(state_), handler != nullptr, instance_ != nullptr,
+                     remote_address_.get_ip(), remote_address_.get_port());
+            abort();
+            return;
+        }
         replace_input_buffer(instance_->take_input_packet());
 
         bool ok = true;
@@ -362,7 +368,8 @@ namespace yuan::net
 
     void UdpConnection::set_ssl_handler(std::shared_ptr<SSLHandler> sslHandler)
     {
-        assert(false);
+        (void)sslHandler;
+        LOG_WARN("ssl handler is not supported by udp connection, ip: {}, port: {}", remote_address_.get_ip(), remote_address_.get_port());
     }
 
     bool UdpConnection::proc_one_buffer(const ::yuan::buffer::ByteBuffer & buffer)

@@ -30,6 +30,7 @@ namespace yuan::net::http
         uint64_t last_active_ms = 0;
         std::string filename;
         std::string upload_id;
+        uint64_t chunk_size = 0;
         std::unordered_map<int, UploadedChunk> received;
 
         void touch(uint64_t now_ms)

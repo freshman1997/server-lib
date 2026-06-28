@@ -67,6 +67,7 @@ namespace yuan::timer
             BasicTimer *timer = entry.timer;
             if (!timer || timer->is_cancel() || timer->is_done()) {
                 heap_.pop();
+                ++stale_timer_count_;
                 continue;
             }
 
@@ -85,10 +86,12 @@ namespace yuan::timer
             if (timer->ready()) {
                 timer->set_deadline(next_deadline);
                 push(timer);
+            } else {
+                ++stale_timer_count_;
             }
         }
 
-        cleanup_cancelled();
+        cleanup_cancelled(stale_timer_count_ != 0);
     }
 
     uint32_t HeapTimerManager::get_time_unit() const
@@ -109,6 +112,7 @@ namespace yuan::timer
             BasicTimer *timer = entry.timer;
             if (!timer || timer->is_cancel() || timer->is_done() || entry.deadline != timer->deadline()) {
                 heap_.pop();
+                ++stale_timer_count_;
                 continue;
             }
 
@@ -123,8 +127,15 @@ namespace yuan::timer
         return idle_timeout_ms;
     }
 
-    void HeapTimerManager::cleanup_cancelled()
+    void HeapTimerManager::cleanup_cancelled(bool force)
     {
+        if (!force) {
+            const auto timer_count = timers_.size();
+            if (timer_count == 0 || stale_timer_count_ < 64 || stale_timer_count_ * 4 < timer_count) {
+                return;
+            }
+        }
+
         timers_.erase(
             std::remove_if(
                 timers_.begin(),
@@ -141,5 +152,6 @@ namespace yuan::timer
             }
         }
         heap_.swap(retained);
+        stale_timer_count_ = 0;
     }
 }

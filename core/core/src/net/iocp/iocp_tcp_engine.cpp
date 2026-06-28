@@ -546,7 +546,7 @@ namespace yuan::net
                 remaining -= readable;
                 output_buffer_.pop_front();
             } else {
-                front->consume(remaining);
+                output_buffer_.consume_front(remaining);
                 remaining = 0;
             }
         }

@@ -39,6 +39,7 @@ namespace yuan::net::http
     class HttpSessionContext;
     struct FormDataContent;
     struct FormDataFileItem;
+    class SaveUploadTempChunkTask;
 
     struct HttpServerConfig
     {
@@ -296,6 +297,7 @@ namespace yuan::net::http
             const std::string &filename,
             int total_chunks,
             uint64_t file_size,
+            uint64_t chunk_size,
             HttpResponse *resp,
             std::unordered_map<std::string, UploadFileMapping>::iterator &session_it);
         bool store_upload_chunk(
@@ -308,12 +310,16 @@ namespace yuan::net::http
             UploadSession &session,
             UploadSession &session_snapshot,
             int &received_count);
-        void finalize_upload_chunk(
+        bool finalize_upload_chunk(
             HttpRequest *req,
             int chunk_index,
             FormDataFileItem *file_item,
             const UploadSession &session_snapshot,
-            int received_count);
+            int received_count,
+            std::unique_ptr<SaveUploadTempChunkTask> &merge_task);
+        bool queue_upload_merge_task(std::unique_ptr<SaveUploadTempChunkTask> task,
+                                     const UploadSession &session_snapshot,
+                                     bool &merge_completed);
         void handle_options_preflight(HttpRequest *req, HttpResponse *resp);
 
         yuan::coroutine::Task<void> handle_connection(net::AsyncConnectionContext ctx);

@@ -408,6 +408,57 @@ namespace
         return resp;
     }
 
+    std::string multipart_upload_body(const std::string &boundary,
+                                      const std::string &upload_id,
+                                      const std::string &filename,
+                                      int chunk_index,
+                                      int total_chunks,
+                                      std::size_t file_size,
+                                      const std::string &chunk)
+    {
+        auto field = [&](const std::string &name, const std::string &value) {
+            return "--" + boundary + "\r\n"
+                   "Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n" +
+                   value + "\r\n";
+        };
+
+        std::string body;
+        body += field("chunkindex", std::to_string(chunk_index));
+        body += field("totalchunks", std::to_string(total_chunks));
+        body += field("uploadid", upload_id);
+        body += field("filename", filename);
+        body += field("filesize", std::to_string(file_size));
+        body += "--" + boundary + "\r\n";
+        body += "Content-Disposition: form-data; name=\"file\"; filename=\"chunk.bin\"\r\n";
+        body += "Content-Type: application/octet-stream\r\n\r\n";
+        body += chunk;
+        body += "\r\n--" + boundary + "--\r\n";
+        return body;
+    }
+
+    std::string upload_chunk_request(uint16_t port,
+                                     const std::string &upload_id,
+                                     const std::string &filename,
+                                     int chunk_index,
+                                     int total_chunks,
+                                     std::size_t file_size,
+                                     const std::string &chunk)
+    {
+        const std::string boundary = "----yuan-upload-test-boundary";
+        const std::string body = multipart_upload_body(boundary,
+                                                       upload_id,
+                                                       filename,
+                                                       chunk_index,
+                                                       total_chunks,
+                                                       file_size,
+                                                       chunk);
+        return http_request(port,
+                            "POST",
+                            "/upload",
+                            "Content-Type: multipart/form-data; boundary=" + boundary + "\r\n",
+                            body);
+    }
+
     bool recv_exact(socket_t s, char *dst, std::size_t n)
     {
         std::size_t off = 0;
@@ -675,6 +726,37 @@ namespace
         check(mini_stats.find("200") != std::string::npos, "__mini_nginx_stats should return 200");
         check(mini_stats.find("\"server\"") != std::string::npos, "__mini_nginx_stats should include server section");
         check(mini_stats.find("\"proxy\"") != std::string::npos, "__mini_nginx_stats should include proxy section");
+    }
+
+    void test_upload_rejects_metadata_mismatch(uint16_t port)
+    {
+        const std::string upload_id = "file_test_metadata_mismatch";
+        const std::string first = upload_chunk_request(port, upload_id, "first.bin", 0, 2, 6, "abc");
+        check(first.find("200 OK") != std::string::npos,
+              "first upload chunk should create resumable upload session");
+        check(first.find("\"status\":\"uploading\"") != std::string::npos,
+              "partial upload response should report uploading status");
+
+        const std::string second = upload_chunk_request(port, upload_id, "second.bin", 1, 2, 6, "def");
+        check(second.find("409 Conflict") != std::string::npos,
+              "same upload id with different metadata should be rejected");
+    }
+
+    void test_upload_complete_reports_merge_queued(uint16_t port)
+    {
+        const std::string upload_id = "file_test_merge_queued";
+        const std::string first = upload_chunk_request(port, upload_id, "merge.bin", 0, 2, 6, "abc");
+        check(first.find("200 OK") != std::string::npos,
+              "first chunk of complete upload should succeed");
+
+        const std::string second = upload_chunk_request(port, upload_id, "merge.bin", 1, 2, 6, "def");
+        check(second.find("200 OK") != std::string::npos,
+              "last chunk should succeed after merge task is queued");
+        check(second.find("\"complete\":true") != std::string::npos,
+              "last chunk response should mark upload as complete");
+        check(second.find("\"status\":\"processing\"") != std::string::npos ||
+                  second.find("\"status\":\"complete\"") != std::string::npos,
+              "last chunk response should report processing or complete merge status");
     }
 
     void test_http1_split_header_and_invalid_content_length(uint16_t port)
@@ -3404,6 +3486,8 @@ int main()
           "auto-finished HTTP/1 response should include handler body");
 
     test_http_caps_and_proxy_stats(port);
+    test_upload_rejects_metadata_mismatch(port);
+    test_upload_complete_reports_merge_queued(port);
     test_http1_split_header_and_invalid_content_length(port);
     test_http1_chunked_request(port);
     test_http2_preface_gate(port);

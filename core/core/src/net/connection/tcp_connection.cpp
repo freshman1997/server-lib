@@ -408,7 +408,7 @@ namespace yuan::net
                     output_buffer_.pop_front();
                     ++i;
                 } else {
-                    front->consume(static_cast<std::size_t>(ret));
+                    output_buffer_.consume_front(static_cast<std::size_t>(ret));
                 }
             } else if (ret < 0) {
                 if (!transient_write_error) {

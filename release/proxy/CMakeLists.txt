@@ -45,5 +45,17 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/analyze_proxy_soak.ps1"
             "${RELEASE_PROXY_OUTPUT_DIR}/analyze_proxy_soak.ps1"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/config.json"
+            "${RELEASE_PROXY_OUTPUT_DIR}/config.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/start.sh"
+            "${RELEASE_PROXY_OUTPUT_DIR}/start.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/stop.sh"
+            "${RELEASE_PROXY_OUTPUT_DIR}/stop.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/health_check.sh"
+            "${RELEASE_PROXY_OUTPUT_DIR}/health_check.sh"
     COMMENT "Copy proxy soak scripts"
 )

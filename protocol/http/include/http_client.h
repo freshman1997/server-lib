@@ -72,6 +72,7 @@ namespace yuan::net::http
         net::AsyncClientSession session_;
         std::unique_ptr<net::NetworkRuntime> owned_runtime_;
         int port_;
+        bool use_ssl_ = false;
         std::string host_name_;
         std::shared_ptr<SSLModule> ssl_module_;
         std::unique_ptr<HttpSession> last_session_;

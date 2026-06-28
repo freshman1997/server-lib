@@ -13,6 +13,8 @@
 #include "net/security/openssl.h"
 #include "base/owner_ptr.h"
 
+#include <charconv>
+
 namespace yuan::net::http
 {
     HttpClient::HttpClient()
@@ -27,37 +29,69 @@ namespace yuan::net::http
 
     bool HttpClient::query(const std::string & url)
     {
-        if (url.find("://") == std::string::npos) {
+        size_t pos = url.find("://");
+        if (pos == std::string::npos) {
             return false;
         }
-        size_t pos = url.find("://");
         std::string protocol = url.substr(0, pos);
-        bool is_https = (protocol == "https");
+        const bool is_https = (protocol == "https");
         if (protocol != "http" && protocol != "https") {
             return false;
         }
 
         std::string rest = url.substr(pos + 3);
-        size_t port_pos = rest.find(":");
-        size_t path_pos = rest.find("/");
+        if (rest.empty()) {
+            return false;
+        }
 
-        if (port_pos != std::string::npos) {
-            size_t port_end = (path_pos != std::string::npos && path_pos > port_pos) ? path_pos : rest.size();
-            std::string port_str = rest.substr(port_pos + 1, port_end - port_pos - 1);
-            port_ = std::stoi(port_str);
-            if (port_ <= 0 || port_ > 65535) {
+        size_t path_pos = rest.find('/');
+        const std::string authority = path_pos == std::string::npos ? rest : rest.substr(0, path_pos);
+        if (authority.empty()) {
+            return false;
+        }
+
+        std::string host;
+        size_t port_pos = std::string::npos;
+        if (authority.front() == '[') {
+            const size_t bracket = authority.find(']');
+            if (bracket == std::string::npos || bracket == 1) {
                 return false;
             }
+            host = authority.substr(0, bracket + 1);
+            if (bracket + 1 < authority.size()) {
+                if (authority[bracket + 1] != ':') {
+                    return false;
+                }
+                port_pos = bracket + 1;
+            }
+        } else {
+            port_pos = authority.rfind(':');
+            if (port_pos != std::string::npos && authority.find(':') != port_pos) {
+                return false;
+            }
+            host = port_pos == std::string::npos ? authority : authority.substr(0, port_pos);
+        }
+
+        if (host.empty()) {
+            return false;
+        }
+
+        if (port_pos != std::string::npos) {
+            const std::string_view port_text(authority.data() + port_pos + 1,
+                                             authority.size() - port_pos - 1);
+            int parsed_port = 0;
+            const auto [ptr, ec] = std::from_chars(port_text.data(), port_text.data() + port_text.size(), parsed_port);
+            if (port_text.empty() || ec != std::errc{} || ptr != port_text.data() + port_text.size() ||
+                parsed_port <= 0 || parsed_port > 65535) {
+                return false;
+            }
+            port_ = parsed_port;
         } else {
             port_ = is_https ? 443 : 80;
-            port_pos = std::string::npos;
         }
 
-        if (path_pos == std::string::npos) {
-            path_pos = rest.size();
-        }
-
-        host_name_ = rest.substr(0, (port_pos != std::string::npos && port_pos < path_pos) ? port_pos : path_pos);
+        use_ssl_ = is_https;
+        host_name_ = std::move(host);
 
         return true;
     }
@@ -110,8 +144,7 @@ namespace yuan::net::http
             co_return nullptr;
         }
 
-        bool is_https = (port_ == 443);
-        if (is_https) {
+        if (use_ssl_) {
             if (!ssl_module_) {
                 ssl_module_ = std::make_shared<OpenSSLModule>();
                 if (!ssl_module_->init("./ca/ca.crt")) {

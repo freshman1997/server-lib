@@ -1,7 +1,9 @@
 ﻿#include <atomic>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <fcntl.h>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -64,6 +66,11 @@ namespace yuan::net
         std::unordered_map<int, std::shared_ptr<Connection>> connections_;
         uint64_t next_generation_ = 1;
         std::atomic<std::thread::id> loop_thread_id_;
+#ifndef _WIN32
+        int wakeup_read_fd_ = -1;
+        int wakeup_write_fd_ = -1;
+        Channel wakeup_channel_;
+#endif
 
         uint64_t next_generation() noexcept
         {
@@ -107,6 +114,76 @@ namespace yuan::net
             }
             return true;
         }
+
+#ifndef _WIN32
+        bool init_wakeup_fd()
+        {
+            int fds[2] = { -1, -1 };
+            if (::pipe(fds) != 0) {
+                return false;
+            }
+            wakeup_read_fd_ = fds[0];
+            wakeup_write_fd_ = fds[1];
+            ::fcntl(wakeup_read_fd_, F_SETFL, ::fcntl(wakeup_read_fd_, F_GETFL, 0) | O_NONBLOCK);
+            ::fcntl(wakeup_write_fd_, F_SETFL, ::fcntl(wakeup_write_fd_, F_GETFL, 0) | O_NONBLOCK);
+            wakeup_channel_.set_fd(wakeup_read_fd_);
+            wakeup_channel_.enable_read();
+            return true;
+        }
+
+        void close_wakeup_fd()
+        {
+            if (wakeup_read_fd_ != -1) {
+                ::close(wakeup_read_fd_);
+                wakeup_read_fd_ = -1;
+            }
+            if (wakeup_write_fd_ != -1) {
+                ::close(wakeup_write_fd_);
+                wakeup_write_fd_ = -1;
+            }
+        }
+
+        bool is_wakeup_fd(int fd) const noexcept
+        {
+            return wakeup_read_fd_ != -1 && fd == wakeup_read_fd_;
+        }
+
+        void drain_wakeup_fd() noexcept
+        {
+            if (wakeup_read_fd_ == -1) {
+                return;
+            }
+            char buf[128];
+            for (;;) {
+                const auto n = ::read(wakeup_read_fd_, buf, sizeof(buf));
+                if (n > 0) {
+                    continue;
+                }
+                if (n < 0 && errno == EINTR) {
+                    continue;
+                }
+                break;
+            }
+        }
+
+        void notify_wakeup_fd() noexcept
+        {
+            if (wakeup_write_fd_ == -1) {
+                return;
+            }
+            const char byte = 1;
+            for (;;) {
+                const auto n = ::write(wakeup_write_fd_, &byte, sizeof(byte));
+                if (n == 1 || (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
+                    return;
+                }
+                if (n < 0 && errno == EINTR) {
+                    continue;
+                }
+                return;
+            }
+        }
+#endif
     };
 
     EventLoop::EventLoop(Poller *poller, timer::TimerManager *timer_manager)
@@ -116,6 +193,12 @@ namespace yuan::net
         data_->timer_manager_ = timer_manager;
         data_->quit_ = false;
         data_->is_waiting_ = false;
+#ifndef _WIN32
+        if (data_->poller_ && data_->init_wakeup_fd()) {
+            std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
+            data_->register_channel_locked(&data_->wakeup_channel_);
+        }
+#endif
     }
 
     EventLoop::~EventLoop()
@@ -124,6 +207,11 @@ namespace yuan::net
         {
             std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
             connections.swap(data_->connections_);
+#ifndef _WIN32
+            if (data_->wakeup_read_fd_ != -1) {
+                data_->remove_registered_channel_locked(&data_->wakeup_channel_, false);
+            }
+#endif
             data_->channels_.clear();
             data_->channel_count_.store(0, std::memory_order_release);
             data_->tombstoned_fds_.clear();
@@ -138,6 +226,9 @@ namespace yuan::net
                 val->detach_owner_event_handler();
             }
         }
+#ifndef _WIN32
+        data_->close_wakeup_fd();
+#endif
     }
 
     EventLoopExitReason EventLoop::loop()
@@ -259,6 +350,12 @@ namespace yuan::net
                 {
                     std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
                     for (const auto &event : events) {
+#ifndef _WIN32
+                        if (data_->is_wakeup_fd(event.fd)) {
+                            active_channels.push_back(event);
+                            continue;
+                        }
+#endif
                         auto it = data_->channels_.find(event.fd);
                         if (it == data_->channels_.end()) {
                             continue;
@@ -278,6 +375,13 @@ namespace yuan::net
                 }
 
                 for (const auto &active_event : active_channels) {
+#ifndef _WIN32
+                    if (data_->is_wakeup_fd(active_event.fd)) {
+                        data_->drain_wakeup_fd();
+                        processed_work = true;
+                        continue;
+                    }
+#endif
                     Channel *channel = nullptr;
                     {
                         std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
@@ -409,6 +513,9 @@ namespace yuan::net
 
     void EventLoop::wakeup()
     {
+#ifndef _WIN32
+        data_->notify_wakeup_fd();
+#endif
         data_->cond.notify_all();
     }
 

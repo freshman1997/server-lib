@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace yuan::thread
@@ -47,18 +48,39 @@ namespace yuan::thread
         {
             using ReturnType = std::invoke_result_t<F, Args...>;
 
-            auto task_ptr = std::make_shared<std::packaged_task<ReturnType()> >(
-                std::bind(std::forward<F>(f), std::forward<Args>(args)...));
-
-            std::future<ReturnType> fut = task_ptr->get_future();
+            auto bound = std::bind(std::forward<F>(f), std::forward<Args>(args)...);
+            auto promise = std::make_shared<std::promise<ReturnType> >();
+            std::future<ReturnType> fut = promise->get_future();
+            auto task = [promise, bound = std::move(bound)]() mutable {
+                try {
+                    if constexpr (std::is_void_v<ReturnType>) {
+                        bound();
+                        promise->set_value();
+                    } else {
+                        promise->set_value(bound());
+                    }
+                } catch (...) {
+                    promise->set_exception(std::current_exception());
+                }
+            };
 
             {
                 std::unique_lock lock(mut_);
-                if (max_queue_size_ > 0 && tasks_.size() >= max_queue_size_) {
-                    handle_rejection([task_ptr]() { (*task_ptr)(); });
+                if (!running_.load(std::memory_order_acquire)) {
+                    set_rejected_exception(*promise, "thread pool is not running");
                     return fut;
                 }
-                tasks_.push_back([task_ptr]() { (*task_ptr)(); });
+
+                if (max_queue_size_ > 0 && tasks_.size() >= max_queue_size_) {
+                    if (reject_policy_ == RejectPolicy::caller_runs) {
+                        lock.unlock();
+                        task();
+                    } else {
+                        handle_rejection(*promise);
+                    }
+                    return fut;
+                }
+                tasks_.push_back(std::move(task));
             }
 
             cond_.notify_one();
@@ -69,7 +91,31 @@ namespace yuan::thread
 
     private:
         void worker_loop();
-        void handle_rejection(std::function<void()> task);
+        void handle_rejection(std::promise<void> &promise);
+
+        template <typename ReturnType>
+        void handle_rejection(std::promise<ReturnType> &promise)
+        {
+            switch (reject_policy_) {
+            case RejectPolicy::discard:
+                set_rejected_exception(promise, "thread pool queue full");
+                break;
+            case RejectPolicy::abort:
+            default:
+                set_rejected_exception(promise, "thread pool queue full");
+                throw std::runtime_error("thread pool queue full");
+            }
+        }
+
+        template <typename ReturnType>
+        static void set_rejected_exception(std::promise<ReturnType> &promise, const char *message)
+        {
+            try {
+                throw std::runtime_error(message);
+            } catch (...) {
+                promise.set_exception(std::current_exception());
+            }
+        }
 
     private:
         int thread_count_;

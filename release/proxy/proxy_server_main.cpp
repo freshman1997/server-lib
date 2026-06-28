@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <thread>
 
@@ -61,6 +62,80 @@ namespace
         return values;
     }
 
+    bool read_json_int(const nlohmann::json &node, const char *key, int &out, int min_value, int max_value)
+    {
+        if (!node.contains(key)) {
+            return false;
+        }
+        try {
+            int value = 0;
+            if (node[key].is_number_integer()) {
+                value = node[key].get<int>();
+            } else if (node[key].is_string()) {
+                value = std::stoi(node[key].get<std::string>());
+            } else {
+                std::cerr << "invalid proxy config field type: " << key << '\n';
+                return false;
+            }
+            if (value < min_value || value > max_value) {
+                std::cerr << "proxy config field out of range: " << key << '=' << value << '\n';
+                return false;
+            }
+            out = value;
+            return true;
+        } catch (...) {
+            std::cerr << "invalid proxy config integer field: " << key << '\n';
+            return false;
+        }
+    }
+
+    bool read_json_bool(const nlohmann::json &node, const char *key, bool &out)
+    {
+        if (!node.contains(key)) {
+            return false;
+        }
+        if (node[key].is_boolean()) {
+            out = node[key].get<bool>();
+            return true;
+        }
+        if (node[key].is_string()) {
+            const std::string value = node[key].get<std::string>();
+            if (value == "1" || value == "true" || value == "TRUE") {
+                out = true;
+                return true;
+            }
+            if (value == "0" || value == "false" || value == "FALSE") {
+                out = false;
+                return true;
+            }
+        }
+        std::cerr << "invalid proxy config boolean field: " << key << '\n';
+        return false;
+    }
+
+    bool read_json_string(const nlohmann::json &node, const char *key, std::string &out)
+    {
+        if (!node.contains(key)) {
+            return false;
+        }
+        if (!node[key].is_string()) {
+            std::cerr << "invalid proxy config string field: " << key << '\n';
+            return false;
+        }
+        out = node[key].get<std::string>();
+        return true;
+    }
+
+    bool read_env_int_range(const char *name, int default_value, int min_value, int max_value)
+    {
+        const int value = read_env_int(name, default_value);
+        if (value < min_value || value > max_value) {
+            std::cerr << "environment field out of range: " << name << '=' << value << ", using " << default_value << '\n';
+            return default_value;
+        }
+        return value;
+    }
+
     void apply_json_config(const nlohmann::json &json, yuan::server::ProxyServiceConfig &config)
     {
         const auto *proxy = &json;
@@ -68,57 +143,27 @@ namespace
             proxy = &json["proxy"];
         }
 
-        if (proxy->contains("listen_host")) {
-            config.listen_host = (*proxy)["listen_host"].get<std::string>();
-        }
-        if (proxy->contains("listen_port")) {
-            config.port = (*proxy)["listen_port"].get<int>();
-        }
-        if (proxy->contains("max_active_sessions")) {
-            config.max_active_sessions = (*proxy)["max_active_sessions"].get<int>();
-        }
-        if (proxy->contains("max_sessions_per_client")) {
-            config.max_sessions_per_client = (*proxy)["max_sessions_per_client"].get<int>();
-        }
-        if (proxy->contains("header_timeout_ms")) {
-            config.header_timeout_ms = (*proxy)["header_timeout_ms"].get<int>();
-        }
-        if (proxy->contains("idle_timeout_ms")) {
-            config.idle_timeout_ms = (*proxy)["idle_timeout_ms"].get<int>();
-        }
-        if (proxy->contains("connect_timeout_ms")) {
-            config.connect_timeout_ms = (*proxy)["connect_timeout_ms"].get<int>();
-        }
-        if (proxy->contains("drain_timeout_ms")) {
-            config.drain_timeout_ms = (*proxy)["drain_timeout_ms"].get<int>();
-        }
-        if (proxy->contains("session_snapshot_interval_ms")) {
-            config.session_snapshot_interval_ms = (*proxy)["session_snapshot_interval_ms"].get<int>();
-        }
-        if (proxy->contains("max_header_bytes")) {
-            config.max_header_bytes = (*proxy)["max_header_bytes"].get<int>();
-        }
-        if (proxy->contains("max_session_buffer_bytes")) {
-            config.max_session_buffer_bytes = (*proxy)["max_session_buffer_bytes"].get<int>();
-        }
-        if (proxy->contains("max_total_tunnel_memory")) {
-            config.max_total_tunnel_memory = (*proxy)["max_total_tunnel_memory"].get<int>();
-        }
-        if (proxy->contains("basic_auth_user")) {
-            config.basic_auth_user = (*proxy)["basic_auth_user"].get<std::string>();
-        }
-        if (proxy->contains("basic_auth_password")) {
-            config.basic_auth_password = (*proxy)["basic_auth_password"].get<std::string>();
-        }
+        (void)read_json_string(*proxy, "listen_host", config.listen_host);
+        (void)read_json_int(*proxy, "listen_port", config.port, 1, 65535);
+        (void)read_json_int(*proxy, "max_active_sessions", config.max_active_sessions, 1, 10000000);
+        (void)read_json_int(*proxy, "max_sessions_per_client", config.max_sessions_per_client, 0, 10000000);
+        (void)read_json_int(*proxy, "header_timeout_ms", config.header_timeout_ms, 1, 24 * 60 * 60 * 1000);
+        (void)read_json_int(*proxy, "idle_timeout_ms", config.idle_timeout_ms, 1, 24 * 60 * 60 * 1000);
+        (void)read_json_int(*proxy, "connect_timeout_ms", config.connect_timeout_ms, 1, 24 * 60 * 60 * 1000);
+        (void)read_json_int(*proxy, "drain_timeout_ms", config.drain_timeout_ms, 0, 24 * 60 * 60 * 1000);
+        (void)read_json_int(*proxy, "session_snapshot_interval_ms", config.session_snapshot_interval_ms, 0, 24 * 60 * 60 * 1000);
+        (void)read_json_int(*proxy, "max_header_bytes", config.max_header_bytes, 1, 100 * 1024 * 1024);
+        (void)read_json_int(*proxy, "max_session_buffer_bytes", config.max_session_buffer_bytes, 1, 1024 * 1024 * 1024);
+        (void)read_json_int(*proxy, "max_total_tunnel_memory", config.max_total_tunnel_memory, 0, std::numeric_limits<int>::max());
+        (void)read_json_string(*proxy, "basic_auth_user", config.basic_auth_user);
+        (void)read_json_string(*proxy, "basic_auth_password", config.basic_auth_password);
         if (proxy->contains("allow_targets") && (*proxy)["allow_targets"].is_array()) {
             config.allow_targets = (*proxy)["allow_targets"].get<std::vector<std::string>>();
         }
         if (proxy->contains("deny_targets") && (*proxy)["deny_targets"].is_array()) {
             config.deny_targets = (*proxy)["deny_targets"].get<std::vector<std::string>>();
         }
-        if (proxy->contains("allow_private_targets")) {
-            config.allow_private_targets = (*proxy)["allow_private_targets"].get<bool>();
-        }
+        (void)read_json_bool(*proxy, "allow_private_targets", config.allow_private_targets);
     }
 
     void apply_json_config(const nlohmann::json &json, Socks5ServiceConfigFile &config)
@@ -128,65 +173,46 @@ namespace
             node = &json["socks5"];
         }
 
-        if (node->contains("enabled")) {
-            config.enabled = (*node)["enabled"].get<bool>();
+        (void)read_json_bool(*node, "enabled", config.enabled);
+        (void)read_json_int(*node, "listen_port", config.port, 1, 65535);
+        (void)read_json_bool(*node, "enable_auth", config.server_config.enable_auth);
+        (void)read_json_string(*node, "username", config.server_config.username);
+        (void)read_json_string(*node, "password", config.server_config.password);
+        (void)read_json_bool(*node, "enable_connect", config.server_config.enable_connect);
+        (void)read_json_bool(*node, "enable_bind", config.server_config.enable_bind);
+        (void)read_json_bool(*node, "enable_udp_associate", config.server_config.enable_udp_associate);
+        int int_value = 0;
+        if (read_json_int(*node, "connect_timeout_ms", int_value, 1, 24 * 60 * 60 * 1000)) {
+            config.server_config.connect_timeout_ms = static_cast<uint32_t>(int_value);
         }
-        if (node->contains("listen_port")) {
-            config.port = (*node)["listen_port"].get<int>();
+        if (read_json_int(*node, "idle_timeout_ms", int_value, 1, 24 * 60 * 60 * 1000)) {
+            config.server_config.idle_timeout_ms = static_cast<uint32_t>(int_value);
         }
-        if (node->contains("enable_auth")) {
-            config.server_config.enable_auth = (*node)["enable_auth"].get<bool>();
+        if (read_json_int(*node, "max_connections", int_value, 1, 10000000)) {
+            config.server_config.max_connections = static_cast<size_t>(int_value);
         }
-        if (node->contains("username")) {
-            config.server_config.username = (*node)["username"].get<std::string>();
+        if (read_json_int(*node, "udp_idle_timeout_ms", int_value, 1, 24 * 60 * 60 * 1000)) {
+            config.server_config.udp_idle_timeout_ms = static_cast<uint32_t>(int_value);
         }
-        if (node->contains("password")) {
-            config.server_config.password = (*node)["password"].get<std::string>();
+        if (read_json_int(*node, "max_datagram_size", int_value, 1, 1024 * 1024 * 1024)) {
+            config.server_config.max_datagram_size = static_cast<size_t>(int_value);
         }
-        if (node->contains("enable_connect")) {
-            config.server_config.enable_connect = (*node)["enable_connect"].get<bool>();
+        if (read_json_int(*node, "max_udp_associations_per_client", int_value, 0, 10000000)) {
+            config.server_config.max_udp_associations_per_client = static_cast<size_t>(int_value);
         }
-        if (node->contains("enable_bind")) {
-            config.server_config.enable_bind = (*node)["enable_bind"].get<bool>();
-        }
-        if (node->contains("enable_udp_associate")) {
-            config.server_config.enable_udp_associate = (*node)["enable_udp_associate"].get<bool>();
-        }
-        if (node->contains("connect_timeout_ms")) {
-            config.server_config.connect_timeout_ms = (*node)["connect_timeout_ms"].get<uint32_t>();
-        }
-        if (node->contains("idle_timeout_ms")) {
-            config.server_config.idle_timeout_ms = (*node)["idle_timeout_ms"].get<uint32_t>();
-        }
-        if (node->contains("max_connections")) {
-            config.server_config.max_connections = (*node)["max_connections"].get<size_t>();
-        }
-        if (node->contains("udp_idle_timeout_ms")) {
-            config.server_config.udp_idle_timeout_ms = (*node)["udp_idle_timeout_ms"].get<uint32_t>();
-        }
-        if (node->contains("max_datagram_size")) {
-            config.server_config.max_datagram_size = (*node)["max_datagram_size"].get<size_t>();
-        }
-        if (node->contains("max_udp_associations_per_client")) {
-            config.server_config.max_udp_associations_per_client = (*node)["max_udp_associations_per_client"].get<size_t>();
-        }
-        if (node->contains("listen_host")) {
-            config.server_config.listen_host = (*node)["listen_host"].get<std::string>();
-        }
-        if (node->contains("allow_private_targets")) {
-            config.server_config.allow_private_targets = (*node)["allow_private_targets"].get<bool>();
-        }
+        (void)read_json_string(*node, "listen_host", config.server_config.listen_host);
+        (void)read_json_bool(*node, "allow_private_targets", config.server_config.allow_private_targets);
         if (node->contains("allow_targets") && (*node)["allow_targets"].is_array()) {
             config.server_config.allow_targets = (*node)["allow_targets"].get<std::vector<std::string>>();
         }
         if (node->contains("deny_targets") && (*node)["deny_targets"].is_array()) {
             config.server_config.deny_targets = (*node)["deny_targets"].get<std::vector<std::string>>();
         }
-        if (node->contains("max_sessions_per_client")) {
-            config.server_config.max_sessions_per_client = (*node)["max_sessions_per_client"].get<size_t>();
+        if (read_json_int(*node, "max_sessions_per_client", int_value, 0, 10000000)) {
+            config.server_config.max_sessions_per_client = static_cast<size_t>(int_value);
         }
-        if (node->contains("drain_timeout_ms")) {
-            config.server_config.drain_timeout_ms = (*node)["drain_timeout_ms"].get<uint32_t>();
+        if (read_json_int(*node, "drain_timeout_ms", int_value, 0, 24 * 60 * 60 * 1000)) {
+            config.server_config.drain_timeout_ms = static_cast<uint32_t>(int_value);
         }
     }
 
@@ -219,19 +245,19 @@ namespace
     void apply_env_overrides(yuan::server::ProxyServiceConfig &config)
     {
         config.listen_host = read_env_string("YUAN_PROXY_LISTEN_HOST", config.listen_host);
-        config.port = read_env_int("YUAN_PROXY_LISTEN_PORT", config.port);
-        config.max_active_sessions = read_env_int("YUAN_PROXY_MAX_ACTIVE", config.max_active_sessions);
+        config.port = read_env_int_range("YUAN_PROXY_LISTEN_PORT", config.port, 1, 65535);
+        config.max_active_sessions = read_env_int_range("YUAN_PROXY_MAX_ACTIVE", config.max_active_sessions, 1, 10000000);
         config.max_sessions_per_client =
-            read_env_int("YUAN_PROXY_MAX_SESSIONS_PER_CLIENT", config.max_sessions_per_client);
-        config.header_timeout_ms = read_env_int("YUAN_PROXY_HEADER_TIMEOUT_MS", config.header_timeout_ms);
-        config.idle_timeout_ms = read_env_int("YUAN_PROXY_IDLE_TIMEOUT_MS", config.idle_timeout_ms);
-        config.connect_timeout_ms = read_env_int("YUAN_PROXY_CONNECT_TIMEOUT_MS", config.connect_timeout_ms);
-        config.drain_timeout_ms = read_env_int("YUAN_PROXY_DRAIN_TIMEOUT_MS", config.drain_timeout_ms);
+            read_env_int_range("YUAN_PROXY_MAX_SESSIONS_PER_CLIENT", config.max_sessions_per_client, 0, 10000000);
+        config.header_timeout_ms = read_env_int_range("YUAN_PROXY_HEADER_TIMEOUT_MS", config.header_timeout_ms, 1, 24 * 60 * 60 * 1000);
+        config.idle_timeout_ms = read_env_int_range("YUAN_PROXY_IDLE_TIMEOUT_MS", config.idle_timeout_ms, 1, 24 * 60 * 60 * 1000);
+        config.connect_timeout_ms = read_env_int_range("YUAN_PROXY_CONNECT_TIMEOUT_MS", config.connect_timeout_ms, 1, 24 * 60 * 60 * 1000);
+        config.drain_timeout_ms = read_env_int_range("YUAN_PROXY_DRAIN_TIMEOUT_MS", config.drain_timeout_ms, 0, 24 * 60 * 60 * 1000);
         config.session_snapshot_interval_ms =
-            read_env_int("YUAN_PROXY_SESSION_SNAPSHOT_INTERVAL_MS", config.session_snapshot_interval_ms);
-        config.max_header_bytes = read_env_int("YUAN_PROXY_MAX_HEADER_BYTES", config.max_header_bytes);
-        config.max_session_buffer_bytes = read_env_int("YUAN_PROXY_MAX_SESSION_BUFFER_BYTES", config.max_session_buffer_bytes);
-        config.max_total_tunnel_memory = read_env_int("YUAN_PROXY_MAX_TOTAL_TUNNEL_MEMORY", config.max_total_tunnel_memory);
+            read_env_int_range("YUAN_PROXY_SESSION_SNAPSHOT_INTERVAL_MS", config.session_snapshot_interval_ms, 0, 24 * 60 * 60 * 1000);
+        config.max_header_bytes = read_env_int_range("YUAN_PROXY_MAX_HEADER_BYTES", config.max_header_bytes, 1, 100 * 1024 * 1024);
+        config.max_session_buffer_bytes = read_env_int_range("YUAN_PROXY_MAX_SESSION_BUFFER_BYTES", config.max_session_buffer_bytes, 1, 1024 * 1024 * 1024);
+        config.max_total_tunnel_memory = read_env_int_range("YUAN_PROXY_MAX_TOTAL_TUNNEL_MEMORY", config.max_total_tunnel_memory, 0, std::numeric_limits<int>::max());
 
         const std::string env_user = read_env_string("YUAN_PROXY_BASIC_USER");
         const std::string env_pass = read_env_string("YUAN_PROXY_BASIC_PASS");
@@ -265,7 +291,7 @@ namespace
         } else if (!enabled.empty()) {
             config.enabled = true;
         }
-        config.port = read_env_int("YUAN_SOCKS5_PORT", config.port);
+        config.port = read_env_int_range("YUAN_SOCKS5_PORT", config.port, 1, 65535);
         const std::string enable_auth = read_env_string("YUAN_SOCKS5_ENABLE_AUTH");
         if (!enable_auth.empty()) {
             config.server_config.enable_auth = enable_auth == "1" || enable_auth == "true" || enable_auth == "TRUE";
@@ -279,21 +305,21 @@ namespace
             config.server_config.password = password;
         }
         config.server_config.connect_timeout_ms = static_cast<uint32_t>(
-            read_env_int("YUAN_SOCKS5_CONNECT_TIMEOUT_MS", static_cast<int>(config.server_config.connect_timeout_ms)));
+            read_env_int_range("YUAN_SOCKS5_CONNECT_TIMEOUT_MS", static_cast<int>(config.server_config.connect_timeout_ms), 1, 24 * 60 * 60 * 1000));
         config.server_config.idle_timeout_ms = static_cast<uint32_t>(
-            read_env_int("YUAN_SOCKS5_IDLE_TIMEOUT_MS", static_cast<int>(config.server_config.idle_timeout_ms)));
+            read_env_int_range("YUAN_SOCKS5_IDLE_TIMEOUT_MS", static_cast<int>(config.server_config.idle_timeout_ms), 1, 24 * 60 * 60 * 1000));
         config.server_config.max_connections = static_cast<size_t>(
-            read_env_int("YUAN_SOCKS5_MAX_CONNECTIONS", static_cast<int>(config.server_config.max_connections)));
+            read_env_int_range("YUAN_SOCKS5_MAX_CONNECTIONS", static_cast<int>(config.server_config.max_connections), 1, 10000000));
         const std::string enable_udp = read_env_string("YUAN_SOCKS5_ENABLE_UDP_ASSOCIATE");
         if (!enable_udp.empty()) {
             config.server_config.enable_udp_associate = enable_udp == "1" || enable_udp == "true" || enable_udp == "TRUE";
         }
         config.server_config.udp_idle_timeout_ms = static_cast<uint32_t>(
-            read_env_int("YUAN_SOCKS5_UDP_IDLE_TIMEOUT_MS", static_cast<int>(config.server_config.udp_idle_timeout_ms)));
+            read_env_int_range("YUAN_SOCKS5_UDP_IDLE_TIMEOUT_MS", static_cast<int>(config.server_config.udp_idle_timeout_ms), 1, 24 * 60 * 60 * 1000));
         config.server_config.max_datagram_size = static_cast<size_t>(
-            read_env_int("YUAN_SOCKS5_MAX_DATAGRAM_SIZE", static_cast<int>(config.server_config.max_datagram_size)));
+            read_env_int_range("YUAN_SOCKS5_MAX_DATAGRAM_SIZE", static_cast<int>(config.server_config.max_datagram_size), 1, 1024 * 1024 * 1024));
         config.server_config.max_udp_associations_per_client = static_cast<size_t>(
-            read_env_int("YUAN_SOCKS5_MAX_UDP_PER_CLIENT", static_cast<int>(config.server_config.max_udp_associations_per_client)));
+            read_env_int_range("YUAN_SOCKS5_MAX_UDP_PER_CLIENT", static_cast<int>(config.server_config.max_udp_associations_per_client), 0, 10000000));
 
         const std::string socks5_listen_host = read_env_string("YUAN_SOCKS5_LISTEN_HOST");
         if (!socks5_listen_host.empty()) {
@@ -312,7 +338,7 @@ namespace
             config.server_config.deny_targets = split_csv(socks5_deny_targets);
         }
         config.server_config.max_sessions_per_client = static_cast<size_t>(
-            read_env_int("YUAN_SOCKS5_MAX_SESSIONS_PER_CLIENT", static_cast<int>(config.server_config.max_sessions_per_client)));
+            read_env_int_range("YUAN_SOCKS5_MAX_SESSIONS_PER_CLIENT", static_cast<int>(config.server_config.max_sessions_per_client), 0, 10000000));
     }
 }
 
@@ -366,7 +392,7 @@ int main(int argc, char **argv)
     }
     std::cout << '\n';
     if (socks5_config.enabled) {
-        std::cout << "socks5 service listening on 0.0.0.0:" << socks5_config.port << '\n';
+        std::cout << "socks5 service listening on " << socks5_config.server_config.listen_host << ':' << socks5_config.port << '\n';
     }
 
     while (g_running.load(std::memory_order_relaxed)) {

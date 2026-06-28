@@ -1,0 +1,32 @@
+{
+  "proxy": {
+    "listen_host": "0.0.0.0",
+    "listen_port": 3128,
+    "max_active_sessions": 4096,
+    "max_sessions_per_client": 1024,
+    "header_timeout_ms": 15000,
+    "upstream_first_byte_timeout_ms": 15000,
+    "idle_timeout_ms": 300000,
+    "connect_timeout_ms": 10000,
+    "drain_timeout_ms": 5000,
+    "session_snapshot_interval_ms": 10000,
+    "max_header_bytes": 262144,
+    "max_session_buffer_bytes": 5242880,
+    "max_total_tunnel_memory": 0,
+    "allow_private_targets": false,
+    "allow_targets": [],
+    "deny_targets": []
+  },
+  "socks5": {
+    "enabled": true,
+    "listen_host": "0.0.0.0",
+    "listen_port": 1080,
+    "enable_auth": false,
+    "username": "",
+    "password": "",
+    "enable_connect": true,
+    "enable_bind": false,
+    "enable_udp_associate": true,
+    "allow_private_targets": false
+  }
+}

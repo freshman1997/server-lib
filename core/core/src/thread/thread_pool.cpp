@@ -88,23 +88,25 @@ namespace yuan::thread
 
     void ThreadPool::push_task(std::unique_ptr<Runnable> task)
     {
-        auto *raw = task.release();
-        submit([raw] {
-            raw->run();
-            delete raw;
+        if (!task) {
+            return;
+        }
+
+        auto shared_task = std::shared_ptr<Runnable>(std::move(task));
+        submit([shared_task] {
+            shared_task->run();
         });
     }
 
-    void ThreadPool::handle_rejection(std::function<void()> task)
+    void ThreadPool::handle_rejection(std::promise<void> &promise)
     {
         switch (reject_policy_) {
         case RejectPolicy::discard:
-            break;
-        case RejectPolicy::caller_runs:
-            task();
+            set_rejected_exception(promise, "thread pool queue full");
             break;
         case RejectPolicy::abort:
         default:
+            set_rejected_exception(promise, "thread pool queue full");
             throw std::runtime_error("thread pool queue full");
         }
     }

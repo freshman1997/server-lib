@@ -6,6 +6,7 @@
 #include "authorization.h"
 #include "base/time.h"
 
+#include <charconv>
 #include <cctype>
 #include <mutex>
 #include <unordered_map>
@@ -54,6 +55,22 @@ namespace yuan::net::http
                 pos = comma + 1;
             }
             return false;
+        }
+
+        bool parse_size_header(std::string_view text, size_t &out)
+        {
+            text = trim_token(text);
+            if (text.empty()) {
+                return false;
+            }
+
+            size_t value = 0;
+            const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+            if (ec != std::errc{} || ptr != text.data() + text.size()) {
+                return false;
+            }
+            out = value;
+            return true;
         }
 
         void merge_exposed_headers(HttpResponse *resp, const std::string &configured)
@@ -416,17 +433,16 @@ namespace yuan::net::http
             {
                 const std::string *cl = req->get_header(http_header_key::content_length);
                 if (cl) {
-                    try
-                    {
-                        size_t len = std::stoull(*cl);
-                        if (len > max_size_) {
-                            resp->set_response_code(ResponseCode::payload_too_large);
-                            resp->process_error(ResponseCode::payload_too_large);
-                            return MiddlewareResult::stop;
-                        }
+                    size_t len = 0;
+                    if (!parse_size_header(*cl, len)) {
+                        resp->set_response_code(ResponseCode::bad_request);
+                        resp->process_error(ResponseCode::bad_request);
+                        return MiddlewareResult::stop;
                     }
-                    catch (...)
-                    {
+                    if (len > max_size_) {
+                        resp->set_response_code(ResponseCode::payload_too_large);
+                        resp->process_error(ResponseCode::payload_too_large);
+                        return MiddlewareResult::stop;
                     }
                 }
                 return MiddlewareResult::next;
