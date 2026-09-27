@@ -12,14 +12,20 @@ PluginHttpInterceptor::~PluginHttpInterceptor()
 
 void PluginHttpInterceptor::set_server_accessor(ServerAccessor accessor)
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     server_accessor_ = std::move(accessor);
 }
 
 void PluginHttpInterceptor::set_installers(MiddlewareInstaller middleware_installer,
-                                           RouteInstaller route_installer)
+                                           RouteInstaller route_installer,
+                                           HttpUninstaller uninstaller)
 {
-    middleware_installer_ = std::move(middleware_installer);
-    route_installer_ = std::move(route_installer);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        middleware_installer_ = std::move(middleware_installer);
+        route_installer_ = std::move(route_installer);
+        uninstaller_ = std::move(uninstaller);
+    }
     install_pending_entries();
 }
 
@@ -121,6 +127,9 @@ bool PluginHttpInterceptor::remove(plugin::HttpInterceptorId id)
     }
 
     uint64_t resource_id = 0;
+    uint64_t installer_token = 0;
+    HttpUninstaller uninstaller;
+    InterceptorEntry removed_entry;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = entries_.find(id);
@@ -130,15 +139,11 @@ bool PluginHttpInterceptor::remove(plugin::HttpInterceptorId id)
 
         auto &entry = it->second;
         resource_id = entry.resource_guard_id;
+        installer_token = entry.installer_token;
+        uninstaller = uninstaller_;
+        removed_entry = std::move(entry);
 
-        if (entry.is_middleware && entry.shared_callback) {
-            *entry.shared_callback = nullptr;
-        }
-        if (!entry.is_middleware && entry.shared_route_callback) {
-            *entry.shared_route_callback = nullptr;
-        }
-
-        auto &ids = plugin_index_[entry.plugin_name];
+        auto &ids = plugin_index_[removed_entry.plugin_name];
         for (auto id_it = ids.begin(); id_it != ids.end(); ++id_it) {
             if (*id_it == id) {
                 ids.erase(id_it);
@@ -146,12 +151,15 @@ bool PluginHttpInterceptor::remove(plugin::HttpInterceptorId id)
             }
         }
         if (ids.empty()) {
-            plugin_index_.erase(entry.plugin_name);
+            plugin_index_.erase(removed_entry.plugin_name);
         }
 
-        entries_.erase(it);
+        entries_.erase(id);
     }
 
+    if (installer_token != 0 && uninstaller) {
+        uninstaller(installer_token);
+    }
     if (resource_guard_ && resource_id != 0) {
         resource_guard_->untrack(resource_id);
     }
@@ -173,20 +181,22 @@ bool PluginHttpInterceptor::install_entry(InterceptorEntry &entry)
         if (!middleware_installer_ || !entry.shared_callback) {
             return false;
         }
-        return middleware_installer_(
+        entry.installer_token = middleware_installer_(
             entry.shared_callback,
             entry.path.empty() ? entry.plugin_name + ".middleware" : entry.path);
+        return entry.installer_token != 0;
     }
 
     if (!route_installer_ || !entry.shared_route_callback || entry.path.empty()) {
         return false;
     }
 
-    return route_installer_(
+    entry.installer_token = route_installer_(
         entry.shared_route_callback,
         entry.path,
         entry.method,
         entry.plugin_name + ":" + entry.path);
+    return entry.installer_token != 0;
 }
 
 void PluginHttpInterceptor::install_pending_entries()
@@ -207,15 +217,18 @@ void PluginHttpInterceptor::install_pending_entries()
 
 bool PluginHttpInterceptor::is_available() const
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     return static_cast<bool>(middleware_installer_) || static_cast<bool>(route_installer_);
 }
 
 void PluginHttpInterceptor::remove_by_plugin_internal(const std::string &plugin_name)
 {
     std::vector<InterceptorEntry> to_remove;
+    HttpUninstaller uninstaller;
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        uninstaller = uninstaller_;
         if (plugin_name.empty()) {
             for (auto &[id, entry] : entries_) {
                 to_remove.push_back(entry);
@@ -239,11 +252,8 @@ void PluginHttpInterceptor::remove_by_plugin_internal(const std::string &plugin_
     }
 
     for (auto &entry : to_remove) {
-        if (entry.is_middleware && entry.shared_callback) {
-            *entry.shared_callback = nullptr;
-        }
-        if (!entry.is_middleware && entry.shared_route_callback) {
-            *entry.shared_route_callback = nullptr;
+        if (entry.installer_token != 0 && uninstaller) {
+            uninstaller(entry.installer_token);
         }
         if (resource_guard_ && entry.resource_guard_id != 0) {
             resource_guard_->untrack(entry.resource_guard_id);

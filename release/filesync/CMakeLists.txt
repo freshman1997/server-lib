@@ -5,7 +5,8 @@ find_package(Threads REQUIRED)
 
 set(RELEASE_FILESYNC_OUTPUT_DIR "${CMAKE_BINARY_DIR}/release/filesync")
 
-add_executable(release_filesync_server filesync_peer.cpp)
+set(FILESYNC_SOURCES filesync_peer.cpp filesync_transfer.cpp filesync_delta.cpp filesync_digest.cpp filesync_config.cpp filesync_scan.cpp filesync_protocol.cpp)
+add_executable(release_filesync_server ${FILESYNC_SOURCES})
 target_compile_features(release_filesync_server PUBLIC cxx_std_20)
 target_compile_definitions(release_filesync_server PRIVATE FILESYNC_DEFAULT_CONFIG="server_config.json")
 target_include_directories(release_filesync_server PUBLIC
@@ -26,7 +27,7 @@ set_target_properties(release_filesync_server PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${RELEASE_FILESYNC_OUTPUT_DIR}"
 )
 
-add_executable(release_filesync_client filesync_peer.cpp)
+add_executable(release_filesync_client ${FILESYNC_SOURCES})
 target_compile_features(release_filesync_client PUBLIC cxx_std_20)
 target_compile_definitions(release_filesync_client PRIVATE FILESYNC_DEFAULT_CONFIG="client_config.json")
 target_include_directories(release_filesync_client PUBLIC
@@ -47,7 +48,7 @@ set_target_properties(release_filesync_client PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${RELEASE_FILESYNC_OUTPUT_DIR}"
 )
 
-add_executable(release_filesync_tests filesync_tests.cpp)
+add_executable(release_filesync_tests filesync_tests.cpp filesync_transfer.cpp filesync_delta.cpp filesync_digest.cpp filesync_config.cpp filesync_scan.cpp filesync_protocol.cpp)
 target_compile_features(release_filesync_tests PUBLIC cxx_std_20)
 target_include_directories(release_filesync_tests PUBLIC
     "${CMAKE_SOURCE_DIR}/third_party/json/include"
@@ -67,9 +68,10 @@ set_target_properties(release_filesync_tests PROPERTIES
 if(BUILD_TESTING)
     add_test(NAME release_filesync_unit COMMAND release_filesync_tests)
     if(WIN32)
+        find_program(FILESYNC_POWERSHELL NAMES pwsh powershell REQUIRED)
         add_test(
             NAME release_filesync_many_tree_e2e
-            COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            COMMAND "${FILESYNC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
                     -File "${CMAKE_CURRENT_SOURCE_DIR}/filesync_many_tree_e2e.ps1"
                     -ServerExe $<TARGET_FILE:release_filesync_server>
                     -ClientExe $<TARGET_FILE:release_filesync_client>

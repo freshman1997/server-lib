@@ -57,6 +57,7 @@ namespace yuan::net
 
         EventLoopExitReason run();
         void stop();
+        bool is_in_loop_thread() const noexcept;
 
         timer::TimerHandle schedule(uint32_t delay_ms, std::function<void()> callback);
 
@@ -66,10 +67,19 @@ namespace yuan::net
         }
 
         timer::TimerHandle schedule_periodic(uint32_t delay_ms, uint32_t interval_ms, std::function<void()> callback, int repeat = 0);
+        timer::TimerHandle schedule_periodic_forever(uint32_t delay_ms, uint32_t interval_ms, std::function<void()> callback)
+        {
+            return schedule_periodic(delay_ms, interval_ms, std::move(callback), -1);
+        }
 
         timer::TimerHandle schedule_periodic_handle(uint32_t delay_ms, uint32_t interval_ms, std::function<void()> callback, int repeat = 0)
         {
             return schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat);
+        }
+
+        timer::TimerHandle schedule_periodic_forever_handle(uint32_t delay_ms, uint32_t interval_ms, std::function<void()> callback)
+        {
+            return schedule_periodic_forever(delay_ms, interval_ms, std::move(callback));
         }
 
         void cancel_timer(const timer::TimerHandle &timer)
@@ -78,6 +88,7 @@ namespace yuan::net
         }
 
         void dispatch(std::function<void()> callback);
+        void dispatch_or_execute(std::function<void()> callback);
 
         void register_connection(const std::shared_ptr<Connection> &conn, std::shared_ptr<ConnectionHandler> handler);
         void register_connection(Connection *conn, std::shared_ptr<ConnectionHandler> handler);
@@ -188,10 +199,22 @@ namespace yuan::net
             return view_.schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat);
         }
 
+        timer::TimerHandle schedule_periodic_forever(uint32_t delay_ms, uint32_t interval_ms,
+                                                     std::function<void()> callback) const
+        {
+            return view_.schedule_periodic_forever(delay_ms, interval_ms, std::move(callback));
+        }
+
         timer::TimerHandle schedule_periodic_handle(uint32_t delay_ms, uint32_t interval_ms,
                                                     std::function<void()> callback, int repeat = 0) const
         {
             return schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat);
+        }
+
+        timer::TimerHandle schedule_periodic_forever_handle(uint32_t delay_ms, uint32_t interval_ms,
+                                                            std::function<void()> callback) const
+        {
+            return schedule_periodic_forever(delay_ms, interval_ms, std::move(callback));
         }
 
         void register_connection(const std::shared_ptr<Connection> &conn, std::shared_ptr<ConnectionHandler> handler) const

@@ -26,6 +26,7 @@ namespace yuan::net
         using ReadCallback = std::function<void(ConnectionContext &)>;
         using WriteCallback = std::function<void(ConnectionContext &)>;
         using CloseCallback = std::function<void(ConnectionContext &)>;
+        using PeerClosedCallback = std::function<void(ConnectionContext &)>;
         using ErrorCallback = std::function<void(ConnectionContext &)>;
 
         StreamServerSession() = default;
@@ -85,6 +86,11 @@ namespace yuan::net
         void set_close_callback(CloseCallback cb)
         {
             close_cb_ = std::move(cb);
+        }
+
+        void set_peer_closed_callback(PeerClosedCallback cb)
+        {
+            peer_closed_cb_ = std::move(cb);
         }
 
         void set_error_callback(ErrorCallback cb)
@@ -161,6 +167,14 @@ namespace yuan::net
             }
         }
 
+        void on_input_shutdown(Connection &conn) override
+        {
+            if (peer_closed_cb_) {
+                ConnectionContext ctx(&conn);
+                peer_closed_cb_(ctx);
+            }
+        }
+
         void on_error(Connection &conn) override
         {
             if (error_cb_) {
@@ -219,6 +233,7 @@ namespace yuan::net
         ReadCallback read_cb_;
         WriteCallback write_cb_;
         CloseCallback close_cb_;
+        PeerClosedCallback peer_closed_cb_;
         ErrorCallback error_cb_;
     };
 

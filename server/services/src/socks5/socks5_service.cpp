@@ -100,13 +100,14 @@ namespace yuan::server
         host_.start([this]() { server_->serve(); });
     }
 
-    void Socks5Service::stop()
+    bool Socks5Service::stop()
     {
         if (snapshot_timer_) {
             snapshot_timer_.cancel();
             snapshot_timer_.reset();
         }
         host_.stop([this]() { server_->stop(); });
+        return true;
     }
 
     yuan::net::socks5::Socks5Server &Socks5Service::server()

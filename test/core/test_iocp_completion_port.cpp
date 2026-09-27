@@ -14,6 +14,7 @@
 #include "net/socket/socket_ops.h"
 
 #include <array>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -987,6 +988,98 @@ namespace
         return require(ok, "tcp engine close-drain reply should round-trip");
     }
 
+    bool test_tcp_engine_large_owned_output()
+    {
+        constexpr std::size_t payload_size = 4 * 1024 * 1024;
+        constexpr std::size_t frame_size = 64 * 1024;
+        yuan::net::IocpTcpEngine engine;
+        yuan::net::IocpTcpEngineCallbacks callbacks;
+        callbacks.on_read = [&](const std::shared_ptr<yuan::net::IocpTcpConnection> &connection,
+                                const char *data,
+                                std::size_t size) {
+            if (size != 5 || std::memcmp(data, "large", 5) != 0) {
+                return;
+            }
+
+            for (std::size_t offset = 0; offset < payload_size; offset += frame_size) {
+                const std::size_t chunk = (std::min)(frame_size, payload_size - offset);
+                yuan::buffer::ByteBuffer frame(chunk);
+                const char marker = static_cast<char>('A' + ((offset / frame_size) % 26));
+                for (std::size_t index = 0; index < chunk; ++index) {
+                    frame.append(&marker, 1);
+                }
+                connection->write_owned(std::move(frame));
+            }
+            connection->flush();
+            connection->close();
+        };
+
+        if (!require(engine.listen("127.0.0.1", 0, 1, std::move(callbacks)),
+                     "tcp engine large-owned-output listen should succeed")) {
+            return false;
+        }
+
+        const int client = yuan::net::socket::create_ipv4_tcp_socket(false);
+        if (!require(client >= 0, "tcp engine large-owned-output client should be created")) {
+            engine.stop();
+            return false;
+        }
+        set_recv_timeout(client, 5000);
+        if (!require(yuan::net::socket::connect(client,
+                                               yuan::net::InetAddress("127.0.0.1", engine.local_port())) == 0,
+                     "tcp engine large-owned-output client connect should succeed")) {
+            yuan::net::socket::close_fd(client);
+            engine.stop();
+            return false;
+        }
+        if (!require(::send(static_cast<SOCKET>(client), "large", 5, 0) == 5,
+                     "tcp engine large-owned-output client send should succeed")) {
+            yuan::net::socket::close_fd(client);
+            engine.stop();
+            return false;
+        }
+
+        std::vector<char> received;
+        received.reserve(payload_size);
+        std::array<char, 32 * 1024> buffer{};
+        while (received.size() < payload_size) {
+            const int count = ::recv(static_cast<SOCKET>(client),
+                                     buffer.data(),
+                                     static_cast<int>(buffer.size()),
+                                     0);
+            if (count <= 0) {
+                yuan::net::socket::close_fd(client);
+                engine.stop();
+                return require(false, "tcp engine large-owned-output should receive complete payload");
+            }
+            received.insert(received.end(), buffer.data(), buffer.data() + count);
+            if (received.size() > payload_size) {
+                yuan::net::socket::close_fd(client);
+                engine.stop();
+                return require(false, "tcp engine large-owned-output should not over-send payload");
+            }
+        }
+
+        bool matches = true;
+        for (std::size_t offset = 0; offset < payload_size; offset += frame_size) {
+            const char expected = static_cast<char>('A' + ((offset / frame_size) % 26));
+            const std::size_t chunk = (std::min)(frame_size, payload_size - offset);
+            if (!std::all_of(received.begin() + static_cast<std::ptrdiff_t>(offset),
+                             received.begin() + static_cast<std::ptrdiff_t>(offset + chunk),
+                             [expected](char value) { return value == expected; })) {
+                matches = false;
+                break;
+            }
+        }
+
+        std::array<char, 1> eof{};
+        const int eof_result = ::recv(static_cast<SOCKET>(client), eof.data(), 1, 0);
+        yuan::net::socket::close_fd(client);
+        engine.stop();
+        return require(matches && eof_result == 0,
+                       "tcp engine large-owned-output should preserve order and drain before close");
+    }
+
     bool test_tcp_engine_peer_half_close_drains_response()
     {
         yuan::net::IocpTcpEngine engine;
@@ -1553,6 +1646,9 @@ int main()
         return 1;
     }
     if (!test_tcp_engine_close_drains_output()) {
+        return 1;
+    }
+    if (!test_tcp_engine_large_owned_output()) {
         return 1;
     }
     if (!test_tcp_engine_peer_half_close_drains_response()) {

@@ -2347,15 +2347,19 @@ namespace yuan::net::http
         return true;
     }
 
-    void HttpServer::use(std::shared_ptr<HttpMiddleware> middleware)
+    uint64_t HttpServer::use(std::shared_ptr<HttpMiddleware> middleware)
     {
-        if (middleware)
-            global_pipeline_.add(std::move(middleware));
+        return global_pipeline_.add(std::move(middleware));
     }
 
-    void HttpServer::use(middleware_function fn, const char *name)
+    uint64_t HttpServer::use(middleware_function fn, const char *name)
     {
-        global_pipeline_.add(std::move(fn), name);
+        return global_pipeline_.add(std::move(fn), name);
+    }
+
+    bool HttpServer::unuse(uint64_t token)
+    {
+        return global_pipeline_.remove(token);
     }
 
     coroutine::Task<void> HttpServer::handle_connection(net::AsyncConnectionContext ctx)

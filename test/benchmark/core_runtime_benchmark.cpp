@@ -379,9 +379,10 @@ namespace
             });
         }
 
-        void stop() override
+        bool stop() override
         {
             stopped_.fetch_add(1, std::memory_order_relaxed);
+            return true;
         }
 
         static void reset()

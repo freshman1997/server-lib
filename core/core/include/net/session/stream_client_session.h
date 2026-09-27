@@ -136,10 +136,38 @@ namespace yuan::net
             }
         }
 
+        void write_owned(::yuan::buffer::ByteBuffer buffer)
+        {
+            if (connection_) {
+                connection_->write_owned(std::move(buffer));
+            }
+        }
+
         void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer)
         {
             if (connection_) {
                 connection_->write_and_flush(buffer);
+            }
+        }
+
+        void write_owned_and_flush(::yuan::buffer::ByteBuffer buffer)
+        {
+            if (connection_) {
+                connection_->write_owned_and_flush(std::move(buffer));
+            }
+        }
+
+        void send_owned(::yuan::buffer::ByteBuffer buffer, FlushPolicy policy = FlushPolicy::immediate)
+        {
+            if (connection_) {
+                connection_->send_owned(std::move(buffer), policy);
+            }
+        }
+
+        void flush()
+        {
+            if (connection_) {
+                connection_->flush();
             }
         }
 

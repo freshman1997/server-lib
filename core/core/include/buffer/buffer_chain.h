@@ -3,7 +3,6 @@
 
 #include <cstddef>
 #include <algorithm>
-#include <functional>
 #include <memory>
 #include <deque>
 
@@ -113,7 +112,8 @@ public:
         readable_bytes_ = 0;
     }
 
-    void for_each_readable(const std::function<bool(const ByteBuffer &)> &visitor) const
+    template <typename Visitor>
+    void for_each_readable(Visitor &&visitor) const
     {
         for (const auto &buffer : buffers_) {
             if (!buffer || buffer->empty()) {

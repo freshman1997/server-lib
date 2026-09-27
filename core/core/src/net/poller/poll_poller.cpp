@@ -62,6 +62,7 @@ namespace yuan::net
         std::vector<NativePollFd> fds_;
         std::vector<net::Channel *> channels_;
         std::unordered_map<int, std::size_t> fd_indices_;
+        uint64_t consecutive_poll_failures_ = 0;
     };
 
     PollPoller::PollPoller()
@@ -96,13 +97,21 @@ namespace yuan::net
         int ret = ::poll(data_->fds_.data(), static_cast<nfds_t>(data_->fds_.size()), timeout);
 #endif
         if (ret < 0) {
+            ++data_->consecutive_poll_failures_;
+            const bool should_log = data_->consecutive_poll_failures_ == 1 ||
+                data_->consecutive_poll_failures_ % 1024 == 0;
+            if (should_log) {
 #ifdef _WIN32
-            LOG_WARN("poll poller failed, ret: {}, wsa_error: {}, fds: {}", ret, platform::GetLastNativeError(), data_->fds_.size());
+                LOG_WARN("poll poller failed, ret: {}, wsa_error: {}, fds: {}, consecutive_failures: {}",
+                         ret, platform::GetLastNativeError(), data_->fds_.size(), data_->consecutive_poll_failures_);
 #else
-            LOG_WARN("poll poller failed, ret: {}", ret);
+                LOG_WARN("poll poller failed, ret: {}, errno: {}, fds: {}, consecutive_failures: {}",
+                         ret, platform::GetLastNativeError(), data_->fds_.size(), data_->consecutive_poll_failures_);
 #endif
+            }
             return tm;
         }
+        data_->consecutive_poll_failures_ = 0;
 
         for (std::size_t i = 0; i < data_->fds_.size(); ++i) {
             auto *channel = i < data_->channels_.size() ? data_->channels_[i] : nullptr;

@@ -31,10 +31,10 @@ void MatchService::start()
     });
 }
 
-void MatchService::stop()
+bool MatchService::stop()
 {
     if (!server_) {
-        return;
+        return true;
     }
 
     server_->stop();
@@ -43,6 +43,7 @@ void MatchService::stop()
     if (worker_.joinable()) {
         worker_.join();
     }
+    return true;
 }
 
 MatchServer& MatchService::server()

@@ -73,8 +73,9 @@ namespace yuan::app
 
         void set_http_server_accessor(std::function<void *()> accessor);
         void set_http_installers(
-            std::function<bool(std::shared_ptr<plugin::HttpMiddlewareCallback>, std::string)> middleware_installer,
-            std::function<bool(std::shared_ptr<plugin::HttpRouteCallback>, std::string, std::string, std::string)> route_installer);
+            std::function<uint64_t(std::shared_ptr<plugin::HttpMiddlewareCallback>, std::string)> middleware_installer,
+            std::function<uint64_t(std::shared_ptr<plugin::HttpRouteCallback>, std::string, std::string, std::string)> route_installer,
+            std::function<bool(uint64_t)> uninstaller);
 
         void set_runtime_context(const RuntimeContext &context) override;
         const RuntimeContext &runtime_context() const;
@@ -130,8 +131,9 @@ namespace yuan::app
         std::unordered_map<std::string, std::unique_ptr<plugin::HostStorage> > plugin_storages_;
         std::unordered_map<std::string, std::filesystem::file_time_type> script_write_times_;
         std::function<void *()> pending_http_server_accessor_;
-        std::function<bool(std::shared_ptr<plugin::HttpMiddlewareCallback>, std::string)> pending_http_middleware_installer_;
-        std::function<bool(std::shared_ptr<plugin::HttpRouteCallback>, std::string, std::string, std::string)> pending_http_route_installer_;
+        std::function<uint64_t(std::shared_ptr<plugin::HttpMiddlewareCallback>, std::string)> pending_http_middleware_installer_;
+        std::function<uint64_t(std::shared_ptr<plugin::HttpRouteCallback>, std::string, std::string, std::string)> pending_http_route_installer_;
+        std::function<bool(uint64_t)> pending_http_uninstaller_;
         mutable std::unique_ptr<plugin::PluginManager> plugin_manager_;
     };
 

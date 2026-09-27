@@ -1669,7 +1669,7 @@ namespace yuan::server
         host_.start([this]() { serve_loop(); });
     }
 
-    void ProxyService::stop()
+    bool ProxyService::stop()
     {
         stop_requested_.store(true, std::memory_order_relaxed);
         auto *runtime = data_->listener.runtime();
@@ -1745,6 +1745,7 @@ namespace yuan::server
             }
         });
         data_->accept_task = {};
+        return true;
     }
 
     void ProxyService::set_runtime_context(const yuan::app::RuntimeContext &context)

@@ -3,3 +3,4 @@ project(yuan-libs)
 
 add_subdirectory(redis_cli)
 add_subdirectory(rpc)
+add_subdirectory(mysql)

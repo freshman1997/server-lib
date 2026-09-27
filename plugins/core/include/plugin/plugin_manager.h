@@ -25,8 +25,11 @@ namespace yuan::plugin
 
         void set_context(const PluginContext &context);
 
-        const PluginContext &context() const;
+        PluginContext context() const;
         PluginContext plugin_context(const std::string &plugin_name) const;
+
+        /// Resolve a script entry only when it remains inside the plugin directory.
+        bool script_entry_path(const std::string &plugin_name, std::string &path) const;
 
         /// 加载单个插件
         bool load(const std::string &pluginName);
@@ -43,7 +46,7 @@ namespace yuan::plugin
         void release_all();
 
         /// 重新加载指定插件的配置文件并返回新的 PluginConfigView
-        PluginConfigView reload_plugin_config(const std::string &plugin_name) const;
+        PluginConfigView reload_plugin_config(const std::string &plugin_name);
 
         /// 设置指定插件的存储接口
         void set_plugin_storage(const std::string &plugin_name, HostStorage *storage);
@@ -69,6 +72,9 @@ namespace yuan::plugin
         bool load_script_plugin(const std::string &plugin_name, const PluginConfigView &config);
 
         PluginConfigView find_plugin_manifest_config(const std::string &plugin_name) const;
+        bool resolve_script_entry_path(const std::string &plugin_name,
+                                       const std::string &entry,
+                                       std::string &path) const;
 
         /// 拓扑排序, 返回排序后的名称列表; 检测到循环依赖时返回 false
         bool topological_sort(const std::vector<std::string> &names,

@@ -49,9 +49,10 @@ namespace yuan::server
         host_.start([this]() { server_->serve(); });
     }
 
-    void WebSocketService::stop()
+    bool WebSocketService::stop()
     {
         host_.stop([this]() { server_->stop(); });
+        return true;
     }
 
     yuan::net::websocket::WebSocketServer &WebSocketService::server()

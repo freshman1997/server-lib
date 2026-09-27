@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -34,14 +35,14 @@ namespace yuan::plugin
 
         bool unregister_extension_points(const std::string &plugin_name);
 
-        std::vector<const ExtensionPointEntry *> find_by_name(const std::string &name) const;
+        std::vector<ExtensionPointEntry> find_by_name(const std::string &name) const;
 
-        std::vector<const ExtensionPointEntry *> find_by_contract(const std::string &contract_id,
-                                                                  int min_version = 1) const;
+        std::vector<ExtensionPointEntry> find_by_contract(const std::string &contract_id,
+                                                          int min_version = 1) const;
 
-        const ExtensionPointEntry *find_one(const std::string &name) const;
+        std::optional<ExtensionPointEntry> find_one(const std::string &name) const;
 
-        const ExtensionPointEntry *find_best_contract(const std::string &contract_id) const;
+        std::optional<ExtensionPointEntry> find_best_contract(const std::string &contract_id) const;
 
         std::vector<ExtensionPointEntry> all_entries() const;
 

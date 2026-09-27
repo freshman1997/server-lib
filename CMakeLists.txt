@@ -6,6 +6,10 @@ project(
     LANGUAGES CXX
 )
 
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 include(CTest)
 include(GNUInstallDirs)
 find_package(Threads REQUIRED)
@@ -33,7 +37,12 @@ option(YUAN_ENABLE_SSH "Enable SSH protocol support" ON)
 option(YUAN_ENABLE_SSH_SFTP "Enable SSH SFTP subsystem support" ${YUAN_ENABLE_SSH})
 option(YUAN_GLOBAL_STATIC_LINK "Enable global static link preference" OFF)
 option(YUAN_BUILD_SHARED_LIBS "Build Yuan project libraries as shared libraries" OFF)
+option(YUAN_ENABLE_TRACY "Enable Tracy profiler instrumentation" OFF)
 option(KCP_BUILD_TESTING "Build kcp tests" OFF)
+
+if(YUAN_ENABLE_TRACY)
+    find_package(Tracy CONFIG REQUIRED)
+endif()
 
 function(yuan_apply_shared_build_mode)
     if (YUAN_GLOBAL_STATIC_LINK)

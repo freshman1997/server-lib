@@ -1,5 +1,6 @@
 ﻿#ifndef __EVENT_LOOH_H__
 #define __EVENT_LOOH_H__
+#include <atomic>
 #include <coroutine>
 #include <functional>
 #include <memory>
@@ -32,6 +33,19 @@ namespace yuan::net
     public:
         class ExternalFdRegistration;
 
+        // Threading model:
+        // - loop() must be called from exactly one thread (the loop thread).
+        // - While loop() is running, channels_/connections_ and the poller are
+        //   owned by the loop thread. update_channel()/close_channel() marshal
+        //   foreign-thread calls synchronously to preserve raw Channel
+        //   lifetimes; before startup they execute directly.
+        // - on_new_connection() may be called from any thread: off-loop calls
+        //   are deferred to the loop thread; the queued functor keeps the
+        //   connection alive until registration runs.
+        // - queue_in_loop()/post_coroutine()/quit()/request_coroutine_resume()
+        //   are safe from any thread and wake the loop as needed.
+        // - No method may race with ~EventLoop(): the loop thread must have
+        //   left loop() and callers must synchronize before destruction.
         EventLoop(Poller *_poller, timer::TimerManager *timer_manager);
         ~EventLoop();
 
@@ -52,7 +66,17 @@ namespace yuan::net
 
         void post_coroutine(std::coroutine_handle<> handle) noexcept override;
 
+        // Execute an operation on the loop thread. Calls made before the
+        // loop starts run synchronously; calls made while it is running are
+        // queued and waited for. This is the boundary for operations that
+        // touch loop-owned objects but cannot be made asynchronous safely.
+        bool run_in_loop_sync(std::function<void()> operation);
+
         bool is_in_loop_thread() const noexcept override;
+
+        bool is_running() const noexcept;
+
+        bool wait_until_stopped(uint32_t timeout_ms = 0) const;
 
         bool accepts_poll_event_for_test(const PollEvent &event) const;
 
@@ -67,6 +91,7 @@ namespace yuan::net
     private:
         class HelperData;
         std::unique_ptr<HelperData> data_;
+
     };
 
     class EventLoop::ExternalFdRegistration
@@ -80,16 +105,22 @@ namespace yuan::net
         ExternalFdRegistration(ExternalFdRegistration &&) = delete;
         ExternalFdRegistration &operator=(ExternalFdRegistration &&) = delete;
 
+        // Thread-safe: from the loop thread (or before the loop starts) the
+        // deregistration runs synchronously; from another thread it is
+        // deferred to the loop thread and shared state keeps the channel
+        // alive until then.
         void close();
         bool active() const noexcept;
         Channel *channel() noexcept;
         uint64_t generation() const noexcept;
 
     private:
+        struct State;
+        void close_state();
+
         EventLoop *loop_ = nullptr;
-        std::shared_ptr<SelectHandler> handler_;
-        std::unique_ptr<Channel> channel_;
-        bool active_ = false;
+        std::shared_ptr<State> state_;
+        std::atomic<bool> active_{false};
     };
 }
 #endif

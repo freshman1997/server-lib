@@ -1,8 +1,10 @@
 #ifndef __HTTP_MIDDLEWARE_H__
 #define __HTTP_MIDDLEWARE_H__
 
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -40,7 +42,7 @@ namespace yuan::net::http
     {
     public:
         explicit FunctionMiddleware(middleware_function fn, const char *name = "anonymous")
-            : fn_(std::move(fn)), name_(name) {}
+            : fn_(std::move(fn)), name_(name ? name : "anonymous") {}
 
         MiddlewareResult process(HttpRequest *req, HttpResponse *resp) override
         {
@@ -48,11 +50,11 @@ namespace yuan::net::http
             return MiddlewareResult::next;
         }
 
-        const char* name() const override { return name_; }
+        const char* name() const override { return name_.c_str(); }
 
     private:
         middleware_function fn_;
-        const char* name_;
+        std::string name_;
     };
 
     // 中间件管道
@@ -60,24 +62,35 @@ namespace yuan::net::http
     {
     public:
         MiddlewarePipeline() = default;
-        ~MiddlewarePipeline() = default;
+        ~MiddlewarePipeline();
+
+        MiddlewarePipeline(const MiddlewarePipeline &) = delete;
+        MiddlewarePipeline &operator=(const MiddlewarePipeline &) = delete;
 
         // 添加中间件（按添加顺序执行）
-        void add(std::shared_ptr<HttpMiddleware> middleware);
-        void add(middleware_function fn, const char *name = "anonymous");
+        uint64_t add(std::shared_ptr<HttpMiddleware> middleware);
+        uint64_t add(middleware_function fn, const char *name = "anonymous");
         
         // 在最前面插入（如全局CORS等）
-        void insert_front(std::shared_ptr<HttpMiddleware> middleware);
+        uint64_t insert_front(std::shared_ptr<HttpMiddleware> middleware);
+
+        // 摘除中间件并等待已进入的调用结束；当前中间件自注销时不等待自身。
+        bool remove(uint64_t token);
 
         // 执行管道，返回是否应该继续处理handler
         bool execute(HttpRequest *req, HttpResponse *resp) const;
 
-        size_t size() const { return middlewares_.size(); }
-        bool empty() const { return middlewares_.empty(); }
-        void clear() { middlewares_.clear(); }
+        size_t size() const;
+        bool empty() const;
+        void clear();
 
     private:
-        std::vector<std::shared_ptr<HttpMiddleware>> middlewares_;
+        struct Entry;
+        uint64_t next_token_locked();
+
+        mutable std::mutex mutex_;
+        uint64_t next_token_ = 1;
+        std::vector<std::shared_ptr<Entry>> middlewares_;
     };
 
     // ==================== 内置中间件工厂 ====================

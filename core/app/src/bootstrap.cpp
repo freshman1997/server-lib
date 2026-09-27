@@ -340,6 +340,22 @@ bool Bootstrap::run()
     return application_.start();
 }
 
+void Bootstrap::wait()
+{
+    if (process_role_ == ProcessRole::standalone && in_process_workers_.empty()) {
+        (void)application_.run();
+        return;
+    }
+
+    while (has_running_workers() || has_recovering_workers()) {
+        poll_workers();
+        if (has_failed_workers()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+}
+
 void Bootstrap::shutdown()
 {
     if (!in_process_workers_.empty()) {
@@ -348,8 +364,10 @@ void Bootstrap::shutdown()
     }
 
     if (process_role_ == ProcessRole::standalone) {
-        application_.stop();
-        return;
+            while (!application_.stop()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            return;
     }
 
     shutdown_multi_process();
@@ -579,10 +597,7 @@ bool Bootstrap::start_worker_process(
             std::_Exit(1);
         }
 
-        while (!g_worker_should_exit) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        }
-
+        (void)local_worker_application_->run();
         shutdown_multi_process();
         std::_Exit(0);
     }
@@ -1112,10 +1127,7 @@ bool Bootstrap::start_worker_process(const WorkerPlan &worker, WorkerProcessInfo
             std::_Exit(1);
         }
 
-        while (!g_worker_should_exit) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        }
-
+        (void)local_worker_application_->run();
         shutdown_multi_process();
         std::_Exit(0);
     }

@@ -1,288 +1,281 @@
-#define FILESYNC_PEER_TESTING
-#include "filesync_peer.cpp"
+#include "filesync_common.h"
+#include "filesync_config.h"
+#include "filesync_delta.h"
+#include "filesync_protocol.h"
+#include "filesync_scan.h"
+#include "filesync_transfer.h"
 
 #include <chrono>
 #include <filesystem>
-#include <functional>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
-namespace
-{
-    int g_failed = 0;
+namespace filesync::tests {
+int failed = 0;
 
-    void check(bool condition, const char *message)
-    {
-        if (!condition) {
-            ++g_failed;
-            std::cerr << "FAIL: " << message << "\n";
-        }
-    }
-
-    void check_throws(const std::function<void()> &fn, const char *message)
-    {
-        try {
-            fn();
-            check(false, message);
-        } catch (const std::exception &) {
-            check(true, message);
-        }
-    }
-
-    std::filesystem::path make_temp_root()
-    {
-        const auto base = std::filesystem::temp_directory_path();
-        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        for (int index = 0; index < 100; ++index) {
-            auto candidate = base / ("release-filesync-test-" + std::to_string(stamp) + "-" + std::to_string(index));
-            std::error_code ec;
-            if (std::filesystem::create_directories(candidate, ec)) {
-                return candidate;
-            }
-        }
-        throw std::runtime_error("failed to create temp test directory");
-    }
-
-    void write_text_file(const std::filesystem::path &path, const std::string &text)
-    {
-        std::filesystem::create_directories(path.parent_path());
-        std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        out << text;
-    }
-
-    std::string read_text_file(const std::filesystem::path &path)
-    {
-        std::ifstream in(path, std::ios::binary);
-        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    }
-
-    std::vector<char> bytes_of(const std::string &text)
-    {
-        return std::vector<char>(text.begin(), text.end());
-    }
-
-    Config test_config_for(const std::filesystem::path &root)
-    {
-        Config config;
-        config.conflict_strategy = "newer_wins";
-        config.sync_deletes = true;
-        config.paths.push_back({root, "work"});
-        return config;
-    }
-
-    void test_token_path_and_hex_helpers()
-    {
-        const std::string input = "alpha beta/%20?=+";
-        const auto encoded = filesync::quote_token(input);
-        const auto decoded = filesync::unquote_token(encoded);
-        check(decoded == input, "quote_token roundtrip");
-
-        check(!filesync::is_safe_relative_path("../escape"), "reject dotdot path");
-        check(!filesync::is_safe_relative_path("work/../escape"), "reject nested dotdot path");
-        check(!filesync::is_safe_relative_path("work/./escape"), "reject dot path component");
-        check(!filesync::is_safe_relative_path("."), "reject current-directory path");
-        check(!filesync::is_safe_relative_path("/absolute"), "reject absolute path");
-        check(!filesync::is_safe_relative_path("C:/absolute"), "reject Windows drive path");
-        check(!filesync::is_safe_relative_path("a:b"), "reject colon path");
-        check(!filesync::is_safe_relative_path("a\\b"), "reject backslash path");
-        check(filesync::is_safe_relative_path("work/docs/readme.txt"), "accept relative path");
-
-        const auto normalized = filesync::normalize_relative_path(std::filesystem::path("/work/docs"));
-        check(normalized == "work/docs", "normalize_relative_path strips leading slash");
-
-        const std::vector<char> data{'a', '\0', static_cast<char>(0xff)};
-        check(filesync::hex_decode(filesync::hex_encode(data)) == data, "hex encode/decode roundtrip");
-        check_throws([]() { (void)filesync::hex_decode("abc"); }, "hex_decode rejects odd payload");
-        check_throws([]() { (void)filesync::hex_decode("zz"); }, "hex_decode rejects non-hex payload");
-    }
-
-    void test_config_rejects_unsafe_remote_prefix()
-    {
-        const auto root = make_temp_root();
-        const auto config_path = root / "config.json";
-        write_text_file(config_path,
-                        "{\"paths\":[{\"local\":\"" + root.generic_string() +
-                            "\",\"remote_prefix\":\"../escape\"}]}");
-        check_throws([&]() { (void)load_config(config_path); }, "load_config rejects unsafe remote_prefix");
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
-    }
-
-    void test_need_message_counts_delete_and_get_actions()
-    {
-        const auto root = make_temp_root();
-        auto config = test_config_for(root);
-
-        Manifest previous;
-        previous["work/old.txt"] = {false, 3, 1, 11};
-        save_state(config, previous);
-
-        Manifest remote;
-        remote["work/old.txt"] = {false, 3, 1, 11};
-        remote["work/new.txt"] = {false, 3, 2, 22};
-
-        const auto need = need_message(config, remote);
-        check(need.find("NEED 2\n") == 0, "NEED header counts DELETE and GET actions");
-        check(need.find("DELETE work/old.txt\n") != std::string::npos, "NEED includes delete action");
-        check(need.find("GET work/new.txt\n") != std::string::npos, "NEED includes get action");
-
-        const auto parsed = parse_need("NEED 3\nGET work/new.txt\nGET ../escape\nGET C:/escape\nEND\n");
-        check(parsed.size() == 1 && parsed.count("work/new.txt") == 1, "parse_need ignores unsafe GET paths");
-
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
-    }
-
-    void test_apply_files_commits_only_verified_payload()
-    {
-        const auto root = make_temp_root();
-        auto config = test_config_for(root);
-
-        const auto expected_path = root / "expected.txt";
-        write_text_file(expected_path, "hello");
-        const auto expected_hash = filesync::fnv1a_file_hash(expected_path);
-
-        const auto bad_text =
-            std::string("FILES 1\nPUT_BEGIN work/a.txt 5 1 ") + std::to_string(expected_hash) + "\n" +
-            "CHUNK " + filesync::hex_encode(bytes_of("bogus")) + "\nPUT_END\nEND\n";
-        check_throws([&]() { apply_files(config, {}, false, bad_text); },
-                     "apply_files rejects hash-mismatched streamed payload");
-        check(!std::filesystem::exists(root / "a.txt"), "hash-mismatched payload is not committed");
-        check(!std::filesystem::exists(root / "a.txt.filesync.tmp"), "hash-mismatched temp file is removed");
-
-        const auto good_text =
-            std::string("FILES 1\nPUT_BEGIN work/a.txt 5 1 ") + std::to_string(expected_hash) + "\n" +
-            "CHUNK " + filesync::hex_encode(bytes_of("hello")) + "\nPUT_END\nEND\n";
-        apply_files(config, {}, false, good_text);
-        check(read_text_file(root / "a.txt") == "hello", "apply_files commits verified streamed payload");
-
-        const auto legacy_bad =
-            std::string("FILES 1\nPUT work/b.txt 5 1 ") + std::to_string(expected_hash) + " " +
-            filesync::hex_encode(bytes_of("bogus")) + "\nEND\n";
-        check_throws([&]() { apply_files(config, {}, false, legacy_bad); },
-                     "apply_files rejects hash-mismatched one-line payload");
-        check(!std::filesystem::exists(root / "b.txt"), "hash-mismatched one-line payload is not committed");
-
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
-    }
-
-    void test_filters_are_relative_and_directory_aware()
-    {
-        const auto root = make_temp_root();
-        auto config = test_config_for(root);
-        config.exclude_patterns = {"build", "third_party/**", "**/.git/**", "*.log"};
-
-        write_text_file(root / "build" / "cache" / "out.o", "object");
-        write_text_file(root / "third_party" / "lib" / "dep.txt", "dep");
-        write_text_file(root / ".git" / "config", "git");
-        write_text_file(root / "logs" / "app.log", "log");
-        write_text_file(root / "src" / "main.cpp", "code");
-        std::filesystem::create_directories(root / "empty" / "child");
-
-        check(any_pattern_matches({"build"}, filter_candidates_for_remote(config, "work/build/cache/out.o")),
-              "relative directory pattern matches below remote_prefix");
-        check(any_pattern_matches({"build/**"}, filter_candidates_for_remote(config, "work/build/cache/out.o")),
-              "relative directory glob matches below remote_prefix");
-        check(any_pattern_matches({"**/build/**"}, filter_candidates_for_remote(config, "work/build")),
-              "globstar directory pattern matches directory itself");
-        check(any_pattern_matches({"*.log"}, filter_candidates_for_remote(config, "work/logs/app.log")),
-              "basename pattern matches nested file");
-
-        const auto manifest = scan_paths(config);
-        check(manifest.count("work/src/main.cpp") == 1, "scan keeps included file");
-        check(manifest.count("work/empty/child") == 1, "scan keeps empty directory");
-        check(manifest.count("work/build") == 0, "scan excludes directory by relative name");
-        check(manifest.count("work/build/cache/out.o") == 0, "scan prunes excluded directory contents");
-        check(manifest.count("work/third_party") == 0, "scan excludes directory by relative glob");
-        check(manifest.count("work/third_party/lib/dep.txt") == 0, "scan prunes excluded glob contents");
-        check(manifest.count("work/.git") == 0, "scan excludes hidden directory by glob");
-        check(manifest.count("work/logs/app.log") == 0, "scan excludes nested basename match");
-
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
-    }
-
-    void test_need_message_respects_local_filters()
-    {
-        const auto root = make_temp_root();
-        auto config = test_config_for(root);
-        config.exclude_patterns = {"build", "*.log"};
-
-        Manifest remote;
-        remote["work/build/out.o"] = {false, 6, 2, 22};
-        remote["work/logs/app.log"] = {false, 3, 2, 33};
-        remote["work/src/main.cpp"] = {false, 4, 2, 44};
-
-        const auto need = need_message(config, remote);
-        check(need.find("GET work/src/main.cpp\n") != std::string::npos, "NEED includes allowed remote file");
-        check(need.find("GET work/build/out.o\n") == std::string::npos, "NEED skips excluded directory file");
-        check(need.find("GET work/logs/app.log\n") == std::string::npos, "NEED skips excluded basename file");
-
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
-    }
-
-    void test_apply_files_ignores_excluded_payload()
-    {
-        const auto root = make_temp_root();
-        auto config = test_config_for(root);
-        config.exclude_patterns = {"secret"};
-
-        const auto text =
-            std::string("FILES 2\nDIR work/secret\nPUT_BEGIN work/secret/a.txt 7 1 123\n") +
-            "CHUNK " + filesync::hex_encode(bytes_of("blocked")) + "\nPUT_END\nEND\n";
-        apply_files(config, {}, false, text);
-        check(!std::filesystem::exists(root / "secret"), "apply_files ignores excluded directory payload");
-
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
-    }
-
-    void test_utf8_paths_roundtrip_through_scan_and_mapping()
-    {
-        const auto root = make_temp_root();
-        auto config = test_config_for(root);
-        const std::string name = std::string({
-            static_cast<char>(0xe4),
-            static_cast<char>(0xb8),
-            static_cast<char>(0xad),
-            static_cast<char>(0xe6),
-            static_cast<char>(0x96),
-            static_cast<char>(0x87),
-            '.',
-            'm',
-            'd',
-        });
-        const auto local = root / filesync::path_from_utf8(name);
-        write_text_file(local, "utf8");
-
-        const auto manifest = scan_paths(config);
-        const auto remote = "work/" + name;
-        const auto it = manifest.find(remote);
-        check(it != manifest.end(), "scan emits UTF-8 remote path");
-        check(it != manifest.end() && std::filesystem::exists(it->second.local_path),
-              "scan keeps real local path for UTF-8 file");
-        check(std::filesystem::exists(local_path_for_remote(config, remote)), "UTF-8 remote maps back to local path");
-
-        std::error_code ec;
-        std::filesystem::remove_all(root, ec);
+void check(bool value, const char* message) {
+    if (!value) {
+        ++failed;
+        std::cerr << "FAIL: " << message << "\n";
     }
 }
 
-int main()
-{
-    test_token_path_and_hex_helpers();
-    test_config_rejects_unsafe_remote_prefix();
-    test_need_message_counts_delete_and_get_actions();
-    test_apply_files_commits_only_verified_payload();
-    test_filters_are_relative_and_directory_aware();
-    test_need_message_respects_local_filters();
-    test_apply_files_ignores_excluded_payload();
-    test_utf8_paths_roundtrip_through_scan_and_mapping();
+std::filesystem::path temporary_root() {
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto path = std::filesystem::temp_directory_path() / ("filesync-delta-" + std::to_string(stamp));
+    std::filesystem::create_directories(path);
+    return path;
+}
 
-    return g_failed == 0 ? 0 : 1;
+void write(const std::filesystem::path& path, const std::string& data) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary);
+    out.write(data.data(), static_cast<std::streamsize>(data.size()));
+}
+
+std::string read(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+class Rebuilder final : public filesync::delta::OperationConsumer {
+public:
+    explicit Rebuilder(const std::filesystem::path& path) : input(path, std::ios::binary) {}
+    void copy(std::uintmax_t offset, std::uint32_t size) override {
+        input.seekg(static_cast<std::streamoff>(offset));
+        std::string block(size, '\0');
+        input.read(block.data(), static_cast<std::streamsize>(size));
+        result += block;
+    }
+    void data(const char* bytes, std::size_t size) override { result.append(bytes, size); }
+    std::string result;
+private:
+    std::ifstream input;
+};
+
+std::string rebuild(const std::filesystem::path& basis, const std::filesystem::path& source,
+                    const filesync::delta::FileSignature& signature, bool& has_copy) {
+    Rebuilder rebuilder(basis);
+    class CopyObserver final : public filesync::delta::OperationConsumer {
+    public:
+        explicit CopyObserver(Rebuilder& value) : target(value) {}
+        void copy(std::uintmax_t offset, std::uint32_t size) override { has_copy = true; target.copy(offset, size); }
+        void data(const char* bytes, std::size_t size) override { target.data(bytes, size); }
+        bool has_copy = false;
+    private:
+        Rebuilder& target;
+    } observer(rebuilder);
+    filesync::delta::stream_delta(source, signature, observer);
+    has_copy = observer.has_copy;
+    return rebuilder.result;
+}
+
+void test_delta_insert_delete_and_reuse() {
+    const auto root = temporary_root();
+    const auto basis = root / "basis.bin";
+    const auto source = root / "source.bin";
+    const std::string original = "0123456789abcdefghijABCDEFGHIJ9876543210";
+    const std::string changed = "prefix-0123456789abcXdefghijABCDEFGHIJ-9876543210";
+    write(basis, original);
+    write(source, changed);
+    const auto signature = filesync::delta::create_signature(basis, 10);
+    bool has_copy = false;
+    check(rebuild(basis, source, signature, has_copy) == changed, "rolling delta rebuilds insertion without loading whole file");
+    check(has_copy, "delta reuses unchanged basis blocks");
+    std::filesystem::remove_all(root);
+}
+
+void test_empty_and_digest() {
+    const auto root = temporary_root();
+    const auto empty = root / "empty";
+    write(empty, {});
+    const auto signature = filesync::delta::create_signature(empty, 4096);
+    check(signature.blocks.empty() && signature.file_size == 0, "empty file has empty signature");
+    check(signature.file_hash == filesync::sha256_file(empty), "file digest is stable SHA-256");
+    std::filesystem::remove_all(root);
+}
+
+void test_path_validation() {
+    check(filesync::is_safe_relative_path("a/b.txt"), "valid UTF-8 path shape accepted");
+    check(!filesync::is_safe_relative_path("../escape"), "dotdot path rejected");
+    check(!filesync::is_safe_relative_path("C:/escape"), "drive path rejected");
+    check(!filesync::is_safe_relative_path("a\\b"), "backslash path rejected");
+}
+
+void test_recursive_exclude_patterns() {
+    filesync::model::Config config;
+    config.exclude_patterns = {"**/build*/**", "**/logs/**"};
+    check(!filesync::scan::included(config, "repo/build/output.obj", false), "build directory is excluded");
+    check(!filesync::scan::included(config, "repo/build-fast/output.obj", false), "build-prefixed directory is excluded");
+    check(!filesync::scan::included(config, "repo/logs/server.log", false), "logs directory is excluded");
+    check(filesync::scan::included(config, "repo/source/build.info", false), "build filename remains included");
+    check(filesync::scan::included(config, "repo/source/BUILD.bazel", false), "BUILD filename remains included");
+    check(filesync::scan::included(config, "repo/.git/objects/pack/data.pack", false), ".git remains included");
+}
+
+void test_strict_protocol() {
+    filesync::model::Config config;
+    const auto hash = filesync::sha256_bytes("", 0);
+    const std::vector<std::string> valid{"HELLO filesync/3 change-me", "MANIFEST 1", "F empty 0 0 " + hash, "END"};
+    check(filesync::protocol::parse_manifest(valid, config).size() == 1, "strict manifest accepts valid empty file");
+    auto invalid = valid;
+    invalid[1] = "MANIFEST 2";
+    bool rejected = false;
+    try { filesync::protocol::parse_manifest(invalid, config); } catch (const std::exception&) { rejected = true; }
+    check(rejected, "strict manifest rejects count mismatch");
+    invalid = valid;
+    invalid.insert(invalid.end() - 1, valid[2]); invalid[1] = "MANIFEST 2";
+    rejected = false;
+    try { filesync::protocol::parse_manifest(invalid, config); } catch (const std::exception&) { rejected = true; }
+    check(rejected, "strict manifest rejects duplicate paths");
+    rejected = false;
+    try { filesync::protocol::parse_need({"NEED 2", "GET x", "END"}); } catch (const std::exception&) { rejected = true; }
+    check(rejected, "strict need rejects count mismatch");
+    const auto root = temporary_root();
+    write(root / "basis", "0123456789abcdef");
+    std::vector<filesync::model::NeedRequest> requests{{"basis", filesync::delta::create_signature(root / "basis", 4)}};
+    const auto encoded = filesync::protocol::encode_need(requests, {});
+    std::istringstream stream(encoded); std::vector<std::string> lines; std::string line;
+    while (std::getline(stream, line)) lines.push_back(line);
+    const auto parsed = filesync::protocol::parse_need(lines);
+    check(parsed.size() == 1 && parsed[0].basis->blocks.size() == 4, "need signatures round trip");
+    std::filesystem::remove_all(root);
+}
+
+class CollectingWriter final : public filesync::transfer::LineWriter {
+public:
+    void write_line(const std::string& line) override { lines.push_back(line); }
+    std::vector<std::string> lines;
+};
+
+void test_delete_request_uses_previous_state() {
+    const auto root = temporary_root();
+    const auto local_root = root / "local";
+    write(local_root / "removed.txt", "old");
+    filesync::model::Config config;
+    config.sync_deletes = true;
+    config.paths.push_back({local_root, "repo"});
+    filesync::config::save_state(config, filesync::scan::paths(config));
+    std::filesystem::remove(local_root / "removed.txt");
+
+    CollectingWriter writer;
+    filesync::transfer::send_need(config, {}, writer);
+    check(writer.lines.size() == 3 && writer.lines[0] == "NEED_BEGIN 1" &&
+        writer.lines[1] == "DELETE repo/removed.txt" && writer.lines[2] == "NEED_END",
+        "delete sync emits paths missing from the remote manifest");
+    std::filesystem::remove_all(root);
+}
+
+void test_delete_transfer_matches_receiver_count() {
+    const auto root = temporary_root();
+    const auto target_root = root / "target";
+    write(target_root / "removed.txt", "old");
+    filesync::model::Config config;
+    config.sync_deletes = true;
+    config.paths.push_back({target_root, "repo"});
+    const std::vector<filesync::model::NeedRequest> requests{{"repo/removed.txt", {}, true}};
+    filesync::model::Manifest manifest;
+    filesync::transfer::FileSender sender(config, manifest, requests);
+    std::vector<std::string> lines;
+    std::string line;
+    while (sender.next_line(line)) lines.push_back(line);
+    check(lines.size() == 3 && lines[0] == "FILES 1" && lines[1] == "DELETE repo/removed.txt" && lines[2] == "END",
+        "delete transfer counts delete records");
+
+    filesync::transfer::Receiver receiver(config);
+    bool complete = false;
+    for (const auto& value : lines) complete = receiver.apply_line(value) || complete;
+    check(complete && !std::filesystem::exists(target_root / "removed.txt"),
+        "receiver applies delete transfer without count mismatch");
+    std::filesystem::remove_all(root);
+}
+
+void test_local_delete_is_sent_to_remote() {
+    const auto root = temporary_root();
+    const auto local_root = root / "local";
+    write(local_root / "removed.txt", "old");
+    filesync::model::Config config;
+    config.sync_deletes = true;
+    config.paths.push_back({local_root, "repo"});
+    const auto previous = filesync::scan::paths(config);
+    filesync::config::save_state(config, previous);
+    std::filesystem::remove(local_root / "removed.txt");
+
+    filesync::model::Manifest remote = previous;
+    CollectingWriter writer;
+    filesync::transfer::send_need(config, remote, writer);
+    check(writer.lines.size() == 3 && writer.lines[1] == "DELETE repo/removed.txt",
+        "local deletion is sent to the remote peer");
+    std::filesystem::remove_all(root);
+}
+
+void test_remote_change_wins_over_local_delete() {
+    const auto root = temporary_root();
+    const auto local_root = root / "local";
+    write(local_root / "changed.txt", "old");
+    filesync::model::Config config;
+    config.sync_deletes = true;
+    config.paths.push_back({local_root, "repo"});
+    const auto previous = filesync::scan::paths(config);
+    filesync::config::save_state(config, previous);
+    std::filesystem::remove(local_root / "changed.txt");
+
+    auto remote_state = previous.at("repo/changed.txt");
+    ++remote_state.mtime;
+    filesync::model::Manifest remote{{"repo/changed.txt", remote_state}};
+    CollectingWriter writer;
+    filesync::transfer::send_need(config, remote, writer);
+    check(writer.lines.size() == 3 && writer.lines[1].rfind("GET ", 0) == 0,
+        "remote change is not overwritten by a stale local deletion");
+    std::filesystem::remove_all(root);
+}
+
+void test_incremental_file_sender_matches_receiver() {
+    const auto root = temporary_root();
+    const auto source_root = root / "source";
+    const auto target_root = root / "target";
+    write(source_root / "large.bin", std::string(20000, 'a') + std::string(20000, 'b'));
+
+    filesync::model::Config source_config;
+    source_config.chunk_size = 4096;
+    source_config.paths.push_back({source_root, "work"});
+    const auto manifest = filesync::scan::paths(source_config);
+    const std::vector<filesync::model::NeedRequest> requests{{"work/large.bin", {}, false}};
+
+    filesync::transfer::FileSender sender(source_config, manifest, requests);
+    std::vector<std::string> incremental;
+    std::string line;
+    while (sender.next_line(line)) incremental.push_back(line);
+
+    CollectingWriter writer;
+    filesync::transfer::send_files(source_config, manifest, requests, writer);
+    check(incremental == writer.lines, "incremental sender preserves full transfer protocol");
+    check(incremental.size() > 4 && incremental.front() == "FILES 1" && incremental.back() == "END",
+          "incremental sender emits bounded records through transfer end");
+
+    filesync::model::Config target_config;
+    target_config.paths.push_back({target_root, "work"});
+    filesync::transfer::Receiver receiver(target_config);
+    bool complete = false;
+    for (const auto& value : incremental) complete = receiver.apply_line(value) || complete;
+    check(complete, "receiver accepts incremental sender output");
+    check(read(target_root / "large.bin") == read(source_root / "large.bin"),
+          "incremental full transfer rebuilds file");
+    std::filesystem::remove_all(root);
+}
+} // namespace filesync::tests
+
+int main() {
+    filesync::tests::test_delta_insert_delete_and_reuse();
+    filesync::tests::test_empty_and_digest();
+    filesync::tests::test_path_validation();
+    filesync::tests::test_recursive_exclude_patterns();
+    filesync::tests::test_strict_protocol();
+    filesync::tests::test_delete_request_uses_previous_state();
+    filesync::tests::test_delete_transfer_matches_receiver_count();
+    filesync::tests::test_local_delete_is_sent_to_remote();
+    filesync::tests::test_remote_change_wins_over_local_delete();
+    filesync::tests::test_incremental_file_sender_matches_receiver();
+    return filesync::tests::failed == 0 ? 0 : 1;
 }

@@ -352,10 +352,11 @@ namespace yuan::app
             return false;
         }
 
-        auto *plugin = pluginManager.get_plugin(plugin_name);
-        if (plugin) {
-            if (!lcm.call_guard().guarded_call_void(plugin_name, lcm.state(plugin_name), "on_enable",
-                                                    [plugin]() { plugin->on_enable(); })) {
+        {
+            auto call = lcm.acquire_call(plugin_name);
+            if (call && !lcm.call_guard().guarded_call_void(plugin_name, call.state(), "on_enable",
+                                                            [&call]() { call.plugin()->on_enable(); })) {
+                lcm.apply_recorded_fault_policy(plugin_name);
                 LOG_ERROR("plugin '{}' on_enable failed, rolling back", plugin_name);
                 cleanup_plugin_resources(plugin_name);
                 pluginManager.release_plugin(plugin_name);
@@ -402,10 +403,13 @@ namespace yuan::app
                 make_plugin_event(plugin_name));
         }
 
-        auto *plugin = pluginManager.get_plugin(plugin_name);
-        if (plugin) {
-            lcm.call_guard().guarded_call_void(plugin_name, lcm.state(plugin_name), "on_disable",
-                                               [plugin]() { plugin->on_disable(); });
+        {
+            auto call = lcm.acquire_call(plugin_name);
+            if (call && !lcm.call_guard().guarded_call_void(
+                    plugin_name, call.state(), "on_disable",
+                    [&call]() { call.plugin()->on_disable(); })) {
+                lcm.apply_recorded_fault_policy(plugin_name);
+            }
         }
 
         if (service_registry_) {
@@ -484,13 +488,15 @@ namespace yuan::app
         auto &lcm = pluginManager.lifecycle_manager();
 
         for (const auto &name : loaded_plugins_) {
-            auto *plugin = pluginManager.get_plugin(name);
             bool healthy = false;
-
-            if (plugin && lcm.accepts_callbacks(name)) {
-                healthy = lcm.call_guard().guarded_call_void(
-                    name, lcm.state(name), "on_health_check",
-                    [plugin]()->bool { return plugin->on_health_check(); });
+            bool callback_completed = false;
+            {
+                auto call = lcm.acquire_call(name);
+                if (call) {
+                    callback_completed = lcm.call_guard().guarded_call_void(
+                        name, call.state(), "on_health_check",
+                        [&]() { healthy = call.plugin()->on_health_check(); });
+                }
             }
 
             results.emplace_back(name, healthy);
@@ -503,7 +509,8 @@ namespace yuan::app
             }
 
             if (!healthy && lcm.state(name) == plugin::PluginState::active) {
-                lcm.fault(name, "health check failed");
+                callback_completed ? lcm.fault(name, "health check failed")
+                                   : lcm.apply_recorded_fault_policy(name);
             }
         }
         return results;
@@ -513,16 +520,14 @@ namespace yuan::app
     {
         auto &pluginManager = plugin_manager();
         auto &lcm = pluginManager.lifecycle_manager();
-        auto *plugin = pluginManager.get_plugin(plugin_name);
-        if (!plugin) {
-            return false;
-        }
-
         bool healthy = false;
-        if (lcm.accepts_callbacks(plugin_name)) {
-            healthy = lcm.call_guard().guarded_call_void(
-                plugin_name, lcm.state(plugin_name), "on_health_check",
-                [plugin]()->bool { return plugin->on_health_check(); });
+        bool callback_completed = false;
+        {
+            auto call = lcm.acquire_call(plugin_name);
+            if (!call) return false;
+            callback_completed = lcm.call_guard().guarded_call_void(
+                plugin_name, call.state(), "on_health_check",
+                [&]() { healthy = call.plugin()->on_health_check(); });
         }
 
         if (runtime_context_.event_bus) {
@@ -533,7 +538,8 @@ namespace yuan::app
         }
 
         if (!healthy && lcm.state(plugin_name) == plugin::PluginState::active) {
-            lcm.fault(plugin_name, "health check failed");
+            callback_completed ? lcm.fault(plugin_name, "health check failed")
+                               : lcm.apply_recorded_fault_policy(plugin_name);
         }
 
         return healthy;
@@ -548,24 +554,24 @@ namespace yuan::app
 
         auto &pluginManager = plugin_manager();
         auto &lcm = pluginManager.lifecycle_manager();
-        auto *plugin = pluginManager.get_plugin(plugin_name);
-        if (!plugin) {
-            return false;
-        }
-        auto plugin_context = pluginManager.plugin_context(plugin_name);
-
         auto new_config = pluginManager.reload_plugin_config(plugin_name);
         if (!new_config.loaded()) {
             LOG_WARN("reload config for plugin '{}' failed: config not loaded", plugin_name);
             return false;
         }
 
-        if (lcm.accepts_callbacks(plugin_name)) {
-            lcm.call_guard().guarded_call_void(
-                plugin_name, lcm.state(plugin_name), "on_config_changed",
-                [plugin, &new_config]() { plugin->on_config_changed(new_config); });
+        {
+            auto call = lcm.acquire_call(plugin_name);
+            if (!call) return false;
+            if (!lcm.call_guard().guarded_call_void(
+                plugin_name, call.state(), "on_config_changed",
+                [&call, &new_config]() { call.plugin()->on_config_changed(new_config); })) {
+                lcm.apply_recorded_fault_policy(plugin_name);
+                return false;
+            }
         }
 
+        const auto plugin_context = pluginManager.plugin_context(plugin_name);
         if (runtime_context_.event_bus) {
             plugin::PluginConfigChangedEvent event;
             static_cast<plugin::PluginEvent &>(event) = make_plugin_event(plugin_name);
@@ -637,15 +643,18 @@ namespace yuan::app
     }
 
     void PluginHostService::set_http_installers(
-        std::function<bool(std::shared_ptr<plugin::HttpMiddlewareCallback>, std::string)> middleware_installer,
-        std::function<bool(std::shared_ptr<plugin::HttpRouteCallback>, std::string, std::string, std::string)> route_installer)
+        std::function<uint64_t(std::shared_ptr<plugin::HttpMiddlewareCallback>, std::string)> middleware_installer,
+        std::function<uint64_t(std::shared_ptr<plugin::HttpRouteCallback>, std::string, std::string, std::string)> route_installer,
+        std::function<bool(uint64_t)> uninstaller)
     {
         pending_http_middleware_installer_ = std::move(middleware_installer);
         pending_http_route_installer_ = std::move(route_installer);
+        pending_http_uninstaller_ = std::move(uninstaller);
         if (http_interceptor_) {
             http_interceptor_adapter()->set_installers(
                 pending_http_middleware_installer_,
-                pending_http_route_installer_);
+                pending_http_route_installer_,
+                pending_http_uninstaller_);
         }
     }
 
@@ -680,34 +689,7 @@ namespace yuan::app
 
     bool PluginHostService::script_entry_path(const std::string & plugin_name, std::string & path) const
     {
-        std::error_code ec;
-        auto manifest_path = std::filesystem::path(plugin_path_) / plugin_name / "plugin.json";
-        if (!std::filesystem::exists(manifest_path, ec) || ec) {
-            manifest_path = std::filesystem::path(plugin_path_) / (plugin_name + ".json");
-            if (!std::filesystem::exists(manifest_path, ec) || ec) {
-                return false;
-            }
-        }
-
-        std::ifstream manifest_file(manifest_path);
-        if (!manifest_file.good()) {
-            return false;
-        }
-        try
-        {
-            nlohmann::json manifest;
-            manifest_file >> manifest;
-            if (manifest.value("run_mode", "") != "script") {
-                return false;
-            }
-            const auto entry = manifest.value("entry", std::string("main.lua"));
-            path = (std::filesystem::path(plugin_path_) / plugin_name / entry).string();
-            return true;
-        }
-        catch (...)
-        {
-            return false;
-        }
+        return plugin_manager().script_entry_path(plugin_name, path);
     }
 
     bool PluginHostService::update_script_timestamp(const std::string & plugin_name)
@@ -768,7 +750,8 @@ namespace yuan::app
         if (pending_http_middleware_installer_ || pending_http_route_installer_) {
             http_interceptor_adapter()->set_installers(
                 pending_http_middleware_installer_,
-                pending_http_route_installer_);
+                pending_http_route_installer_,
+                pending_http_uninstaller_);
         }
 
         auto &pluginManager = plugin_manager();
@@ -846,13 +829,13 @@ namespace yuan::app
                 continue;
             }
 
-            auto *plugin = pluginManager.get_plugin(plugin_name);
-            if (plugin) {
+            auto call = lcm.acquire_call(plugin_name);
+            if (call) {
                 if (!lcm.call_guard().guarded_call_void(
-                    plugin_name, lcm.state(plugin_name), "on_enable",
-                    [plugin]() { plugin->on_enable(); })) {
+                    plugin_name, call.state(), "on_enable",
+                    [&call]() { call.plugin()->on_enable(); })) {
                     LOG_ERROR("plugin '{}' on_enable failed during start", plugin_name);
-                    lcm.fault(plugin_name, "on_enable failed during start");
+                    lcm.apply_recorded_fault_policy(plugin_name);
                 }
             }
 
@@ -873,11 +856,11 @@ namespace yuan::app
         auto &lcm = pluginManager.lifecycle_manager();
 
         for (auto it = loaded_plugins_.rbegin(); it != loaded_plugins_.rend(); ++it) {
-            auto *plugin = pluginManager.get_plugin(*it);
-            if (plugin) {
+            auto call = lcm.acquire_call(*it);
+            if (call) {
                 lcm.call_guard().guarded_call_void(
-                    *it, lcm.state(*it), "on_disable",
-                    [plugin]() { plugin->on_disable(); });
+                    *it, call.state(), "on_disable",
+                    [&call]() { call.plugin()->on_disable(); });
             }
         }
 

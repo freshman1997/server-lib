@@ -4,6 +4,7 @@
 #include "net/handler/connection_handler.h"
 #include "net/socket/socket_ops.h"
 #include "net/handler/event_handler.h"
+#include "event/event_loop.h"
 #include "net/socket/inet_address.h"
 #include "net/socket/socket.h"
 #include "net/security/ssl_handler.h"
@@ -11,9 +12,11 @@
 #include "base/owner_ptr.h"
 #include "base/spinlock.h"
 #include "logger.h"
+#include "net/profiling.h"
 
 #include <cassert>
 #include <cerrno>
+#include <climits>
 #ifdef _WIN32
 #include <ws2tcpip.h>
 #include <winsock2.h>
@@ -177,6 +180,15 @@ namespace yuan::net
             return;
         }
 
+        if (!is_in_owner_loop()) {
+            auto self = std::static_pointer_cast<TcpConnection>(shared_from_this());
+            auto owned = buffer;
+            dispatch_in_owner_loop([self, owned = std::move(owned)]() mutable {
+                self->write_owned(std::move(owned));
+            });
+            return;
+        }
+
         if (state_ != ConnectionState::connected || is_closing_ || output_shutdown_) {
             LOG_WARN("write dropped: state={}, output_shutdown={}, fd={}", static_cast<int>(state_), output_shutdown_, channel_->get_fd());
             return;
@@ -197,6 +209,14 @@ namespace yuan::net
     void TcpConnection::write_owned(::yuan::buffer::ByteBuffer buffer)
     {
         if (buffer.empty()) {
+            return;
+        }
+
+        if (!is_in_owner_loop()) {
+            auto self = std::static_pointer_cast<TcpConnection>(shared_from_this());
+            dispatch_in_owner_loop([self, buffer = std::move(buffer)]() mutable {
+                self->write_owned(std::move(buffer));
+            });
             return;
         }
 
@@ -229,6 +249,15 @@ namespace yuan::net
 
     void TcpConnection::write_and_flush(const ::yuan::buffer::ByteBuffer & buffer)
     {
+        if (!buffer.empty() && !is_in_owner_loop()) {
+            auto self = std::static_pointer_cast<TcpConnection>(shared_from_this());
+            auto owned = buffer;
+            dispatch_in_owner_loop([self, owned = std::move(owned)]() mutable {
+                self->write_owned_and_flush(std::move(owned));
+            });
+            return;
+        }
+
         if (buffer.empty() || state_ != ConnectionState::connected || is_closing_) {
             if (!buffer.empty()) {
                 LOG_WARN("write_and_flush dropped: state={}, fd={}", static_cast<int>(state_), channel_->get_fd());
@@ -250,12 +279,89 @@ namespace yuan::net
 
     void TcpConnection::write_owned_and_flush(::yuan::buffer::ByteBuffer buffer)
     {
+        YUAN_NET_PROFILE_ZONE("core.tcp.write_owned_and_flush");
+        if (!buffer.empty() && !is_in_owner_loop()) {
+            auto self = std::static_pointer_cast<TcpConnection>(shared_from_this());
+            dispatch_in_owner_loop([self, buffer = std::move(buffer)]() mutable {
+                self->write_owned_and_flush(std::move(buffer));
+            });
+            return;
+        }
+
         if (buffer.empty() || state_ != ConnectionState::connected || is_closing_) {
             return;
         }
 
+        bool sent_directly = false;
+        bool queued = false;
+        bool send_failed = false;
         bool overflow = false;
-        {
+        bool direct_attempted = false;
+
+        // Reserve the direct path under the same lock used by producers. The
+        // syscall stays outside the lock, while direct_output_pending_ keeps a
+        // concurrent producer from overtaking this frame.
+        if (YUAN_ENABLE_TCP_DIRECT_SEND && !ssl_handler_ && is_in_owner_loop()) {
+            bool output_empty = false;
+            {
+                YUAN_NET_PROFILE_ZONE("core.tcp.direct_reserve_lock");
+                std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
+                output_empty = output_buffer_.empty() && !direct_output_pending_;
+                if (output_empty) {
+                    direct_output_pending_ = true;
+                    direct_attempted = true;
+                }
+            }
+            if (output_empty) {
+                const auto limit = max_output_buffer_size();
+                if (limit != 0 && buffer.readable_bytes() > limit) {
+                    output_limit_exceeded_.store(true, std::memory_order_release);
+                    overflow = true;
+                } else {
+                    YUAN_NET_PROFILE_ZONE("core.tcp.direct_send");
+                    const auto readable = buffer.readable_bytes();
+                    int ret = 0;
+                    int write_error = 0;
+#ifdef _WIN32
+                    const auto send_size = static_cast<int>((std::min)(readable, static_cast<std::size_t>(INT_MAX)));
+                    ret = ::send(channel_->get_fd(), buffer.read_ptr(), send_size, 0);
+                    write_error = ret < 0 ? platform::GetLastNativeError() : 0;
+#else
+                    ret = ::send(channel_->get_fd(), buffer.read_ptr(), readable, MSG_NOSIGNAL);
+                    write_error = ret < 0 ? platform::GetLastNativeError() : 0;
+#endif
+                    YUAN_NET_PROFILE_TCP_SEND(true, readable, ret, ret < 0 && is_transient_send_error(write_error));
+                    if (ret > 0) {
+                        buffer.consume(static_cast<std::size_t>(ret));
+                    } else if (ret < 0 && !is_transient_send_error(write_error)) {
+                        send_failed = true;
+                    }
+                    sent_directly = buffer.empty();
+                }
+            }
+        }
+
+        if (direct_attempted) {
+            YUAN_NET_PROFILE_ZONE("core.tcp.direct_finish_lock");
+            std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
+            direct_output_pending_ = false;
+            if (!sent_directly && !send_failed && !overflow) {
+                const auto remaining = buffer.readable_bytes();
+                const auto limit = max_output_buffer_size();
+                if (limit != 0 && (remaining > limit || output_buffer_.readable_bytes() > limit - remaining)) {
+                    output_limit_exceeded_.store(true, std::memory_order_release);
+                    overflow = true;
+                } else {
+                    // Put the remainder ahead of producers that arrived while
+                    // the direct syscall was in progress.
+                    output_buffer_.push_front(std::make_unique<::yuan::buffer::ByteBuffer>(std::move(buffer)));
+                    queued = true;
+                }
+            }
+        }
+
+        if (!sent_directly && !queued && !send_failed && !overflow) {
+            YUAN_NET_PROFILE_ZONE("core.tcp.queue_output_lock");
             std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
             const auto bytes = buffer.readable_bytes();
             const auto limit = max_output_buffer_size();
@@ -266,8 +372,18 @@ namespace yuan::net
                 output_buffer_.push_back(std::make_unique<::yuan::buffer::ByteBuffer>(std::move(buffer)));
             }
         }
+
+        if (send_failed) {
+            notify_error_event();
+            do_close();
+            return;
+        }
         if (overflow) {
             do_close();
+            return;
+        }
+        if (sent_directly) {
+            finish_output_drained();
             return;
         }
         channel_->enable_write();
@@ -279,6 +395,14 @@ namespace yuan::net
 
     void TcpConnection::write_raw_and_flush(std::string_view data)
     {
+        if (!is_in_owner_loop()) {
+            auto self = std::static_pointer_cast<TcpConnection>(shared_from_this());
+            std::string owned(data);
+            dispatch_in_owner_loop([self, owned = std::move(owned)]() mutable {
+                self->write_raw_and_flush(owned);
+            });
+            return;
+        }
         if (data.empty() || state_ != ConnectionState::connected || is_closing_ || output_shutdown_) {
             return;
         }
@@ -340,8 +464,22 @@ namespace yuan::net
 
     void TcpConnection::flush()
     {
+        if (!is_in_owner_loop()) {
+            auto self = std::static_pointer_cast<TcpConnection>(shared_from_this());
+            dispatch_in_owner_loop([self]() { self->flush(); });
+            return;
+        }
+        YUAN_NET_PROFILE_ZONE("core.tcp.flush");
         if (state_ == ConnectionState::closed || is_closing_) {
             return;
+        }
+
+        {
+            YUAN_NET_PROFILE_ZONE("core.tcp.flush_lock");
+            std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
+            if (direct_output_pending_) {
+                return;
+            }
         }
 
         assert(state_ == ConnectionState::connected || state_ == ConnectionState::closing);
@@ -354,6 +492,8 @@ namespace yuan::net
         if (!front || front->empty()) {
             return;
         }
+
+        YUAN_NET_PROFILE_TCP_FLUSH(output_buffer_.size(), output_buffer_.readable_bytes());
 
         LOG_TRACE("flush: fd={}, output_chunks={}, first_chunk_readable={}", channel_->get_fd(), output_buffer_.size(), front->readable_bytes());
 
@@ -371,6 +511,7 @@ namespace yuan::net
                 write_error = ret < 0 ? platform::GetLastNativeError() : 0;
                 transient_write_error = ret < 0 && is_transient_errno(write_error);
             } else {
+                YUAN_NET_PROFILE_ZONE("core.tcp.flush_send");
 #ifdef _WIN32
                 ret = ::send(channel_->get_fd(), front->read_ptr(), static_cast<int>(front->readable_bytes()), 0);
                 write_error = ret < 0 ? platform::GetLastNativeError() : 0;
@@ -378,6 +519,7 @@ namespace yuan::net
                 ret = ::send(channel_->get_fd(), front->read_ptr(), front->readable_bytes(), MSG_NOSIGNAL);
                 write_error = ret < 0 ? platform::GetLastNativeError() : 0;
 #endif
+                YUAN_NET_PROFILE_TCP_SEND(false, front->readable_bytes(), ret, ret < 0 && is_transient_send_error(write_error));
                 transient_write_error = ret < 0 && is_transient_send_error(write_error);
             }
 
@@ -451,6 +593,11 @@ namespace yuan::net
 
     bool TcpConnection::shutdown_write()
     {
+        if (!is_in_owner_loop()) {
+            auto self = std::static_pointer_cast<TcpConnection>(shared_from_this());
+            dispatch_in_owner_loop([self]() { (void)self->shutdown_write(); });
+            return true;
+        }
         if (!socket_ || output_shutdown_) {
             return false;
         }
@@ -480,6 +627,11 @@ namespace yuan::net
 
     void TcpConnection::close()
     {
+        if (!is_in_owner_loop()) {
+            auto self = std::static_pointer_cast<TcpConnection>(shared_from_this());
+            dispatch_in_owner_loop([self]() { self->close(); });
+            return;
+        }
         if (state_ == ConnectionState::closed || is_closing_) {
             return;
         }
@@ -797,6 +949,14 @@ namespace yuan::net
     void TcpConnection::set_event_handler(EventHandler * eventHandler)
     {
         assert(channel_);
+        auto *event_loop = dynamic_cast<EventLoop *>(eventHandler);
+        if (event_loop && event_loop->is_running() && !event_loop->is_in_loop_thread()) {
+            auto self = std::static_pointer_cast<TcpConnection>(shared_from_this());
+            if (eventHandler_) {
+                dispatch_in_owner_loop([self, eventHandler]() { self->set_event_handler(eventHandler); });
+            }
+            return;
+        }
         if (eventHandler_ == eventHandler) {
             if (eventHandler_) {
                 eventHandler_->update_channel(yuan::base::owner_ptr(channel_));

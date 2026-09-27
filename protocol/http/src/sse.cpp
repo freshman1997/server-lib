@@ -154,8 +154,8 @@ namespace yuan::net::http
                         conn
                     ] : subscribers_) {
             (void)id;
-            if (auto owner = conn.lock()) {
-                owner->close();
+            if (conn) {
+                conn->close();
             }
         }
         subscribers_.clear();
@@ -199,9 +199,9 @@ namespace yuan::net::http
         {
             std::lock_guard<std::mutex> lock(mutex_);
             for (auto it = subscribers_.begin(); it != subscribers_.end();) {
-                auto conn = it->second.lock();
+                auto conn = it->second;
                 if (conn && conn->is_active()) {
-                    active.push_back(std::move(conn));
+                    active.push_back(conn);
                     ++it;
                 } else {
                     it = subscribers_.erase(it);
@@ -225,9 +225,9 @@ namespace yuan::net::http
         {
             std::lock_guard<std::mutex> lock(mutex_);
             for (auto it = subscribers_.begin(); it != subscribers_.end();) {
-                auto conn = it->second.lock();
+                auto conn = it->second;
                 if (conn && conn->is_active()) {
-                    active.push_back(std::move(conn));
+                    active.push_back(conn);
                     ++it;
                 } else {
                     it = subscribers_.erase(it);
@@ -246,7 +246,7 @@ namespace yuan::net::http
         size_t count = 0;
         for (const auto &[id, conn] : subscribers_) {
             (void)id;
-            auto owner = conn.lock();
+            auto owner = conn;
             if (owner && owner->is_active()) {
                 ++count;
             }

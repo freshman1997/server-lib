@@ -41,7 +41,8 @@ namespace yuan::plugin
 
     inline bool has_permission(PluginPermission granted, PluginPermission required)
     {
-        return (static_cast<uint32_t>(granted) & static_cast<uint32_t>(required)) != 0;
+        const auto required_bits = static_cast<uint32_t>(required);
+        return (static_cast<uint32_t>(granted) & required_bits) == required_bits;
     }
 
     /// 权限名称表 (用于配置文件和日志)

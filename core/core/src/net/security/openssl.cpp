@@ -9,6 +9,16 @@
 #include <vector>
 #include "openssl/ssl.h"
 #include "openssl/err.h"
+#include "openssl/x509_vfy.h"
+#include "openssl/x509v3.h"
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <wincrypt.h>
+#endif
 
 namespace yuan::net
 {
@@ -72,6 +82,57 @@ namespace yuan::net
 
         using SslCtxPtr = std::unique_ptr<SSL_CTX, SslCtxDeleter>;
         using SslPtr = std::unique_ptr<SSL, SslDeleter>;
+
+#ifdef _WIN32
+        bool load_windows_system_roots(SSL_CTX *ctx)
+        {
+            auto *store = SSL_CTX_get_cert_store(ctx);
+            if (!store) {
+                return false;
+            }
+
+            HCERTSTORE system_store = CertOpenSystemStoreA(0, "ROOT");
+            if (!system_store) {
+                return false;
+            }
+
+            bool loaded_any = false;
+            PCCERT_CONTEXT cert_context = nullptr;
+            while ((cert_context = CertEnumCertificatesInStore(system_store, cert_context)) != nullptr) {
+                const unsigned char *encoded = cert_context->pbCertEncoded;
+                X509 *cert = d2i_X509(nullptr, &encoded, static_cast<long>(cert_context->cbCertEncoded));
+                if (!cert) {
+                    continue;
+                }
+                if (X509_STORE_add_cert(store, cert) == 1) {
+                    loaded_any = true;
+                } else {
+                    const auto err = ERR_peek_last_error();
+                    if (ERR_GET_LIB(err) == ERR_LIB_X509 && ERR_GET_REASON(err) == X509_R_CERT_ALREADY_IN_HASH_TABLE) {
+                        ERR_clear_error();
+                        loaded_any = true;
+                    }
+                }
+                X509_free(cert);
+            }
+
+            CertCloseStore(system_store, 0);
+            return loaded_any;
+        }
+#endif
+
+        bool load_client_trust_roots(SSL_CTX *ctx, const std::string &cert)
+        {
+            if (!cert.empty()) {
+                return SSL_CTX_load_verify_locations(ctx, cert.c_str(), nullptr) == 1;
+            }
+
+            bool loaded = SSL_CTX_set_default_verify_paths(ctx) == 1;
+#ifdef _WIN32
+            loaded = load_windows_system_roots(ctx) || loaded;
+#endif
+            return loaded;
+        }
 
         static int alpn_select_callback(SSL *, const unsigned char **out, unsigned char *outlen,
                                          const unsigned char *in, unsigned int inlen, void *arg)
@@ -159,7 +220,9 @@ namespace yuan::net
                 return false;
             }
         } else {
-            if (SSL_CTX_load_verify_locations(data_->ctx_.get(), cert.c_str(), NULL) != 1) {
+            SSL_CTX_set_verify(data_->ctx_.get(), SSL_VERIFY_PEER, nullptr);
+            SSL_CTX_set_default_verify_dir(data_->ctx_.get());
+            if (!load_client_trust_roots(data_->ctx_.get(), cert)) {
                 ERR_print_errors_cb(set_err_msg, this);
                 return false;
             }
@@ -356,9 +419,34 @@ namespace yuan::net
                 return -1;
             }
             ERR_print_errors_cb(set_err_msg, this->data_->module_);
+        } else if (data_->mode_ == OpenSSLHandler::SSLMode::connector_) {
+            const auto verify_result = SSL_get_verify_result(data_->ssl_.get());
+            if (verify_result != X509_V_OK) {
+                if (data_->module_) {
+                    const auto *message = X509_verify_cert_error_string(verify_result);
+                    data_->module_->set_error_msg(message, std::strlen(message));
+                }
+                return -1;
+            }
         }
 
         return res;
+    }
+
+    bool OpenSSLHandler::set_hostname(const std::string &hostname)
+    {
+        if (!data_->ssl_ || hostname.empty()) {
+            return false;
+        }
+        if (SSL_set_tlsext_host_name(data_->ssl_.get(), hostname.c_str()) != 1) {
+            return false;
+        }
+        auto *param = SSL_get0_param(data_->ssl_.get());
+        if (!param) {
+            return false;
+        }
+        X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+        return X509_VERIFY_PARAM_set1_host(param, hostname.c_str(), hostname.size()) == 1;
     }
 
     bool OpenSSLHandler::ssl_want_read() const

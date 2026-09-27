@@ -91,9 +91,12 @@ namespace yuan::coroutine
         if (!event_loop_ || !conn) {
             return;
         }
-        conn->set_connection_handler(std::move(handler));
-        conn->set_event_handler(event_loop_);
-        event_loop_->on_new_connection(conn->shared_from_this());
+        auto shared = conn->shared_from_this();
+        event_loop_->run_in_loop_sync([loop = event_loop_, shared = std::move(shared), handler = std::move(handler)]() mutable {
+            shared->set_connection_handler(std::move(handler));
+            shared->set_event_handler(loop);
+            loop->on_new_connection(shared);
+        });
     }
 
     inline void RuntimeView::register_connection(const std::shared_ptr<net::Connection> &conn, std::shared_ptr<net::ConnectionHandler> handler) const
@@ -101,15 +104,19 @@ namespace yuan::coroutine
         if (!event_loop_ || !conn) {
             return;
         }
-        conn->set_connection_handler(std::move(handler));
-        conn->set_event_handler(event_loop_);
-        event_loop_->on_new_connection(conn);
+        event_loop_->run_in_loop_sync([loop = event_loop_, conn, handler = std::move(handler)]() mutable {
+            conn->set_connection_handler(std::move(handler));
+            conn->set_event_handler(loop);
+            loop->on_new_connection(conn);
+        });
     }
 
     inline void RuntimeView::update_channel(net::Channel * channel) const
     {
         if (event_loop_ && channel) {
-            event_loop_->update_channel(channel);
+            event_loop_->run_in_loop_sync([loop = event_loop_, channel]() {
+                loop->update_channel(channel);
+            });
         }
     }
 

@@ -174,8 +174,9 @@ namespace yuan::net::http
         void on_async(const std::string &url, async_request_function func);
         void on(const std::string &url, request_function func,
                 std::shared_ptr<MiddlewarePipeline> pipeline, bool is_prefix = false);
-        void use(std::shared_ptr<HttpMiddleware> middleware);
-        void use(middleware_function fn, const char *name = "anonymous");
+        uint64_t use(std::shared_ptr<HttpMiddleware> middleware);
+        uint64_t use(middleware_function fn, const char *name = "anonymous");
+        bool unuse(uint64_t token);
 
         using WsProxyHandler = std::function<coroutine::Task<void>(
             net::AsyncConnectionContext, const std::string &, const std::string &,

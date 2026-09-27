@@ -43,9 +43,10 @@ namespace yuan::server
         }
     }
 
-    void DnsService::stop()
+    bool DnsService::stop()
     {
         host_.stop([this]() { server_->stop(); });
+        return true;
     }
 
     yuan::net::dns::DnsServer &DnsService::server()

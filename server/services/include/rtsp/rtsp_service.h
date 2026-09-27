@@ -18,7 +18,7 @@ public:
 
     bool init() override;
     void start() override;
-    void stop() override;
+    bool stop() override;
     void set_runtime_context(const yuan::app::RuntimeContext &context) override;
 
     yuan::net::rtsp::RtspServer &server();

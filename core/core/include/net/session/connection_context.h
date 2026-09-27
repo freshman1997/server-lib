@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <cstdint>
+#include <functional>
 #include <string_view>
 
 namespace yuan::net
@@ -33,6 +34,11 @@ namespace yuan::net
             return conn_handle_->take_input_byte_buffer();
         }
 
+        ::yuan::buffer::ByteBuffer take_and_clear_input_byte_buffer()
+        {
+            return conn_handle_->take_and_clear_input_byte_buffer();
+        }
+
         ::yuan::buffer::ByteBuffer get_input_byte_buffer() const
         {
             return conn_handle_->get_input_byte_buffer();
@@ -51,6 +57,21 @@ namespace yuan::net
         void write_and_flush(const ::yuan::buffer::ByteBuffer &buffer)
         {
             conn_handle_->write_and_flush(buffer);
+        }
+
+        void write_owned(::yuan::buffer::ByteBuffer buffer)
+        {
+            conn_handle_->write_owned(std::move(buffer));
+        }
+
+        void write_owned_and_flush(::yuan::buffer::ByteBuffer buffer)
+        {
+            conn_handle_->write_owned_and_flush(std::move(buffer));
+        }
+
+        void send_owned(::yuan::buffer::ByteBuffer buffer, FlushPolicy policy = FlushPolicy::immediate)
+        {
+            conn_handle_->send_owned(std::move(buffer), policy);
         }
 
         void append_output(std::string_view text)
@@ -86,6 +107,28 @@ namespace yuan::net
         bool is_connected() const
         {
             return conn_handle_ && conn_handle_->is_connected();
+        }
+
+        bool try_append_output(std::string_view text)
+        {
+            return conn_handle_->try_append_output(text);
+        }
+
+        std::size_t output_readable_bytes() const noexcept
+        {
+            return conn_handle_ ? conn_handle_->output_readable_bytes() : 0;
+        }
+
+        bool is_in_owner_loop() const noexcept
+        {
+            return conn_handle_ && conn_handle_->is_in_owner_loop();
+        }
+
+        void dispatch_in_owner_loop(std::function<void()> callback)
+        {
+            if (conn_handle_) {
+                conn_handle_->dispatch_in_owner_loop(std::move(callback));
+            }
         }
 
         const InetAddress &get_remote_address() const

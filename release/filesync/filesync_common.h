@@ -12,11 +12,13 @@
 #include <thread>
 #include <vector>
 
-namespace filesync {
+#include "filesync_digest.h"
+#include "filesync_limits.h"
 
+namespace filesync {
 inline std::uint64_t file_time_to_seconds(const std::filesystem::file_time_type& time) {
-    const auto system_time = std::chrono::time_point_cast<std::chrono::seconds>(
-        time - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+    const auto system_time = std::chrono::time_point_cast<std::chrono::nanoseconds>(
+        std::filesystem::file_time_type::clock::to_sys(time));
     return static_cast<std::uint64_t>(system_time.time_since_epoch().count());
 }
 
@@ -60,12 +62,14 @@ inline bool is_safe_relative_path(const std::string& value) {
         return false;
     }
     std::size_t start = 0;
+    for (unsigned char ch : value) if (ch < 32 || ch == 127) return false;
     while (start <= value.size()) {
         const auto end = value.find('/', start);
         const auto part = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
         if (part.empty() || part == "." || part == "..") {
             return false;
         }
+        if (part.back() == '.' || part.back() == ' ') return false;
         if (end == std::string::npos) {
             break;
         }
@@ -81,7 +85,7 @@ inline std::uint64_t fnv1a_file_hash(const std::filesystem::path& path) {
     }
 
     std::uint64_t hash = 1469598103934665603ull;
-    char buffer[64 * 1024];
+    char buffer[limits::digest_buffer_size];
     while (in) {
         in.read(buffer, sizeof(buffer));
         const auto count = in.gcount();
@@ -117,6 +121,8 @@ inline int from_hex(char ch) {
 inline std::string unquote_token(const std::string& value) {
     std::string out;
     for (std::size_t i = 0; i < value.size(); ++i) {
+        if (value[i] == '%' && (i + 2 >= value.size() || from_hex(value[i + 1]) < 0 || from_hex(value[i + 2]) < 0))
+            throw std::runtime_error("invalid escaped token");
         if (value[i] == '%' && i + 2 < value.size()) {
             const int hi = from_hex(value[i + 1]);
             const int lo = from_hex(value[i + 2]);

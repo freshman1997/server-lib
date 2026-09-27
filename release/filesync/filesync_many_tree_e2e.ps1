@@ -177,6 +177,48 @@ try {
         throw "client did not pull server-side change when local manifest was unchanged"
     }
 
+    $deltaServer = Join-Path $serverDir 'delta.bin'
+    $deltaClient = Join-Path $clientDir 'delta.bin'
+    $deltaBytes = [byte[]]::new(1024 * 1024)
+    for ($i = 0; $i -lt $deltaBytes.Length; $i++) {
+        $deltaBytes[$i] = $i % 251
+    }
+    [System.IO.File]::WriteAllBytes($deltaServer, $deltaBytes)
+    $deltaInitial = Wait-Until -TimeoutSeconds 60 -Condition {
+        return (Test-Path -LiteralPath $deltaClient) -and
+            ((Get-FileHash -Algorithm SHA256 -LiteralPath $deltaServer).Hash -eq
+             (Get-FileHash -Algorithm SHA256 -LiteralPath $deltaClient).Hash)
+    }
+    if (!$deltaInitial) {
+        throw "initial delta basis file did not sync"
+    }
+
+    $deltaBytes[500000] = ($deltaBytes[500000] + 1) % 251
+    [System.IO.File]::WriteAllBytes($deltaServer, $deltaBytes)
+    $deltaUpdated = Wait-Until -TimeoutSeconds 60 -Condition {
+        return (Get-FileHash -Algorithm SHA256 -LiteralPath $deltaServer).Hash -eq
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $deltaClient).Hash
+    }
+    if (!$deltaUpdated) {
+        throw "incremental delta update did not sync"
+    }
+    $deltaLogged = Wait-Until -TimeoutSeconds 10 -Condition {
+        $serverUsedDelta = (Test-Path -LiteralPath $serverLog) -and
+            ((Get-Content -LiteralPath $serverLog -Raw) -match 'delta=[1-9]')
+        $clientUsedDelta = (Test-Path -LiteralPath $clientLog) -and
+            ((Get-Content -LiteralPath $clientLog -Raw) -match 'delta=[1-9]')
+        return $serverUsedDelta -or $clientUsedDelta
+    }
+    if (!$deltaLogged) {
+        throw "updated file was not sent through the delta path"
+    }
+
+    $temporaryFiles = @(Get-ChildItem -LiteralPath $tmp -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like '*.filesync.tmp.*' -or $_.Name -like '*.filesync.backup.*' })
+    if ($temporaryFiles.Count -ne 0) {
+        throw "temporary transfer files remain after successful sync"
+    }
+
     if ($client.HasExited) {
         throw "client process exited unexpectedly"
     }
@@ -184,7 +226,7 @@ try {
         throw "server process exited unexpectedly"
     }
 
-    Write-Output "filesync many-tree e2e OK files=$totalFiles empty_dirs=$emptyDirs tmp=$tmp"
+    Write-Output "filesync many-tree e2e OK files=$totalFiles empty_dirs=$emptyDirs delta=verified tmp=$tmp"
     $success = $true
 } catch {
     Write-Output "filesync many-tree e2e FAILED tmp=$tmp"

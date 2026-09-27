@@ -19,21 +19,23 @@ class PluginHttpInterceptor : public plugin::HostHttpInterceptor
 {
 public:
     using ServerAccessor = std::function<void *()>;
-    using MiddlewareInstaller = std::function<bool(
+    using MiddlewareInstaller = std::function<uint64_t(
         std::shared_ptr<plugin::HttpMiddlewareCallback> callback,
         std::string name)>;
-    using RouteInstaller = std::function<bool(
+    using RouteInstaller = std::function<uint64_t(
         std::shared_ptr<plugin::HttpRouteCallback> callback,
         std::string path,
         std::string method,
         std::string name)>;
+    using HttpUninstaller = std::function<bool(uint64_t token)>;
 
     PluginHttpInterceptor() = default;
     ~PluginHttpInterceptor() override;
 
     void set_server_accessor(ServerAccessor accessor);
     void set_installers(MiddlewareInstaller middleware_installer,
-                        RouteInstaller route_installer);
+                        RouteInstaller route_installer,
+                        HttpUninstaller uninstaller);
     void set_resource_guard(plugin::HostResourceGuard *guard);
 
     plugin::HttpInterceptorId add_middleware(
@@ -60,6 +62,7 @@ private:
         std::string method;
         bool is_middleware = false;
         bool installed = false;
+        uint64_t installer_token = 0;
         uint64_t resource_guard_id = 0;
         std::shared_ptr<plugin::HttpMiddlewareCallback> shared_callback;
         std::shared_ptr<plugin::HttpRouteCallback> shared_route_callback;
@@ -72,6 +75,7 @@ private:
     ServerAccessor server_accessor_;
     MiddlewareInstaller middleware_installer_;
     RouteInstaller route_installer_;
+    HttpUninstaller uninstaller_;
     plugin::HostResourceGuard *resource_guard_ = nullptr;
 
     mutable std::mutex mutex_;

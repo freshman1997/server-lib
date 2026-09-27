@@ -5,6 +5,7 @@
 #include "plugin/plugin_config_view.h"
 
 #include <functional>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -31,6 +32,7 @@ namespace yuan::plugin
 
     private:
         ScriptPluginRegistry() = default;
+        mutable std::mutex mutex_;
         std::unordered_map<std::string, FactoryFn> factories_;
     };
 

@@ -1,5 +1,9 @@
+#include <cassert>
+#include <exception>
+
 #include "net/runtime/network_runtime.h"
 #include "event/event_loop.h"
+#include "logger.h"
 #include "net/acceptor/acceptor.h"
 #include "net/channel/channel.h"
 #include "net/connection/connection.h"
@@ -39,15 +43,29 @@ namespace yuan::net
     {
     }
 
-    NetworkRuntime::~NetworkRuntime()
-    {
-        stop();
+NetworkRuntime::~NetworkRuntime()
+{
+    stop();
+
+        if (owns_ && loop_ && loop_->is_running()) {
+            if (loop_->is_in_loop_thread()) {
+                LOG_ERROR("NetworkRuntime destroyed from its own EventLoop thread");
+                std::terminate();
+            }
+            loop_->wait_until_stopped();
+        }
 
         owned_loop_.reset();
         owned_timer_manager_.reset();
         owned_poller_.reset();
 
         if (!owns_) {
+            // The external owner controls the loop lifetime. Do not pretend
+            // that stop() synchronizes a separately managed run thread.
+            if (loop_ && loop_->is_running()) {
+                LOG_ERROR("NetworkRuntime destroyed while externally-owned EventLoop is still running");
+                std::terminate();
+            }
             loop_ = nullptr;
             timer_manager_ = nullptr;
             poller_ = nullptr;
@@ -105,9 +123,14 @@ namespace yuan::net
         if (!timer_manager_ || !callback) {
             return {};
         }
-        return timer_manager_->after(delay_ms, [cb = std::move(callback)]() {
-            cb();
+        if (!loop_ || loop_->is_in_loop_thread()) {
+            return timer_manager_->after(delay_ms, [cb = std::move(callback)]() { cb(); });
+        }
+        timer::TimerHandle result;
+        loop_->run_in_loop_sync([this, delay_ms, callback = std::move(callback), &result]() mutable {
+            result = timer_manager_->after(delay_ms, [cb = std::move(callback)]() { cb(); });
         });
+        return result;
     }
 
     timer::TimerHandle NetworkRuntime::schedule_periodic(uint32_t delay_ms, uint32_t interval_ms, std::function<void()> callback, int repeat)
@@ -115,9 +138,22 @@ namespace yuan::net
         if (!timer_manager_ || !callback) {
             return {};
         }
-        return timer_manager_->every(delay_ms, interval_ms, [cb = std::move(callback)]() {
-            cb();
-        }, repeat);
+        if (!loop_ || loop_->is_in_loop_thread()) {
+            return timer_manager_->every(delay_ms, interval_ms,
+                                         [cb = std::move(callback)]() { cb(); }, repeat);
+        }
+        timer::TimerHandle result;
+        loop_->run_in_loop_sync([this, delay_ms, interval_ms, repeat,
+                                 callback = std::move(callback), &result]() mutable {
+            result = timer_manager_->every(delay_ms, interval_ms,
+                                           [cb = std::move(callback)]() { cb(); }, repeat);
+        });
+        return result;
+    }
+
+    bool NetworkRuntime::is_in_loop_thread() const noexcept
+    {
+        return loop_ && loop_->is_in_loop_thread();
     }
 
     void NetworkRuntime::dispatch(std::function<void()> callback)
@@ -127,15 +163,29 @@ namespace yuan::net
         }
     }
 
+    void NetworkRuntime::dispatch_or_execute(std::function<void()> callback)
+    {
+        if (!loop_ || !callback) {
+            return;
+        }
+        if (loop_->is_in_loop_thread()) {
+            callback();
+            return;
+        }
+        loop_->queue_in_loop(std::move(callback));
+    }
+
     void NetworkRuntime::register_connection(const std::shared_ptr<Connection> &conn, std::shared_ptr<ConnectionHandler> handler)
     {
         if (!loop_ || !conn) {
             return;
         }
 
-        conn->set_connection_handler(std::move(handler));
-        conn->set_event_handler(loop_);
-        loop_->on_new_connection(conn);
+        loop_->run_in_loop_sync([loop = loop_, conn, handler = std::move(handler)]() mutable {
+            conn->set_connection_handler(std::move(handler));
+            conn->set_event_handler(loop);
+            loop->on_new_connection(conn);
+        });
     }
 
     void NetworkRuntime::register_connection(Connection * conn, std::shared_ptr<ConnectionHandler> handler)
@@ -144,15 +194,20 @@ namespace yuan::net
             return;
         }
 
-        conn->set_connection_handler(std::move(handler));
-        conn->set_event_handler(loop_);
-        loop_->on_new_connection(conn->shared_from_this());
+        auto shared = conn->shared_from_this();
+        loop_->run_in_loop_sync([loop = loop_, shared = std::move(shared), handler = std::move(handler)]() mutable {
+            shared->set_connection_handler(std::move(handler));
+            shared->set_event_handler(loop);
+            loop->on_new_connection(shared);
+        });
     }
 
     void NetworkRuntime::update_channel(Channel * channel)
     {
         if (loop_ && channel) {
-            loop_->update_channel(channel);
+            loop_->run_in_loop_sync([loop = loop_, channel]() {
+                loop->update_channel(channel);
+            });
         }
     }
 
@@ -169,11 +224,13 @@ namespace yuan::net
         if (!acceptor || !loop_) {
             return;
         }
-        acceptor->set_event_handler(loop_);
-        acceptor->set_connection_handler(std::move(handler));
-        if (channel) {
-            loop_->update_channel(channel);
-        }
+        loop_->run_in_loop_sync([loop = loop_, acceptor, handler = std::move(handler), channel]() mutable {
+            acceptor->set_event_handler(loop);
+            acceptor->set_connection_handler(std::move(handler));
+            if (channel) {
+                loop->update_channel(channel);
+            }
+        });
     }
 
 } // namespace yuan::net

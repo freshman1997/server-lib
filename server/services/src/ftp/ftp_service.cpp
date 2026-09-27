@@ -38,9 +38,10 @@ namespace yuan::server
         }
     }
 
-    void FtpService::stop()
+    bool FtpService::stop()
     {
         host_.stop([this]() { server_->quit(); });
+        return true;
     }
 
     yuan::net::ftp::FtpServer &FtpService::server()

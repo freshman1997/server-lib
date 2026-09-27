@@ -226,12 +226,10 @@ namespace yuan::net
 
     void ShardedAsyncListener::stop_shards()
     {
-        for (auto &shard : shards_) {
-            if (shard.acceptor) {
-                shard.acceptor->close();
-            }
-        }
-
+        // Stop the loop threads FIRST so acceptor teardown happens after the
+        // loops have left run(); channel mutations then never race an
+        // in-flight poll. Closing acceptors while a loop is still running
+        // would cross thread boundaries into EventLoop::close_channel().
         for (auto &shard : shards_) {
             if (shard.runtime) {
                 shard.runtime->stop();
@@ -241,6 +239,12 @@ namespace yuan::net
         for (auto &shard : shards_) {
             if (shard.thread.joinable()) {
                 shard.thread.join();
+            }
+        }
+
+        for (auto &shard : shards_) {
+            if (shard.acceptor) {
+                shard.acceptor->close();
             }
         }
         shards_.clear();

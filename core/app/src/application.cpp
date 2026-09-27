@@ -4,6 +4,7 @@
 #include "eventbus/event_bus.h"
 #include "eventbus/event_type_registry.h"
 #include "metrics/resource_usage_reporter.h"
+#include "net/runtime/network_runtime.h"
 
 #include <exception>
 #include <mutex>
@@ -348,19 +349,50 @@ namespace yuan::app
         return true;
     }
 
-    void Application::stop()
+    bool Application::run()
+    {
+        if (!running_ && !start()) {
+            return false;
+        }
+
+        if (context_.shared_runtime) {
+            return context_.shared_runtime->run() == net::EventLoopExitReason::quit_requested;
+        }
+
+        bool ok = true;
+        for (const auto &entry : service_instances_) {
+            if (entry.service) {
+                ok = entry.service->run() && ok;
+            }
+        }
+        return ok;
+    }
+
+    bool Application::stop()
     {
         if (!initialized_ && !running_) {
-            return;
+            return true;
         }
 
         if (context_.event_bus) {
             context_.event_bus->publish(events::application_stopping, make_application_event(context_));
         }
 
+        bool stopped = true;
         for (auto it = service_instances_.rbegin(); it != service_instances_.rend(); ++it) {
             if (it->service) {
-                it->service->stop();
+                if (!it->service->stop()) {
+                    stopped = false;
+                }
+            }
+        }
+
+        if (!stopped) {
+            return false;
+        }
+
+        for (auto it = service_instances_.rbegin(); it != service_instances_.rend(); ++it) {
+            if (it->service) {
                 if (context_.event_bus) {
                     const auto service_context = make_service_context(context_, *it);
                     context_.event_bus->publish(events::service_stopped, make_service_event(service_context, it->descriptor.name));
@@ -373,6 +405,7 @@ namespace yuan::app
 
         running_ = false;
         initialized_ = false;
+        return true;
     }
 
     bool Application::is_initialized() const

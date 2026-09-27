@@ -26,6 +26,7 @@
 #include "net/handler/event_handler.h"
 #include "net/socket/socket.h"
 #include "net/handler/connection_handler.h"
+#include "event/event_loop.h"
 
 namespace yuan::net
 {
@@ -217,6 +218,22 @@ namespace yuan::net
 
     void UdpAcceptor::set_event_handler(EventHandler * handler)
     {
+        if (handler && !handler->is_in_loop_thread()) {
+            if (auto *loop = dynamic_cast<EventLoop *>(handler)) {
+                if (loop->is_running()) {
+                    loop->run_in_loop_sync([this, handler]() { set_event_handler(handler); });
+                    return;
+                }
+            }
+        }
+        if (!handler && handler_ && !handler_->is_in_loop_thread()) {
+            if (auto *loop = dynamic_cast<EventLoop *>(handler_)) {
+                if (loop->is_running()) {
+                    loop->run_in_loop_sync([this]() { set_event_handler(nullptr); });
+                    return;
+                }
+            }
+        }
         if (handler_ == handler) {
             if (handler_ && channel_) {
                 handler_->update_channel(yuan::base::owner_ptr(channel_));

@@ -76,9 +76,9 @@ namespace yuan::net
         if (!started_) {
             return false;
         }
-        update_timer_ = runtime_.schedule_periodic(config_.update_interval_ms, config_.update_interval_ms, [this] { update_sessions(); });
+        update_timer_ = runtime_.schedule_periodic_forever(config_.update_interval_ms, config_.update_interval_ms, [this] { update_sessions(); });
         if (config_.idle_timeout_ms != 0) {
-            cleanup_timer_ = runtime_.schedule_periodic(config_.cleanup_interval_ms, config_.cleanup_interval_ms, [this] { cleanup_idle_sessions(); });
+            cleanup_timer_ = runtime_.schedule_periodic_forever(config_.cleanup_interval_ms, config_.cleanup_interval_ms, [this] { cleanup_idle_sessions(); });
         }
         return true;
     }
@@ -107,10 +107,14 @@ namespace yuan::net
             return false;
         }
         InetAddress output_address = session->address;
-        t_kcp_output_address = &output_address;
-        ikcp_update(session->kcp, static_cast<IUINT32>(base::time::now()));
-        ikcp_flush(session->kcp);
-        t_kcp_output_address = nullptr;
+        if (config_.flush_on_send) {
+            t_kcp_output_address = &output_address;
+            if (config_.update_on_send) {
+                ikcp_update(session->kcp, static_cast<IUINT32>(base::time::now()));
+            }
+            ikcp_flush(session->kcp);
+            t_kcp_output_address = nullptr;
+        }
         return true;
     }
 

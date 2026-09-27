@@ -73,20 +73,7 @@ int main()
              snapshot.total_restarts,
              snapshot.shutdown_started);
 
-    while (!g_should_exit) {
-        bootstrap.poll_workers();
-        if (bootstrap.process_role() == yuan::app::ProcessRole::supervisor &&
-            (bootstrap.has_failed_workers() ||
-             (!bootstrap.has_running_workers() && !bootstrap.has_recovering_workers()))) {
-            if (bootstrap.has_failed_workers()) {
-                LOG_WARN("supervisor detected worker failure");
-            } else {
-                LOG_WARN("all worker processes have exited and no worker is recovering");
-            }
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
+    bootstrap.wait();
 
     bootstrap.shutdown();
 

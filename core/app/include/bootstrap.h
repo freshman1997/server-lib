@@ -101,6 +101,8 @@ public:
     ~Bootstrap();
 
     bool run();
+    // Blocks until the application or its supervisor has stopped.
+    void wait();
     void shutdown();
     void poll_workers();
     ProcessRole process_role() const noexcept;

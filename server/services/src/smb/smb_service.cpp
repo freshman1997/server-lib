@@ -44,7 +44,7 @@ namespace yuan::server
         host_.start([this]() { server_->serve(); });
     }
 
-    void SmbService::stop()
+    bool SmbService::stop()
     {
         auto *server = server_.get();
         host_.stop([server]() {
@@ -52,6 +52,7 @@ namespace yuan::server
                 server->stop();
             }
         });
+        return true;
     }
 
     yuan::net::smb::SmbServer &SmbService::server()

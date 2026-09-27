@@ -56,6 +56,11 @@ namespace yuan::net
         input_shutdown,
     };
 
+    enum class FlushPolicy {
+        deferred,
+        immediate,
+    };
+
         static constexpr size_t DEFAULT_INPUT_BUFFER_SIZE = 16 * 1024;
         static constexpr size_t DEFAULT_MAX_PACKET_SIZE = 1024 * 1024 * 5;
         static constexpr size_t ET_DRAIN_MAX_BUFFER_SIZE = 4 * 1024 * 1024;
@@ -112,6 +117,15 @@ namespace yuan::net
         {
             write_owned(std::move(buffer));
             flush();
+        }
+
+        void send_owned(::yuan::buffer::ByteBuffer buffer, FlushPolicy policy = FlushPolicy::immediate)
+        {
+            if (policy == FlushPolicy::immediate) {
+                write_owned_and_flush(std::move(buffer));
+            } else {
+                write_owned(std::move(buffer));
+            }
         }
 
         virtual void write_raw_and_flush(std::string_view data)
@@ -408,6 +422,16 @@ namespace yuan::net
                 ensure_output_chunk(text.size())->append(text);
                 output_buffer_.account_append(text.size());
             }
+        }
+
+        bool try_append_output(std::string_view text)
+        {
+            if (text.empty()) return true;
+            std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
+            if (!can_append_output_locked(text.size())) return false;
+            ensure_output_chunk(text.size())->append(text);
+            output_buffer_.account_append(text.size());
+            return true;
         }
 
         void append_output(const char *data, std::size_t size)
@@ -746,6 +770,9 @@ namespace yuan::net
         ::yuan::buffer::ByteBuffer input_buffer_;
         mutable yuan::base::Spinlock output_buffer_mutex_;
         ::yuan::buffer::BufferChain output_buffer_;
+        // Protected by output_buffer_mutex_. Prevents a concurrent producer
+        // from starting another direct send while this one is in progress.
+        bool direct_output_pending_ = false;
         std::atomic_size_t max_output_buffer_size_{0};
         std::atomic_bool output_limit_exceeded_{false};
 

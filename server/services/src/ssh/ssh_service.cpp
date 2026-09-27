@@ -44,9 +44,10 @@ namespace yuan::server
         host_.start([this]() { server_->serve(); });
     }
 
-    void SshService::stop()
+    bool SshService::stop()
     {
         host_.stop([this]() { server_->stop(); });
+        return true;
     }
 
     yuan::net::ssh::SshServer &SshService::server()

@@ -49,9 +49,10 @@ namespace yuan::server
         host_.start([this]() { server_->serve(); });
     }
 
-    void MqttService::stop()
+    bool MqttService::stop()
     {
         host_.stop([this]() { server_->stop(); });
+        return true;
     }
 
     yuan::net::mqtt::MqttServer &MqttService::server()

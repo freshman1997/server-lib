@@ -13,6 +13,59 @@
 
 namespace yuan::plugin
 {
+    namespace
+    {
+        auto &current_thread_calls()
+        {
+            // Avoid cross-DLL thread-local destructor ordering during native plugin unload.
+            thread_local auto *calls = new std::unordered_map<std::string, std::size_t>();
+            return *calls;
+        }
+    }
+
+    PluginLifecycleManager::CallLease::CallLease(PluginLifecycleManager *manager,
+                                                 std::string plugin_name,
+                                                 Plugin *plugin,
+                                                 PluginState state)
+        : manager_(manager), plugin_name_(std::move(plugin_name)), plugin_(plugin), state_(state)
+    {
+    }
+
+    PluginLifecycleManager::CallLease::CallLease(CallLease &&other) noexcept
+        : manager_(other.manager_), plugin_name_(std::move(other.plugin_name_)),
+          plugin_(other.plugin_), state_(other.state_)
+    {
+        other.manager_ = nullptr;
+        other.plugin_ = nullptr;
+    }
+
+    PluginLifecycleManager::CallLease &PluginLifecycleManager::CallLease::operator=(CallLease &&other) noexcept
+    {
+        if (this != &other) {
+            reset();
+            manager_ = other.manager_;
+            plugin_name_ = std::move(other.plugin_name_);
+            plugin_ = other.plugin_;
+            state_ = other.state_;
+            other.manager_ = nullptr;
+            other.plugin_ = nullptr;
+        }
+        return *this;
+    }
+
+    PluginLifecycleManager::CallLease::~CallLease()
+    {
+        reset();
+    }
+
+    void PluginLifecycleManager::CallLease::reset()
+    {
+        if (manager_) {
+            manager_->release_call(plugin_name_);
+            manager_ = nullptr;
+            plugin_ = nullptr;
+        }
+    }
 
     PluginLifecycleManager::~PluginLifecycleManager()
     {
@@ -21,36 +74,43 @@ namespace yuan::plugin
 
     void PluginLifecycleManager::set_resource_guard(HostResourceGuard * guard)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         resource_guard_ = guard;
     }
 
     void PluginLifecycleManager::set_service_registry(HostServiceRegistry * registry)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         service_registry_ = registry;
     }
 
     void PluginLifecycleManager::set_http_interceptor(HostHttpInterceptor * interceptor)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         http_interceptor_ = interceptor;
     }
 
     void PluginLifecycleManager::set_permission_guard(HostPermissionGuard * guard)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         permission_guard_ = guard;
     }
 
     void PluginLifecycleManager::set_scheduler(HostScheduler * scheduler)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         scheduler_ = scheduler;
     }
 
     void PluginLifecycleManager::set_event_bus(HostEventBus * bus)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         event_bus_ = bus;
     }
 
     void PluginLifecycleManager::set_call_guard(std::unique_ptr<PluginCallGuard> guard)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         call_guard_ = std::move(guard);
     }
 
@@ -98,8 +158,16 @@ namespace yuan::plugin
 
     bool PluginLifecycleManager::transition(const std::string & name, PluginState new_state)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return do_transition(name, new_state);
+        PluginState old_state;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = instances_.find(name);
+            if (it == instances_.end()) return false;
+            old_state = it->second.state;
+            if (!do_transition(name, new_state)) return false;
+        }
+        if (old_state != new_state) run_transition_effects(name, old_state, new_state);
+        return true;
     }
 
     bool PluginLifecycleManager::do_transition(const std::string & name, PluginState new_state)
@@ -121,126 +189,115 @@ namespace yuan::plugin
         }
 
         it->second.state = new_state;
-        LOG_INFO("plugin '{}' state: {} -> {}", name, to_string(old_state), to_string(new_state));
-
-        notify_state_change(name, old_state, new_state);
-
-        if (new_state == PluginState::faulted || new_state == PluginState::quarantined) {
-            if (scheduler_) {
-                scheduler_->cancel_by_prefix(name);
-            }
-        }
-
-        if (new_state == PluginState::stopped) {
-            do_cleanup_plugin(name);
-        }
-
         return true;
     }
 
     bool PluginLifecycleManager::activate(const std::string & name)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = instances_.find(name);
-        if (it == instances_.end()) {
-            return false;
+        auto current = state(name);
+        if (current == PluginState::initialized) {
+            return transition(name, PluginState::active);
         }
-
-        if (it->second.state == PluginState::initialized) {
-            return do_transition(name, PluginState::active);
-        }
-        if (it->second.state == PluginState::degraded) {
+        if (current == PluginState::degraded) {
             call_guard_->reset_faults(name);
-            return do_transition(name, PluginState::active);
+            return transition(name, PluginState::active);
         }
         return false;
     }
 
     bool PluginLifecycleManager::fault(const std::string & name, const std::string & reason)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = instances_.find(name);
-        if (it == instances_.end()) {
-            return false;
-        }
-
-        if (!is_operational(it->second.state) && it->second.state != PluginState::faulted) {
+        auto current = state(name);
+        if (!is_operational(current) && current != PluginState::faulted) {
             return false;
         }
 
         LOG_ERROR("plugin '{}' faulted: {}", name, reason);
 
         call_guard_->report_fault(name, "lifecycle::fault", reason);
+        return apply_recorded_fault_policy(name);
+    }
 
+    bool PluginLifecycleManager::apply_recorded_fault_policy(const std::string &name)
+    {
         auto suggested = call_guard_->suggested_state(name);
         if (suggested == PluginState::quarantined) {
-            return do_transition(name, PluginState::quarantined);
+            return transition(name, PluginState::quarantined);
         }
         if (suggested == PluginState::faulted) {
-            return do_transition(name, PluginState::faulted);
+            return transition(name, PluginState::faulted);
         }
         if (suggested == PluginState::degraded) {
-            return do_transition(name, PluginState::degraded);
+            return transition(name, PluginState::degraded);
         }
         return true;
     }
 
     bool PluginLifecycleManager::quarantine(const std::string & name)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return do_transition(name, PluginState::quarantined);
+        return transition(name, PluginState::quarantined);
     }
 
     bool PluginLifecycleManager::degrade(const std::string & name)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return do_transition(name, PluginState::degraded);
+        return transition(name, PluginState::degraded);
     }
 
     bool PluginLifecycleManager::recover(const std::string & name)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = instances_.find(name);
-        if (it == instances_.end()) {
-            return false;
+        auto current = state(name);
+        if (current == PluginState::faulted) {
+            return transition(name, PluginState::degraded);
         }
-
-        if (it->second.state == PluginState::faulted) {
-            return do_transition(name, PluginState::degraded);
-        }
-        if (it->second.state == PluginState::degraded) {
+        if (current == PluginState::degraded) {
             call_guard_->reset_faults(name);
-            return do_transition(name, PluginState::active);
+            return transition(name, PluginState::active);
         }
         return false;
     }
 
     bool PluginLifecycleManager::stop(const std::string & name)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = instances_.find(name);
-        if (it == instances_.end()) {
+        if (current_thread_calls().count(name)) {
+            LOG_WARN("plugin '{}' cannot stop itself from an active callback", name);
             return false;
         }
-
-        if (it->second.state == PluginState::stopped || it->second.state == PluginState::unloaded) {
+        Plugin *plugin = nullptr;
+        PluginState old_state;
+        bool release_plugin = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = instances_.find(name);
+            if (it == instances_.end()) return false;
+            old_state = it->second.state;
+            if (old_state == PluginState::stopped || old_state == PluginState::unloaded) return true;
+            if (old_state == PluginState::loaded || old_state == PluginState::discovered) {
+                it->second.accepting_calls = false;
+                do_transition(name, PluginState::stopped);
+            } else {
+                if (!is_operational(old_state) && old_state != PluginState::faulted &&
+                    old_state != PluginState::quarantined && old_state != PluginState::initialized) return false;
+                it->second.accepting_calls = false;
+                do_transition(name, PluginState::stopping);
+                plugin = it->second.plugin;
+                release_plugin = true;
+            }
+        }
+        if (!release_plugin) {
+            run_transition_effects(name, old_state, PluginState::stopped);
             return true;
         }
 
-        if (it->second.state == PluginState::loaded || it->second.state == PluginState::discovered) {
-            return do_transition(name, PluginState::stopped);
+        run_transition_effects(name, old_state, PluginState::stopping);
+        // Remove callback producers before waiting for callbacks already in flight.
+        do_cleanup_plugin(name);
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            calls_drained_.wait(lock, [&]() {
+                auto it = instances_.find(name);
+                return it == instances_.end() || it->second.active_calls == 0;
+            });
         }
-
-        if (!is_operational(it->second.state) &&
-            it->second.state != PluginState::faulted &&
-            it->second.state != PluginState::quarantined &&
-            it->second.state != PluginState::initialized) {
-            return false;
-        }
-
-        do_transition(name, PluginState::stopping);
-
-        auto *plugin = it->second.plugin;
         if (plugin) {
             try
             {
@@ -258,30 +315,27 @@ namespace yuan::plugin
             }
         }
 
-        return do_transition(name, PluginState::stopped);
+        return transition(name, PluginState::stopped);
     }
 
     bool PluginLifecycleManager::unload(const std::string & name)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = instances_.find(name);
-        if (it == instances_.end()) {
-            return false;
+        Plugin *plugin = nullptr;
+        void *handle = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = instances_.find(name);
+            if (it == instances_.end()) return false;
+            if (it->second.state != PluginState::stopped && it->second.state != PluginState::discovered) {
+                LOG_WARN("plugin '{}' cannot unload from state {}", name, to_string(it->second.state));
+                return false;
+            }
+            if (it->second.active_calls != 0) return false;
+            plugin = it->second.plugin;
+            handle = it->second.library_handle;
+            instances_.erase(it);
+            load_order_.erase(std::remove(load_order_.begin(), load_order_.end(), name), load_order_.end());
         }
-
-        if (it->second.state != PluginState::stopped && it->second.state != PluginState::discovered) {
-            LOG_WARN("plugin '{}' cannot unload from state {}", name, to_string(it->second.state));
-            return false;
-        }
-
-        auto *plugin = it->second.plugin;
-        auto *handle = it->second.library_handle;
-
-        instances_.erase(it);
-
-        load_order_.erase(
-            std::remove(load_order_.begin(), load_order_.end(), name),
-            load_order_.end());
 
         delete plugin;
         if (handle) {
@@ -370,25 +424,63 @@ namespace yuan::plugin
         if (it == instances_.end()) {
             return false;
         }
-        return plugin::accepts_callbacks(it->second.state);
+        return it->second.accepting_calls && plugin::accepts_callbacks(it->second.state);
+    }
+
+    PluginLifecycleManager::CallLease PluginLifecycleManager::acquire_call(const std::string &name)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = instances_.find(name);
+        if (it == instances_.end() || !it->second.accepting_calls ||
+            !plugin::accepts_callbacks(it->second.state) || !it->second.plugin) {
+            return {};
+        }
+        ++it->second.active_calls;
+        ++current_thread_calls()[name];
+        return CallLease(this, name, it->second.plugin, it->second.state);
+    }
+
+    void PluginLifecycleManager::release_call(const std::string &name)
+    {
+        auto &thread_calls = current_thread_calls();
+        auto thread_it = thread_calls.find(name);
+        if (thread_it != thread_calls.end() && --thread_it->second == 0) {
+            thread_calls.erase(thread_it);
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = instances_.find(name);
+        if (it != instances_.end() && it->second.active_calls > 0 && --it->second.active_calls == 0) {
+            calls_drained_.notify_all();
+        }
     }
 
     void PluginLifecycleManager::do_cleanup_plugin(const std::string & name)
     {
-        if (http_interceptor_) {
-            http_interceptor_->remove_by_plugin(name);
+        HostHttpInterceptor *http_interceptor;
+        HostResourceGuard *resource_guard;
+        HostServiceRegistry *service_registry;
+        HostPermissionGuard *permission_guard;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            http_interceptor = http_interceptor_;
+            resource_guard = resource_guard_;
+            service_registry = service_registry_;
+            permission_guard = permission_guard_;
+        }
+        if (http_interceptor) {
+            http_interceptor->remove_by_plugin(name);
         }
 
-        if (resource_guard_) {
-            resource_guard_->cleanup_plugin(name);
+        if (resource_guard) {
+            resource_guard->cleanup_plugin(name);
         }
 
-        if (service_registry_) {
-            service_registry_->unregister_plugin_services(name);
+        if (service_registry) {
+            service_registry->unregister_plugin_services(name);
         }
 
-        if (permission_guard_) {
-            permission_guard_->revoke(name, PluginPermission::all);
+        if (permission_guard) {
+            permission_guard->revoke(name, PluginPermission::all);
         }
     }
 
@@ -396,9 +488,31 @@ namespace yuan::plugin
                                                      PluginState old_state,
                                                      PluginState new_state)
     {
-        if (state_change_callback_) {
-            state_change_callback_(name, old_state, new_state);
+        StateChangeCallback callback;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            callback = state_change_callback_;
         }
+        if (callback) {
+            callback(name, old_state, new_state);
+        }
+    }
+
+    void PluginLifecycleManager::run_transition_effects(const std::string &name,
+                                                        PluginState old_state,
+                                                        PluginState new_state)
+    {
+        LOG_INFO("plugin '{}' state: {} -> {}", name, to_string(old_state), to_string(new_state));
+        notify_state_change(name, old_state, new_state);
+        if (new_state == PluginState::faulted || new_state == PluginState::quarantined) {
+            HostScheduler *scheduler;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                scheduler = scheduler_;
+            }
+            if (scheduler) scheduler->cancel_by_prefix(name);
+        }
+        if (new_state == PluginState::stopped) do_cleanup_plugin(name);
     }
 
 } // namespace yuan::plugin

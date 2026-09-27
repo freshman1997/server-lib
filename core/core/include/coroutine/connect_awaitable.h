@@ -115,10 +115,8 @@ namespace yuan::coroutine
                 result_.result = ConnectResult::connect_failed;
             }
 
-            if (auto *stream = dynamic_cast<net::StreamTransport *>(&*conn_)) {
-                if (auto *channel = stream->stream_channel()) {
-                    runtime_.event_loop()->update_channel(channel);
-                }
+            if (runtime_.event_loop()) {
+                runtime_.event_loop()->on_new_connection(conn_);
             }
 
             if (timeout_ms_ > 0 && runtime_.timer_manager()) {

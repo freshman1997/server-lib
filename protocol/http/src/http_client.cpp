@@ -147,7 +147,7 @@ namespace yuan::net::http
         if (use_ssl_) {
             if (!ssl_module_) {
                 ssl_module_ = std::make_shared<OpenSSLModule>();
-                if (!ssl_module_->init("./ca/ca.crt")) {
+                if (!ssl_module_->init("")) {
                     ssl_module_.reset();
                     co_return nullptr;
                 }
@@ -161,6 +161,10 @@ namespace yuan::net::http
 
             auto sslHandler = ssl_module_->create_handler(channel->get_fd(), SSLHandler::SSLMode::connector_);
             if (!sslHandler) {
+                co_return nullptr;
+            }
+
+            if (!sslHandler->set_hostname(host_name_)) {
                 co_return nullptr;
             }
 

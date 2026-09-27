@@ -156,7 +156,14 @@ namespace yuan::coroutine
             if (!timer_manager_ || !callback) {
                 return {};
             }
-            return timer_manager_->after(delay_ms, [cb = std::move(callback)]() { cb(); });
+            if (!event_loop_ || event_loop_->is_in_loop_thread()) {
+                return timer_manager_->after(delay_ms, [cb = std::move(callback)]() { cb(); });
+            }
+            timer::TimerHandle result;
+            event_loop_->run_in_loop_sync([this, delay_ms, callback = std::move(callback), &result]() mutable {
+                result = timer_manager_->after(delay_ms, [cb = std::move(callback)]() { cb(); });
+            });
+            return result;
         }
 
         timer::TimerHandle schedule_handle(uint32_t delay_ms, std::function<void()> callback) const
@@ -165,19 +172,40 @@ namespace yuan::coroutine
         }
 
         timer::TimerHandle schedule_periodic(uint32_t delay_ms, uint32_t interval_ms,
-                                             std::function<void()> callback, int repeat = 0) const
+                                              std::function<void()> callback, int repeat = 0) const
         {
             if (!timer_manager_ || !callback) {
                 return {};
             }
-            return timer_manager_->every(delay_ms, interval_ms,
-                                         [cb = std::move(callback)]() { cb(); }, repeat);
+            if (!event_loop_ || event_loop_->is_in_loop_thread()) {
+                return timer_manager_->every(delay_ms, interval_ms,
+                                              [cb = std::move(callback)]() { cb(); }, repeat);
+            }
+            timer::TimerHandle result;
+            event_loop_->run_in_loop_sync([this, delay_ms, interval_ms, repeat,
+                                           callback = std::move(callback), &result]() mutable {
+                result = timer_manager_->every(delay_ms, interval_ms,
+                                               [cb = std::move(callback)]() { cb(); }, repeat);
+            });
+            return result;
+        }
+
+        timer::TimerHandle schedule_periodic_forever(uint32_t delay_ms, uint32_t interval_ms,
+                                                     std::function<void()> callback) const
+        {
+            return schedule_periodic(delay_ms, interval_ms, std::move(callback), -1);
         }
 
         timer::TimerHandle schedule_periodic_handle(uint32_t delay_ms, uint32_t interval_ms,
-                                                    std::function<void()> callback, int repeat = 0) const
+                                                     std::function<void()> callback, int repeat = 0) const
         {
             return schedule_periodic(delay_ms, interval_ms, std::move(callback), repeat);
+        }
+
+        timer::TimerHandle schedule_periodic_forever_handle(uint32_t delay_ms, uint32_t interval_ms,
+                                                            std::function<void()> callback) const
+        {
+            return schedule_periodic_forever(delay_ms, interval_ms, std::move(callback));
         }
 
         static void cancel_timer(const timer::TimerHandle &timer)

@@ -105,7 +105,7 @@ namespace yuan::net::http
         std::string name_;
         size_t max_clients_;
         mutable std::mutex mutex_;
-        std::unordered_map<uint64_t, std::weak_ptr<SseConnection>> subscribers_;
+        std::unordered_map<uint64_t, std::shared_ptr<SseConnection>> subscribers_;
     };
 
     // SSE 管理器 - 全局管理所有SseChannel

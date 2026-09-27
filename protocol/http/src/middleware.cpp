@@ -8,6 +8,8 @@
 
 #include <charconv>
 #include <cctype>
+#include <algorithm>
+#include <condition_variable>
 #include <mutex>
 #include <unordered_map>
 
@@ -104,31 +106,143 @@ namespace yuan::net::http
 
     // ==================== MiddlewarePipeline ====================
 
-    void MiddlewarePipeline::add(std::shared_ptr<HttpMiddleware> middleware)
+    struct MiddlewarePipeline::Entry
     {
-        if (middleware) {
-            middlewares_.push_back(std::move(middleware));
+        uint64_t token = 0;
+        std::shared_ptr<HttpMiddleware> middleware;
+        std::mutex mutex;
+        std::condition_variable idle;
+        size_t in_flight = 0;
+        bool active = true;
+    };
+
+    namespace
+    {
+        thread_local const void *executing_middleware_entry = nullptr;
+
+        bool is_executing_entry(const void *entry)
+        {
+            return executing_middleware_entry == entry;
         }
     }
 
-    void MiddlewarePipeline::add(middleware_function fn, const char * name)
+    MiddlewarePipeline::~MiddlewarePipeline()
     {
-        if (fn) {
-            middlewares_.push_back(std::make_shared<FunctionMiddleware>(std::move(fn), name));
-        }
+        clear();
     }
 
-    void MiddlewarePipeline::insert_front(std::shared_ptr<HttpMiddleware> middleware)
+    uint64_t MiddlewarePipeline::next_token_locked()
     {
-        if (middleware) {
-            middlewares_.insert(middlewares_.begin(), std::move(middleware));
+        while (next_token_ == 0) {
+            ++next_token_;
         }
+        return next_token_++;
+    }
+
+    uint64_t MiddlewarePipeline::add(std::shared_ptr<HttpMiddleware> middleware)
+    {
+        if (!middleware) {
+            return 0;
+        }
+
+        auto entry = std::make_shared<Entry>();
+        entry->middleware = std::move(middleware);
+        std::lock_guard<std::mutex> lock(mutex_);
+        entry->token = next_token_locked();
+        middlewares_.push_back(entry);
+        return entry->token;
+    }
+
+    uint64_t MiddlewarePipeline::add(middleware_function fn, const char *name)
+    {
+        if (!fn) {
+            return 0;
+        }
+        return add(std::make_shared<FunctionMiddleware>(std::move(fn), name));
+    }
+
+    uint64_t MiddlewarePipeline::insert_front(std::shared_ptr<HttpMiddleware> middleware)
+    {
+        if (!middleware) {
+            return 0;
+        }
+
+        auto entry = std::make_shared<Entry>();
+        entry->middleware = std::move(middleware);
+        std::lock_guard<std::mutex> lock(mutex_);
+        entry->token = next_token_locked();
+        middlewares_.insert(middlewares_.begin(), entry);
+        return entry->token;
+    }
+
+    bool MiddlewarePipeline::remove(uint64_t token)
+    {
+        if (token == 0) {
+            return false;
+        }
+
+        std::shared_ptr<Entry> removed;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            const auto it = std::find_if(middlewares_.begin(), middlewares_.end(),
+                                         [token](const auto &entry) { return entry->token == token; });
+            if (it == middlewares_.end()) {
+                return false;
+            }
+            removed = std::move(*it);
+            middlewares_.erase(it);
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(removed->mutex);
+            removed->active = false;
+        }
+        if (is_executing_entry(removed.get())) {
+            return true;
+        }
+        std::unique_lock<std::mutex> lock(removed->mutex);
+        removed->idle.wait(lock, [&removed]() { return removed->in_flight == 0; });
+        return true;
     }
 
     bool MiddlewarePipeline::execute(HttpRequest * req, HttpResponse * resp) const
     {
-        for (auto &mw : middlewares_) {
-            auto result = mw->process(req, resp);
+        std::vector<std::shared_ptr<Entry>> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            snapshot = middlewares_;
+        }
+
+        for (const auto &entry : snapshot) {
+            {
+                std::lock_guard<std::mutex> lock(entry->mutex);
+                if (!entry->active) {
+                    continue;
+                }
+                ++entry->in_flight;
+            }
+
+            const void *previous_entry = executing_middleware_entry;
+            executing_middleware_entry = entry.get();
+            MiddlewareResult result;
+            try {
+                result = entry->middleware->process(req, resp);
+            } catch (...) {
+                executing_middleware_entry = previous_entry;
+                {
+                    std::lock_guard<std::mutex> lock(entry->mutex);
+                    --entry->in_flight;
+                }
+                entry->idle.notify_all();
+                throw;
+            }
+            executing_middleware_entry = previous_entry;
+            {
+                std::lock_guard<std::mutex> lock(entry->mutex);
+                --entry->in_flight;
+            }
+            entry->idle.notify_all();
+
             switch (result) {
             case MiddlewareResult::next:
                 break;
@@ -145,6 +259,39 @@ namespace yuan::net::http
             }
         }
         return true; // 所有中间件通过，继续执行handler
+    }
+
+    size_t MiddlewarePipeline::size() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return middlewares_.size();
+    }
+
+    bool MiddlewarePipeline::empty() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return middlewares_.empty();
+    }
+
+    void MiddlewarePipeline::clear()
+    {
+        std::vector<std::shared_ptr<Entry>> removed;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            removed.swap(middlewares_);
+        }
+
+        for (const auto &entry : removed) {
+            {
+                std::lock_guard<std::mutex> lock(entry->mutex);
+                entry->active = false;
+            }
+            if (is_executing_entry(entry.get())) {
+                continue;
+            }
+            std::unique_lock<std::mutex> lock(entry->mutex);
+            entry->idle.wait(lock, [&entry]() { return entry->in_flight == 0; });
+        }
     }
 
     // ==================== 内置中间件实现 ====================

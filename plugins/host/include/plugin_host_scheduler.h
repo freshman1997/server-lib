@@ -54,6 +54,7 @@ private:
     };
 
     void worker_loop();
+    void execute_callback(const TaskInfo &task, const char *phase) noexcept;
     void insert_task(std::shared_ptr<TaskInfo> task);
     void ensure_worker_started();
     void spawn_worker();

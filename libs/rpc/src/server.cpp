@@ -9,6 +9,11 @@ namespace yuan::rpc
         return bus_.bind(std::move(route), std::move(handler));
     }
 
+    void Server::set_dispatcher(RequestHandler dispatcher)
+    {
+        dispatcher_ = std::move(dispatcher);
+    }
+
     bool Server::unregister_handler(const Route &route)
     {
         return bus_.unbind(route);
@@ -16,6 +21,7 @@ namespace yuan::rpc
 
     Response Server::handle(const Message &message) const
     {
+        if (dispatcher_) return dispatcher_(message);
         return bus_.dispatch(message);
     }
 

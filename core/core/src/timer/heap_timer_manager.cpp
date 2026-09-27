@@ -117,7 +117,7 @@ namespace yuan::timer
             }
 
             const uint64_t now = base::time::steady_now_ms();
-            const uint64_t wait = entry.deadline > now ? entry.deadline - now : 0;
+            const uint64_t wait = entry.deadline > now ? entry.deadline - now : 1;
             const uint64_t cap = active_timeout_cap_ms == 0
                 ? std::numeric_limits<uint32_t>::max()
                 : active_timeout_cap_ms;

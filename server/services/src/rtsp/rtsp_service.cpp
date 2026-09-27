@@ -41,9 +41,10 @@ void RtspService::start()
     host_.start([this]() { server_->serve(); });
 }
 
-void RtspService::stop()
+bool RtspService::stop()
 {
     host_.stop([this]() { server_->stop(); });
+    return true;
 }
 
 yuan::net::rtsp::RtspServer &RtspService::server()

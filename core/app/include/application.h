@@ -76,7 +76,8 @@ public:
 
     bool init();
     bool start();
-    void stop();
+    bool run();
+    bool stop();
 
     bool is_initialized() const;
     bool is_running() const;

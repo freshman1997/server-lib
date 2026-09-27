@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -84,7 +85,10 @@ namespace yuan::net
         bool attach(IocpCompletionPort &port, uintptr_t key);
         bool complete(IocpOperation &operation) noexcept;
         std::shared_ptr<IocpTcpConnection> self();
-        bool complete_output_send(std::size_t bytes, bool &close_after_output);
+        bool complete_output_send(std::unique_ptr<::yuan::buffer::ByteBuffer> buffer, std::size_t bytes, bool &close_after_output);
+        bool complete_output_batch_send(std::vector<std::unique_ptr<::yuan::buffer::ByteBuffer>> buffers,
+                                        std::size_t bytes,
+                                        bool &close_after_output);
         bool complete_direct_output_send(const char *data, std::size_t size, std::size_t bytes, bool &close_after_output);
         void fail_output_send();
         bool has_pending_output() const;
@@ -95,8 +99,10 @@ namespace yuan::net
         void notify_write();
         void notify_error();
         void notify_closed();
+        void finish_close(bool graceful_shutdown = false);
+        void detach_engine() noexcept;
 
-        IocpTcpEngine *engine_ = nullptr;
+        std::atomic<IocpTcpEngine *> engine_{nullptr};
         std::atomic_int fd_{-1};
         std::atomic<ConnectionState> state_{ConnectionState::connected};
         InetAddress local_address_;
@@ -165,6 +171,9 @@ namespace yuan::net
         void add_connection(const std::shared_ptr<IocpTcpConnection> &connection);
         void remove_connection(int fd);
         void close_connection(const std::shared_ptr<IocpTcpConnection> &connection, bool notify, bool graceful_shutdown = false);
+        bool begin_operation() noexcept;
+        void complete_operation() noexcept;
+        void wait_for_operations() noexcept;
         IocpCompletionPort port_;
         IocpDispatcher dispatcher_;
         IocpAcceptEx accept_ex_;
@@ -175,6 +184,9 @@ namespace yuan::net
         AddressFamily listen_family_ = AddressFamily::ipv4;
         std::atomic_bool running_{false};
         std::atomic_uint32_t pending_accepts_{0};
+        std::atomic_uint32_t pending_operations_{0};
+        std::mutex operations_mutex_;
+        std::condition_variable operations_cv_;
         std::size_t accept_count_ = 0;
         std::mutex connections_mutex_;
         std::unordered_map<int, std::shared_ptr<IocpTcpConnection>> connections_;

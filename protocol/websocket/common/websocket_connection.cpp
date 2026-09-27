@@ -75,11 +75,7 @@ namespace yuan::net::websocket
         }
 
         if (pkt_parser_.pack(this, buf, (uint8_t)pktType)) {
-            std::vector< ::yuan::buffer::ByteBuffer> output;
-            output.reserve(output_chunks_.size());
-            for (auto &chunk : output_chunks_) {
-                output.push_back(std::move(chunk));
-            }
+            auto output = std::move(output_chunks_);
             output_chunks_.clear();
             return enqueue_output(std::move(output)) && flush_output_queue();
         } else {
@@ -179,7 +175,7 @@ namespace yuan::net::websocket
         uint32_t interval = config_->get_heart_beat_interval();
         if (interval > 0) {
             auto weak = weak_self();
-            heartbeat_timer_ = runtime->schedule_periodic(interval, interval, [weak]() {
+            heartbeat_timer_ = runtime->schedule_periodic_forever(interval, interval, [weak]() {
                 if (auto self = weak.lock()) {
                     if (self->conn_ && self->state_ == State::connected_) {
                         self->check_pong_deadline();
@@ -398,7 +394,7 @@ namespace yuan::net::websocket
         }
 
         for (auto &chunk : outbound_queue_) {
-            conn_->write(chunk);
+            conn_->write_owned(std::move(chunk));
         }
         outbound_queue_.clear();
         outbound_queue_bytes_ = 0;
@@ -508,7 +504,7 @@ namespace yuan::net::websocket
         std::vector< ::yuan::buffer::ByteBuffer> output;
         if (pack_control_frame(empty_payload, static_cast<uint8_t>(OpCodeType::type_ping_frame), output)) {
             for (auto &buf : output) {
-                conn->write(buf);
+                conn->write_owned(std::move(buf));
             }
             conn->flush();
             mark_ping_sent();
@@ -526,7 +522,7 @@ namespace yuan::net::websocket
         std::vector< ::yuan::buffer::ByteBuffer> output;
         if (pack_control_frame(payload, static_cast<uint8_t>(OpCodeType::type_pong_frame), output)) {
             for (auto &buf : output) {
-                conn->write(buf);
+                conn->write_owned(std::move(buf));
             }
             conn->flush();
             mark_write_activity();
@@ -549,7 +545,7 @@ namespace yuan::net::websocket
         std::vector< ::yuan::buffer::ByteBuffer> output;
         if (pack_control_frame(payload, static_cast<uint8_t>(OpCodeType::type_close_frame), output)) {
             for (auto &buf : output) {
-                conn->write(buf);
+                conn->write_owned(std::move(buf));
             }
             conn->flush();
             mark_write_activity();

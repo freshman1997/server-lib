@@ -15,7 +15,7 @@ namespace yuan::rpc
 
     RpcContext context_from(const Message &message)
     {
-        return RpcContext{message.request_id, message.continuation_id(), message.source, message.target, message.metadata};
+        return RpcContext{message.request_id, message.continuation_id(), message.connection_id, message.session_id, message.peer_service_id, message.auth_token, message.flags, message.source, message.target, message.metadata};
     }
 
     RpcContext context_from(const Response &response)
@@ -23,6 +23,11 @@ namespace yuan::rpc
         RpcContext context;
         context.request_id = response.request_id;
         context.continuation_id = response.continuation_id();
+        context.connection_id = response.connection_id;
+        context.session_id = response.session_id;
+        context.peer_service_id = response.peer_service_id;
+        context.auth_token = response.auth_token;
+        context.flags = response.flags;
         context.metadata = response.metadata;
         return context;
     }

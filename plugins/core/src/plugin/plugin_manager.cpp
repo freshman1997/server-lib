@@ -42,6 +42,28 @@ namespace yuan::plugin
             return (std::filesystem::path(base) / relative).string();
         }
 
+        static bool is_valid_plugin_name(const std::string &name)
+        {
+            return !name.empty() && std::all_of(name.begin(), name.end(), [](unsigned char ch) {
+                return (ch >= 'A' && ch <= 'Z') ||
+                       (ch >= 'a' && ch <= 'z') ||
+                       (ch >= '0' && ch <= '9') || ch == '_' || ch == '-';
+            });
+        }
+
+        static bool path_is_within(const std::filesystem::path &root,
+                                   const std::filesystem::path &candidate)
+        {
+            auto root_it = root.begin();
+            auto candidate_it = candidate.begin();
+            for (; root_it != root.end(); ++root_it, ++candidate_it) {
+                if (candidate_it == candidate.end() || *root_it != *candidate_it) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         static std::vector<std::string> native_plugin_extensions()
         {
             std::vector<std::string> extensions{ ".plugin" };
@@ -263,6 +285,9 @@ namespace yuan::plugin
         static std::string find_manifest_config_path(const std::string &base_path,
                                                      const std::string &plugin_name)
         {
+            if (!is_valid_plugin_name(plugin_name)) {
+                return {};
+            }
             std::error_code ec;
 
             const auto flat_path = std::filesystem::path(base_path) / (plugin_name + ".json");
@@ -330,11 +355,16 @@ namespace yuan::plugin
 
         void apply_resource_quota_from_config(const std::string &plugin_name, const PluginContext &context)
         {
-            if (!context.resource_guard || !context.config.loaded()) {
+            if (!context.resource_guard) {
+                return;
+            }
+            if (!context.config.loaded()) {
+                context.resource_guard->clear_quota(plugin_name);
                 return;
             }
             auto *raw = context.config.raw();
             if (!raw || !raw->contains("resource_quota") || !(*raw)["resource_quota"].is_object()) {
+                context.resource_guard->clear_quota(plugin_name);
                 return;
             }
 
@@ -396,7 +426,14 @@ namespace yuan::plugin
     void PluginManager::set_plugin_path(const std::string & path)
     {
         std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
-        data_->plugin_path_ = std::filesystem::path(path).string();
+        std::error_code ec;
+        auto normalized = std::filesystem::weakly_canonical(std::filesystem::path(path), ec);
+        if (ec) {
+            ec.clear();
+            normalized = std::filesystem::absolute(std::filesystem::path(path), ec).lexically_normal();
+        }
+        data_->plugin_path_ = ec ? std::filesystem::path(path).lexically_normal().string()
+                                : normalized.string();
     }
     void PluginManager::set_context(const PluginContext & context)
     {
@@ -412,7 +449,7 @@ namespace yuan::plugin
         lifecycle_manager_.set_event_bus(data_->context_.event_bus);
     }
 
-    const PluginContext &PluginManager::context() const
+    PluginContext PluginManager::context() const
     {
         std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
         return data_->context_;
@@ -421,6 +458,9 @@ namespace yuan::plugin
     PluginContext PluginManager::plugin_context(const std::string & plugin_name) const
     {
         std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
+        if (!is_valid_plugin_name(plugin_name)) {
+            return {};
+        }
         auto it = data_->contexts_.find(plugin_name);
         if (it != data_->contexts_.end()) {
             return it->second;
@@ -430,6 +470,10 @@ namespace yuan::plugin
 
     void *PluginManager::load_plugin_library(const std::string & plugin_name) const
     {
+        if (!is_valid_plugin_name(plugin_name)) {
+            LOG_ERROR("invalid plugin name '{}'", plugin_name);
+            return nullptr;
+        }
         std::vector<std::string> candidates;
         for (const auto &extension : native_plugin_extensions()) {
             const std::string real_name = join_path(data_->plugin_path_, plugin_name + extension);
@@ -460,6 +504,9 @@ namespace yuan::plugin
 
     Plugin *PluginManager::create_plugin_instance(const std::string & plugin_name, void * handle) const
     {
+        if (!is_valid_plugin_name(plugin_name)) {
+            return nullptr;
+        }
         const std::string entry_symbol = "get_" + plugin_name + "_plugin_instance";
 
         plugin_entry_function func = nullptr;
@@ -503,6 +550,9 @@ namespace yuan::plugin
 
     PluginContext PluginManager::make_plugin_context(const std::string & plugin_name) const
     {
+        if (!is_valid_plugin_name(plugin_name)) {
+            return {};
+        }
         PluginContext context = data_->context_;
         context.plugin_name = plugin_name;
         context.plugin_root_path = data_->plugin_path_;
@@ -514,7 +564,11 @@ namespace yuan::plugin
             context.plugin_config_path = config_path;
             context.config = load_plugin_config(config_path);
             if (context.config.loaded()) {
-                if (parse_run_mode(context.config.get_string("run_mode", "")) == PluginRunMode::script) {
+                const auto configured_run_mode = parse_run_mode(context.config.get_string("run_mode", ""));
+                if (configured_run_mode != PluginRunMode::unknown) {
+                    context.run_mode = configured_run_mode;
+                }
+                if (configured_run_mode == PluginRunMode::script) {
                     context.plugin_root_path = join_path(data_->plugin_path_, plugin_name);
                 }
             }
@@ -604,13 +658,67 @@ namespace yuan::plugin
 
     PluginConfigView PluginManager::find_plugin_manifest_config(const std::string & plugin_name) const
     {
+        if (!is_valid_plugin_name(plugin_name)) {
+            return {};
+        }
         const std::string config_path = find_manifest_config_path(data_->plugin_path_, plugin_name);
         return load_plugin_config(config_path);
+    }
+
+    bool PluginManager::resolve_script_entry_path(const std::string &plugin_name,
+                                                  const std::string &entry,
+                                                  std::string &path) const
+    {
+        if (!is_valid_plugin_name(plugin_name) || entry.empty()) {
+            return false;
+        }
+
+        const std::filesystem::path relative(entry);
+        if (relative.is_absolute() || relative.has_root_name() || relative.has_root_directory()) {
+            return false;
+        }
+        for (const auto &component : relative) {
+            if (component == "..") {
+                return false;
+            }
+        }
+
+        std::error_code ec;
+        const auto plugin_base = std::filesystem::weakly_canonical(data_->plugin_path_, ec);
+        if (ec) {
+            return false;
+        }
+        const auto plugin_dir = std::filesystem::weakly_canonical(
+            plugin_base / plugin_name, ec);
+        if (ec || !path_is_within(plugin_base, plugin_dir) || plugin_dir == plugin_base) {
+            return false;
+        }
+        const auto candidate = std::filesystem::weakly_canonical(
+            (plugin_dir / relative.lexically_normal()), ec);
+        if (ec || !path_is_within(plugin_dir, candidate) || candidate == plugin_dir) {
+            return false;
+        }
+
+        path = candidate.string();
+        return true;
+    }
+
+    bool PluginManager::script_entry_path(const std::string &plugin_name, std::string &path) const
+    {
+        std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
+        auto config = find_plugin_manifest_config(plugin_name);
+        if (!config.loaded() || parse_run_mode(config.get_string("run_mode", "")) != PluginRunMode::script) {
+            return false;
+        }
+        return resolve_script_entry_path(plugin_name, config.get_string("entry", "main.lua"), path);
     }
 
     bool PluginManager::load_native_plugin(const std::string & pluginName)
     {
         std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
+        if (!is_valid_plugin_name(pluginName)) {
+            return false;
+        }
         void *handle = load_plugin_library(pluginName);
         if (!handle) {
             return false;
@@ -643,6 +751,9 @@ namespace yuan::plugin
     bool PluginManager::load_script_plugin(const std::string & name, const PluginConfigView & config)
     {
         std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
+        if (!is_valid_plugin_name(name)) {
+            return false;
+        }
         PluginManifest manifest;
         manifest.plugin_id = name;
         manifest.name = config.get_string("name", name);
@@ -696,7 +807,12 @@ namespace yuan::plugin
             return false;
         }
 
-        std::string script_path = join_path(join_path(data_->plugin_path_, name), manifest.entry);
+        std::string script_path;
+        if (!resolve_script_entry_path(name, manifest.entry, script_path)) {
+            LOG_ERROR("script plugin '{}' has unsafe entry path '{}'", name, manifest.entry);
+            delete adapter;
+            return false;
+        }
         if (!adapter->load_script(script_path)) {
             LOG_ERROR("script plugin '{}' failed to load script '{}'", name, script_path);
             delete adapter;
@@ -724,6 +840,10 @@ namespace yuan::plugin
     bool PluginManager::load(const std::string & pluginName)
     {
         std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
+        if (!is_valid_plugin_name(pluginName)) {
+            LOG_ERROR("invalid plugin name '{}'", pluginName);
+            return false;
+        }
         auto config = find_plugin_manifest_config(pluginName);
 
         if (config.loaded()) {
@@ -740,6 +860,10 @@ namespace yuan::plugin
         std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
         if (plugin_names.empty()) {
             return true;
+        }
+        if (!std::all_of(plugin_names.begin(), plugin_names.end(), is_valid_plugin_name)) {
+            LOG_ERROR("plugin list contains an invalid plugin name");
+            return false;
         }
 
         struct PendingPlugin
@@ -941,6 +1065,10 @@ namespace yuan::plugin
 
         std::vector<ProtocolServiceDescriptor> out;
         for (const auto &plugin_name : plugin_names) {
+            if (!is_valid_plugin_name(plugin_name)) {
+                LOG_ERROR("invalid plugin name '{}'", plugin_name);
+                continue;
+            }
             auto config = find_plugin_manifest_config(plugin_name);
             if (!config.loaded()) {
                 continue;
@@ -998,6 +1126,9 @@ namespace yuan::plugin
     Plugin *PluginManager::get_plugin(const std::string & name)
     {
         std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
+        if (!is_valid_plugin_name(name)) {
+            return nullptr;
+        }
         auto it = data_->plugins_.find(name);
         return it == data_->plugins_.end() ? nullptr : it->second.second;
     }
@@ -1005,31 +1136,15 @@ namespace yuan::plugin
     void PluginManager::release_plugin(const std::string & pluginName)
     {
         std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
+        if (!is_valid_plugin_name(pluginName)) {
+            return;
+        }
         auto it = data_->plugins_.find(pluginName);
         if (it == data_->plugins_.end()) {
             return;
         }
 
         extension_point_registry_.unregister_extension_points(pluginName);
-
-        auto plugin_state = lifecycle_manager_.state(pluginName);
-        if (is_operational(plugin_state)) {
-            auto *plugin = it->second.second;
-            if (plugin) {
-                try
-                {
-                    plugin->on_disable();
-                }
-                catch (const std::exception &ex)
-                {
-                    LOG_ERROR("plugin '{}' on_disable() threw: {}", pluginName, ex.what());
-                }
-                catch (...)
-                {
-                    LOG_ERROR("plugin '{}' on_disable() threw unknown exception", pluginName);
-                }
-            }
-        }
 
         lifecycle_manager_.stop(pluginName);
         lifecycle_manager_.unload(pluginName);
@@ -1057,21 +1172,71 @@ namespace yuan::plugin
         }
     }
 
-    PluginConfigView PluginManager::reload_plugin_config(const std::string & plugin_name) const
+    PluginConfigView PluginManager::reload_plugin_config(const std::string & plugin_name)
     {
         std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
+        if (!is_valid_plugin_name(plugin_name)) {
+            return {};
+        }
         auto it = data_->plugins_.find(plugin_name);
-        if (it == data_->plugins_.end()) {
+        auto context_it = data_->contexts_.find(plugin_name);
+        if (it == data_->plugins_.end() || context_it == data_->contexts_.end()) {
             return {};
         }
 
         const std::string config_path = find_manifest_config_path(data_->plugin_path_, plugin_name);
-        return load_plugin_config(config_path);
+        auto config = load_plugin_config(config_path);
+        if (!config.loaded()) {
+            return {};
+        }
+
+        PluginContext updated = data_->context_;
+        const auto &previous = context_it->second;
+        updated.app_name = previous.app_name;
+        updated.plugin_name = plugin_name;
+        updated.plugin_config_path = config_path;
+        updated.plugin_root_path = data_->plugin_path_;
+        updated.config = config;
+        updated.storage = previous.storage;
+        updated.worker_threads = previous.worker_threads;
+        updated.runtime_worker_count = previous.runtime_worker_count;
+        updated.worker_index = previous.worker_index;
+        updated.is_worker_process = previous.is_worker_process;
+        updated.active_service_name = previous.active_service_name;
+        updated.service_index = previous.service_index;
+        updated.service_instance_index = previous.service_instance_index;
+        updated.service_instance_count = previous.service_instance_count;
+        updated.listener_reuse_port = previous.listener_reuse_port;
+        updated.extension_point_registry = &extension_point_registry_;
+
+        const auto configured_run_mode = parse_run_mode(config.get_string("run_mode", ""));
+        updated.run_mode = configured_run_mode == PluginRunMode::unknown ? previous.run_mode : configured_run_mode;
+        if (updated.run_mode == PluginRunMode::script) {
+            updated.plugin_root_path = join_path(data_->plugin_path_, plugin_name);
+        }
+        updated.granted_permissions = permissions_from_config(config);
+
+        auto *permission_guard = updated.permission_guard;
+        auto *resource_guard = updated.resource_guard;
+        if (permission_guard) {
+            permission_guard->revoke(plugin_name, PluginPermission::all);
+            if (updated.granted_permissions != PluginPermission::none) {
+                permission_guard->grant(plugin_name, updated.granted_permissions);
+            }
+        }
+        apply_permission_boundary(updated);
+        updated.resource_guard = resource_guard;
+        apply_resource_quota_from_config(plugin_name, updated);
+        context_it->second = std::move(updated);
+        return context_it->second.config;
     }
 
     void PluginManager::set_plugin_storage(const std::string & plugin_name, HostStorage * storage)
     {
         std::lock_guard<std::recursive_mutex> lock(data_->mutex_);
+        if (!is_valid_plugin_name(plugin_name)) {
+            return;
+        }
         auto it = data_->contexts_.find(plugin_name);
         if (it != data_->contexts_.end()) {
             it->second.storage = storage;

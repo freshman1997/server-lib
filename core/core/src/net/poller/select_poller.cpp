@@ -4,7 +4,6 @@
 #include "logger.h"
 #include "platform/native_platform.h"
 
-#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -21,7 +20,6 @@ namespace yuan::net
         fd_set writes_;
 		fd_set excepts_;
         std::unordered_map<int, net::Channel *> sockets_;
-        std::mutex mutex_;
     };
 
 #ifdef _WIN32
@@ -57,7 +55,6 @@ namespace yuan::net
     uint64_t SelectPoller::poll(uint32_t timeout, std::vector<PollEvent> &events)
     {
         uint64_t tm = base::time::get_tick_count();
-        std::lock_guard<std::mutex> lock(data_->mutex_);
 
         auto queue_close_event = [&events](int fd, Channel *channel) {
             if (!channel) {
@@ -222,7 +219,6 @@ namespace yuan::net
         if (!channel->has_events()) {
             remove_channel(channel);
         } else {
-            std::lock_guard<std::mutex> lock(data_->mutex_);
             data_->sockets_[channel->get_fd()] = channel;
         }
     }
@@ -233,7 +229,6 @@ namespace yuan::net
             return;
         }
 
-        std::lock_guard<std::mutex> lock(data_->mutex_);
         data_->sockets_.erase(channel->get_fd());
     }
 }

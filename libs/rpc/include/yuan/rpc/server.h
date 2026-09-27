@@ -13,6 +13,7 @@ namespace yuan::rpc
     {
     public:
         bool register_handler(Route route, RequestHandler handler);
+        void set_dispatcher(RequestHandler dispatcher);
 
         template<typename Request, typename ResponseT, typename Handler>
         bool register_typed_handler(Route route, Handler handler)
@@ -49,6 +50,7 @@ namespace yuan::rpc
 
     private:
         LocalBus bus_;
+        RequestHandler dispatcher_;
     };
 }
 

@@ -83,13 +83,21 @@ namespace yuan::net
 
     void TcpAcceptor::close()
     {
+        if (handler_ && !handler_->is_in_loop_thread()) {
+            if (auto *loop = dynamic_cast<EventLoop *>(handler_)) {
+                if (loop->is_running()) {
+                    loop->run_in_loop_sync([this]() { close(); });
+                    return;
+                }
+            }
+        }
         notify_accept_waiters(std::shared_ptr<Connection>{});
         if (channel_) {
-            channel_->disable_all();
             if (handler_) {
                 handler_->close_channel(yuan::base::owner_ptr(channel_));
                 handler_ = nullptr;
             }
+            channel_->disable_all();
             channel_->clear_handler();
         }
         if (conn_handler_owner_) {
@@ -179,6 +187,26 @@ namespace yuan::net
 
     void TcpAcceptor::set_event_handler(EventHandler * handler)
     {
+        EventLoop *loop = nullptr;
+        if (handler_ && !handler_->is_in_loop_thread()) {
+            loop = dynamic_cast<EventLoop *>(handler_);
+        } else if (handler && !handler->is_in_loop_thread()) {
+            loop = dynamic_cast<EventLoop *>(handler);
+        }
+        if (loop && loop->is_running()) {
+            if (!loop->is_in_loop_thread()) {
+                loop->run_in_loop_sync([this, handler]() { set_event_handler(handler); });
+                return;
+            }
+        }
+        if (!handler && handler_ && !handler_->is_in_loop_thread()) {
+            if (auto *owner_loop = dynamic_cast<EventLoop *>(handler_)) {
+                if (owner_loop->is_running()) {
+                    owner_loop->run_in_loop_sync([this]() { set_event_handler(nullptr); });
+                    return;
+                }
+            }
+        }
         if (handler_ == handler) {
             if (handler_ && channel_) {
                 handler_->update_channel(yuan::base::owner_ptr(channel_));

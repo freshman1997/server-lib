@@ -1,7 +1,9 @@
 #include "bootstrap.h"
 #include "eventbus/event_bus.h"
 #include "plugin_resource_guard.h"
+#include "plugin_permission_guard.h"
 #include "plugin_protocol_service_adapter.h"
+#include "plugin_host_scheduler.h"
 #include "plugin_host_service.h"
 #include "plugin_service_registry_adapter.h"
 #include "plugin/plugin_call_guard.h"
@@ -556,6 +558,10 @@ namespace
     class StubPlugin : public yuan::plugin::Plugin
     {
     public:
+        explicit StubPlugin(std::function<void()> release_hook = {})
+            : release_hook_(std::move(release_hook))
+        {
+        }
         void on_loaded() override
         {
         }
@@ -565,7 +571,11 @@ namespace
         }
         void on_release() override
         {
+            if (release_hook_) release_hook_();
         }
+
+    private:
+        std::function<void()> release_hook_;
     };
 
     class FakeScriptPlugin final : public yuan::plugin::ScriptPluginAdapter
@@ -879,6 +889,65 @@ namespace
                 "4 faults with threshold=4 should suggest quarantined");
     }
 
+    void test_call_guard_fault_window()
+    {
+        yuan::plugin::PluginCallGuard::Config config;
+        config.fault_threshold = 2;
+        config.fault_window = std::chrono::milliseconds(10);
+
+        yuan::plugin::PluginCallGuard guard(config);
+        guard.report_fault("windowed", "call1", "error1");
+        guard.report_fault("windowed", "call2", "error2");
+        require(guard.fault_count("windowed") == 2,
+                "faults within the window should accumulate");
+        require(guard.suggested_state("windowed") == yuan::plugin::PluginState::faulted,
+                "faults within the window should affect suggested state");
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        require(guard.fault_count("windowed") == 0,
+                "expired faults should read as zero");
+        require(guard.suggested_state("windowed") == yuan::plugin::PluginState::active,
+                "expired faults should suggest active state");
+
+        guard.report_fault("windowed", "call3", "error3");
+        require(guard.fault_count("windowed") == 1,
+                "a fault after the window should start a new count");
+        require(guard.suggested_state("windowed") == yuan::plugin::PluginState::degraded,
+                "a fault after the window should not retain the expired state");
+    }
+
+    void test_scheduler_survives_callback_exceptions()
+    {
+        yuan::app::PluginHostScheduler scheduler;
+        std::atomic<int> interval_calls{0};
+        std::atomic<bool> later_task_ran{false};
+
+        scheduler.schedule_after(std::chrono::milliseconds::zero(), []() {
+            throw std::runtime_error("oneshot failure");
+        }, "throwing.oneshot");
+        const auto interval_id = scheduler.schedule_interval(std::chrono::milliseconds(5), [&]() {
+            if (++interval_calls == 1) {
+                throw std::runtime_error("interval failure");
+            }
+        }, "throwing.interval");
+        scheduler.schedule_after(std::chrono::milliseconds(10), [&]() {
+            later_task_ran.store(true);
+        }, "later.oneshot");
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while ((!later_task_ran.load() || interval_calls.load() < 2) &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
+        scheduler.cancel(interval_id);
+        scheduler.shutdown();
+        require(later_task_ran.load(),
+                "scheduler should execute later tasks after a callback throws");
+        require(interval_calls.load() >= 2,
+                "interval task should remain scheduled after its callback throws");
+    }
+
     void test_lifecycle_manager_state_transitions()
     {
         yuan::plugin::PluginLifecycleManager mgr;
@@ -935,6 +1004,57 @@ namespace
 
         require(mgr.unload("loaded_only"),
                 "unload should succeed after stopping loaded-only plugin");
+    }
+
+    void test_lifecycle_callbacks_are_reentrant()
+    {
+        yuan::plugin::PluginLifecycleManager mgr;
+        auto plugin = new StubPlugin([&]() {
+            require(mgr.state("reentrant") == yuan::plugin::PluginState::stopping,
+                    "on_release should be able to query lifecycle state");
+        });
+        require(mgr.register_instance("reentrant", plugin, nullptr), "reentrant plugin should register");
+        mgr.set_state_change_callback([&](const std::string &name,
+                                          yuan::plugin::PluginState,
+                                          yuan::plugin::PluginState) {
+            require(mgr.state(name) != yuan::plugin::PluginState::unloaded,
+                    "state callback should be able to query lifecycle state");
+        });
+        require(mgr.transition("reentrant", yuan::plugin::PluginState::initialized),
+                "reentrant plugin should initialize");
+        require(mgr.activate("reentrant"), "reentrant plugin should activate");
+        require(mgr.stop("reentrant"), "reentrant plugin should stop without deadlock");
+        require(mgr.unload("reentrant"), "reentrant plugin should unload");
+    }
+
+    void test_lifecycle_stop_waits_for_active_calls()
+    {
+        yuan::plugin::PluginLifecycleManager mgr;
+        require(mgr.register_instance("drain", new StubPlugin(), nullptr), "drain plugin should register");
+        require(mgr.transition("drain", yuan::plugin::PluginState::initialized), "drain plugin should initialize");
+        require(mgr.activate("drain"), "drain plugin should activate");
+
+        auto call = mgr.acquire_call("drain");
+        require(static_cast<bool>(call), "active plugin should grant a call lease");
+        std::atomic<bool> stopped{false};
+        std::thread stop_thread([&]() {
+            stopped.store(mgr.stop("drain"));
+        });
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (mgr.state("drain") != yuan::plugin::PluginState::stopping &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        require(mgr.state("drain") == yuan::plugin::PluginState::stopping,
+                "stop should close the call gate before waiting");
+        require(!mgr.acquire_call("drain"), "stopping plugin should reject new calls");
+        require(!stopped.load(), "stop should wait for an active call lease");
+
+        call = {};
+        stop_thread.join();
+        require(stopped.load(), "stop should finish after active calls drain");
+        require(mgr.unload("drain"), "drained plugin should unload");
     }
 
     void test_lifecycle_manager_fault_escalation()
@@ -1910,6 +2030,25 @@ namespace
         require(found_open_outbound_connection, "to_names should include open_outbound_connection");
         require(found_bind_privileged_port, "to_names should include bind_privileged_port");
         require(found_use_tls, "to_names should include use_tls");
+    }
+
+    void test_combined_permissions()
+    {
+        using yuan::plugin::PluginPermission;
+
+        const auto granted = PluginPermission::use_event_bus | PluginPermission::use_logger;
+        require(yuan::plugin::has_permission(
+                    granted,
+                    PluginPermission::use_event_bus | PluginPermission::use_logger),
+                "all required permission bits should be accepted");
+        require(!yuan::plugin::has_permission(
+                    PluginPermission::use_event_bus,
+                    PluginPermission::use_event_bus | PluginPermission::use_logger),
+                "a partial match should not satisfy combined permissions");
+        require(yuan::plugin::has_permission(PluginPermission::none, PluginPermission::none),
+                "no required permissions should always be accepted");
+        require(yuan::plugin::has_permission(granted, PluginPermission::none),
+                "required none should be accepted with granted permissions");
     }
 
     void test_protocol_handler_registry_datagram_groundwork()
@@ -4714,6 +4853,172 @@ namespace
         std::filesystem::remove_all(temp_root, ec);
     }
 
+    void test_plugin_manager_rejects_unsafe_paths()
+    {
+        const std::string language = "governance-path-safety";
+        yuan::plugin::ScriptPluginRegistry::instance().register_adapter(
+            language,
+            [](const yuan::plugin::PluginManifest &manifest, const yuan::plugin::PluginConfigView &) -> yuan::plugin::ScriptPluginAdapter * {
+                return new FakeScriptPlugin(manifest);
+            });
+
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-path-safety-" + std::to_string(static_cast<unsigned long long>(
+                                                           std::chrono::steady_clock::now().time_since_epoch().count())));
+        const auto safe_dir = temp_root / "safe-plugin";
+        std::filesystem::create_directories(safe_dir / "scripts");
+        std::ofstream(safe_dir / "scripts" / "main.fake") << "safe\n";
+        std::ofstream(temp_root / "outside.fake") << "outside\n";
+
+        auto write_manifest = [&](const std::string &entry) {
+            std::ofstream manifest(safe_dir / "plugin.json", std::ios::trunc);
+            require(static_cast<bool>(manifest), "path safety manifest should be writable");
+            manifest << nlohmann::json{
+                {"run_mode", "script"},
+                {"language", language},
+                {"entry", entry},
+            }.dump(2) << "\n";
+        };
+
+        yuan::plugin::PluginManager manager;
+        manager.set_plugin_path((temp_root / ".").string());
+        manager.set_context(yuan::plugin::PluginContext{});
+
+        std::string resolved;
+        write_manifest("scripts/./main.fake");
+        require(manager.script_entry_path("safe-plugin", resolved),
+                "normalized relative script entry should resolve");
+        require(std::filesystem::path(resolved) == std::filesystem::weakly_canonical(safe_dir / "scripts" / "main.fake"),
+                "resolved script entry should be canonical");
+
+        write_manifest("../outside.fake");
+        require(!manager.script_entry_path("safe-plugin", resolved), "parent traversal entry should be rejected");
+        require(!manager.load("safe-plugin"), "load should reject a parent traversal script entry");
+
+        write_manifest(std::filesystem::absolute(temp_root / "outside.fake").string());
+        require(!manager.script_entry_path("safe-plugin", resolved), "absolute script entry should be rejected");
+
+        require(!manager.load("../safe-plugin"), "load should reject a traversal plugin name");
+        require(!manager.load_all({"safe-plugin", "bad/name"}), "load_all should reject an invalid plugin name");
+        require(manager.discover_protocol_services({"../safe-plugin"}).empty(),
+                "manifest discovery should reject an invalid plugin name");
+        require(manager.plugin_context("../safe-plugin").plugin_name.empty(),
+                "context lookup should reject an invalid plugin name");
+
+        const auto link_path = safe_dir / "escape-link";
+        std::error_code link_ec;
+        std::filesystem::create_directory_symlink(temp_root, link_path, link_ec);
+        if (!link_ec) {
+            write_manifest("escape-link/outside.fake");
+            require(!manager.script_entry_path("safe-plugin", resolved),
+                    "symlink script entry escaping the plugin directory should be rejected");
+            require(!manager.load("safe-plugin"),
+                    "load should reject a symlink script entry escaping the plugin directory");
+        }
+
+        const auto external_plugin_dir = temp_root.parent_path() / (temp_root.filename().string() + "-external");
+        std::filesystem::create_directories(external_plugin_dir);
+        std::ofstream(external_plugin_dir / "main.fake") << "external plugin root\n";
+        const auto linked_plugin_dir = temp_root / "linked_plugin";
+        link_ec.clear();
+        std::filesystem::create_directory_symlink(external_plugin_dir, linked_plugin_dir, link_ec);
+        if (!link_ec) {
+            std::ofstream manifest(external_plugin_dir / "plugin.json");
+            manifest << nlohmann::json{
+                {"run_mode", "script"},
+                {"language", language},
+                {"entry", "main.fake"},
+            }.dump(2) << "\n";
+            manifest.close();
+            require(!manager.script_entry_path("linked_plugin", resolved),
+                    "symlink plugin directory escaping the plugin base should be rejected");
+            require(!manager.load("linked_plugin"),
+                    "load should reject a symlink plugin directory escaping the plugin base");
+        }
+
+        std::error_code ec;
+        std::filesystem::remove_all(temp_root, ec);
+        std::filesystem::remove_all(external_plugin_dir, ec);
+    }
+
+    void test_plugin_manager_reload_updates_context_permissions_and_quota()
+    {
+        const std::string language = "governance-config-reload";
+        yuan::plugin::ScriptPluginRegistry::instance().register_adapter(
+            language,
+            [](const yuan::plugin::PluginManifest &manifest, const yuan::plugin::PluginConfigView &) -> yuan::plugin::ScriptPluginAdapter * {
+                return new FakeScriptPlugin(manifest);
+            });
+
+        const auto temp_root = std::filesystem::temp_directory_path() /
+                               ("plugin-config-reload-" + std::to_string(static_cast<unsigned long long>(
+                                                            std::chrono::steady_clock::now().time_since_epoch().count())));
+        const auto plugin_dir = temp_root / "reload_context";
+        std::filesystem::create_directories(plugin_dir);
+        std::ofstream(plugin_dir / "main.fake") << "reload\n";
+
+        auto write_manifest = [&](const char *permissions, size_t quota) {
+            std::ofstream manifest(plugin_dir / "plugin.json", std::ios::trunc);
+            require(static_cast<bool>(manifest), "reload context manifest should be writable");
+            manifest << nlohmann::json{
+                {"run_mode", "script"},
+                {"language", language},
+                {"entry", "main.fake"},
+                {"permissions", permissions},
+                {"marker", static_cast<int>(quota)},
+                {"resource_quota", {{"max_total_resources", quota}}},
+            }.dump(2) << "\n";
+        };
+
+        yuan::app::PluginPermissionGuard permission_guard;
+        yuan::app::PluginResourceGuard resource_guard;
+        FakeEventBus event_bus;
+        FakeScheduler scheduler;
+        yuan::plugin::PluginContext base_context;
+        base_context.event_bus = &event_bus;
+        base_context.scheduler = &scheduler;
+        base_context.permission_guard = &permission_guard;
+        base_context.resource_guard = &resource_guard;
+
+        write_manifest("use_event_bus", 5);
+        yuan::plugin::PluginManager manager;
+        manager.set_plugin_path(temp_root.string());
+        manager.set_context(base_context);
+        require(manager.load("reload_context"), "reload context script should load");
+
+        auto before = manager.plugin_context("reload_context");
+        require(before.event_bus == &event_bus && before.scheduler == nullptr,
+                "initial permission boundary should expose only the granted capability");
+        require(permission_guard.check("reload_context", yuan::plugin::PluginPermission::use_event_bus),
+                "initial permission grant should reach the permission guard");
+        require(resource_guard.quota("reload_context").max_total_resources == 5,
+                "initial resource quota should reach the resource guard");
+
+        write_manifest("use_scheduler", 2);
+        auto reloaded = manager.reload_plugin_config("reload_context");
+        require(reloaded.loaded() && reloaded.get_int64("marker", -1) == 2,
+                "reload should return the newly persisted config");
+
+        const auto after = manager.plugin_context("reload_context");
+        require(after.config.get_int64("marker", -1) == 2,
+                "reloaded config should be written back to the saved context");
+        require(after.run_mode == yuan::plugin::PluginRunMode::script,
+                "reloaded run mode should be written back to the saved context");
+        require(std::filesystem::path(after.plugin_root_path) == std::filesystem::weakly_canonical(plugin_dir),
+                "reloaded script root should remain the canonical plugin directory");
+        require(after.event_bus == nullptr && after.scheduler == &scheduler,
+                "reloaded capability boundary should revoke old and expose new capabilities");
+        require(!permission_guard.check("reload_context", yuan::plugin::PluginPermission::use_event_bus) &&
+                    permission_guard.check("reload_context", yuan::plugin::PluginPermission::use_scheduler),
+                "reload should synchronize permission guard revoke and grant");
+        require(resource_guard.quota("reload_context").max_total_resources == 2,
+                "reload should replace the resource quota");
+
+        manager.release_all();
+        std::error_code ec;
+        std::filesystem::remove_all(temp_root, ec);
+    }
+
     void test_plugin_manifest_resource_quota_limits_host_resources()
     {
         fake_script_load_counts.clear();
@@ -4909,11 +5214,15 @@ int main()
     test_call_guard_blocks_faulted_plugin();
     test_call_guard_fault_handler();
     test_call_guard_custom_thresholds();
+    test_call_guard_fault_window();
+    test_scheduler_survives_callback_exceptions();
     std::cout << "  PASSED" << std::endl;
 
     std::cout << "=== Phase C: Lifecycle Manager Tests ===" << std::endl;
     test_lifecycle_manager_state_transitions();
     test_lifecycle_manager_stop_from_loaded_state();
+    test_lifecycle_callbacks_are_reentrant();
+    test_lifecycle_stop_waits_for_active_calls();
     test_lifecycle_manager_fault_escalation();
     test_lifecycle_manager_state_change_callback();
     test_lifecycle_manager_cleanup_on_stop();
@@ -4931,6 +5240,7 @@ int main()
     test_capability_enforcement();
     test_plugin_context_identity_boundary();
     test_protocol_service_permission_names();
+    test_combined_permissions();
     test_protocol_handler_registry_datagram_groundwork();
     test_protocol_service_manifest_discovery();
     test_protocol_service_worker_local_adapter();
@@ -4961,6 +5271,8 @@ int main()
     test_lua_service_registry_and_http_bindings();
     test_ts_service_registry_and_http_bindings();
     test_plugin_host_reload_changed_script_plugins();
+    test_plugin_manager_rejects_unsafe_paths();
+    test_plugin_manager_reload_updates_context_permissions_and_quota();
     test_plugin_manifest_resource_quota_limits_host_resources();
     test_script_bindings_respect_manifest_permissions();
     std::cout << "  PASSED" << std::endl;

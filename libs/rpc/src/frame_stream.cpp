@@ -23,7 +23,11 @@ namespace yuan::rpc::wire
     {
         auto result = decode_frame(buffer_.data(), buffer_.size(), options_);
         if (result.ok) {
-            buffer_.erase(buffer_.begin(), buffer_.begin() + static_cast<std::ptrdiff_t>(result.consumed));
+            if (result.consumed >= buffer_.size()) {
+                buffer_.clear();
+            } else {
+                buffer_.erase(buffer_.begin(), buffer_.begin() + static_cast<std::ptrdiff_t>(result.consumed));
+            }
         }
         return result;
     }

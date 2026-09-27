@@ -1,6 +1,7 @@
 #ifndef __NET_SECURITY_SSL_HANDLER_H__
 #define __NET_SECURITY_SSL_HANDLER_H__
 #include <cstddef>
+#include <string>
 #include <string_view>
 
 namespace yuan::net
@@ -19,6 +20,11 @@ namespace yuan::net
         }
 
         virtual int ssl_init_action() = 0;
+
+        virtual bool set_hostname(const std::string &hostname)
+        {
+            return hostname.empty();
+        }
 
         virtual int ssl_write(const char *data, std::size_t size) = 0;
 

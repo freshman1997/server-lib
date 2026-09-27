@@ -42,7 +42,7 @@ namespace yuan::server
 
         bool init() override;
         void start() override;
-        void stop() override;
+        bool stop() override;
         void set_runtime_context(const yuan::app::RuntimeContext &context) override;
 
         std::shared_ptr<yuan::net::bit_torrent::BitTorrentClient> get_client_by_task_id(int64_t task_id);

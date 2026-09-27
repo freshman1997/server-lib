@@ -1,11 +1,13 @@
 #include "yuan/rpc/rpc.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <chrono>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -26,11 +28,8 @@ namespace
         message.set_continuation_id(777);
         message.route.service = 12;
         message.route.method = 34;
-        message.route.name = "game.player.move";
         message.serialization = yuan::rpc::Serialization::protobuf;
         message.compression = yuan::rpc::Compression::zstd;
-        message.metadata.emplace("trace", "abc");
-        message.metadata.emplace("lang", "cpp");
         message.payload = {1, 2, 3, 4};
 
         yuan::rpc::Bytes encoded;
@@ -43,15 +42,68 @@ namespace
             return 11;
         }
         const auto restored = yuan::rpc::wire::to_message(decoded.frame);
-        if (!require(restored.request_id == 99 && restored.continuation_id() == 777 && restored.route.name == "game.player.move", "message route mismatch")) {
+        if (!require(restored.request_id == 99 && restored.continuation_id() == 777 && restored.route.service == 12 && restored.route.method == 34, "message route mismatch")) {
             return 12;
         }
         if (!require(restored.serialization == yuan::rpc::Serialization::protobuf && restored.compression == yuan::rpc::Compression::zstd,
                      "message codec flags mismatch")) {
             return 13;
         }
-        if (!require(restored.metadata.at("trace") == "abc" && restored.payload == message.payload, "metadata or payload mismatch")) {
+        if (!require(restored.metadata.empty() && restored.route.name.empty() && restored.payload == message.payload, "fixed wire payload mismatch")) {
             return 14;
+        }
+        return 0;
+    }
+
+    int test_byte_buffer_encoder_parity()
+    {
+        yuan::rpc::Message message;
+        message.kind = yuan::rpc::MessageKind::request;
+        message.request_id = 501;
+        message.set_continuation_id(902);
+        message.route.service = 31;
+        message.route.method = 47;
+        message.serialization = yuan::rpc::Serialization::json;
+        message.compression = yuan::rpc::Compression::none;
+        message.payload.assign(8192, static_cast<std::uint8_t>(0x5A));
+
+        yuan::rpc::Bytes encoded_bytes;
+        yuan::buffer::ByteBuffer encoded_buffer;
+        if (!require(yuan::rpc::wire::encode_message(message, encoded_bytes) &&
+                         yuan::rpc::wire::encode_message(message, encoded_buffer),
+                     "message encoders should both succeed")) {
+            return 20;
+        }
+        if (!require(encoded_bytes.size() == encoded_buffer.readable_bytes() &&
+                         std::equal(encoded_bytes.begin(), encoded_bytes.end(), encoded_buffer.read_ptr(),
+                                    [](std::uint8_t left, char right) {
+                                        return left == static_cast<std::uint8_t>(static_cast<unsigned char>(right));
+                                    }),
+                     "message Bytes and ByteBuffer encoders should match")) {
+            return 21;
+        }
+
+        yuan::rpc::Response response;
+        response.request_id = 777;
+        response.coroutine_id = 888;
+        response.status = yuan::rpc::RpcStatus::internal_error;
+        response.serialization = yuan::rpc::Serialization::raw;
+        response.payload.assign(4097, static_cast<std::uint8_t>(0x33));
+
+        encoded_bytes.clear();
+        encoded_buffer.clear();
+        if (!require(yuan::rpc::wire::encode_response(response, encoded_bytes) &&
+                         yuan::rpc::wire::encode_response(response, encoded_buffer),
+                     "response encoders should both succeed")) {
+            return 22;
+        }
+        if (!require(encoded_bytes.size() == encoded_buffer.readable_bytes() &&
+                         std::equal(encoded_bytes.begin(), encoded_bytes.end(), encoded_buffer.read_ptr(),
+                                    [](std::uint8_t left, char right) {
+                                        return left == static_cast<std::uint8_t>(static_cast<unsigned char>(right));
+                                    }),
+                     "response Bytes and ByteBuffer encoders should match")) {
+            return 23;
         }
         return 0;
     }
@@ -66,7 +118,6 @@ namespace
         response.encryption = yuan::rpc::Encryption::xor_stream;
         response.key_id = 77;
         response.nonce = 0xABCDEFULL;
-        response.metadata.emplace("content-type", "application/json");
         response.payload = {'{', '}', '\n'};
 
         yuan::rpc::security::XorStreamCipher cipher("dev-key");
@@ -93,7 +144,7 @@ namespace
         if (!require(restored.request_id == 1234 && restored.coroutine_id == 5678 && restored.status == yuan::rpc::RpcStatus::ok, "response header mismatch")) {
             return 33;
         }
-        if (!require(restored.metadata.at("content-type") == "application/json" && restored.payload == response.payload,
+        if (!require(restored.metadata.empty() && restored.error.empty() && restored.payload == response.payload,
                      "encrypted response payload mismatch")) {
             return 34;
         }
@@ -104,12 +155,14 @@ namespace
     {
         yuan::rpc::Message first;
         first.request_id = 1;
-        first.route.name = "a";
+        first.route.service = 1;
+        first.route.method = 1;
         first.payload = {1};
 
         yuan::rpc::Message second;
         second.request_id = 2;
-        second.route.name = "b";
+        second.route.service = 1;
+        second.route.method = 2;
         second.payload = {2};
 
         yuan::rpc::Bytes a;
@@ -144,7 +197,8 @@ namespace
     {
         yuan::rpc::Message message;
         message.request_id = 9;
-        message.route.name = "error.check";
+        message.route.service = 9;
+        message.route.method = 9;
         message.payload = {1, 2, 3};
 
         yuan::rpc::Bytes encoded;
@@ -191,7 +245,8 @@ namespace
     {
         yuan::rpc::Server server;
         yuan::rpc::Route route;
-        route.name = "json.echo";
+        route.service = 100;
+        route.method = 1;
         if (!require(server.register_typed_handler<yuan::rpc::JsonText, yuan::rpc::JsonText>(
                 route,
                 [](const yuan::rpc::JsonText &request) {
@@ -231,7 +286,8 @@ namespace
 
         yuan::rpc::Server server;
         yuan::rpc::Route route;
-        route.name = "session.echo";
+        route.service = 100;
+        route.method = 2;
         if (!require(server.register_typed_handler<yuan::rpc::JsonText, yuan::rpc::JsonText>(
                 route,
                 [](const yuan::rpc::JsonText &request) {
@@ -291,7 +347,8 @@ namespace
     {
         yuan::rpc::Server server;
         yuan::rpc::Route route;
-        route.name = "coroutine.echo";
+        route.service = 100;
+        route.method = 3;
         if (!require(server.register_typed_handler<yuan::rpc::JsonText, yuan::rpc::JsonText>(
                 route,
                 [](const yuan::rpc::JsonText &request) {
@@ -322,7 +379,8 @@ namespace
         yuan::rpc::RpcCoroutineRegistry registry;
         yuan::rpc::CoroutineRpcClient client(session.client(), registry);
         yuan::rpc::Route route;
-        route.name = "never.reply";
+        route.service = 100;
+        route.method = 4;
 
         auto task = coroutine_timeout(client, route);
         task.resume();
@@ -353,6 +411,9 @@ namespace
 int main()
 {
     if (const int rc = test_plain_message_roundtrip(); rc != 0) {
+        return rc;
+    }
+    if (const int rc = test_byte_buffer_encoder_parity(); rc != 0) {
         return rc;
     }
     if (const int rc = test_encrypted_response_roundtrip(); rc != 0) {

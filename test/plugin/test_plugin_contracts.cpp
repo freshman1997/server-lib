@@ -4,6 +4,7 @@
 #include "application.h"
 #include "plugin_host_service.h"
 #include "plugin/plugin_context.h"
+#include "plugin/extension_point_registry.h"
 #include "service.h"
 #include "service_registry.h"
 #include "eventbus/event_bus.h"
@@ -15,6 +16,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <any>
 
 namespace
 {
@@ -473,6 +475,42 @@ namespace
         require(bad_service->stop_calls == 0, "failing managed service should not be stopped during rollback");
     }
 
+    void test_extension_point_registry_value_snapshots()
+    {
+        yuan::plugin::ExtensionPointRegistry registry;
+        yuan::plugin::ExtensionPointDescriptor v1;
+        v1.name = "demo.echo";
+        v1.type = "EchoV1";
+        v1.contract_id = "demo.echo";
+        v1.contract_version = 1;
+        yuan::plugin::ExtensionPointDescriptor v3 = v1;
+        v3.type = "EchoV3";
+        v3.contract_version = 3;
+
+        require(registry.register_extension_point("plugin-v1", v1, std::string("one")),
+                "first extension point registration should succeed");
+        require(registry.register_extension_point("plugin-v3", v3, std::string("three")),
+                "second extension point registration should succeed");
+
+        const auto by_name = registry.find_by_name("demo.echo");
+        require(by_name.size() == 2 && by_name[0].contract_version == 1 && by_name[1].contract_version == 3,
+                "name query should return stable value snapshots in registration order");
+        const auto best = registry.find_best_contract("demo.echo");
+        require(best.has_value() && best->contract_version == 3 && best->type == "EchoV3",
+                "contract query should select the highest version");
+        const auto minimum = registry.find_by_contract("demo.echo", 2);
+        require(minimum.size() == 1 && minimum.front().contract_version == 3,
+                "contract query should honor minimum version");
+
+        require(registry.unregister_extension_points("plugin-v1"),
+                "extension point owner should be unregisterable");
+        require(by_name.size() == 2 && by_name[0].plugin_name == "plugin-v1",
+                "query result should remain valid after registry mutation");
+        const auto after_unregister = registry.find_by_name("demo.echo");
+        require(after_unregister.size() == 1 && after_unregister.front().plugin_name == "plugin-v3",
+                "new query should omit unregistered extension points");
+    }
+
     void test_lua_script_plugin_host_smoke()
     {
         const auto plugin_root = find_example_plugins_root();
@@ -527,6 +565,7 @@ int main()
     test_plugin_resource_guard_snapshot_and_leak_report();
     test_plugin_service_visibility();
     test_plugin_service_start_rollback();
+    test_extension_point_registry_value_snapshots();
     test_lua_script_plugin_host_smoke();
     test_typescript_script_plugin_host_smoke();
     std::cout << "plugin contract tests passed\n";

@@ -3,13 +3,20 @@
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <exception>
 #include <fcntl.h>
+#include <future>
 #include <mutex>
 #include <queue>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
 
 #include "base/spinlock.h"
 #include "logger.h"
@@ -23,6 +30,7 @@
 #include "net/socket/inet_address.h"
 #include "net/acceptor/acceptor.h"
 #include "net/acceptor/stream_listener.h"
+#include "platform/native_platform.h"
 
 #include <ranges>
 
@@ -36,13 +44,26 @@ namespace yuan::net
 {
     namespace
     {
-        constexpr uint32_t kIdlePollTimeoutMs = 50;
-        constexpr uint32_t kActiveTimerPollTimeoutCapMs = 50;
+        constexpr uint32_t kInitialIdlePollTimeoutMs = 1;
+        constexpr uint32_t kMaxIdlePollTimeoutMs = 50;
+        constexpr uint32_t kActiveTimerPollTimeoutCapMs = kMaxIdlePollTimeoutMs;
+        constexpr uint32_t kEventDispatchBudgetMs = 8;
+        // Saturation point of the idle backoff shift; idle_streak_ never grows
+        // past this because the timeout is already capped by then.
+        constexpr uint32_t kIdleBackoffShiftSaturation = 6;
     }
 
     class EventLoop::HelperData
     {
     public:
+        enum class State : uint8_t
+        {
+            created,
+            running,
+            stopping,
+            stopped,
+        };
+
         HelperData() = default;
         HelperData(const HelperData &) = delete;
         HelperData & operator=(const HelperData &) = delete;
@@ -50,23 +71,38 @@ namespace yuan::net
     public:
         std::atomic_bool quit_{false};
         std::atomic_bool resume_coroutine_requested_{false};
-        std::atomic_bool is_waiting_{false};
+        std::atomic_bool loop_running_{false};
+        std::atomic<State> state_{State::created};
+        mutable std::mutex lifecycle_mutex_;
+        mutable std::condition_variable lifecycle_cv_;
+        // Serializes setup/teardown operations with the created -> running
+        // transition. It is recursive because setup callbacks can call back
+        // into run_in_loop_sync while configuring an object.
+        mutable std::recursive_mutex setup_mutex_;
         std::atomic_size_t channel_count_{0};
         std::atomic_bool has_pending_callbacks_{false};
         std::atomic_bool has_pending_coroutines_{false};
         Poller *poller_ = nullptr;
         timer::TimerManager *timer_manager_ = nullptr;
+        // Guards pending queues and channel maps. Runtime channel mutations
+        // are marshalled synchronously to the loop thread; setup/teardown
+        // mutations may run directly when the loop is not running.
         yuan::base::Spinlock spinlock_;
-        std::mutex cond_mutex_;
-        std::condition_variable cond;
         std::unordered_map<int, Channel *> channels_;
         std::unordered_set<int> tombstoned_fds_;
         std::queue<std::function<void()>> pending_callbacks_;
         std::queue<std::coroutine_handle<>> pending_coroutines_;
+        std::vector<PollEvent> deferred_events_;
         std::unordered_map<int, std::shared_ptr<Connection>> connections_;
         uint64_t next_generation_ = 1;
+        uint32_t idle_streak_ = 0;
         std::atomic<std::thread::id> loop_thread_id_;
-#ifndef _WIN32
+#ifdef _WIN32
+        int wakeup_fd_ = -1;
+        sockaddr_in wakeup_addr_{};
+        bool wakeup_wsa_started_ = false;
+        Channel wakeup_channel_;
+#else
         int wakeup_read_fd_ = -1;
         int wakeup_write_fd_ = -1;
         Channel wakeup_channel_;
@@ -115,9 +151,48 @@ namespace yuan::net
             return true;
         }
 
-#ifndef _WIN32
         bool init_wakeup_fd()
         {
+#ifdef _WIN32
+            if (!wakeup_wsa_started_) {
+                WSADATA wsa{};
+                if (::WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+                    return false;
+                }
+                wakeup_wsa_started_ = true;
+            }
+
+            const SOCKET fd = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (fd == INVALID_SOCKET) {
+                return false;
+            }
+
+            u_long non_blocking = 1;
+            if (::ioctlsocket(fd, FIONBIO, &non_blocking) != 0) {
+                ::closesocket(fd);
+                return false;
+            }
+
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            addr.sin_port = 0;
+            if (::bind(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+                ::closesocket(fd);
+                return false;
+            }
+
+            int addr_len = static_cast<int>(sizeof(wakeup_addr_));
+            if (::getsockname(fd, reinterpret_cast<sockaddr *>(&wakeup_addr_), &addr_len) != 0) {
+                ::closesocket(fd);
+                return false;
+            }
+
+            wakeup_fd_ = static_cast<int>(fd);
+            wakeup_channel_.set_fd(wakeup_fd_);
+            wakeup_channel_.enable_read();
+            return true;
+#else
             int fds[2] = { -1, -1 };
             if (::pipe(fds) != 0) {
                 return false;
@@ -129,10 +204,21 @@ namespace yuan::net
             wakeup_channel_.set_fd(wakeup_read_fd_);
             wakeup_channel_.enable_read();
             return true;
+#endif
         }
 
         void close_wakeup_fd()
         {
+#ifdef _WIN32
+            if (wakeup_fd_ != -1) {
+                ::closesocket(static_cast<SOCKET>(wakeup_fd_));
+                wakeup_fd_ = -1;
+            }
+            if (wakeup_wsa_started_) {
+                ::WSACleanup();
+                wakeup_wsa_started_ = false;
+            }
+#else
             if (wakeup_read_fd_ != -1) {
                 ::close(wakeup_read_fd_);
                 wakeup_read_fd_ = -1;
@@ -141,15 +227,36 @@ namespace yuan::net
                 ::close(wakeup_write_fd_);
                 wakeup_write_fd_ = -1;
             }
+#endif
         }
 
         bool is_wakeup_fd(int fd) const noexcept
         {
+#ifdef _WIN32
+            return wakeup_fd_ != -1 && fd == wakeup_fd_;
+#else
             return wakeup_read_fd_ != -1 && fd == wakeup_read_fd_;
+#endif
         }
 
         void drain_wakeup_fd() noexcept
         {
+#ifdef _WIN32
+            if (wakeup_fd_ == -1) {
+                return;
+            }
+            char buf[128];
+            for (;;) {
+                const auto n = ::recvfrom(static_cast<SOCKET>(wakeup_fd_), buf, sizeof(buf), 0, nullptr, nullptr);
+                if (n > 0) {
+                    continue;
+                }
+                if (n < 0 && platform::GetLastNativeError() == WSAEINTR) {
+                    continue;
+                }
+                break;
+            }
+#else
             if (wakeup_read_fd_ == -1) {
                 return;
             }
@@ -164,10 +271,29 @@ namespace yuan::net
                 }
                 break;
             }
+#endif
         }
 
         void notify_wakeup_fd() noexcept
         {
+#ifdef _WIN32
+            if (wakeup_fd_ == -1) {
+                return;
+            }
+            const char byte = 1;
+            for (;;) {
+                const auto n = ::sendto(static_cast<SOCKET>(wakeup_fd_), &byte, sizeof(byte), 0,
+                                        reinterpret_cast<sockaddr *>(&wakeup_addr_), sizeof(wakeup_addr_));
+                if (n == 1) {
+                    return;
+                }
+                const int err = platform::GetLastNativeError();
+                if (err == WSAEINTR) {
+                    continue;
+                }
+                return;
+            }
+#else
             if (wakeup_write_fd_ == -1) {
                 return;
             }
@@ -182,8 +308,8 @@ namespace yuan::net
                 }
                 return;
             }
-        }
 #endif
+        }
     };
 
     EventLoop::EventLoop(Poller *poller, timer::TimerManager *timer_manager)
@@ -192,31 +318,31 @@ namespace yuan::net
         data_->poller_ = poller;
         data_->timer_manager_ = timer_manager;
         data_->quit_ = false;
-        data_->is_waiting_ = false;
-#ifndef _WIN32
         if (data_->poller_ && data_->init_wakeup_fd()) {
             std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
             data_->register_channel_locked(&data_->wakeup_channel_);
         }
-#endif
     }
 
     EventLoop::~EventLoop()
     {
+        if (data_->loop_running_.load(std::memory_order_acquire)) {
+            LOG_ERROR("EventLoop destroyed while its loop thread is still running");
+            std::terminate();
+        }
         std::unordered_map<int, std::shared_ptr<Connection>> connections;
         {
             std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
             connections.swap(data_->connections_);
-#ifndef _WIN32
-            if (data_->wakeup_read_fd_ != -1) {
+            if (data_->is_wakeup_fd(data_->wakeup_channel_.get_fd())) {
                 data_->remove_registered_channel_locked(&data_->wakeup_channel_, false);
             }
-#endif
             data_->channels_.clear();
             data_->channel_count_.store(0, std::memory_order_release);
             data_->tombstoned_fds_.clear();
             data_->pending_callbacks_ = {};
             data_->pending_coroutines_ = {};
+            data_->deferred_events_.clear();
             data_->has_pending_callbacks_.store(false, std::memory_order_release);
             data_->has_pending_coroutines_.store(false, std::memory_order_release);
         }
@@ -226,16 +352,31 @@ namespace yuan::net
                 val->detach_owner_event_handler();
             }
         }
-#ifndef _WIN32
         data_->close_wakeup_fd();
-#endif
     }
 
     EventLoopExitReason EventLoop::loop()
     {
         assert(data_->poller_);
 
-        data_->quit_.store(false, std::memory_order_relaxed);
+        std::unique_lock<std::recursive_mutex> setup_lock(data_->setup_mutex_);
+        {
+            std::lock_guard<std::mutex> lifecycle_lock(data_->lifecycle_mutex_);
+            const auto state = data_->state_.load(std::memory_order_relaxed);
+            if (state == HelperData::State::running || state == HelperData::State::stopping) {
+                LOG_ERROR("EventLoop::loop called concurrently");
+                return EventLoopExitReason::quit_requested;
+            }
+            // A stopped loop may be entered again after a coroutine-resume
+            // exit. A quit requested before the first start must not be
+            // erased, while flags from a completed run are reset here.
+            if (state == HelperData::State::stopped) {
+                data_->resume_coroutine_requested_.store(false, std::memory_order_relaxed);
+            }
+            data_->state_.store(HelperData::State::running, std::memory_order_release);
+            data_->loop_running_.store(true, std::memory_order_release);
+        }
+        setup_lock.unlock();
         data_->resume_coroutine_requested_.store(false, std::memory_order_relaxed);
         data_->loop_thread_id_.store(std::this_thread::get_id(), std::memory_order_relaxed);
 
@@ -304,23 +445,31 @@ namespace yuan::net
         std::vector<PollEvent> events;
         events.reserve(4096);
 
-        std::vector<PollEvent> active_channels;
-        active_channels.reserve(256);
+        std::vector<PollEvent> active_events;
+        active_events.reserve(256);
 
         auto has_channels = [this]() {
             return data_->channel_count_.load(std::memory_order_acquire) > 0;
         };
 
-        auto poll_timeout = [this](const bool processed_work) {
+        auto idle_timeout = [this]() {
+            const auto shift = data_->idle_streak_ < kIdleBackoffShiftSaturation
+                ? data_->idle_streak_
+                : kIdleBackoffShiftSaturation;
+            const auto timeout = kInitialIdlePollTimeoutMs << shift;
+            return timeout > kMaxIdlePollTimeoutMs ? kMaxIdlePollTimeoutMs : timeout;
+        };
+
+        auto poll_timeout = [this, &idle_timeout](const bool processed_work) {
             if (processed_work) {
                 return 0U;
             }
 
             if (!data_->timer_manager_) {
-                return kIdlePollTimeoutMs;
+                return idle_timeout();
             }
 
-            return data_->timer_manager_->poll_timeout(kIdlePollTimeoutMs, kActiveTimerPollTimeoutCapMs);
+            return data_->timer_manager_->poll_timeout(idle_timeout(), kActiveTimerPollTimeoutCapMs);
         };
 
         while (!data_->quit_.load(std::memory_order_acquire) && !data_->resume_coroutine_requested_.load(std::memory_order_acquire)) {
@@ -332,30 +481,35 @@ namespace yuan::net
             processed_work = drain_coroutines() || processed_work;
 
             events.clear();
-            const bool has_registered_channels = has_channels();
-            const uint32_t timeout_ms = poll_timeout(processed_work);
-            if (!has_registered_channels) {
-                if (timeout_ms > 0) {
-                    std::unique_lock<std::mutex> lock(data_->cond_mutex_);
-                    data_->is_waiting_.store(true, std::memory_order_release);
-                    data_->cond.wait_for(lock, std::chrono::milliseconds(timeout_ms));
-                    data_->is_waiting_.store(false, std::memory_order_release);
-                }
-                continue;
+            active_events.clear();
+            if (!data_->deferred_events_.empty()) {
+                active_events.swap(data_->deferred_events_);
             }
 
-            data_->poller_->poll(timeout_ms, events);
-            if (!events.empty()) {
-                active_channels.clear();
-                {
-                    std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
+            if (active_events.empty()) {
+                const bool has_registered_channels = has_channels();
+                const uint32_t timeout_ms = poll_timeout(processed_work);
+                if (!has_registered_channels) {
+                    // Degraded mode (wakeup fd unavailable): bounded sleep +
+                    // atomic flag re-check each iteration keeps the loop
+                    // responsive without a condition variable.
+                    if (timeout_ms > 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms));
+                    }
+                    if (!processed_work && data_->idle_streak_ < kIdleBackoffShiftSaturation) {
+                        ++data_->idle_streak_;
+                    }
+                    continue;
+                }
+
+                data_->poller_->poll(timeout_ms, events);
+                if (!events.empty()) {
+                    // channels_ is loop-thread-only while running; no lock needed.
                     for (const auto &event : events) {
-#ifndef _WIN32
                         if (data_->is_wakeup_fd(event.fd)) {
-                            active_channels.push_back(event);
+                            active_events.push_back(event);
                             continue;
                         }
-#endif
                         auto it = data_->channels_.find(event.fd);
                         if (it == data_->channels_.end()) {
                             continue;
@@ -370,21 +524,34 @@ namespace yuan::net
                             continue;
                         }
 
-                        active_channels.push_back(event);
+                        active_events.push_back(event);
                     }
                 }
+            }
 
-                for (const auto &active_event : active_channels) {
-#ifndef _WIN32
+            if (!active_events.empty()) {
+                const auto event_dispatch_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kEventDispatchBudgetMs);
+                std::size_t dispatched_events = 0;
+                for (std::size_t event_index = 0; event_index < active_events.size(); ++event_index) {
+                    if (dispatched_events > 0 && std::chrono::steady_clock::now() >= event_dispatch_deadline) {
+                        data_->deferred_events_.insert(data_->deferred_events_.end(),
+                                                      active_events.begin() + static_cast<std::ptrdiff_t>(event_index),
+                                                      active_events.end());
+                        processed_work = true;
+                        break;
+                    }
+
+                    const auto &active_event = active_events[event_index];
                     if (data_->is_wakeup_fd(active_event.fd)) {
                         data_->drain_wakeup_fd();
                         processed_work = true;
+                        ++dispatched_events;
                         continue;
                     }
-#endif
                     Channel *channel = nullptr;
+                    std::shared_ptr<Connection> pinned_connection;
                     {
-                        std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
+                        // Loop-thread-only state; no lock needed.
                         auto it = data_->channels_.find(active_event.fd);
                         if (it == data_->channels_.end()) {
                             continue;
@@ -398,9 +565,15 @@ namespace yuan::net
                             (channel->get_events() & active_event.revents) == Channel::NONE_EVENT) {
                             continue;
                         }
+
+                        auto connection_it = data_->connections_.find(active_event.fd);
+                        if (connection_it != data_->connections_.end()) {
+                            pinned_connection = connection_it->second;
+                        }
                     }
 
                     processed_work = true;
+                    ++dispatched_events;
                     try {
                         channel->set_revent(active_event.revents);
                         channel->on_event();
@@ -418,10 +591,31 @@ namespace yuan::net
             if (data_->timer_manager_) {
                 data_->timer_manager_->run_due_timers();
             }
+
+            if (processed_work) {
+                data_->idle_streak_ = 0;
+            } else if (data_->idle_streak_ < kIdleBackoffShiftSaturation) {
+                ++data_->idle_streak_;
+            }
         }
 
-        drain_callbacks();
-        drain_coroutines();
+        for (;;) {
+            const bool callbacks_processed = drain_callbacks();
+            const bool coroutines_processed = drain_coroutines();
+            if (!callbacks_processed && !coroutines_processed) {
+                std::lock_guard<std::mutex> lifecycle_lock(data_->lifecycle_mutex_);
+                std::lock_guard<yuan::base::Spinlock> queue_lock(data_->spinlock_);
+                if (!data_->pending_callbacks_.empty() || !data_->pending_coroutines_.empty()) {
+                    continue;
+                }
+                data_->loop_running_.store(false, std::memory_order_release);
+                data_->state_.store(HelperData::State::stopped, std::memory_order_release);
+                data_->loop_thread_id_.store(std::thread::id{}, std::memory_order_release);
+                break;
+            }
+        }
+
+        data_->lifecycle_cv_.notify_all();
 
         return data_->resume_coroutine_requested_.load(std::memory_order_acquire)
             ? EventLoopExitReason::coroutine_resume_requested
@@ -431,6 +625,14 @@ namespace yuan::net
     void EventLoop::on_new_connection(const std::shared_ptr<Connection> &conn)
     {
         if (!conn) {
+            return;
+        }
+
+        if (!is_in_loop_thread() && data_->loop_running_.load(std::memory_order_acquire)) {
+            const auto keepalive = conn;
+            run_in_loop_sync([this, keepalive]() {
+                on_new_connection(keepalive);
+            });
             return;
         }
 
@@ -454,7 +656,7 @@ namespace yuan::net
     void EventLoop::quit()
     {
         data_->quit_.store(true, std::memory_order_release);
-        data_->cond.notify_all();
+        wakeup();
     }
 
     void EventLoop::close_channel(Channel *channel)
@@ -463,26 +665,32 @@ namespace yuan::net
             return;
         }
 
-        std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
-        const int fd = channel->get_fd();
-        auto it = data_->channels_.find(fd);
-        if (it != data_->channels_.end()) {
-            if (it->second != channel) {
+        if (!is_in_loop_thread() && data_->loop_running_.load(std::memory_order_acquire)) {
+            run_in_loop_sync([this, channel]() { close_channel(channel); });
+            return;
+        }
+        {
+            std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
+            const int fd = channel->get_fd();
+            auto it = data_->channels_.find(fd);
+            if (it != data_->channels_.end()) {
+                if (it->second != channel) {
+                    channel->bump_generation();
+                    LOG_DEBUG("ignore stale close_channel for reused fd: {}", fd);
+                    return;
+                }
+                LOG_INFO("channel closed, fd: {}", fd);
+                data_->poller_->remove_channel(channel);
+                data_->channels_.erase(it);
+                data_->channel_count_.fetch_sub(1, std::memory_order_release);
+                data_->tombstoned_fds_.insert(fd);
                 channel->bump_generation();
-                LOG_DEBUG("ignore stale close_channel for reused fd: {}", fd);
-                return;
+                data_->connections_.erase(fd);
+            } else if (data_->tombstoned_fds_.find(fd) != data_->tombstoned_fds_.end()) {
+                channel->bump_generation();
+            } else {
+                LOG_WARN("channel not found, fd: {}", fd);
             }
-            LOG_INFO("channel closed, fd: {}", fd);
-            data_->poller_->remove_channel(channel);
-            data_->channels_.erase(it);
-            data_->channel_count_.fetch_sub(1, std::memory_order_release);
-            data_->tombstoned_fds_.insert(fd);
-            channel->bump_generation();
-            data_->connections_.erase(fd);
-        } else if (data_->tombstoned_fds_.find(fd) != data_->tombstoned_fds_.end()) {
-            channel->bump_generation();
-        } else {
-            LOG_WARN("channel not found, fd: {}", fd);
         }
     }
 
@@ -492,31 +700,33 @@ namespace yuan::net
             return;
         }
 
-        std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
-        const int fd = channel->get_fd();
-        if (!channel->has_events()) {
-            auto it = data_->channels_.find(fd);
-            if (it != data_->channels_.end() && it->second == channel) {
-                data_->poller_->remove_channel(channel);
-                data_->channels_.erase(it);
-                data_->channel_count_.fetch_sub(1, std::memory_order_release);
-                data_->tombstoned_fds_.insert(fd);
-                channel->bump_generation();
-            } else if (data_->tombstoned_fds_.find(fd) != data_->tombstoned_fds_.end()) {
-                channel->bump_generation();
-            }
+        if (!is_in_loop_thread() && data_->loop_running_.load(std::memory_order_acquire)) {
+            run_in_loop_sync([this, channel]() { update_channel(channel); });
             return;
         }
-
-        data_->register_channel_locked(channel);
+        {
+            std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
+            const int fd = channel->get_fd();
+            if (!channel->has_events()) {
+                auto it = data_->channels_.find(fd);
+                if (it != data_->channels_.end() && it->second == channel) {
+                    data_->poller_->remove_channel(channel);
+                    data_->channels_.erase(it);
+                    data_->channel_count_.fetch_sub(1, std::memory_order_release);
+                    data_->tombstoned_fds_.insert(fd);
+                    channel->bump_generation();
+                } else if (data_->tombstoned_fds_.find(fd) != data_->tombstoned_fds_.end()) {
+                    channel->bump_generation();
+                }
+            } else {
+                data_->register_channel_locked(channel);
+            }
+        }
     }
 
     void EventLoop::wakeup()
     {
-#ifndef _WIN32
         data_->notify_wakeup_fd();
-#endif
-        data_->cond.notify_all();
     }
 
     void EventLoop::request_coroutine_resume()
@@ -527,8 +737,19 @@ namespace yuan::net
 
     void EventLoop::queue_in_loop(std::function<void()> cb)
     {
+        if (!cb) {
+            return;
+        }
+
         {
-            std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
+            std::lock_guard<std::mutex> lifecycle_lock(data_->lifecycle_mutex_);
+            const auto state = data_->state_.load(std::memory_order_relaxed);
+            if (state == HelperData::State::stopped && data_->quit_.load(std::memory_order_acquire)) {
+                // The stopped state is published only after the final drain.
+                return;
+            }
+
+            std::lock_guard<yuan::base::Spinlock> queue_lock(data_->spinlock_);
             data_->pending_callbacks_.push(std::move(cb));
             data_->has_pending_callbacks_.store(true, std::memory_order_release);
         }
@@ -545,7 +766,13 @@ namespace yuan::net
         }
 
         {
-            std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
+            std::lock_guard<std::mutex> lifecycle_lock(data_->lifecycle_mutex_);
+            const auto state = data_->state_.load(std::memory_order_relaxed);
+            if (state == HelperData::State::stopped && data_->quit_.load(std::memory_order_acquire)) {
+                return;
+            }
+
+            std::lock_guard<yuan::base::Spinlock> queue_lock(data_->spinlock_);
             data_->pending_coroutines_.push(handle);
             data_->has_pending_coroutines_.store(true, std::memory_order_release);
         }
@@ -555,13 +782,105 @@ namespace yuan::net
         }
     }
 
+    bool EventLoop::run_in_loop_sync(std::function<void()> operation)
+    {
+        if (!operation) {
+            return false;
+        }
+        if (is_in_loop_thread()) {
+            operation();
+            return true;
+        }
+
+        // Keep setup and the startup transition mutually exclusive. Without
+        // this gate a caller can observe `created`, release the lifecycle
+        // lock, and mutate poller-owned state concurrently with loop().
+        std::unique_lock<std::recursive_mutex> setup_lock(data_->setup_mutex_);
+        bool run_without_loop = false;
+        {
+            std::lock_guard<std::mutex> lifecycle_lock(data_->lifecycle_mutex_);
+            const auto state = data_->state_.load(std::memory_order_relaxed);
+            if (state == HelperData::State::created || state == HelperData::State::stopped) {
+                // No loop thread owns poller state in either setup state. A
+                // stopped loop remains reusable unless quit is explicitly
+                // requested; teardown operations are still safe after quit.
+                run_without_loop = true;
+            }
+        }
+
+        if (run_without_loop) {
+            operation();
+            return true;
+        }
+
+        if (is_in_loop_thread()) {
+            operation();
+            return true;
+        }
+
+        auto completion = std::make_shared<std::promise<void>>();
+        auto future = completion->get_future();
+        {
+            std::lock_guard<std::mutex> lifecycle_lock(data_->lifecycle_mutex_);
+            const auto state = data_->state_.load(std::memory_order_relaxed);
+            if (state != HelperData::State::running && state != HelperData::State::stopping) {
+                return false;
+            }
+
+            std::lock_guard<yuan::base::Spinlock> queue_lock(data_->spinlock_);
+            data_->pending_callbacks_.push([operation = std::move(operation), completion]() mutable {
+                try {
+                    operation();
+                } catch (...) {
+                    completion->set_exception(std::current_exception());
+                    return;
+                }
+                completion->set_value();
+            });
+            data_->has_pending_callbacks_.store(true, std::memory_order_release);
+        }
+        wakeup();
+        try {
+            future.get();
+        } catch (...) {
+            return false;
+        }
+        return true;
+    }
+
     bool EventLoop::is_in_loop_thread() const noexcept
     {
         return data_->loop_thread_id_.load(std::memory_order_acquire) == std::this_thread::get_id();
     }
 
+    bool EventLoop::is_running() const noexcept
+    {
+        return data_->loop_running_.load(std::memory_order_acquire);
+    }
+
+    bool EventLoop::wait_until_stopped(uint32_t timeout_ms) const
+    {
+        if (is_in_loop_thread()) {
+            return false;
+        }
+        std::unique_lock<std::mutex> lock(data_->lifecycle_mutex_);
+        auto stopped = [this]() {
+            const auto state = data_->state_.load(std::memory_order_acquire);
+            return state == HelperData::State::created || state == HelperData::State::stopped;
+        };
+        if (timeout_ms == 0) {
+            data_->lifecycle_cv_.wait(lock, stopped);
+            return true;
+        }
+        return data_->lifecycle_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), stopped);
+    }
+
     bool EventLoop::accepts_poll_event_for_test(const PollEvent &event) const
     {
+        if (data_->loop_running_.load(std::memory_order_acquire) && !is_in_loop_thread()) {
+            LOG_ERROR("accepts_poll_event_for_test called from a foreign thread while the loop is running");
+            return false;
+        }
         std::lock_guard<yuan::base::Spinlock> lock(data_->spinlock_);
         auto it = data_->channels_.find(event.fd);
         return it != data_->channels_.end() && event.generation != 0 &&
@@ -581,32 +900,88 @@ namespace yuan::net
         return std::make_unique<ExternalFdRegistration>(this, fd, std::move(handler), events);
     }
 
+    struct EventLoop::ExternalFdRegistration::State
+    {
+        enum class Status : uint8_t
+        {
+            pending,
+            registered,
+            closing,
+            closed,
+        };
+
+        EventLoop *loop = nullptr;
+        std::shared_ptr<SelectHandler> handler;
+        std::unique_ptr<Channel> channel;
+        Status status = Status::pending;
+
+        void register_on_loop()
+        {
+            if (!loop || !channel || status != Status::pending) {
+                return;
+            }
+
+            handler->set_event_handler(loop);
+            channel->set_handler(std::weak_ptr<SelectHandler>(handler));
+            loop->update_channel(channel.get());
+            status = Status::registered;
+        }
+
+        void close_on_loop()
+        {
+            if (!channel || status == Status::closed) {
+                return;
+            }
+
+            const auto previous = status;
+            status = Status::closing;
+            if (loop && previous == Status::registered) {
+                loop->close_channel(channel.get());
+            }
+            channel->disable_all();
+            channel->clear_handler();
+            handler.reset();
+            status = Status::closed;
+        }
+    };
+
     EventLoop::ExternalFdRegistration::ExternalFdRegistration(
         EventLoop *loop,
         int fd,
         std::shared_ptr<SelectHandler> handler,
         int events)
         : loop_(loop),
-          handler_(std::move(handler)),
-          channel_(std::make_unique<Channel>(fd)),
-          active_(loop_ != nullptr && handler_ != nullptr && events != Channel::NONE_EVENT)
+          state_(std::make_shared<State>()),
+          active_(loop != nullptr && handler != nullptr && events != Channel::NONE_EVENT)
     {
         if (!active_) {
-            channel_.reset();
+            state_.reset();
             return;
         }
 
-        handler_->set_event_handler(loop_);
-        channel_->set_handler(std::weak_ptr<SelectHandler>(handler_));
+        state_->loop = loop_;
+        state_->handler = std::move(handler);
+        state_->channel = std::make_unique<Channel>(fd);
         if (events & Channel::READ_EVENT) {
-            channel_->enable_read();
+            state_->channel->enable_read();
         }
 
         if (events & Channel::WRITE_EVENT) {
-            channel_->enable_write();
+            state_->channel->enable_write();
         }
 
-        loop_->update_channel(channel_.get());
+        if (loop_->is_in_loop_thread() || !loop_->is_running()) {
+            state_->register_on_loop();
+        } else {
+            auto state = state_;
+            if (!loop_->run_in_loop_sync([state]() {
+                state->register_on_loop();
+            })) {
+                active_.store(false, std::memory_order_release);
+                state_->close_on_loop();
+                state_.reset();
+            }
+        }
     }
 
     EventLoop::ExternalFdRegistration::~ExternalFdRegistration()
@@ -616,35 +991,49 @@ namespace yuan::net
 
     void EventLoop::ExternalFdRegistration::close()
     {
-        if (!active_) {
+        if (!active_.exchange(false, std::memory_order_acq_rel)) {
             return;
         }
 
-        active_ = false;
-        if (loop_ && channel_) {
-            loop_->close_channel(channel_.get());
+        if (!state_) {
+            return;
         }
 
-        if (channel_) {
-            channel_->disable_all();
-            channel_->clear_handler();
+        if (!loop_ || !loop_->is_running() || loop_->is_in_loop_thread()) {
+            close_state();
+        } else {
+            auto state = state_;
+            if (!loop_->run_in_loop_sync([state]() {
+                state->close_on_loop();
+            })) {
+                loop_->wait_until_stopped();
+                close_state();
+                return;
+            }
+            state_.reset();
         }
+    }
 
-        handler_.reset();
+    void EventLoop::ExternalFdRegistration::close_state()
+    {
+        if (state_) {
+            state_->close_on_loop();
+            state_.reset();
+        }
     }
 
     bool EventLoop::ExternalFdRegistration::active() const noexcept
     {
-        return active_;
+        return active_.load(std::memory_order_acquire);
     }
 
     Channel *EventLoop::ExternalFdRegistration::channel() noexcept
     {
-        return channel_.get();
+        return state_ ? state_->channel.get() : nullptr;
     }
 
     uint64_t EventLoop::ExternalFdRegistration::generation() const noexcept
     {
-        return channel_ ? channel_->generation() : 0;
+        return state_ && state_->channel ? state_->channel->generation() : 0;
     }
 }

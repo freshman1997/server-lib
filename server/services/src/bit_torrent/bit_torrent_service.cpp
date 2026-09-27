@@ -929,7 +929,7 @@ namespace yuan::server
         });
     }
 
-    void BitTorrentService::stop()
+    bool BitTorrentService::stop()
     {
         host_.stop([this]() {
             std::lock_guard<std::mutex> lock(tasks_mutex_);
@@ -968,6 +968,7 @@ namespace yuan::server
                 }
             }
         });
+        return true;
 
         if (bt_runtime_) {
             bt_runtime_->stop();

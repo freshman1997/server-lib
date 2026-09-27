@@ -2,6 +2,8 @@
 
 #include "logger.h"
 
+#include <exception>
+
 namespace yuan::app
 {
 
@@ -147,6 +149,23 @@ void PluginHostScheduler::spawn_worker()
     worker_ = std::thread(&PluginHostScheduler::worker_loop, this);
 }
 
+void PluginHostScheduler::execute_callback(const TaskInfo &task, const char *phase) noexcept
+{
+    if (!task.callback) {
+        return;
+    }
+
+    try {
+        task.callback();
+    } catch (const std::exception &e) {
+        LOG_ERROR("scheduler task callback threw: id={}, name='{}', phase={}, error={}",
+                  task.id, task.name, phase, e.what());
+    } catch (...) {
+        LOG_ERROR("scheduler task callback threw unknown exception: id={}, name='{}', phase={}",
+                  task.id, task.name, phase);
+    }
+}
+
 void PluginHostScheduler::worker_loop()
 {
     LOG_DEBUG("scheduler worker thread started");
@@ -222,17 +241,12 @@ void PluginHostScheduler::worker_loop()
                 // 一次性任务, 从索引中移除后执行
                 id_index_.erase(task->id);
                 lock.unlock();
-                if (task->callback) {
-                    task->callback();
-                }
+                execute_callback(*task, "oneshot");
                 lock.lock();
             } else {
                 // 重复任务: 先执行, 再重新调度
-                auto callback = task->callback;
                 lock.unlock();
-                if (callback) {
-                    callback();
-                }
+                execute_callback(*task, "interval");
                 lock.lock();
 
                 if (!task->cancelled && running_.load() && !shutdown_requested_.load()) {
@@ -276,7 +290,7 @@ void PluginHostScheduler::worker_loop()
         for (auto &task : pending_oneshot) {
             if (task->callback && !task->cancelled) {
                 lock.unlock();
-                task->callback();
+                execute_callback(*task, "shutdown");
                 lock.lock();
             }
         }

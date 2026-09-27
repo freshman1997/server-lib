@@ -395,15 +395,7 @@ int main(int argc, char **argv)
         std::cout << "socks5 service listening on " << socks5_config.server_config.listen_host << ':' << socks5_config.port << '\n';
     }
 
-    while (g_running.load(std::memory_order_relaxed)) {
-        bootstrap.poll_workers();
-        if (bootstrap.process_role() == yuan::app::ProcessRole::supervisor &&
-            (bootstrap.has_failed_workers() ||
-             (!bootstrap.has_running_workers() && !bootstrap.has_recovering_workers()))) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
+    bootstrap.wait();
 
     bootstrap.shutdown();
     return 0;

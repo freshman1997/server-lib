@@ -42,12 +42,12 @@ bool install_plugin_http_bridge(yuan::app::PluginHostService &plugin_host, HttpS
 
     plugin_host.set_http_installers(
         [&http_service](std::shared_ptr<yuan::plugin::HttpMiddlewareCallback> callback,
-                        std::string name) -> bool {
+                        std::string name) -> uint64_t {
             if (!callback) {
-                return false;
+                return 0;
             }
 
-            http_service.server().use(
+            return http_service.server().use(
                 [callback = std::move(callback)](yuan::net::http::HttpRequest *req,
                                                  yuan::net::http::HttpResponse *resp) {
                     auto cb = callback ? *callback : nullptr;
@@ -61,18 +61,17 @@ bool install_plugin_http_bridge(yuan::app::PluginHostService &plugin_host, HttpS
                         ? yuan::net::http::MiddlewareResult::next
                         : yuan::net::http::MiddlewareResult::stop;
                 },
-                "plugin.middleware");
-            return true;
+                name.c_str());
         },
         [&http_service](std::shared_ptr<yuan::plugin::HttpRouteCallback> callback,
                         std::string route_path,
                         std::string route_method,
-                        std::string name) -> bool {
+                         std::string name) -> uint64_t {
             if (!callback || route_path.empty()) {
-                return false;
+                return 0;
             }
 
-            http_service.server().use(
+            return http_service.server().use(
                 [callback = std::move(callback),
                  route_path = std::move(route_path),
                  route_method = std::move(route_method)](
@@ -91,8 +90,10 @@ bool install_plugin_http_bridge(yuan::app::PluginHostService &plugin_host, HttpS
                     cb(std::string(req->get_path()), req->get_raw_method(), req, resp);
                     return yuan::net::http::MiddlewareResult::stop;
                 },
-                "plugin.route");
-            return true;
+                name.c_str());
+        },
+        [&http_service](uint64_t token) -> bool {
+            return http_service.server().unuse(token);
         });
 
     return true;

@@ -20,7 +20,7 @@ public:
 
     bool init() override;
     void start() override;
-    void stop() override;
+    bool stop() override;
 
     MatchServer& server();
     const MatchServer& server() const;

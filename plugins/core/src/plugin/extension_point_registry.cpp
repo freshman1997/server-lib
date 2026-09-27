@@ -75,11 +75,11 @@ namespace yuan::plugin
         return true;
     }
 
-    std::vector<const ExtensionPointEntry *> ExtensionPointRegistry::find_by_name(const std::string & name) const
+    std::vector<ExtensionPointEntry> ExtensionPointRegistry::find_by_name(const std::string & name) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        std::vector<const ExtensionPointEntry *> result;
+        std::vector<ExtensionPointEntry> result;
         auto it = name_index_.find(name);
         if (it == name_index_.end()) {
             return result;
@@ -87,18 +87,18 @@ namespace yuan::plugin
 
         for (std::size_t idx : it->second) {
             if (!entries_[idx].extension_point_name.empty()) {
-                result.push_back(&entries_[idx]);
+                result.push_back(entries_[idx]);
             }
         }
         return result;
     }
 
-    std::vector<const ExtensionPointEntry *> ExtensionPointRegistry::find_by_contract(const std::string & contract_id,
-                                                                                      int min_version) const
+    std::vector<ExtensionPointEntry> ExtensionPointRegistry::find_by_contract(const std::string & contract_id,
+                                                                               int min_version) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        std::vector<const ExtensionPointEntry *> result;
+        std::vector<ExtensionPointEntry> result;
         auto it = contract_index_.find(contract_id);
         if (it == contract_index_.end()) {
             return result;
@@ -107,45 +107,45 @@ namespace yuan::plugin
         for (std::size_t idx : it->second) {
             if (entries_[idx].contract_version >= min_version &&
                 !entries_[idx].extension_point_name.empty()) {
-                result.push_back(&entries_[idx]);
+                result.push_back(entries_[idx]);
             }
         }
         return result;
     }
 
-    const ExtensionPointEntry *ExtensionPointRegistry::find_one(const std::string & name) const
+    std::optional<ExtensionPointEntry> ExtensionPointRegistry::find_one(const std::string & name) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
         auto it = name_index_.find(name);
         if (it == name_index_.end() || it->second.empty()) {
-            return nullptr;
+            return std::nullopt;
         }
 
         for (std::size_t idx : it->second) {
             if (!entries_[idx].extension_point_name.empty()) {
-                return &entries_[idx];
+                return entries_[idx];
             }
         }
-        return nullptr;
+        return std::nullopt;
     }
 
-    const ExtensionPointEntry *ExtensionPointRegistry::find_best_contract(const std::string & contract_id) const
+    std::optional<ExtensionPointEntry> ExtensionPointRegistry::find_best_contract(const std::string & contract_id) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
         auto it = contract_index_.find(contract_id);
         if (it == contract_index_.end() || it->second.empty()) {
-            return nullptr;
+            return std::nullopt;
         }
 
-        const ExtensionPointEntry *best = nullptr;
+        std::optional<ExtensionPointEntry> best;
         for (std::size_t idx : it->second) {
             if (entries_[idx].extension_point_name.empty()) {
                 continue;
             }
             if (!best || entries_[idx].contract_version > best->contract_version) {
-                best = &entries_[idx];
+                best = entries_[idx];
             }
         }
         return best;

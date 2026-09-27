@@ -1543,7 +1543,7 @@ namespace yuan::server
         }
     }
 
-    void NasService::stop()
+    bool NasService::stop()
     {
         stop_smb_service();
         if (http_) {
@@ -1554,6 +1554,7 @@ namespace yuan::server
         mounted_ = false;
         initialized_ = false;
         mount_result_ = {};
+        return true;
     }
 
     void NasService::set_runtime_context(const yuan::app::RuntimeContext &context)

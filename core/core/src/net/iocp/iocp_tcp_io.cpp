@@ -6,6 +6,7 @@
 #endif
 
 #include "platform/native_platform.h"
+#include "net/profiling.h"
 
 namespace yuan::net
 {
@@ -15,6 +16,7 @@ namespace yuan::net
                               void *operation,
                               uint32_t *error) noexcept
     {
+        YUAN_NET_PROFILE_ZONE("core.iocp.post_recv");
         if (error) {
             *error = 0;
         }
@@ -60,8 +62,9 @@ namespace yuan::net
                               const void *buffer,
                               uint32_t buffer_bytes,
                               void *operation,
-                              uint32_t *error) noexcept
+                               uint32_t *error) noexcept
     {
+        YUAN_NET_PROFILE_ZONE("core.iocp.post_send");
         if (error) {
             *error = 0;
         }
@@ -101,6 +104,39 @@ namespace yuan::net
         return false;
 #endif
     }
+
+#ifdef _WIN32
+    bool IocpTcpIo::post_send_many(int fd,
+                                   WSABUF *buffers,
+                                   DWORD buffer_count,
+                                   void *operation,
+                                   uint32_t *error) noexcept
+    {
+        YUAN_NET_PROFILE_ZONE("core.iocp.post_send_many");
+        if (error) {
+            *error = 0;
+        }
+        if (fd < 0 || !buffers || buffer_count == 0 || !operation) {
+            if (error) {
+                *error = WSAEINVAL;
+            }
+            return false;
+        }
+
+        DWORD bytes = 0;
+        const int rc = ::WSASend(static_cast<SOCKET>(fd), buffers, buffer_count, &bytes, 0,
+                                 static_cast<LPWSAOVERLAPPED>(operation), nullptr);
+        if (rc == 0) {
+            return true;
+        }
+
+        const int last_error = platform::GetLastNativeError();
+        if (error) {
+            *error = static_cast<uint32_t>(last_error);
+        }
+        return last_error == WSA_IO_PENDING;
+    }
+#endif
 
     bool IocpTcpIo::cancel(int fd) noexcept
     {

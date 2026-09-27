@@ -47,6 +47,8 @@ namespace yuan::net
     public:
         virtual int ssl_init_action();
 
+        bool set_hostname(const std::string &hostname) override;
+
         virtual int ssl_write(const char *data, std::size_t size);
 
         virtual int ssl_read(char *buffer, std::size_t size);

@@ -41,6 +41,8 @@ namespace yuan::net
             bool nodelay = true;
             std::uint32_t resend = 1;
             bool no_congestion_control = true;
+            bool flush_on_send = true;
+            bool update_on_send = true;
             std::size_t max_sessions = 0;
             std::size_t max_sessions_per_address = 1;
             std::size_t max_sessions_per_ip = 0;

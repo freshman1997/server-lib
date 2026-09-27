@@ -19,7 +19,13 @@ namespace yuan::app
 
         virtual void start() = 0;
 
-        virtual void stop() = 0;
+        // Runs the service's foreground event loop when it owns one.
+        // Services that already run asynchronously from start() keep the default.
+        virtual bool run() { return true; }
+
+        // Returns true only after the service has completed its shutdown.
+        // A false result keeps the service's event loop and dependencies alive.
+        virtual bool stop() = 0;
 
         virtual timer::TimerManager *resource_usage_timer_manager() { return nullptr; }
 

@@ -6,6 +6,7 @@
 #include "net/socket/inet_address.h"
 #include "net/socket/socket_ops.h"
 #include "base/spinlock.h"
+#include "net/profiling.h"
 
 #include <algorithm>
 #include <array>
@@ -51,9 +52,15 @@ namespace yuan::net
         int accepted_fd = kInvalidSocket;
         std::array<char, kIocpAcceptBufferBytes> accept_buffer{};
         std::vector<char> buffer;
+        std::unique_ptr<::yuan::buffer::ByteBuffer> send_buffer;
+        std::vector<std::unique_ptr<::yuan::buffer::ByteBuffer>> send_buffers;
+#ifdef _WIN32
+        std::vector<WSABUF> send_wsabufs;
+#endif
         std::shared_ptr<const std::string> shared_buffer;
         bool drains_output = false;
         bool direct_output = false;
+        bool batched_output = false;
     };
 
     IocpTcpConnection::IocpTcpConnection(IocpTcpEngine &engine,
@@ -94,7 +101,11 @@ namespace yuan::net
 
     bool IocpTcpConnection::post_recv(std::size_t buffer_bytes)
     {
-        if (buffer_bytes == 0 || closing()) {
+        auto *engine = engine_.load(std::memory_order_acquire);
+        if (!engine || !engine->begin_operation() || buffer_bytes == 0 || closing()) {
+            if (engine) {
+                engine->complete_operation();
+            }
             return false;
         }
 
@@ -102,6 +113,7 @@ namespace yuan::net
         operation->connection = self();
         operation->buffer.resize(buffer_bytes);
         if (!context_.begin_operation(operation->io, IocpOperationKind::recv, operation)) {
+            engine->complete_operation();
             delete operation;
             return false;
         }
@@ -111,6 +123,7 @@ namespace yuan::net
                                   static_cast<uint32_t>(operation->buffer.size()),
                                   operation->io.native_overlapped())) {
             context_.complete_operation(operation->io);
+            engine->complete_operation();
             delete operation;
             return false;
         }
@@ -119,7 +132,11 @@ namespace yuan::net
 
     bool IocpTcpConnection::send(const void *data, std::size_t size)
     {
-        if (!data || size == 0 || closing()) {
+        auto *engine = engine_.load(std::memory_order_acquire);
+        if (!engine || !engine->begin_operation() || !data || size == 0 || closing()) {
+            if (engine) {
+                engine->complete_operation();
+            }
             return false;
         }
 
@@ -128,6 +145,7 @@ namespace yuan::net
         const auto *bytes = static_cast<const char *>(data);
         operation->buffer.assign(bytes, bytes + size);
         if (!context_.begin_operation(operation->io, IocpOperationKind::send, operation)) {
+            engine->complete_operation();
             delete operation;
             return false;
         }
@@ -137,6 +155,7 @@ namespace yuan::net
                                   static_cast<uint32_t>(operation->buffer.size()),
                                   operation->io.native_overlapped())) {
             context_.complete_operation(operation->io);
+            engine->complete_operation();
             delete operation;
             return false;
         }
@@ -150,7 +169,11 @@ namespace yuan::net
 
     bool IocpTcpConnection::send_shared(std::shared_ptr<const std::string> data)
     {
-        if (!data || data->empty() || closing()) {
+        auto *engine = engine_.load(std::memory_order_acquire);
+        if (!engine || !engine->begin_operation() || !data || data->empty() || closing()) {
+            if (engine) {
+                engine->complete_operation();
+            }
             return false;
         }
 
@@ -158,6 +181,7 @@ namespace yuan::net
         operation->connection = self();
         operation->shared_buffer = std::move(data);
         if (!context_.begin_operation(operation->io, IocpOperationKind::send, operation)) {
+            engine->complete_operation();
             delete operation;
             return false;
         }
@@ -167,6 +191,7 @@ namespace yuan::net
                                   static_cast<uint32_t>(operation->shared_buffer->size()),
                                   operation->io.native_overlapped())) {
             context_.complete_operation(operation->io);
+            engine->complete_operation();
             delete operation;
             return false;
         }
@@ -209,6 +234,7 @@ namespace yuan::net
         if (!buffer.empty()) {
             bool overflow = false;
             {
+                YUAN_NET_PROFILE_ZONE("core.iocp.write_owned_lock");
                 std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
                 const auto bytes = buffer.readable_bytes();
                 const auto limit = max_output_buffer_size();
@@ -253,7 +279,7 @@ namespace yuan::net
             return;
         }
 
-        auto *operation = new IocpTcpEngine::Operation{};
+        std::unique_ptr<IocpTcpEngine::Operation> operation;
         bool should_flush = false;
         bool overflow = false;
         {
@@ -264,15 +290,12 @@ namespace yuan::net
                     (data.size() > limit || output_buffer_.readable_bytes() > limit - data.size())) {
                     output_limit_exceeded_.store(true, std::memory_order_release);
                     overflow = true;
-                    delete operation;
-                    operation = nullptr;
                 } else {
                     ensure_output_chunk(data.size())->append(data);
                     should_flush = !output_flush_pending_;
-                    delete operation;
-                    operation = nullptr;
                 }
             } else {
+                operation = std::make_unique<IocpTcpEngine::Operation>();
                 operation->buffer.assign(data.data(), data.data() + data.size());
                 operation->drains_output = true;
                 operation->direct_output = true;
@@ -291,45 +314,84 @@ namespace yuan::net
             return;
         }
 
-        operation->connection = self();
-        if (!context_.begin_operation(operation->io, IocpOperationKind::send, operation)) {
+        auto *operation_ptr = operation.release();
+        operation_ptr->connection = self();
+        auto *engine = engine_.load(std::memory_order_acquire);
+        if (!engine || !engine->begin_operation()) {
             fail_output_send();
-            delete operation;
+            delete operation_ptr;
+            return;
+        }
+        if (!context_.begin_operation(operation_ptr->io, IocpOperationKind::send, operation_ptr)) {
+            engine->complete_operation();
+            fail_output_send();
+            delete operation_ptr;
             return;
         }
 
         if (!IocpTcpIo::post_send(context_.fd(),
-                                  operation->buffer.data(),
-                                  static_cast<uint32_t>(operation->buffer.size()),
-                                  operation->io.native_overlapped())) {
-            context_.complete_operation(operation->io);
+                                  operation_ptr->buffer.data(),
+                                  static_cast<uint32_t>(operation_ptr->buffer.size()),
+                                  operation_ptr->io.native_overlapped())) {
+            context_.complete_operation(operation_ptr->io);
+            engine->complete_operation();
             fail_output_send();
-            delete operation;
+            delete operation_ptr;
         }
     }
 
     void IocpTcpConnection::flush()
     {
+        YUAN_NET_PROFILE_ZONE("core.iocp.flush");
         if (state_.load(std::memory_order_acquire) == ConnectionState::closed || closing()) {
             return;
         }
 
-        auto *operation = new IocpTcpEngine::Operation{};
+        std::unique_ptr<IocpTcpEngine::Operation> operation;
         {
+            YUAN_NET_PROFILE_ZONE("core.iocp.flush_lock");
             std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
             if (output_flush_pending_) {
-                delete operation;
                 return;
             }
 
             for (;;) {
                 auto *front = output_buffer_.front();
                 if (!front) {
-                    delete operation;
                     return;
                 }
                 if (!front->empty()) {
-                    operation->buffer.assign(front->read_ptr(), front->read_ptr() + front->readable_bytes());
+                    operation = std::make_unique<IocpTcpEngine::Operation>();
+                    if (YUAN_ENABLE_IOCP_SEND_BATCH && output_buffer_.size() > 1) {
+#ifdef _WIN32
+                        constexpr std::size_t kMaxBatchBuffers = 16;
+                        while (!output_buffer_.empty() && operation->send_buffers.size() < kMaxBatchBuffers) {
+                            auto buffer = output_buffer_.pop_front();
+                            if (buffer && !buffer->empty()) {
+                                operation->send_buffers.push_back(std::move(buffer));
+                            }
+                        }
+                        if (operation->send_buffers.size() > 1) {
+                            operation->send_wsabufs.reserve(operation->send_buffers.size());
+                            for (const auto &buffer : operation->send_buffers) {
+                                operation->send_wsabufs.push_back(WSABUF{
+                                    static_cast<ULONG>(buffer->readable_bytes()),
+                                    buffer->read_ptr()});
+                            }
+                            operation->batched_output = true;
+                        } else if (!operation->send_buffers.empty()) {
+                            operation->send_buffer = std::move(operation->send_buffers.front());
+                            operation->send_buffers.clear();
+                        }
+#else
+                        operation->send_buffer = output_buffer_.pop_front();
+#endif
+                    } else {
+                        operation->send_buffer = output_buffer_.pop_front();
+                    }
+                    if (!operation->batched_output && !operation->send_buffer) {
+                        return;
+                    }
                     operation->drains_output = true;
                     output_flush_pending_ = true;
                     break;
@@ -338,20 +400,42 @@ namespace yuan::net
             }
         }
 
-        operation->connection = self();
-        if (!context_.begin_operation(operation->io, IocpOperationKind::send, operation)) {
+        auto *operation_ptr = operation.release();
+        operation_ptr->connection = self();
+        auto *engine = engine_.load(std::memory_order_acquire);
+        if (!engine || !engine->begin_operation()) {
             fail_output_send();
-            delete operation;
+            delete operation_ptr;
+            return;
+        }
+        if (!context_.begin_operation(operation_ptr->io, IocpOperationKind::send, operation_ptr)) {
+            engine->complete_operation();
+            fail_output_send();
+            delete operation_ptr;
             return;
         }
 
-        if (!IocpTcpIo::post_send(context_.fd(),
-                                  operation->buffer.data(),
-                                  static_cast<uint32_t>(operation->buffer.size()),
-                                  operation->io.native_overlapped())) {
-            context_.complete_operation(operation->io);
+        bool posted = false;
+        {
+            YUAN_NET_PROFILE_ZONE("core.iocp.flush_post_send");
+            posted = operation_ptr->batched_output
+#ifdef _WIN32
+                ? IocpTcpIo::post_send_many(context_.fd(), operation_ptr->send_wsabufs.data(),
+                                            static_cast<DWORD>(operation_ptr->send_wsabufs.size()),
+                                            operation_ptr->io.native_overlapped())
+#else
+                ? false
+#endif
+                : IocpTcpIo::post_send(context_.fd(),
+                                       operation_ptr->send_buffer->read_ptr(),
+                                       static_cast<uint32_t>(operation_ptr->send_buffer->readable_bytes()),
+                                       operation_ptr->io.native_overlapped());
+        }
+        if (!posted) {
+            context_.complete_operation(operation_ptr->io);
+            engine->complete_operation();
             fail_output_send();
-            delete operation;
+            delete operation_ptr;
         }
     }
 
@@ -388,8 +472,8 @@ namespace yuan::net
             return;
         }
 
-        if (engine_) {
-            engine_->close_connection(self(), true, true);
+        if (auto *engine = engine_.load(std::memory_order_acquire)) {
+            engine->close_connection(self(), true, true);
         } else {
             close_now();
         }
@@ -416,8 +500,8 @@ namespace yuan::net
         }
         context_.request_close(true);
         close_engine_socket(fd);
-        if (engine_) {
-            engine_->remove_connection(fd);
+        if (auto *engine = engine_.load(std::memory_order_acquire)) {
+            engine->remove_connection(fd);
         }
     }
 
@@ -532,22 +616,53 @@ namespace yuan::net
         return std::static_pointer_cast<IocpTcpConnection>(shared_from_this());
     }
 
-    bool IocpTcpConnection::complete_output_send(std::size_t bytes, bool &close_after_output)
+    bool IocpTcpConnection::complete_output_send(std::unique_ptr<::yuan::buffer::ByteBuffer> buffer,
+                                                  std::size_t bytes,
+                                                  bool &close_after_output)
     {
         std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
-        std::size_t remaining = bytes;
-        while (remaining > 0) {
-            auto *front = output_buffer_.front();
-            if (!front) {
+        if (buffer && bytes < buffer->readable_bytes()) {
+            buffer->consume(bytes);
+            output_buffer_.push_front(std::move(buffer));
+        }
+        output_flush_pending_ = false;
+        close_after_output = close_after_output_ && output_buffer_.readable_bytes() == 0;
+        return output_buffer_.readable_bytes() > 0;
+    }
+
+
+    bool IocpTcpConnection::complete_output_batch_send(
+        std::vector<std::unique_ptr<::yuan::buffer::ByteBuffer>> buffers,
+        std::size_t bytes,
+        bool &close_after_output)
+    {
+        std::lock_guard<yuan::base::Spinlock> lock(output_buffer_mutex_);
+        for (std::size_t index = 0; index < buffers.size(); ++index) {
+            auto &buffer = buffers[index];
+            if (!buffer || buffer->empty()) {
+                continue;
+            }
+            const auto consumed = (std::min)(bytes, buffer->readable_bytes());
+            buffer->consume(consumed);
+            bytes -= consumed;
+            if (!buffer->empty()) {
+                for (std::size_t remaining = buffers.size(); remaining > index + 1; --remaining) {
+                    auto &tail = buffers[remaining - 1];
+                    if (tail && !tail->empty()) {
+                        output_buffer_.push_front(std::move(tail));
+                    }
+                }
+                output_buffer_.push_front(std::move(buffer));
                 break;
             }
-            const auto readable = front->readable_bytes();
-            if (readable <= remaining) {
-                remaining -= readable;
-                output_buffer_.pop_front();
-            } else {
-                output_buffer_.consume_front(remaining);
-                remaining = 0;
+            if (bytes == 0) {
+                for (std::size_t remaining = buffers.size(); remaining > index + 1; --remaining) {
+                    auto &tail = buffers[remaining - 1];
+                    if (tail && !tail->empty()) {
+                        output_buffer_.push_front(std::move(tail));
+                    }
+                }
+                break;
             }
         }
         output_flush_pending_ = false;
@@ -627,10 +742,26 @@ namespace yuan::net
         notify_closed_event();
     }
 
+    void IocpTcpConnection::finish_close(bool graceful_shutdown)
+    {
+        if (auto *engine = engine_.load(std::memory_order_acquire)) {
+            engine->close_connection(self(), true, graceful_shutdown);
+            return;
+        }
+        close_now(graceful_shutdown);
+        notify_closed();
+    }
+
+    void IocpTcpConnection::detach_engine() noexcept
+    {
+        engine_.store(nullptr, std::memory_order_release);
+    }
+
     IocpTcpEngine::~IocpTcpEngine()
     {
         stop();
     }
+
 
     bool IocpTcpEngine::listen(const std::string &host,
                                uint16_t port,
@@ -748,9 +879,17 @@ namespace yuan::net
             return false;
         }
 
+        running_.store(true, std::memory_order_release);
         auto *operation = new Operation{};
         operation->connection = connection;
+        if (!begin_operation()) {
+            delete operation;
+            connection->close_now();
+            stop();
+            return false;
+        }
         if (!connection->context_.begin_operation(operation->io, IocpOperationKind::connect, operation)) {
+            complete_operation();
             delete operation;
             connection->close_now();
             stop();
@@ -766,13 +905,13 @@ namespace yuan::net
                               remote_len,
                               operation->io.native_overlapped())) {
             connection->context_.complete_operation(operation->io);
+            complete_operation();
             delete operation;
             connection->close_now();
             stop();
             return false;
         }
 
-        running_.store(true, std::memory_order_release);
         add_connection(connection);
         return true;
 #else
@@ -808,10 +947,13 @@ namespace yuan::net
             }
         }
 
-        for (int i = 0; pending_accepts_.load(std::memory_order_acquire) != 0 && i < 200; ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+        wait_for_operations();
         dispatcher_.stop();
+        for (auto &connection : connections) {
+            if (connection) {
+                connection->detach_engine();
+            }
+        }
         port_.close();
         callbacks_ = {};
         local_port_ = 0;
@@ -842,6 +984,11 @@ namespace yuan::net
             return false;
         }
 
+        if (!begin_operation()) {
+            close_engine_socket(operation->accepted_fd);
+            delete operation;
+            return false;
+        }
         pending_accepts_.fetch_add(1, std::memory_order_acq_rel);
         if (!accept_ex_.post(listener_,
                              operation->accepted_fd,
@@ -849,6 +996,7 @@ namespace yuan::net
                              operation->accept_buffer.size(),
                              operation->io.native_overlapped())) {
             pending_accepts_.fetch_sub(1, std::memory_order_acq_rel);
+            complete_operation();
             close_engine_socket(operation->accepted_fd);
             delete operation;
             return false;
@@ -880,6 +1028,35 @@ namespace yuan::net
             delete operation;
             break;
         }
+        complete_operation();
+    }
+
+    bool IocpTcpEngine::begin_operation() noexcept
+    {
+        if (!running_.load(std::memory_order_acquire)) {
+            return false;
+        }
+        pending_operations_.fetch_add(1, std::memory_order_acq_rel);
+        if (!running_.load(std::memory_order_acquire)) {
+            complete_operation();
+            return false;
+        }
+        return true;
+    }
+
+    void IocpTcpEngine::complete_operation() noexcept
+    {
+        if (pending_operations_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            operations_cv_.notify_all();
+        }
+    }
+
+    void IocpTcpEngine::wait_for_operations() noexcept
+    {
+        std::unique_lock<std::mutex> lock(operations_mutex_);
+        operations_cv_.wait(lock, [this]() {
+            return pending_operations_.load(std::memory_order_acquire) == 0;
+        });
     }
 
     void IocpTcpEngine::handle_accept(Operation &operation, const IocpCompletion &completion)
@@ -960,12 +1137,12 @@ namespace yuan::net
             const auto error = completion.error;
             auto on_error = callbacks_.on_error;
             delete &operation;
-            connection->dispatch_in_owner_loop([this, connection, error, on_error = std::move(on_error)]() {
+            connection->dispatch_in_owner_loop([connection, error, on_error = std::move(on_error)]() {
                 connection->notify_error();
                 if (on_error) {
                     on_error(connection, error);
                 }
-                close_connection(connection, true);
+                connection->finish_close();
             });
             return;
         }
@@ -974,13 +1151,13 @@ namespace yuan::net
         connection->state_.store(ConnectionState::connected, std::memory_order_release);
         auto on_connect = callbacks_.on_connect;
         delete &operation;
-        connection->dispatch_in_owner_loop([this, connection, on_connect = std::move(on_connect)]() {
+        connection->dispatch_in_owner_loop([connection, on_connect = std::move(on_connect)]() {
             if (on_connect) {
                 on_connect(connection);
             }
             connection->notify_connected();
             if (!connection->post_recv()) {
-                close_connection(connection, true);
+                connection->finish_close();
             }
         });
     }
@@ -1003,19 +1180,19 @@ namespace yuan::net
             const auto error = completion.error;
             auto on_error = callbacks_.on_error;
             delete &operation;
-            connection->dispatch_in_owner_loop([this, connection, error, on_error = std::move(on_error)]() {
+            connection->dispatch_in_owner_loop([connection, error, on_error = std::move(on_error)]() {
                 connection->notify_error();
                 if (on_error) {
                     on_error(connection, error);
                 }
-                close_connection(connection, true);
+                connection->finish_close();
             });
             return;
         }
 
         if (completion.bytes == 0) {
             delete &operation;
-            connection->dispatch_in_owner_loop([this, connection]() {
+            connection->dispatch_in_owner_loop([connection]() {
                 connection->input_shutdown_.store(true, std::memory_order_release);
                 connection->notify_input_shutdown_event();
                 if (connection->read_dispatch_pending_.load(std::memory_order_acquire)) {
@@ -1029,7 +1206,7 @@ namespace yuan::net
                     if (connection->defer_close_on_unconsumed_input_.load(std::memory_order_acquire)) {
                         return;
                     }
-                    close_connection(connection, true, true);
+                    connection->finish_close(true);
                 }
             });
             return;
@@ -1040,7 +1217,7 @@ namespace yuan::net
         auto on_read = callbacks_.on_read;
         delete &operation;
 
-        auto deliver = [this, connection, data = std::move(data), on_read = std::move(on_read)]() {
+        auto deliver = [connection, data = std::move(data), on_read = std::move(on_read)]() {
             if (connection->get_connection_state() == ConnectionState::closed) {
                 return;
             }
@@ -1051,9 +1228,9 @@ namespace yuan::net
             if (on_read) {
                 on_read(connection, data->data(), data->size());
             }
-            if (!connection->closing() && running_.load(std::memory_order_acquire)) {
+            if (!connection->closing()) {
                 if (!connection->post_recv()) {
-                    close_connection(connection, true, true);
+                    connection->finish_close(true);
                 }
             }
         };
@@ -1079,27 +1256,30 @@ namespace yuan::net
         const uint32_t bytes = completion.bytes;
         const bool drains_output = operation.drains_output;
         const bool direct_output = operation.direct_output;
+        const bool batched_output = operation.batched_output;
         if (!completion.ok) {
             if (drains_output) {
                 connection->fail_output_send();
             }
             auto on_error = callbacks_.on_error;
             delete &operation;
-            connection->dispatch_in_owner_loop([this, connection, error, on_error = std::move(on_error)]() {
+            connection->dispatch_in_owner_loop([connection, error, on_error = std::move(on_error)]() {
                 connection->notify_error();
                 if (on_error) {
                     on_error(connection, error);
                 }
-                close_connection(connection, true);
+                connection->finish_close();
             });
             return;
         }
 
         if (drains_output) {
             bool close_after_output = false;
-            const bool has_more_output = direct_output
+            const bool has_more_output = batched_output
+                ? connection->complete_output_batch_send(std::move(operation.send_buffers), bytes, close_after_output)
+                : direct_output
                 ? connection->complete_direct_output_send(operation.buffer.data(), operation.buffer.size(), bytes, close_after_output)
-                : connection->complete_output_send(bytes, close_after_output);
+                : connection->complete_output_send(std::move(operation.send_buffer), bytes, close_after_output);
             delete &operation;
             if (has_more_output) {
                 connection->flush();
@@ -1116,8 +1296,7 @@ namespace yuan::net
             if (!notify_write && !close_after_output && !close_after_unconsumed_input) {
                 return;
             }
-            connection->dispatch_in_owner_loop([this,
-                                                connection,
+            connection->dispatch_in_owner_loop([connection,
                                                 bytes,
                                                 close_after_output,
                                                 close_after_unconsumed_input,
@@ -1130,11 +1309,11 @@ namespace yuan::net
                     on_write(connection, bytes);
                 }
                 if (close_after_unconsumed_input) {
-                    close_connection(connection, true, true);
+                    connection->finish_close(true);
                     return;
                 }
                 if (close_after_output) {
-                    close_connection(connection, true, true);
+                    connection->finish_close(true);
                 }
             });
             return;

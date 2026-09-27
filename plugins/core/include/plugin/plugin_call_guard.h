@@ -102,14 +102,17 @@ namespace yuan::plugin
         {
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = fault_counts_.find(plugin_name);
-            return it != fault_counts_.end() ? it->second.count : 0;
+            if (it == fault_counts_.end() || is_expired(it->second, std::chrono::steady_clock::now())) {
+                return 0;
+            }
+            return it->second.count;
         }
 
         PluginState suggested_state(const std::string &plugin_name) const
         {
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = fault_counts_.find(plugin_name);
-            if (it == fault_counts_.end()) {
+            if (it == fault_counts_.end() || is_expired(it->second, std::chrono::steady_clock::now())) {
                 return PluginState::active;
             }
             if (it->second.count >= config_.quarantine_threshold) {
@@ -158,6 +161,9 @@ namespace yuan::plugin
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 auto &entry = fault_counts_[plugin_name];
+                if (is_expired(entry, event.timestamp)) {
+                    entry.count = 0;
+                }
                 entry.count++;
                 entry.last_fault_time = event.timestamp;
                 handler = fault_handler_;
@@ -176,6 +182,12 @@ namespace yuan::plugin
             uint32_t count = 0;
             std::chrono::steady_clock::time_point last_fault_time;
         };
+
+        bool is_expired(const FaultEntry &entry,
+                        std::chrono::steady_clock::time_point now) const
+        {
+            return entry.count > 0 && now - entry.last_fault_time > config_.fault_window;
+        }
 
         std::unordered_map<std::string, FaultEntry> fault_counts_;
         FaultEventHandler fault_handler_;

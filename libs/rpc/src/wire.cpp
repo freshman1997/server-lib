@@ -1,5 +1,7 @@
 #include "yuan/rpc/wire.h"
 
+#include "yuan/rpc/profiling.h"
+
 #include <limits>
 #include <utility>
 
@@ -79,27 +81,6 @@ namespace yuan::rpc::wire
             return true;
         }
 
-        bool write_string(Bytes &out, std::string_view value)
-        {
-            if (value.size() > std::numeric_limits<std::uint16_t>::max()) {
-                return false;
-            }
-            write_u16(out, static_cast<std::uint16_t>(value.size()));
-            out.insert(out.end(), value.begin(), value.end());
-            return true;
-        }
-
-        bool read_string(const std::uint8_t *data, std::size_t size, std::size_t &offset, std::string &value)
-        {
-            std::uint16_t len = 0;
-            if (!read_u16(data, size, offset, len) || offset + len > size) {
-                return false;
-            }
-            value.assign(reinterpret_cast<const char *>(data + offset), len);
-            offset += len;
-            return true;
-        }
-
         void append_checked(Bytes &out, const Bytes &value)
         {
             out.insert(out.end(), value.begin(), value.end());
@@ -109,44 +90,69 @@ namespace yuan::rpc::wire
         {
             out.insert(out.end(), value.begin(), value.end());
         }
-    }
 
-    bool encode_metadata(const Metadata &metadata, Bytes &out)
-    {
-        if (metadata.size() > std::numeric_limits<std::uint16_t>::max()) {
-            return false;
+        void write_header(::yuan::buffer::ByteBuffer &out, const FrameHeader &header, std::uint32_t body_size)
+        {
+            out.append_u32(magic);
+            out.append_u8(version);
+            out.append_u8(static_cast<std::uint8_t>(header.kind));
+            out.append_u8(static_cast<std::uint8_t>(header.serialization));
+            out.append_u8(static_cast<std::uint8_t>(header.compression));
+            out.append_u16(static_cast<std::uint16_t>(header.status));
+            out.append_u16(static_cast<std::uint16_t>(header.encryption));
+            out.append_u32(body_size);
+            out.append_u64(header.request_id);
+            out.append_u32(header.service);
+            out.append_u32(header.method);
+            out.append_u32(body_size);
+            out.append_u64(header.session_id);
+            out.append_u64(header.peer_service_id);
+            out.append_u64(header.auth_token);
+            out.append_u32(header.flags);
+            out.append_u64(header.nonce);
+            out.append_u64(header.coroutine_id);
+            out.append_u32(header.key_id);
         }
-        write_u16(out, static_cast<std::uint16_t>(metadata.size()));
-        for (const auto &[key, value] : metadata) {
-            if (!write_string(out, key) || !write_string(out, value)) {
+
+        bool encode_frame_to_buffer(const FrameHeader &header,
+                                    const Bytes &payload,
+                                    ::yuan::buffer::ByteBuffer &out,
+                                    const EncodeOptions &options)
+        {
+            if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
                 return false;
             }
-        }
-        return true;
-    }
 
-    bool decode_metadata(const std::uint8_t *data, std::size_t size, Metadata &metadata)
-    {
-        std::size_t offset = 0;
-        std::uint16_t count = 0;
-        if (!read_u16(data, size, offset, count)) {
-            return false;
-        }
-        Metadata out;
-        out.reserve(count);
-        for (std::uint16_t i = 0; i < count; ++i) {
-            std::string key;
-            std::string value;
-            if (!read_string(data, size, offset, key) || !read_string(data, size, offset, value)) {
+            Bytes encrypted_body;
+            const Bytes *body = &payload;
+            if (header.encryption != Encryption::none) {
+                if (!options.encrypt) {
+                    return false;
+                }
+                CryptoContext context;
+                context.encryption = header.encryption;
+                context.key_id = header.key_id;
+                context.nonce = header.nonce;
+                context.kind = header.kind;
+                context.request_id = header.request_id;
+                if (!options.encrypt(context, payload, encrypted_body)) {
+                    return false;
+                }
+                body = &encrypted_body;
+            }
+            if (body->size() > std::numeric_limits<std::uint32_t>::max()) {
                 return false;
             }
-            out.emplace(std::move(key), std::move(value));
+
+            const auto body_size = static_cast<std::uint32_t>(body->size());
+            out.clear();
+            out.ensure_writable(header_size + body_size);
+            write_header(out, header, body_size);
+            if (!body->empty()) {
+                out.append(body->data(), body->size());
+            }
+            return out.readable_bytes() == header_size + body_size;
         }
-        if (offset != size) {
-            return false;
-        }
-        metadata = std::move(out);
-        return true;
     }
 
     bool encode_frame(const FrameHeader &header,
@@ -157,28 +163,19 @@ namespace yuan::rpc::wire
                       Bytes &out,
                       const EncodeOptions &options)
     {
-        Bytes metadata_bytes;
-        if (!encode_metadata(metadata, metadata_bytes)) {
-            return false;
-        }
-        if (route_name.size() > std::numeric_limits<std::uint32_t>::max() ||
-            error.size() > std::numeric_limits<std::uint32_t>::max() ||
-            metadata_bytes.size() > std::numeric_limits<std::uint32_t>::max() ||
-            payload.size() > std::numeric_limits<std::uint32_t>::max()) {
+        YUAN_RPC_PROFILE_ZONE("yuan.rpc.wire.encode_frame");
+        (void)metadata;
+        (void)route_name;
+        (void)error;
+        if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
             return false;
         }
 
-        Bytes plain_body;
-        plain_body.reserve(route_name.size() + metadata_bytes.size() + error.size() + payload.size());
-        append_checked(plain_body, route_name);
-        append_checked(plain_body, metadata_bytes);
-        append_checked(plain_body, error);
-        append_checked(plain_body, payload);
-
-        Bytes body;
+        Bytes encrypted_body;
+        const Bytes *body = &payload;
         if (header.encryption == Encryption::none) {
-            body = std::move(plain_body);
         } else {
+            YUAN_RPC_PROFILE_ZONE("yuan.rpc.wire.encrypt");
             if (!options.encrypt) {
                 return false;
             }
@@ -188,16 +185,17 @@ namespace yuan::rpc::wire
             context.nonce = header.nonce;
             context.kind = header.kind;
             context.request_id = header.request_id;
-            if (!options.encrypt(context, plain_body, body)) {
+            if (!options.encrypt(context, payload, encrypted_body)) {
                 return false;
             }
+            body = &encrypted_body;
         }
 
-        if (body.size() > std::numeric_limits<std::uint32_t>::max()) {
+        if (body->size() > std::numeric_limits<std::uint32_t>::max()) {
             return false;
         }
 
-        const std::uint32_t body_size = static_cast<std::uint32_t>(body.size());
+        const std::uint32_t body_size = static_cast<std::uint32_t>(body->size());
         out.clear();
         out.reserve(header_size + body_size);
         write_u32(out, magic);
@@ -211,19 +209,21 @@ namespace yuan::rpc::wire
         write_u64(out, header.request_id);
         write_u32(out, header.service);
         write_u32(out, header.method);
-        write_u32(out, static_cast<std::uint32_t>(route_name.size()));
-        write_u32(out, static_cast<std::uint32_t>(metadata_bytes.size()));
-        write_u32(out, static_cast<std::uint32_t>(error.size()));
-        write_u32(out, static_cast<std::uint32_t>(payload.size()));
+        write_u32(out, body_size);
+        write_u64(out, header.session_id);
+        write_u64(out, header.peer_service_id);
+        write_u64(out, header.auth_token);
+        write_u32(out, header.flags);
         write_u64(out, header.nonce);
         write_u64(out, header.coroutine_id);
         write_u32(out, header.key_id);
-        append_checked(out, body);
+        append_checked(out, *body);
         return out.size() == header_size + body_size;
     }
 
     bool encode_message(const Message &message, Bytes &out, const EncodeOptions &options)
     {
+        YUAN_RPC_PROFILE_ZONE("yuan.rpc.wire.encode_message");
         FrameHeader header;
         header.kind = message.kind;
         header.request_id = message.request_id;
@@ -233,6 +233,10 @@ namespace yuan::rpc::wire
         header.encryption = message.encryption;
         header.key_id = message.key_id;
         header.nonce = message.nonce;
+        header.session_id = message.session_id;
+        header.peer_service_id = message.peer_service_id;
+        header.auth_token = message.auth_token;
+        header.flags = message.flags;
         header.service = message.route.service;
         header.method = message.route.method;
         return encode_frame(header, message.metadata, message.route.name, {}, message.payload, out, options);
@@ -240,6 +244,7 @@ namespace yuan::rpc::wire
 
     bool encode_response(const Response &response, Bytes &out, const EncodeOptions &options)
     {
+        YUAN_RPC_PROFILE_ZONE("yuan.rpc.wire.encode_response");
         FrameHeader header;
         header.kind = MessageKind::response;
         header.request_id = response.request_id;
@@ -250,11 +255,57 @@ namespace yuan::rpc::wire
         header.encryption = response.encryption;
         header.key_id = response.key_id;
         header.nonce = response.nonce;
+        header.session_id = response.session_id;
+        header.peer_service_id = response.peer_service_id;
+        header.auth_token = response.auth_token;
+        header.flags = response.flags;
         return encode_frame(header, response.metadata, {}, response.error, response.payload, out, options);
+    }
+
+    bool encode_message(const Message &message, ::yuan::buffer::ByteBuffer &out, const EncodeOptions &options)
+    {
+        YUAN_RPC_PROFILE_ZONE("yuan.rpc.wire.encode_message");
+        FrameHeader header;
+        header.kind = message.kind;
+        header.request_id = message.request_id;
+        header.coroutine_id = message.coroutine_id;
+        header.serialization = message.serialization;
+        header.compression = message.compression;
+        header.encryption = message.encryption;
+        header.key_id = message.key_id;
+        header.nonce = message.nonce;
+        header.session_id = message.session_id;
+        header.peer_service_id = message.peer_service_id;
+        header.auth_token = message.auth_token;
+        header.flags = message.flags;
+        header.service = message.route.service;
+        header.method = message.route.method;
+        return encode_frame_to_buffer(header, message.payload, out, options);
+    }
+
+    bool encode_response(const Response &response, ::yuan::buffer::ByteBuffer &out, const EncodeOptions &options)
+    {
+        YUAN_RPC_PROFILE_ZONE("yuan.rpc.wire.encode_response");
+        FrameHeader header;
+        header.kind = MessageKind::response;
+        header.request_id = response.request_id;
+        header.coroutine_id = response.coroutine_id;
+        header.status = response.status;
+        header.serialization = response.serialization;
+        header.compression = response.compression;
+        header.encryption = response.encryption;
+        header.key_id = response.key_id;
+        header.nonce = response.nonce;
+        header.session_id = response.session_id;
+        header.peer_service_id = response.peer_service_id;
+        header.auth_token = response.auth_token;
+        header.flags = response.flags;
+        return encode_frame_to_buffer(header, response.payload, out, options);
     }
 
     DecodeResult decode_frame(const std::uint8_t *data, std::size_t size, const DecodeOptions &options)
     {
+        YUAN_RPC_PROFILE_ZONE("yuan.rpc.wire.decode_frame");
         DecodeResult result;
         if (size < header_size) {
             result.error = DecodeError::need_more;
@@ -302,32 +353,29 @@ namespace yuan::rpc::wire
         if (!read_u64(data, size, offset, header.request_id) ||
             !read_u32(data, size, offset, header.service) ||
             !read_u32(data, size, offset, header.method) ||
-            !read_u32(data, size, offset, header.route_name_size) ||
-            !read_u32(data, size, offset, header.metadata_size) ||
-            !read_u32(data, size, offset, header.error_size) ||
             !read_u32(data, size, offset, header.payload_size)) {
             result.error = DecodeError::malformed;
             return result;
         }
 
-        if (!read_u64(data, size, offset, header.nonce) || !read_u64(data, size, offset, header.coroutine_id) ||
+        if (!read_u64(data, size, offset, header.session_id) || !read_u64(data, size, offset, header.peer_service_id) ||
+            !read_u64(data, size, offset, header.auth_token) ||
+            !read_u32(data, size, offset, header.flags) ||
+            !read_u64(data, size, offset, header.nonce) || !read_u64(data, size, offset, header.coroutine_id) ||
             !read_u32(data, size, offset, header.key_id)) {
             result.error = DecodeError::malformed;
             return result;
         }
 
-        const std::uint64_t section_sum = static_cast<std::uint64_t>(header.route_name_size) +
-                                          header.metadata_size + header.error_size + header.payload_size;
-
         Bytes plain_body;
         const auto *body = data + header_size;
         if (header.encryption == Encryption::none) {
-            if (section_sum != body_size) {
+            if (header.payload_size != body_size) {
                 result.error = DecodeError::malformed;
                 return result;
             }
-            plain_body.assign(body, body + body_size);
         } else {
+            YUAN_RPC_PROFILE_ZONE("yuan.rpc.wire.decrypt");
             if (!options.decrypt) {
                 result.error = DecodeError::malformed;
                 return result;
@@ -343,24 +391,17 @@ namespace yuan::rpc::wire
                 result.error = DecodeError::malformed;
                 return result;
             }
-        }
-        if (plain_body.size() != section_sum) {
-            result.error = DecodeError::malformed;
-            return result;
+            if (plain_body.size() != header.payload_size) {
+                result.error = DecodeError::malformed;
+                return result;
+            }
+            body = plain_body.data();
         }
 
-        body = plain_body.data();
-        std::size_t body_offset = 0;
-        result.frame.route_name.assign(reinterpret_cast<const char *>(body + body_offset), header.route_name_size);
-        body_offset += header.route_name_size;
-        if (!decode_metadata(body + body_offset, header.metadata_size, result.frame.metadata)) {
-            result.error = DecodeError::malformed;
-            return result;
+        {
+            YUAN_RPC_PROFILE_ZONE("yuan.rpc.wire.payload_assign");
+            result.frame.payload.assign(body, body + header.payload_size);
         }
-        body_offset += header.metadata_size;
-        result.frame.error.assign(reinterpret_cast<const char *>(body + body_offset), header.error_size);
-        body_offset += header.error_size;
-        result.frame.payload.assign(body + body_offset, body + body_offset + header.payload_size);
 
         result.ok = true;
         result.consumed = header_size + body_size;
@@ -374,36 +415,43 @@ namespace yuan::rpc::wire
 
     Message to_message(DecodedFrame frame)
     {
+        YUAN_RPC_PROFILE_ZONE("yuan.rpc.wire.to_message");
         Message message;
         message.kind = frame.header.kind;
         message.request_id = frame.header.request_id;
         message.coroutine_id = frame.header.coroutine_id;
+        message.connection_id = 0;
+        message.session_id = frame.header.session_id;
+        message.peer_service_id = frame.header.peer_service_id;
+        message.auth_token = frame.header.auth_token;
+        message.flags = frame.header.flags;
         message.route.service = frame.header.service;
         message.route.method = frame.header.method;
-        message.route.name = std::move(frame.route_name);
         message.serialization = frame.header.serialization;
         message.compression = frame.header.compression;
         message.encryption = frame.header.encryption;
         message.key_id = frame.header.key_id;
         message.nonce = frame.header.nonce;
-        message.metadata = std::move(frame.metadata);
         message.payload = std::move(frame.payload);
         return message;
     }
 
     Response to_response(DecodedFrame frame)
     {
+        YUAN_RPC_PROFILE_ZONE("yuan.rpc.wire.to_response");
         Response response;
         response.request_id = frame.header.request_id;
         response.coroutine_id = frame.header.coroutine_id;
+        response.session_id = frame.header.session_id;
+        response.peer_service_id = frame.header.peer_service_id;
+        response.auth_token = frame.header.auth_token;
+        response.flags = frame.header.flags;
         response.status = frame.header.status;
-        response.error = std::move(frame.error);
         response.serialization = frame.header.serialization;
         response.compression = frame.header.compression;
         response.encryption = frame.header.encryption;
         response.key_id = frame.header.key_id;
         response.nonce = frame.header.nonce;
-        response.metadata = std::move(frame.metadata);
         response.payload = std::move(frame.payload);
         return response;
     }

@@ -10,6 +10,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -17,8 +18,13 @@
 #include <vector>
 
 #ifndef _WIN32
+#include <arpa/inet.h>
 #include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <unistd.h>
+#else
+#include <winsock2.h>
 #endif
 
 namespace
@@ -261,6 +267,129 @@ namespace
     }
 #endif
 
+    class UdpSelfSocket
+    {
+    public:
+        UdpSelfSocket() = default;
+        ~UdpSelfSocket() { close(); }
+        UdpSelfSocket(const UdpSelfSocket &) = delete;
+        UdpSelfSocket &operator=(const UdpSelfSocket &) = delete;
+
+        bool init()
+        {
+#ifdef _WIN32
+            const SOCKET s = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (s == INVALID_SOCKET) {
+                return false;
+            }
+            fd_ = static_cast<int>(s);
+            u_long non_blocking = 1;
+            (void)::ioctlsocket(s, FIONBIO, &non_blocking);
+#else
+            const int s = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (s < 0) {
+                return false;
+            }
+            fd_ = s;
+            const int flags = ::fcntl(s, F_GETFL, 0);
+            (void)::fcntl(s, F_SETFL, flags | O_NONBLOCK);
+#endif
+            addr_.sin_family = AF_INET;
+            addr_.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            addr_.sin_port = 0;
+            if (::bind(native(), reinterpret_cast<sockaddr *>(&addr_), sizeof(addr_)) != 0) {
+                close();
+                return false;
+            }
+#ifdef _WIN32
+            int addr_len = static_cast<int>(sizeof(addr_));
+#else
+            socklen_t addr_len = sizeof(addr_);
+#endif
+            if (::getsockname(native(), reinterpret_cast<sockaddr *>(&addr_), &addr_len) != 0) {
+                close();
+                return false;
+            }
+            return true;
+        }
+
+        int fd() const { return fd_; }
+
+        void notify()
+        {
+            if (fd_ < 0) {
+                return;
+            }
+            const char byte = 'u';
+            (void)::sendto(native(), &byte, 1, 0, reinterpret_cast<sockaddr *>(&addr_), sizeof(addr_));
+        }
+
+        void drain()
+        {
+            if (fd_ < 0) {
+                return;
+            }
+            char buf[64];
+            while (::recv(native(), buf, sizeof(buf), 0) > 0) {
+            }
+        }
+
+        void close()
+        {
+            if (fd_ < 0) {
+                return;
+            }
+#ifdef _WIN32
+            ::closesocket(native());
+#else
+            ::close(fd_);
+#endif
+            fd_ = -1;
+        }
+
+    private:
+#ifdef _WIN32
+        SOCKET native() const { return static_cast<SOCKET>(fd_); }
+#else
+        int native() const { return fd_; }
+#endif
+
+        int fd_ = -1;
+        sockaddr_in addr_{};
+    };
+
+    class UdpReadHandler final : public yuan::net::SelectHandler
+    {
+    public:
+        explicit UdpReadHandler(UdpSelfSocket *sock)
+            : sock_(sock)
+        {
+        }
+
+        void on_read_event() override
+        {
+            ++read_count;
+            sock_->drain();
+            if (quit_on_read && event_handler_) {
+                event_handler_->quit();
+            }
+        }
+
+        void on_write_event() override {}
+
+        void set_event_handler(yuan::net::EventHandler *eventHandler) override
+        {
+            event_handler_ = eventHandler;
+        }
+
+        int read_count = 0;
+        bool quit_on_read = false;
+
+    private:
+        UdpSelfSocket *sock_;
+        yuan::net::EventHandler *event_handler_ = nullptr;
+    };
+
     void test_generation_validation()
     {
         std::cout << "  [EventToken] generation validation\n";
@@ -389,6 +518,50 @@ namespace
         loop_thread.join();
     }
 
+    void test_quit_before_loop_is_preserved()
+    {
+        std::cout << "  [EventToken] quit before loop is preserved\n";
+
+        NoopPoller poller;
+        yuan::timer::WheelTimerManager timer_manager;
+        yuan::net::EventLoop loop(&poller, &timer_manager);
+        loop.quit();
+
+        const auto started = std::chrono::steady_clock::now();
+        const auto reason = loop.loop();
+        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - started).count();
+        check(reason == yuan::net::EventLoopExitReason::quit_requested,
+              "pre-start quit should remain visible to loop");
+        check(elapsed_ms < 100, "pre-start quit should return without polling");
+    }
+
+    void test_cross_thread_sync_operation_and_close()
+    {
+        std::cout << "  [EventToken] cross-thread synchronous channel operation\n";
+
+        yuan::net::PollPoller poller;
+        yuan::timer::WheelTimerManager timer_manager;
+        yuan::net::EventLoop loop(&poller, &timer_manager);
+        UdpSelfSocket sock;
+        check(sock.init(), "udp self socket should initialize for sync operation test");
+
+        yuan::net::Channel channel(sock.fd());
+        channel.enable_read();
+        std::thread loop_thread([&loop]() { (void)loop.loop(); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+        loop.update_channel(&channel);
+        const auto generation = channel.generation();
+        loop.close_channel(&channel);
+        loop.quit();
+        loop_thread.join();
+
+        check(generation != 0, "synchronous cross-thread update should assign generation");
+        check(channel.generation() != generation,
+              "synchronous cross-thread close should complete before returning");
+    }
+
     void test_real_fd_read_close_lifecycle()
     {
         std::cout << "  [EventToken] real fd read close lifecycle\n";
@@ -470,6 +643,85 @@ namespace
         check(handler.read_count == 1, "real poller should wake and dispatch pipe read");
         loop.close_channel(&channel);
 #endif
+    }
+
+    void test_real_fd_cross_thread_update_channel_wakes_poller()
+    {
+        std::cout << "  [EventToken] queued channel registration on loop thread\n";
+
+        yuan::net::PollPoller poller;
+        check(poller.init(), "poll poller should initialize for queued registration test");
+        yuan::timer::WheelTimerManager timer_manager;
+        yuan::net::EventLoop loop(&poller, &timer_manager);
+
+        UdpSelfSocket sock;
+        check(sock.init(), "udp self socket should initialize for queued registration test");
+
+        yuan::net::Channel channel(sock.fd());
+        UdpReadHandler handler(&sock);
+        handler.quit_on_read = true;
+        handler.set_event_handler(&loop);
+        channel.set_handler(&handler);
+        channel.enable_read();
+
+        sock.notify();
+
+        std::thread loop_thread([&loop]() {
+            (void)loop.loop();
+        });
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        const auto started = std::chrono::steady_clock::now();
+        loop.queue_in_loop([&loop, &channel]() {
+            loop.update_channel(&channel);
+        });
+        loop_thread.join();
+        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - started).count();
+
+        check(handler.read_count == 1, "queued registration should deliver new fd event");
+        check(elapsed_ms < 1000, "loop should observe queued registration promptly");
+    }
+
+    void test_real_fd_cross_thread_close_channel_while_polling()
+    {
+        std::cout << "  [EventToken] queued close keeps loop quiet after deregistration\n";
+
+        yuan::net::PollPoller poller;
+        check(poller.init(), "poll poller should initialize for queued close test");
+        yuan::timer::WheelTimerManager timer_manager;
+        yuan::net::EventLoop loop(&poller, &timer_manager);
+
+        UdpSelfSocket sock;
+        check(sock.init(), "udp self socket should initialize for queued close test");
+
+        yuan::net::Channel channel(sock.fd());
+        UdpReadHandler handler(&sock);
+        handler.set_event_handler(&loop);
+        channel.set_handler(&handler);
+        channel.enable_read();
+        loop.update_channel(&channel);
+
+        std::thread loop_thread([&loop]() {
+            (void)loop.loop();
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+
+        std::promise<void> closed;
+        auto closed_future = closed.get_future();
+        loop.queue_in_loop([&loop, &channel, &closed]() {
+            loop.close_channel(&channel);
+            closed.set_value();
+        });
+        closed_future.wait();
+
+        sock.notify();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        check(handler.read_count == 0, "queued closed channel must not receive events");
+
+        loop.quit();
+        loop_thread.join();
+        check(handler.read_count == 0, "loop should stay quiet for closed channel until quit");
     }
 
     void test_external_fd_registration_raii_unregisters_without_closing_fd()
@@ -559,8 +811,12 @@ int main()
     test_reused_fd_stale_channel_is_ignored();
     test_callback_close_invalidates_later_events();
     test_cross_thread_queue_wakes_idle_loop();
+    test_quit_before_loop_is_preserved();
+    test_cross_thread_sync_operation_and_close();
     test_real_fd_read_close_lifecycle();
     test_real_fd_cross_thread_read_wakes_poller();
+    test_real_fd_cross_thread_update_channel_wakes_poller();
+    test_real_fd_cross_thread_close_channel_while_polling();
     test_external_fd_registration_raii_unregisters_without_closing_fd();
     test_external_fd_registration_close_inside_callback();
 

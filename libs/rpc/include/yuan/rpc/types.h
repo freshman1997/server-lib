@@ -77,6 +77,12 @@ namespace yuan::rpc
         internal_error = 6
     };
 
+    namespace message_flag
+    {
+        inline constexpr std::uint32_t defer_response = 1U << 0U;
+        inline constexpr std::uint32_t close_connection = 1U << 1U;
+    }
+
     struct Route
     {
         ServiceId service = 0;
@@ -100,6 +106,10 @@ namespace yuan::rpc
         MessageKind kind = MessageKind::request;
         RequestId request_id = 0;
         CoroutineId coroutine_id = 0;
+        std::uint64_t connection_id = 0;
+        std::uint64_t session_id = 0;
+        std::uint64_t peer_service_id = 0;
+        std::uint64_t auth_token = 0;
         Route route;
         Peer source;
         Peer target;
@@ -108,6 +118,7 @@ namespace yuan::rpc
         Encryption encryption = Encryption::none;
         std::uint32_t key_id = 0;
         std::uint64_t nonce = 0;
+        std::uint32_t flags = 0;
         Metadata metadata;
         Bytes payload;
 
@@ -126,6 +137,10 @@ namespace yuan::rpc
     {
         RequestId request_id = 0;
         CoroutineId coroutine_id = 0;
+        std::uint64_t connection_id = 0;
+        std::uint64_t session_id = 0;
+        std::uint64_t peer_service_id = 0;
+        std::uint64_t auth_token = 0;
         RpcStatus status = RpcStatus::ok;
         std::string error;
         Serialization serialization = Serialization::raw;
@@ -133,6 +148,7 @@ namespace yuan::rpc
         Encryption encryption = Encryption::none;
         std::uint32_t key_id = 0;
         std::uint64_t nonce = 0;
+        std::uint32_t flags = 0;
         Metadata metadata;
         Bytes payload;
 
@@ -173,6 +189,11 @@ namespace yuan::rpc
     {
         RequestId request_id = 0;
         ContinuationId continuation_id = 0;
+        std::uint64_t connection_id = 0;
+        std::uint64_t session_id = 0;
+        std::uint64_t peer_service_id = 0;
+        std::uint64_t auth_token = 0;
+        std::uint32_t flags = 0;
         Peer source;
         Peer target;
         Metadata metadata;

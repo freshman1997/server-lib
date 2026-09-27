@@ -332,23 +332,23 @@ namespace yuan::plugin
             return true;
         }
 
-        const ExtensionPointEntry *resolve_extension_point(const std::string &name) const
+        std::optional<ExtensionPointEntry> resolve_extension_point(const std::string &name) const
         {
             if (!ctx_.extension_point_registry) {
-                return nullptr;
+                return std::nullopt;
             }
             return ctx_.extension_point_registry->find_one(name);
         }
 
-        const ExtensionPointEntry *resolve_extension_contract(const std::string &contract_id) const
+        std::optional<ExtensionPointEntry> resolve_extension_contract(const std::string &contract_id) const
         {
             if (!ctx_.extension_point_registry) {
-                return nullptr;
+                return std::nullopt;
             }
             return ctx_.extension_point_registry->find_best_contract(contract_id);
         }
 
-        std::vector<const ExtensionPointEntry *> resolve_all_extensions(const std::string &name) const
+        std::vector<ExtensionPointEntry> resolve_all_extensions(const std::string &name) const
         {
             if (!ctx_.extension_point_registry) {
                 return {};
@@ -356,8 +356,8 @@ namespace yuan::plugin
             return ctx_.extension_point_registry->find_by_name(name);
         }
 
-        std::vector<const ExtensionPointEntry *> resolve_all_by_contract(const std::string &contract_id,
-                                                                         int min_version = 1) const
+        std::vector<ExtensionPointEntry> resolve_all_by_contract(const std::string &contract_id,
+                                                                 int min_version = 1) const
         {
             if (!ctx_.extension_point_registry) {
                 return {};

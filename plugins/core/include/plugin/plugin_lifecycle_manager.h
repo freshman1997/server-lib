@@ -5,6 +5,7 @@
 #include "plugin/plugin_state.h"
 
 #include <functional>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -30,11 +31,41 @@ namespace yuan::plugin
         void *library_handle = nullptr;
         PluginState state = PluginState::discovered;
         PluginContext *context = nullptr;
+        bool accepting_calls = true;
+        std::size_t active_calls = 0;
     };
 
     class PluginLifecycleManager
     {
     public:
+        class CallLease
+        {
+        public:
+            CallLease() = default;
+            CallLease(const CallLease &) = delete;
+            CallLease &operator=(const CallLease &) = delete;
+            CallLease(CallLease &&other) noexcept;
+            CallLease &operator=(CallLease &&other) noexcept;
+            ~CallLease();
+
+            explicit operator bool() const { return manager_ != nullptr; }
+            Plugin *plugin() const { return plugin_; }
+            PluginState state() const { return state_; }
+
+        private:
+            friend class PluginLifecycleManager;
+            CallLease(PluginLifecycleManager *manager,
+                      std::string plugin_name,
+                      Plugin *plugin,
+                      PluginState state);
+            void reset();
+
+            PluginLifecycleManager *manager_ = nullptr;
+            std::string plugin_name_;
+            Plugin *plugin_ = nullptr;
+            PluginState state_ = PluginState::unloaded;
+        };
+
         using StateChangeCallback = std::function<void(const std::string &plugin_name,
                                                        PluginState old_state,
                                                        PluginState new_state)>;
@@ -74,6 +105,7 @@ namespace yuan::plugin
 
         bool activate(const std::string &name);
         bool fault(const std::string &name, const std::string &reason);
+        bool apply_recorded_fault_policy(const std::string &name);
         bool quarantine(const std::string &name);
         bool degrade(const std::string &name);
         bool recover(const std::string &name);
@@ -94,11 +126,14 @@ namespace yuan::plugin
         void set_context(const std::string &name, PluginContext *context);
 
         bool accepts_callbacks(const std::string &name) const;
+        CallLease acquire_call(const std::string &name);
 
     private:
         bool do_transition(const std::string &name, PluginState new_state);
         void do_cleanup_plugin(const std::string &name);
         void notify_state_change(const std::string &name, PluginState old_state, PluginState new_state);
+        void run_transition_effects(const std::string &name, PluginState old_state, PluginState new_state);
+        void release_call(const std::string &name);
 
         Config config_;
         std::unique_ptr<PluginCallGuard> call_guard_;
@@ -110,6 +145,7 @@ namespace yuan::plugin
         HostEventBus *event_bus_ = nullptr;
 
         mutable std::mutex mutex_;
+        std::condition_variable calls_drained_;
         std::unordered_map<std::string, PluginInstance> instances_;
         std::vector<std::string> load_order_;
 

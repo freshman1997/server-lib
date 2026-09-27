@@ -371,7 +371,7 @@ namespace yuan::server
         host_.start([this]() { server_->serve(); });
     }
 
-    void HttpService::stop()
+    bool HttpService::stop()
     {
         stop_dashboard_push_timer();
         unsubscribe_dashboard_events();
@@ -396,10 +396,11 @@ namespace yuan::server
             });
             future.wait();
             host_.stop();
-            return;
+            return true;
         }
 
         host_.stop(std::move(stop_server));
+        return true;
     }
 
     yuan::net::http::HttpServer &HttpService::server()
