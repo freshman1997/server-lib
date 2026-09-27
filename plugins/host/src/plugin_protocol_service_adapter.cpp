@@ -2037,7 +2037,7 @@ namespace yuan::app
         }
     }
 
-    void PluginProtocolServiceAdapter::stop()
+    bool PluginProtocolServiceAdapter::stop()
     {
         const bool was_started = started_;
         stop_protocol_listener();
@@ -2053,6 +2053,7 @@ namespace yuan::app
                 plugin::events::plugin_protocol_service_stopped,
                 make_protocol_service_event(runtime_context_, protocol_service_));
         }
+        return true;
     }
 
     const std::string &PluginProtocolServiceAdapter::plugin_path() const noexcept

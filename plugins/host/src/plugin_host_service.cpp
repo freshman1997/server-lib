@@ -850,7 +850,7 @@ namespace yuan::app
         started_ = true;
     }
 
-    void PluginHostService::stop()
+    bool PluginHostService::stop()
     {
         auto &pluginManager = plugin_manager();
         auto &lcm = pluginManager.lifecycle_manager();
@@ -907,6 +907,8 @@ namespace yuan::app
         logger_.reset();
         event_bus_.reset();
         service_catalog_.reset();
+
+        return true;
     }
 
 } // namespace yuan::app

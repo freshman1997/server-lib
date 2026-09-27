@@ -13,7 +13,7 @@ class DummyService final : public yuan::app::Service
 public:
     bool init() override { return true; }
     void start() override {}
-    void stop() override {}
+    bool stop() override { return true; }
 };
 
 bool require(bool condition, const std::string &message)

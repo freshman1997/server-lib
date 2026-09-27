@@ -82,7 +82,7 @@ namespace yuan::app
 
         bool init() override;
         void start() override;
-        void stop() override;
+        bool stop() override;
 
         plugin::PluginLifecycleManager &lifecycle_manager();
         const plugin::PluginLifecycleManager &lifecycle_manager() const;

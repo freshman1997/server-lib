@@ -29,8 +29,9 @@ namespace
         {
         }
 
-        void stop() override
+        bool stop() override
         {
+            return true;
         }
     };
 

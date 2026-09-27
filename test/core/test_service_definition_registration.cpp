@@ -25,9 +25,10 @@ public:
         ++start_count;
     }
 
-    void stop() override
+    bool stop() override
     {
         ++stop_count;
+        return true;
     }
 
     static int init_count;
@@ -44,7 +45,7 @@ class ContextAwareService final : public yuan::app::Service, public yuan::app::R
 public:
     bool init() override { return true; }
     void start() override {}
-    void stop() override {}
+    bool stop() override { return true; }
 
     void set_runtime_context(const yuan::app::RuntimeContext &context) override
     {
@@ -70,9 +71,10 @@ public:
         started = true;
     }
 
-    void stop() override
+    bool stop() override
     {
         stopped = true;
+        return true;
     }
 
     bool initialized = false;

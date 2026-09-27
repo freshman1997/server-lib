@@ -65,9 +65,10 @@ namespace
             }
         }
 
-        void stop() override
+        bool stop() override
         {
             ++stopped_;
+            return true;
         }
 
         static void reset()
@@ -148,9 +149,10 @@ namespace
             });
         }
 
-        void stop() override
+        bool stop() override
         {
             ++stopped_;
+            return true;
         }
 
         static void reset()
@@ -212,9 +214,10 @@ namespace
             });
         }
 
-        void stop() override
+        bool stop() override
         {
             ++stopped_;
+            return true;
         }
 
         static void reset()

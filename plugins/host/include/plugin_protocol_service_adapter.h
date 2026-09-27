@@ -63,7 +63,7 @@ namespace yuan::app
         void set_runtime_context(const RuntimeContext &context) override;
         bool init() override;
         void start() override;
-        void stop() override;
+        bool stop() override;
 
         const std::string &plugin_path() const noexcept;
         const plugin::ProtocolServiceDescriptor &protocol_service() const noexcept;
