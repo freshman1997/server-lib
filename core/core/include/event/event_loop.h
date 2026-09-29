@@ -115,12 +115,8 @@ namespace yuan::net
         uint64_t generation() const noexcept;
 
     private:
-        struct State;
-        void close_state();
-
-        EventLoop *loop_ = nullptr;
-        std::shared_ptr<State> state_;
-        std::atomic<bool> active_{false};
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
     };
 }
 #endif

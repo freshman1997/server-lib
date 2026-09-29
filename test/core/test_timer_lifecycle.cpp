@@ -29,7 +29,11 @@ int main()
         return 1;
     }
 
-    yuan::coroutine::sync_wait(view, wait_for_timer(view));
+    const auto result = yuan::coroutine::sync_wait(view, wait_for_timer(view));
+    if (!result) {
+        std::cerr << "timer coroutine failed\n";
+        return 1;
+    }
 
     if (!fired) {
         std::cerr << "one-shot timer should fire\n";

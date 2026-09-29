@@ -153,7 +153,8 @@ namespace yuan::net::ftp
     {
         owned_runtime_ = std::make_unique<NetworkRuntime>();
         auto rv = owned_runtime_->runtime_view();
-        return coroutine::sync_wait(rv, connect_async(rv, ip, port));
+        const auto result = coroutine::sync_wait(rv, connect_async(rv, ip, port));
+        return result && result.value ? *result.value : false;
     }
 
     bool FtpClient::login(const std::string & username, const std::string & password)
@@ -162,7 +163,8 @@ namespace yuan::net::ftp
             return false;
         }
         auto rv = control_session_.runtime_view();
-        return coroutine::sync_wait(rv, login_async(username, password));
+        const auto result = coroutine::sync_wait(rv, login_async(username, password));
+        return static_cast<bool>(result) && *result.value;
     }
 
     std::string FtpClient::list(const std::string & path)
@@ -171,7 +173,8 @@ namespace yuan::net::ftp
             return {};
         }
         auto rv = control_session_.runtime_view();
-        return coroutine::sync_wait(rv, list_async(path));
+        const auto result = coroutine::sync_wait(rv, list_async(path));
+        return result && result.value ? *result.value : std::string{};
     }
 
     std::string FtpClient::nlist(const std::string & path)
@@ -180,7 +183,8 @@ namespace yuan::net::ftp
             return {};
         }
         auto rv = control_session_.runtime_view();
-        return coroutine::sync_wait(rv, nlist_async(path));
+        const auto result = coroutine::sync_wait(rv, nlist_async(path));
+        return result && result.value ? *result.value : std::string{};
     }
 
     bool FtpClient::download(const std::string & remote_path, const std::string & local_path)
@@ -189,7 +193,8 @@ namespace yuan::net::ftp
             return false;
         }
         auto rv = control_session_.runtime_view();
-        return coroutine::sync_wait(rv, download_async(remote_path, local_path));
+        const auto result = coroutine::sync_wait(rv, download_async(remote_path, local_path));
+        return result && result.value ? *result.value : false;
     }
 
     bool FtpClient::upload(const std::string & local_path, const std::string & remote_path)
@@ -198,7 +203,8 @@ namespace yuan::net::ftp
             return false;
         }
         auto rv = control_session_.runtime_view();
-        return coroutine::sync_wait(rv, upload_async(local_path, remote_path));
+        const auto result = coroutine::sync_wait(rv, upload_async(local_path, remote_path));
+        return result && result.value ? *result.value : false;
     }
 
     bool FtpClient::append(const std::string & local_path, const std::string & remote_path)
@@ -207,7 +213,8 @@ namespace yuan::net::ftp
             return false;
         }
         auto rv = control_session_.runtime_view();
-        return coroutine::sync_wait(rv, append_async(local_path, remote_path));
+        const auto result = coroutine::sync_wait(rv, append_async(local_path, remote_path));
+        return result && result.value ? *result.value : false;
     }
 
     void FtpClient::quit()

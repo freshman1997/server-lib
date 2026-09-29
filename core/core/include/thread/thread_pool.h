@@ -7,6 +7,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -30,6 +31,20 @@ namespace yuan::thread
         RejectPolicy reject_policy = RejectPolicy::abort;
     };
 
+    template <typename T>
+    struct ThreadTaskResult {
+        std::optional<T> value;
+        std::exception_ptr error;
+        explicit operator bool() const noexcept { return !error && value.has_value(); }
+    };
+
+    template <>
+    struct ThreadTaskResult<void> {
+        bool completed = false;
+        std::exception_ptr error;
+        explicit operator bool() const noexcept { return completed && !error; }
+    };
+
     class ThreadPool
     {
     public:
@@ -44,39 +59,50 @@ namespace yuan::thread
         void wait_all();
 
         template <typename F, typename... Args>
-        auto submit(F &&f, Args &&... args) -> std::future<std::invoke_result_t<F, Args...> >
+        auto submit(F &&f, Args &&... args) -> std::future<ThreadTaskResult<std::invoke_result_t<F, Args...> > >
         {
             using ReturnType = std::invoke_result_t<F, Args...>;
+            using ResultType = ThreadTaskResult<ReturnType>;
 
             auto bound = std::bind(std::forward<F>(f), std::forward<Args>(args)...);
-            auto promise = std::make_shared<std::promise<ReturnType> >();
-            std::future<ReturnType> fut = promise->get_future();
-            auto task = [promise, bound = std::move(bound)]() mutable {
-                try {
-                    if constexpr (std::is_void_v<ReturnType>) {
-                        bound();
-                        promise->set_value();
-                    } else {
-                        promise->set_value(bound());
+            auto promise = std::make_shared<std::promise<ResultType> >();
+            std::future<ResultType> fut = promise->get_future();
+            auto task = [promise, bound = std::move(bound)](bool cancelled) mutable {
+                ResultType result;
+                if (cancelled) {
+                    result.error = std::make_exception_ptr(std::runtime_error("thread pool task cancelled"));
+                } else {
+                    try {
+                        if constexpr (std::is_void_v<ReturnType>) {
+                            bound();
+                            result.completed = true;
+                        } else {
+                            result.value = bound();
+                        }
+                    } catch (...) {
+                        result.error = std::current_exception();
                     }
-                } catch (...) {
-                    promise->set_exception(std::current_exception());
                 }
+                promise->set_value(std::move(result));
             };
 
             {
                 std::unique_lock lock(mut_);
                 if (!running_.load(std::memory_order_acquire)) {
-                    set_rejected_exception(*promise, "thread pool is not running");
+                    ResultType rejected;
+                    rejected.error = std::make_exception_ptr(std::runtime_error("thread pool is not running"));
+                    promise->set_value(std::move(rejected));
                     return fut;
                 }
 
                 if (max_queue_size_ > 0 && tasks_.size() >= max_queue_size_) {
                     if (reject_policy_ == RejectPolicy::caller_runs) {
                         lock.unlock();
-                        task();
+                        task(false);
                     } else {
-                        handle_rejection(*promise);
+                        ResultType rejected;
+                        rejected.error = std::make_exception_ptr(std::runtime_error("thread pool queue full"));
+                        promise->set_value(std::move(rejected));
                     }
                     return fut;
                 }
@@ -91,39 +117,14 @@ namespace yuan::thread
 
     private:
         void worker_loop();
-        void handle_rejection(std::promise<void> &promise);
-
-        template <typename ReturnType>
-        void handle_rejection(std::promise<ReturnType> &promise)
-        {
-            switch (reject_policy_) {
-            case RejectPolicy::discard:
-                set_rejected_exception(promise, "thread pool queue full");
-                break;
-            case RejectPolicy::abort:
-            default:
-                set_rejected_exception(promise, "thread pool queue full");
-                throw std::runtime_error("thread pool queue full");
-            }
-        }
-
-        template <typename ReturnType>
-        static void set_rejected_exception(std::promise<ReturnType> &promise, const char *message)
-        {
-            try {
-                throw std::runtime_error(message);
-            } catch (...) {
-                promise.set_exception(std::current_exception());
-            }
-        }
-
+        
     private:
         int thread_count_;
         std::size_t max_queue_size_;
         RejectPolicy reject_policy_;
         std::atomic<bool> running_{};
         std::atomic<std::size_t> active_count_{};
-        std::deque<std::function<void()> > tasks_;
+        std::deque<std::function<void(bool)> > tasks_;
         std::vector<std::thread> threads_;
         std::mutex mut_;
         std::condition_variable cond_;

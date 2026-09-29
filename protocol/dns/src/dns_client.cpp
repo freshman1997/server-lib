@@ -122,9 +122,14 @@ namespace yuan::net::dns
             return false;
         }
 
-        auto response = yuan::coroutine::sync_wait(
+        auto result = yuan::coroutine::sync_wait(
             rv,
             query_async(domain, type, timeout_ms));
+        if (!result || !result.value) {
+            LOG_WARN("DNS query coroutine failed");
+            return false;
+        }
+        auto response = *result.value;
 
         bool success = response.is_response();
 

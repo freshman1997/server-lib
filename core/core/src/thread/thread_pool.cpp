@@ -47,10 +47,15 @@ namespace yuan::thread
             return;
         }
 
+        std::deque<std::function<void(bool)>> cancelled;
         {
             std::unique_lock lock(mut_);
-            tasks_.clear();
+            cancelled.swap(tasks_);
         }
+        for (auto &task : cancelled) {
+            task(true);
+        }
+        done_.notify_all();
         cond_.notify_all();
 
         for (auto &t : threads_) {
@@ -98,23 +103,10 @@ namespace yuan::thread
         });
     }
 
-    void ThreadPool::handle_rejection(std::promise<void> &promise)
-    {
-        switch (reject_policy_) {
-        case RejectPolicy::discard:
-            set_rejected_exception(promise, "thread pool queue full");
-            break;
-        case RejectPolicy::abort:
-        default:
-            set_rejected_exception(promise, "thread pool queue full");
-            throw std::runtime_error("thread pool queue full");
-        }
-    }
-
     void ThreadPool::worker_loop()
     {
         while (true) {
-            std::function<void()> task;
+            std::function<void(bool)> task;
             {
                 std::unique_lock lock(mut_);
                 cond_.wait(lock, [this] {
@@ -133,7 +125,7 @@ namespace yuan::thread
                 active_count_.fetch_add(1, std::memory_order_relaxed);
                 try
                 {
-                    task();
+                    task(false);
                 }
                 catch (const std::exception &e)
                 {

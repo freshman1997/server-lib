@@ -4022,7 +4022,7 @@ namespace yuan::net::http
         }
 
         auto shared_task = std::shared_ptr<SaveUploadTempChunkTask>(std::move(task));
-        std::future<void> future;
+        std::future<yuan::thread::ThreadTaskResult<void>> future;
         try {
             future = thread_pool_->submit([shared_task] {
                 shared_task->run();
@@ -4042,10 +4042,15 @@ namespace yuan::net::http
 
         if (future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
             try {
-                future.get();
-                merge_completed = true;
-                LOG_INFO("[Upload] merge completed inline: {} size={}", session_snapshot.filename, session_snapshot.total_size);
-                return true;
+                const auto result = future.get();
+                if (result) {
+                    merge_completed = true;
+                    LOG_INFO("[Upload] merge completed inline: {} size={}", session_snapshot.filename, session_snapshot.total_size);
+                    return true;
+                }
+                LOG_ERROR("[Upload] merge task rejected/failed id={} file={}",
+                          session_snapshot.upload_id, session_snapshot.filename);
+                return false;
             } catch (const std::exception &e) {
                 LOG_ERROR("[Upload] merge task rejected/failed id={} file={} error={}",
                           session_snapshot.upload_id,

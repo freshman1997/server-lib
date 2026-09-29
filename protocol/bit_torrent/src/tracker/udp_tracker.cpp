@@ -335,7 +335,7 @@ namespace yuan::net::bit_torrent
         owned_runtime_ = std::make_unique<NetworkRuntime>();
         auto runtime = owned_runtime_->runtime_view();
 
-        auto response = yuan::coroutine::sync_wait(
+        auto result = yuan::coroutine::sync_wait(
             runtime,
             announce_async(runtime, tracker_host, tracker_port, meta, local_port,
                            uploaded, downloaded, left, event, peer_id));
@@ -343,9 +343,14 @@ namespace yuan::net::bit_torrent
         owned_runtime_->stop();
 
         if (out) {
-            *out = response;
+            if (result && result.value) {
+                *out = *result.value;
+            } else {
+                out->is_error = true;
+                out->error_message_ = "announce coroutine failed";
+            }
         }
-        return !response.is_error;
+        return result && result.value && !result.value->is_error;
     }
 
     bool UdpTracker::announce(const std::string & tracker_host,
@@ -438,16 +443,21 @@ namespace yuan::net::bit_torrent
         owned_runtime_ = std::make_unique<NetworkRuntime>();
         auto runtime = owned_runtime_->runtime_view();
 
-        auto response = yuan::coroutine::sync_wait(
+        auto result = yuan::coroutine::sync_wait(
             runtime,
             scrape_async(runtime, tracker_host, tracker_port, meta));
 
         owned_runtime_->stop();
 
         if (out) {
-            *out = response;
+            if (result && result.value) {
+                *out = *result.value;
+            } else {
+                out->is_error = true;
+                out->error_message_ = "scrape coroutine failed";
+            }
         }
-        return !response.is_error;
+        return result && result.value && !result.value->is_error;
     }
 
     bool UdpTracker::scrape(const std::string & tracker_host,

@@ -480,7 +480,9 @@ namespace
                                     auto task = coroutine_schedule_chain_task(view, iterations, checksum);
                                     task.resume();
                                     runtime.run();
-                                    task.get_result();
+                                    if (!task.take_result()) {
+                                        fail("coroutine_schedule_chain task failed");
+                                    }
                                 });
 
         if (checksum.load(std::memory_order_acquire) != iterations) {

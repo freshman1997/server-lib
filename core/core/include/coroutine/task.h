@@ -2,12 +2,47 @@
 #define __YUAN_COROUTINE_TASK_H__
 
 #include <coroutine>
+#include <cstdio>
 #include <exception>
 #include <functional>
+#include <mutex>
+#include <optional>
+#include <string>
 #include <utility>
 
 namespace yuan::coroutine
 {
+    inline std::string task_error_message(const std::exception_ptr &error)
+    {
+        if (!error) {
+            return {};
+        }
+        try {
+            std::rethrow_exception(error);
+        } catch (const std::exception &e) {
+            return e.what();
+        } catch (...) {
+            return "unknown coroutine error";
+        }
+    }
+
+    template <typename T>
+    struct TaskResult
+    {
+        bool completed = false;
+        std::optional<T> value;
+        std::exception_ptr error;
+
+        explicit operator bool() const noexcept { return completed && !error && value.has_value(); }
+    };
+
+    struct TaskVoidResult
+    {
+        bool completed = false;
+        std::exception_ptr error;
+
+        explicit operator bool() const noexcept { return completed && !error; }
+    };
 
     template <typename T>
     class Task
@@ -113,18 +148,18 @@ namespace yuan::coroutine
             }
         }
 
-            T get_result() const
-            {
-                if (handle_ && handle_.promise().exception_) {
-                    std::rethrow_exception(handle_.promise().exception_);
-                }
-                return std::move(handle_.promise().value_);
-            }
-
-        T resume_once_and_get_result()
+        TaskResult<T> take_result() const
         {
-            resume();
-            return get_result();
+            TaskResult<T> result;
+            if (!handle_ || !handle_.done()) {
+                return result;
+            }
+            result.completed = true;
+            result.error = handle_.promise().exception_;
+            if (!result.error) {
+                result.value = std::move(handle_.promise().value_);
+            }
+            return result;
         }
 
         class awaiter
@@ -213,20 +248,31 @@ namespace yuan::coroutine
                 return handler;
             }
 
+            static std::mutex &detached_exception_mutex()
+            {
+                static std::mutex mutex;
+                return mutex;
+            }
+
             static void notify_detached_exception(const std::exception_ptr &exception) noexcept
             {
                 if (!exception) {
                     return;
                 }
 
-                auto &handler = detached_exception_handler();
-                if (!handler) {
-                    return;
-                }
-
                 try {
-                    handler(exception);
+                    std::function<void(std::exception_ptr)> handler;
+                    {
+                        std::lock_guard<std::mutex> lock(detached_exception_mutex());
+                        handler = detached_exception_handler();
+                    }
+                    if (handler) {
+                        handler(exception);
+                    } else {
+                        std::fprintf(stderr, "Detached task failed: %s\n", task_error_message(exception).c_str());
+                    }
                 } catch (...) {
+                    std::fputs("Detached task exception handler failed\n", stderr);
                 }
             }
 
@@ -312,11 +358,13 @@ namespace yuan::coroutine
 
         static void set_detached_exception_handler(std::function<void(std::exception_ptr)> handler)
         {
+            std::lock_guard<std::mutex> lock(promise_type::detached_exception_mutex());
             promise_type::detached_exception_handler() = std::move(handler);
         }
 
         static void clear_detached_exception_handler()
         {
+            std::lock_guard<std::mutex> lock(promise_type::detached_exception_mutex());
             promise_type::detached_exception_handler() = {};
         }
 
@@ -344,17 +392,14 @@ namespace yuan::coroutine
             }
         }
 
-        void get_result() const
+        TaskVoidResult take_result() const
         {
-            if (handle_ && handle_.promise().exception_) {
-                std::rethrow_exception(handle_.promise().exception_);
+            TaskVoidResult result;
+            if (handle_ && handle_.done()) {
+                result.completed = true;
+                result.error = handle_.promise().exception_;
             }
-        }
-
-        void resume_once_and_get_result()
-        {
-            resume();
-            get_result();
+            return result;
         }
 
         class awaiter

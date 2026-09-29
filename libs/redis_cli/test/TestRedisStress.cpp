@@ -65,7 +65,7 @@ namespace
             co_return co_await async_client->ping_async();
         };
         auto ping_r = yuan::coroutine::sync_wait(runtime, ping_t());
-        assert(ping_r && ping_r->get_type() == yuan::redis::resp_status);
+        assert(ping_r && ping_r.value && *ping_r.value && (*ping_r.value)->get_type() == yuan::redis::resp_status);
 
         (void)async_client->set(ack, "v1");
 
@@ -73,7 +73,7 @@ namespace
             co_return co_await async_client->get_async(ack);
         };
         auto get_r = yuan::coroutine::sync_wait(runtime, get_t());
-        assert(get_r && get_r->get_type() == yuan::redis::resp_string);
+        assert(get_r && get_r.value && *get_r.value && (*get_r.value)->get_type() == yuan::redis::resp_string);
 
         auto del_r = async_client->del({ack});
         assert(del_r && del_r->get_type() == yuan::redis::resp_int);
@@ -82,7 +82,7 @@ namespace
             co_return co_await async_client->command_async("PING", {});
         };
         auto cmd_r = yuan::coroutine::sync_wait(runtime, cmd_t());
-        assert(cmd_r && cmd_r->get_type() == yuan::redis::resp_status);
+        assert(cmd_r && cmd_r.value && *cmd_r.value && (*cmd_r.value)->get_type() == yuan::redis::resp_status);
 
         std::cout << "STRESS_RESULT async_commands=ok" << std::endl;
     }
@@ -673,8 +673,8 @@ int main()
             };
 
             auto result = yuan::coroutine::sync_wait(runtime, async_task());
-            assert(result != nullptr);
-            assert(result->get_type() == yuan::redis::resp_array);
+            assert(result && result.value && *result.value);
+            assert((*result.value)->get_type() == yuan::redis::resp_array);
 
             std::vector<std::string> str_cmds;
             str_cmds.push_back("SET " + async_key + " async_str");
@@ -686,8 +686,8 @@ int main()
             };
 
             auto str_result = yuan::coroutine::sync_wait(runtime, str_task());
-            assert(str_result != nullptr);
-            assert(str_result->get_type() == yuan::redis::resp_array);
+            assert(str_result && str_result.value && *str_result.value);
+            assert((*str_result.value)->get_type() == yuan::redis::resp_array);
 
             std::cout << "STRESS_RESULT async_pipeline=ok" << std::endl;
 

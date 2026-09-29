@@ -238,13 +238,18 @@ void test_udp_tracker_runtime_announce_async()
         runtime,
         tracker.announce_async(runtime, "127.0.0.1", port, meta, 6881));
 
-    require(!response.is_error, "udp tracker runtime announce_async should succeed");
-    require(response.interval_ == 120, "udp tracker runtime announce_async should parse interval");
-    require(response.incomplete_ == 4, "udp tracker runtime announce_async should parse incomplete count");
-    require(response.complete_ == 9, "udp tracker runtime announce_async should parse complete count");
-    require(response.peers_.size() == 1, "udp tracker runtime announce_async should return one peer");
-    require(response.peers_.front().ip_ == "127.0.0.1", "udp tracker runtime announce_async should parse peer IP");
-    require(response.peers_.front().port_ == 51413, "udp tracker runtime announce_async should parse peer port");
+    require(response && response.value.has_value(), "udp tracker runtime announce_async should complete");
+    if (response && response.value) {
+        require(!response.value->is_error, "udp tracker runtime announce_async should succeed");
+        require(response.value->interval_ == 120, "udp tracker runtime announce_async should parse interval");
+        require(response.value->incomplete_ == 4, "udp tracker runtime announce_async should parse incomplete count");
+        require(response.value->complete_ == 9, "udp tracker runtime announce_async should parse complete count");
+        require(response.value->peers_.size() == 1, "udp tracker runtime announce_async should return one peer");
+        if (!response.value->peers_.empty()) {
+            require(response.value->peers_.front().ip_ == "127.0.0.1", "udp tracker runtime announce_async should parse peer IP");
+            require(response.value->peers_.front().port_ == 51413, "udp tracker runtime announce_async should parse peer port");
+        }
+    }
 
     if (tracker_thread.joinable()) {
         tracker_thread.join();

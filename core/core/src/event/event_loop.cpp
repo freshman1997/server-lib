@@ -900,7 +900,7 @@ namespace yuan::net
         return std::make_unique<ExternalFdRegistration>(this, fd, std::move(handler), events);
     }
 
-    struct EventLoop::ExternalFdRegistration::State
+    struct ExternalFdRegistrationState
     {
         enum class Status : uint8_t
         {
@@ -945,41 +945,50 @@ namespace yuan::net
         }
     };
 
+    struct EventLoop::ExternalFdRegistration::Impl
+    {
+        EventLoop *loop = nullptr;
+        std::shared_ptr<ExternalFdRegistrationState> state;
+        std::atomic<bool> active{false};
+    };
+
     EventLoop::ExternalFdRegistration::ExternalFdRegistration(
         EventLoop *loop,
         int fd,
         std::shared_ptr<SelectHandler> handler,
         int events)
-        : loop_(loop),
-          state_(std::make_shared<State>()),
-          active_(loop != nullptr && handler != nullptr && events != Channel::NONE_EVENT)
+        : impl_(std::make_unique<Impl>())
     {
-        if (!active_) {
-            state_.reset();
+        impl_->loop = loop;
+        impl_->state = std::make_shared<ExternalFdRegistrationState>();
+        impl_->active.store(loop != nullptr && handler != nullptr && events != Channel::NONE_EVENT,
+                            std::memory_order_release);
+        if (!impl_->active.load(std::memory_order_acquire)) {
+            impl_->state.reset();
             return;
         }
 
-        state_->loop = loop_;
-        state_->handler = std::move(handler);
-        state_->channel = std::make_unique<Channel>(fd);
+        impl_->state->loop = loop;
+        impl_->state->handler = std::move(handler);
+        impl_->state->channel = std::make_unique<Channel>(fd);
         if (events & Channel::READ_EVENT) {
-            state_->channel->enable_read();
+            impl_->state->channel->enable_read();
         }
 
         if (events & Channel::WRITE_EVENT) {
-            state_->channel->enable_write();
+            impl_->state->channel->enable_write();
         }
 
-        if (loop_->is_in_loop_thread() || !loop_->is_running()) {
-            state_->register_on_loop();
+        if (loop->is_in_loop_thread() || !loop->is_running()) {
+            impl_->state->register_on_loop();
         } else {
-            auto state = state_;
-            if (!loop_->run_in_loop_sync([state]() {
+            auto state = impl_->state;
+            if (!loop->run_in_loop_sync([state]() {
                 state->register_on_loop();
             })) {
-                active_.store(false, std::memory_order_release);
-                state_->close_on_loop();
-                state_.reset();
+                impl_->active.store(false, std::memory_order_release);
+                impl_->state->close_on_loop();
+                impl_->state.reset();
             }
         }
     }
@@ -991,49 +1000,45 @@ namespace yuan::net
 
     void EventLoop::ExternalFdRegistration::close()
     {
-        if (!active_.exchange(false, std::memory_order_acq_rel)) {
+        if (!impl_ || !impl_->active.exchange(false, std::memory_order_acq_rel)) {
             return;
         }
 
-        if (!state_) {
+        if (!impl_->state) {
             return;
         }
 
-        if (!loop_ || !loop_->is_running() || loop_->is_in_loop_thread()) {
-            close_state();
+        if (!impl_->loop || !impl_->loop->is_running() || impl_->loop->is_in_loop_thread()) {
+            impl_->state->close_on_loop();
+            impl_->state.reset();
         } else {
-            auto state = state_;
-            if (!loop_->run_in_loop_sync([state]() {
+            auto state = impl_->state;
+            if (!impl_->loop->run_in_loop_sync([state]() {
                 state->close_on_loop();
             })) {
-                loop_->wait_until_stopped();
-                close_state();
+                impl_->loop->wait_until_stopped();
+                impl_->state->close_on_loop();
+                impl_->state.reset();
                 return;
             }
-            state_.reset();
-        }
-    }
-
-    void EventLoop::ExternalFdRegistration::close_state()
-    {
-        if (state_) {
-            state_->close_on_loop();
-            state_.reset();
+            impl_->state.reset();
         }
     }
 
     bool EventLoop::ExternalFdRegistration::active() const noexcept
     {
-        return active_.load(std::memory_order_acquire);
+        return impl_ && impl_->active.load(std::memory_order_acquire);
     }
 
     Channel *EventLoop::ExternalFdRegistration::channel() noexcept
     {
-        return state_ ? state_->channel.get() : nullptr;
+        return impl_ && impl_->state ? impl_->state->channel.get() : nullptr;
     }
 
     uint64_t EventLoop::ExternalFdRegistration::generation() const noexcept
     {
-        return state_ && state_->channel ? state_->channel->generation() : 0;
+        return impl_ && impl_->state && impl_->state->channel
+            ? impl_->state->channel->generation()
+            : 0;
     }
 }

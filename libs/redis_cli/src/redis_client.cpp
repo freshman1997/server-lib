@@ -176,10 +176,17 @@ namespace yuan::redis
         };
         bool res = false;
         try {
-            res = yuan::coroutine::sync_wait_locked(
+            auto wait_result = yuan::coroutine::sync_wait_locked(
                 runtime,
                 wait_connect(),
                 "redis event loop is already running on another thread");
+            if (wait_result && wait_result.value) {
+                res = *wait_result.value;
+            } else if (wait_result.error) {
+                impl_->last_error_.store(ErrorValue::from_string(yuan::coroutine::task_error_message(wait_result.error)));
+                impl_->disconnect();
+                return -1;
+            }
         } catch (const std::exception &ex) {
             impl_->last_error_.store(ErrorValue::from_string(ex.what()));
             impl_->disconnect();

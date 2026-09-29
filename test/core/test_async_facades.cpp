@@ -53,7 +53,7 @@ namespace
         return std::string(span.begin(), span.end());
     }
 
-    class ImmediateFlushConnection final : public yuan::net::Connection
+    class ImmediateFlushConnection : public yuan::net::Connection
     {
     public:
         ImmediateFlushConnection()
@@ -156,6 +156,16 @@ namespace
         std::shared_ptr<yuan::net::ConnectionHandler> handler_owner_;
         yuan::net::EventHandler *event_handler_ = nullptr;
         std::shared_ptr<yuan::net::SSLHandler> ssl_handler_;
+    };
+
+    class ImmediateCloseConnection final : public ImmediateFlushConnection
+    {
+    public:
+        void close() override
+        {
+            ImmediateFlushConnection::close();
+            notify_closed_event();
+        }
     };
 
     class ClosingConnection final : public yuan::net::Connection
@@ -398,9 +408,8 @@ namespace
         co_await ctx.close_async();
     }
 
-    void run_echo_server(uint16_t port)
+    void run_echo_server(uint16_t port, yuan::net::NetworkRuntime &runtime)
     {
-        yuan::net::NetworkRuntime runtime;
         yuan::net::AsyncListenerHost host;
 
         host.set_connection_handler([](yuan::net::AsyncConnectionContext ctx)->yuan::coroutine::Task<void> {
@@ -414,9 +423,9 @@ namespace
         auto accept_task = host.run_async();
         accept_task.resume();
 
-        while (true) {
-            runtime.run();
+        while (runtime.run() != yuan::net::EventLoopExitReason::quit_requested) {
         }
+        host.close();
     }
 
     void run_udp_echo_server(uint16_t port, std::atomic_bool &ready, std::atomic_bool &stopped)
@@ -508,7 +517,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const auto result_value = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "runtime lifecycle test should return 0");
 
         runtime.cancel_timer(timer);
@@ -584,7 +594,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(runtime.runtime_view(), test_fn(runtime.runtime_view()));
+        const auto result_value = yuan::coroutine::sync_wait(runtime.runtime_view(), test_fn(runtime.runtime_view()));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "accept waiter preservation test should return 0");
         if (client_thread.joinable()) {
             client_thread.join();
@@ -655,7 +666,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(runtime.runtime_view(), test_fn(runtime.runtime_view()));
+        const auto result_value = yuan::coroutine::sync_wait(runtime.runtime_view(), test_fn(runtime.runtime_view()));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "connect waiter preservation test should return 0");
         if (server_thread.joinable()) {
             server_thread.join();
@@ -693,7 +705,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(rv, test_default_ctx(rv));
+        const auto result_value = yuan::coroutine::sync_wait(rv, test_default_ctx(rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "connection context lifecycle test should return 0");
 
         auto conn = std::make_shared<ImmediateFlushConnection>();
@@ -738,7 +751,8 @@ namespace
             co_return 0;
         };
 
-        const int read_result = yuan::coroutine::sync_wait(rv, test_async_read_keeps_handler(rv));
+        const auto read_result_value = yuan::coroutine::sync_wait(rv, test_async_read_keeps_handler(rv));
+        const int read_result = read_result_value && read_result_value.value ? *read_result_value.value : -1;
         check(read_result == 0, "async read handler preservation test should return 0");
     }
 
@@ -749,10 +763,10 @@ namespace
         const uint16_t port = reserve_tcp_port();
         check(port != 0, "should reserve a TCP port");
 
+        yuan::net::NetworkRuntime server_runtime;
         std::thread server_thread([&]() {
-        run_echo_server(port);
+            run_echo_server(port, server_runtime);
         });
-        server_thread.detach();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -798,8 +812,11 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(client_rv, client_test(client_rv));
+        const auto result_value = yuan::coroutine::sync_wait(client_rv, client_test(client_rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "client session test should return 0");
+        server_runtime.stop();
+        server_thread.join();
     }
 
     void test_async_request_client_one_shot()
@@ -809,10 +826,10 @@ namespace
         const uint16_t port = reserve_tcp_port();
         check(port != 0, "should reserve a TCP port");
 
+        yuan::net::NetworkRuntime server_runtime;
         std::thread server_thread([&]() {
-        run_echo_server(port);
+            run_echo_server(port, server_runtime);
         });
-        server_thread.detach();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -841,8 +858,11 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(client_rv, client_test(client_rv));
+        const auto result_value = yuan::coroutine::sync_wait(client_rv, client_test(client_rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "request client test should return 0");
+        server_runtime.stop();
+        server_thread.join();
     }
 
     void test_async_datagram_client_send_receive()
@@ -896,7 +916,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(client_rv, client_test(client_rv));
+        const auto result_value = yuan::coroutine::sync_wait(client_rv, client_test(client_rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "datagram client test should return 0");
 
         server_stopped.store(true);
@@ -950,7 +971,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(client_rv, client_test(client_rv));
+        const auto result_value = yuan::coroutine::sync_wait(client_rv, client_test(client_rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "send_and_receive_async test should return 0");
 
         server_stopped.store(true);
@@ -966,10 +988,10 @@ namespace
         const uint16_t port = reserve_tcp_port();
         check(port != 0, "should reserve a TCP port");
 
+        yuan::net::NetworkRuntime server_runtime;
         std::thread server_thread([&]() {
-        run_echo_server(port);
+            run_echo_server(port, server_runtime);
         });
-        server_thread.detach();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -1024,8 +1046,11 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(client_rv, client_test(client_rv));
+        const auto result_value = yuan::coroutine::sync_wait(client_rv, client_test(client_rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "IO awaitables test should return 0");
+        server_runtime.stop();
+        server_thread.join();
     }
 
     void test_write_and_flush_immediate_completion_regression()
@@ -1060,8 +1085,22 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const auto result_value = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "immediate completion regression test should return 0");
+    }
+
+    void test_close_event_during_await_suspend()
+    {
+        yuan::net::NetworkRuntime runtime;
+        auto view = static_cast<yuan::coroutine::RuntimeView>(runtime.runtime_view());
+        auto connection = std::make_shared<ImmediateCloseConnection>();
+        auto task_fn = [&]() -> yuan::coroutine::Task<yuan::coroutine::IoStatus> {
+            co_return co_await view.close(connection);
+        };
+        auto result = yuan::coroutine::sync_wait(view, task_fn());
+        check(result && result.value && *result.value == yuan::coroutine::IoStatus::success,
+              "synchronous close notification should resume exactly once");
     }
 
     void test_async_read_handle_keeps_connection_until_close()
@@ -1094,7 +1133,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const auto result_value = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "read handle ownership regression test should return 0");
         check(weak_conn.expired(), "completed timer callbacks should release captured connection ownership");
     }
@@ -1123,7 +1163,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const auto result_value = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "read timeout late event regression should return 0");
     }
 
@@ -1162,15 +1203,17 @@ namespace
             conn->inject_input("one");
             co_await view.schedule();
             check(first.done(), "first read coroutine should complete after input arrives");
-            auto first_result = first.resume_once_and_get_result();
-            check(first_result.status == yuan::coroutine::IoStatus::success,
-                  "first read waiter should still complete");
-            check(buffer_to_string(first_result.data) == "one",
-                  "first read waiter should receive injected data");
+            auto first_result = first.take_result();
+            check(first_result && first_result.value.has_value(), "first read waiter should return a result");
+            check(first_result.value && first_result.value->status == yuan::coroutine::IoStatus::success,
+                   "first read waiter should still complete");
+            check(first_result.value && buffer_to_string(first_result.value->data) == "one",
+                   "first read waiter should receive injected data");
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const auto result_value = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "multiple read waiter policy test should return 0");
     }
 
@@ -1219,7 +1262,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const auto result_value = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "handler preservation regression should return 0");
     }
 
@@ -1240,6 +1284,7 @@ int main()
     test_async_datagram_client_send_and_receive_async();
     test_io_awaitables_via_connection_context();
     test_write_and_flush_immediate_completion_regression();
+    test_close_event_during_await_suspend();
     test_async_read_handle_keeps_connection_until_close();
     test_async_read_timeout_then_late_event();
     test_multiple_read_waiters_rejected();

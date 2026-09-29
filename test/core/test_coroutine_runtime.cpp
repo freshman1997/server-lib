@@ -79,32 +79,32 @@ yuan::coroutine::Task<void> detached_throws_void()
 int test_task_resume_once_api()
 {
     auto value_task = immediate_value();
-    if (value_task.resume_once_and_get_result() != 42) {
-        std::cerr << "resume_once_and_get_result should return immediate result\n";
+    value_task.resume();
+    const auto value = value_task.take_result();
+    if (!value || *value.value != 42) {
+        std::cerr << "take_result should return immediate result\n";
         return 100;
     }
 
-    bool value_thrown = false;
-    try {
-        auto failing = throws_value();
-        (void)failing.resume_once_and_get_result();
-    } catch (const std::runtime_error &) {
-        value_thrown = true;
+    auto failing = throws_value();
+    if (failing.take_result()) {
+        std::cerr << "unfinished Task<T> should not report success\n";
+        return 103;
     }
-    if (!value_thrown) {
-        std::cerr << "Task<T> resume_once_and_get_result should rethrow exceptions\n";
+    failing.resume();
+    if (failing.take_result()) {
+        std::cerr << "Task<T> take_result should report exceptions\n";
         return 101;
     }
 
-    bool void_thrown = false;
-    try {
-        auto failing = throws_void();
-        failing.resume_once_and_get_result();
-    } catch (const std::runtime_error &) {
-        void_thrown = true;
+    auto void_failing = throws_void();
+    if (void_failing.take_result()) {
+        std::cerr << "unfinished Task<void> should not report success\n";
+        return 104;
     }
-    if (!void_thrown) {
-        std::cerr << "Task<void> resume_once_and_get_result should rethrow exceptions\n";
+    void_failing.resume();
+    if (void_failing.take_result()) {
+        std::cerr << "Task<void> take_result should report exceptions\n";
         return 102;
     }
 
@@ -143,6 +143,18 @@ int test_detached_task_exception_sink()
 
     return 0;
 }
+
+int test_sync_wait_error_result()
+{
+    auto value = yuan::coroutine::sync_wait(yuan::coroutine::RuntimeView{}, throws_value());
+    auto void_result = yuan::coroutine::sync_wait(yuan::coroutine::RuntimeView{}, throws_void());
+    if (!value.error || !void_result.error || value || void_result) {
+        std::cerr << "sync_wait should report coroutine exceptions as results\n";
+        return 120;
+    }
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -152,10 +164,14 @@ int main()
     yuan::net::EventLoop loop(&poller, &timer_manager);
     yuan::coroutine::RuntimeView runtime(&loop, &timer_manager);
 
-    const int result = yuan::coroutine::sync_wait(runtime, run_runtime_smoke(runtime));
-    if (result != 0) {
-        std::cerr << "coroutine runtime smoke test failed: " << result << "\n";
-        return result;
+    const auto result = yuan::coroutine::sync_wait(runtime, run_runtime_smoke(runtime));
+    if (!result) {
+        std::cerr << "coroutine runtime smoke task failed\n";
+        return 1;
+    }
+    if (*result.value != 0) {
+        std::cerr << "coroutine runtime smoke test failed: " << *result.value << "\n";
+        return *result.value;
     }
 
     const int task_api_result = test_task_resume_once_api();
@@ -163,10 +179,15 @@ int main()
         return task_api_result;
     }
 
+    if (const int error_result = test_sync_wait_error_result(); error_result != 0) {
+        return error_result;
+    }
+
     const int detached_sink_result = test_detached_task_exception_sink();
     if (detached_sink_result != 0) {
         return detached_sink_result;
     }
+
 
     std::cout << "coroutine runtime smoke test passed\n";
     return EXIT_SUCCESS;

@@ -106,9 +106,12 @@ namespace yuan::net::http
         owned_runtime_ = std::make_unique<net::NetworkRuntime>();
         auto rv = owned_runtime_->runtime_view();
 
-        auto *response = yuan::coroutine::sync_wait(
+        auto response_result = yuan::coroutine::sync_wait(
             rv,
             do_connect_async(rv, std::move(ccb), config::connection_idle_timeout));
+        auto *response = response_result && response_result.value
+            ? *response_result.value
+            : nullptr;
 
         if (response && rcb) {
             auto *context = response->get_context();
@@ -243,9 +246,10 @@ namespace yuan::net::http
         net::NetworkRuntime runtime;
         auto rv = runtime.runtime_view();
 
-        co_return yuan::coroutine::sync_wait(
+        auto result = yuan::coroutine::sync_wait(
             rv,
             do_connect_async(rv, std::move(ccb), timeout_ms));
+        co_return result && result.value ? *result.value : nullptr;
     }
 
     HttpResponseSnapshot HttpClient::snapshot_response(HttpResponse * response)

@@ -657,13 +657,15 @@ namespace yuan::coroutine
                 } },
             };
             waiter_count_ = connection->add_event_waiters(registrations,
-                                                          sizeof(registrations) / sizeof(registrations[0]),
-                                                          waiter_ids_.data(),
-                                                          waiter_ids_.size());
+                                                           sizeof(registrations) / sizeof(registrations[0]),
+                                                           waiter_ids_.data(),
+                                                           waiter_ids_.size());
+            suspending_ = true;
             connection->close();
+            suspending_ = false;
 
             if (completed_) {
-                return true;
+                return false;
             }
             if (connection->get_connection_state() == net::ConnectionState::closed) {
                 result_ = IoStatus::success;
@@ -688,7 +690,9 @@ namespace yuan::coroutine
             completed_ = true;
             result_ = status;
             restore_handler_if_needed();
-            detail::resume_on_loop(runtime_.event_loop(), handle_);
+            if (!suspending_) {
+                detail::resume_on_loop(runtime_.event_loop(), handle_);
+            }
         }
         void restore_handler_if_needed() noexcept
         {
@@ -717,6 +721,7 @@ namespace yuan::coroutine
         std::array<uint64_t, 3> waiter_ids_{};
         std::size_t waiter_count_ = 0;
         bool completed_ = false;
+        bool suspending_ = false;
         bool handler_restored_ = false;
     };
 

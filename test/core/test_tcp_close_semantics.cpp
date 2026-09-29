@@ -333,7 +333,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const auto result_value = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "tcp close semantics coroutine should return 0");
 
         if (srv.joinable()) {
@@ -403,7 +404,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const auto result_value = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "large drain coroutine should return 0");
 
         if (srv.joinable()) {
@@ -499,7 +501,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const auto result_value = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "half-close coroutine should return 0");
 
         if (srv.joinable()) {
@@ -694,7 +697,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const auto result_value = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "idempotent close coroutine should return 0");
         if (srv.joinable()) {
             srv.join();
@@ -729,7 +733,8 @@ namespace
             co_return 0;
         };
 
-        const int result = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const auto result_value = yuan::coroutine::sync_wait(rv, test_fn(rv));
+        const int result = result_value && result_value.value ? *result_value.value : -1;
         check(result == 0, "close while connecting coroutine should return 0");
     }
 

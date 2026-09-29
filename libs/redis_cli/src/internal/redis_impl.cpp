@@ -322,7 +322,7 @@ std::shared_ptr<RedisValue> RedisClient::Impl::execute_command(std::shared_ptr<C
     const auto timeout_ms = ct > 0 ? static_cast<uint32_t>(ct) : 0;
     std::shared_ptr<RedisValue> res;
     try {
-        res = yuan::coroutine::sync_wait_locked(runtime, [this, cmd, timeout_ms]()->SimpleTask<std::shared_ptr<RedisValue> > {
+        auto wait_result = yuan::coroutine::sync_wait_locked(runtime, [this, cmd, timeout_ms]()->SimpleTask<std::shared_ptr<RedisValue> > {
         const auto &cmdStr = cmd->pack();
         conn_->write(::yuan::buffer::ByteBuffer(std::string_view(cmdStr.data(), cmdStr.size())));
         const bool timed_out = co_await completion_event_.wait_for(
@@ -338,6 +338,14 @@ std::shared_ptr<RedisValue> RedisClient::Impl::execute_command(std::shared_ptr<C
             client_->set_last_error(ErrorValue::from_string("connection closed"));
         }
         co_return cmd->get_result(); }(), "redis event loop is already running on another thread");
+        if (wait_result && wait_result.value) {
+            res = *wait_result.value;
+        } else if (wait_result.error) {
+            last_error_.store(ErrorValue::from_string(yuan::coroutine::task_error_message(wait_result.error)));
+            last_cmd_ = nullptr;
+            disconnect();
+            return nullptr;
+        }
     } catch (const std::exception &ex) {
         last_error_.store(ErrorValue::from_string(ex.what()));
         last_cmd_ = nullptr;
@@ -404,10 +412,16 @@ std::shared_ptr<RedisValue> RedisClient::Impl::execute_command(std::shared_ptr<C
         const auto runtime = registry()->get_coroutine_runtime();
         int result = -1;
         try {
-            result = yuan::coroutine::sync_wait_locked(
+            auto wait_result = yuan::coroutine::sync_wait_locked(
                 runtime,
                 wait_task(),
                 "redis event loop is already running on another thread");
+            if (wait_result && wait_result.value) {
+                result = *wait_result.value;
+            } else if (wait_result.error) {
+                last_error_.store(ErrorValue::from_string(yuan::coroutine::task_error_message(wait_result.error)));
+                return -1;
+            }
         } catch (const std::exception &ex) {
             last_error_.store(ErrorValue::from_string(ex.what()));
             return -1;
